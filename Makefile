@@ -7,3 +7,6 @@ build:
 
 clean:
 	@cargo clean
+
+test:
+	@dune runtest --force --no-buffer

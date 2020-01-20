@@ -68,6 +68,7 @@ module Expr
   val arrow : t -> t -> t
   val arrow_l : t list -> t -> t
   val (@->) : t -> t -> t
+  val new_var : string -> t -> t
   val var : var -> t
   val lambda : var -> t -> t
   val lambda_l : var list -> t -> t
@@ -155,7 +156,7 @@ end
     | Lambda (a,b) -> Fmt.fprintf out "@[\\%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
     | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
     | Arrow (a,b) -> Fmt.fprintf out "@[%a@ -> %a@]" pp a pp b
-    | App (a, b) -> Fmt.fprintf out "%a@ %a" pp a pp_inner b
+    | App (a, b) -> Fmt.fprintf out "@[%a@ %a@]" pp a pp_inner b
 
   and pp_inner out t =
     match t.view with
