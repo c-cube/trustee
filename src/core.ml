@@ -48,6 +48,7 @@ module Expr
 
   type var
   type var_content
+  type subst
 
   type view =
     | Type
@@ -65,6 +66,7 @@ module Expr
   val compare : t -> t -> int
   val hash : t -> int
   val pp : t Fmt.printer
+  val pp_inner : t Fmt.printer
 
   val type_ : t
   val kind : t
@@ -74,7 +76,8 @@ module Expr
   val arrow : t -> t -> t
   val arrow_l : t list -> t -> t
   val (@->) : t -> t -> t
-  val new_var : string -> t -> t
+  val new_sym : string -> t -> t
+  val new_var : string -> t -> var
   val var : var -> t
   val lambda : var -> t -> t
   val lambda_l : var list -> t -> t
@@ -82,12 +85,43 @@ module Expr
   val eq_const : t
   val eq : t -> t -> t
 
+  val subst1 : var -> t -> in_:t -> t
+  (** [subst1 v t ~in_:u] builds the term [u [v:=t]] where all instances of
+      [v] are replaced by [t]. *)
+
   val is_bool : t -> bool
   val is_a_type : t -> bool
   val is_a_bool : t -> bool
+  val is_var : t -> bool
+
+  val unfold_app : t -> t * t list
+  (** [unfold_app (f a b c)] is [f, [a;b;c]] *)
+
+  type term = t
 
   module Set : Set.S with type elt = t
   module Tbl : Hashtbl.S with type key = t
+
+  module Var : sig
+    type t = var
+    val ty : var -> term
+    val pp : t Fmt.printer
+    val has_ty : var -> term -> bool
+    (** [Var.has_ty v ty] is true iff [ty v = ty] *)
+  end
+
+  module Subst : sig
+    type t = subst
+
+    val empty : t
+    val add : var -> term -> t -> t
+    val of_list : (var*term) list -> t
+    val pp : t Fmt.printer
+
+    val apply : t -> (term -> term)
+    (** [apply subst] is a function that instantiates terms it's applied to
+        using [subst]. It contains an internal cache. *)
+  end
 end
 = struct
   type t = {
@@ -173,6 +207,7 @@ end
   let var' v : t = make_ (Var v) (fun () -> v.v_ty)
   let new_var (s:string) (ty:t) : t =
     make_ (Var {v_name=ID.make s; v_ty=ty}) (fun () -> ty)
+  let new_sym = new_var
 
   let bool = new_var "Bool" type_
   let arrow a b : t = make_ (Arrow (a,b)) (fun () -> type_)
@@ -189,14 +224,14 @@ end
         a_ret
       | Some {view=Pi (a_v, a_body); _}, Some ty_b when equal (ty_exn a_v) ty_b ->
         (* substitute [b] for [a_v] in [a_body] *)
-        subst a_v b ~in_:a_body
+        subst1 a_v b ~in_:a_body
       | _ ->
         invalid_argf "@[type mismatch:@ cannot apply @[%a@ : %a@]@ to %a@]" pp a pp (ty_exn a) pp b
     in
     make_ (App (a,b)) get_ty
 
   (* substitution of [x] with [by] *)
-  and subst (x:var) by ~in_ : t =
+  and subst1 (x:var) by ~in_ : t =
     let rec aux t =
       if equal t x then by
       else (
@@ -229,6 +264,17 @@ end
     | None -> false
   let is_bool = equal bool
   let is_a_bool t = match t.ty with Some b -> is_bool b | None -> false
+  let is_var t = match t.view with Var _ -> true | _ -> false
+
+  let unfold_app t =
+    let rec aux acc t =
+      match t.view with
+      | App (f, u) -> aux (u::acc) f
+      | _ -> t, acc
+    in
+    aux [] t
+
+  type term = t
 
   module As_key = struct
     type nonrec t = t
@@ -238,6 +284,58 @@ end
   end
   module Set = Set.Make(As_key)
   module Tbl = Hashtbl.Make(As_key)
+  module Map = Map.Make(As_key)
+
+  module Var = struct
+    type t = var
+    let pp = pp
+    let ty = ty_exn
+    let has_ty v t = equal (ty v) t
+  end
+
+  module Subst = struct
+    type t = term Map.t
+    let empty : t = Map.empty
+    let add (v:var) t self : t =
+      assert (is_var v);
+      Map.add v t self
+
+    let to_list self = Map.fold (fun v t l -> (v,t) :: l) self []
+
+    let pp out (self:t) =
+      let pp_binding out (v,t) = Fmt.fprintf out "(@[%a@ := %a@])" pp v pp t in
+      Fmt.fprintf out "{@[%a@]}" (pp_list pp_binding) (to_list self)
+
+    let of_list l : t = List.fold_left (fun s (v,t) -> add v t s) empty l
+
+    let apply (self:t) : term -> term =
+      let tbl = Tbl.create 8 in
+      let rec aux t =
+        match Tbl.find tbl t with
+        | u -> u
+        | exception Not_found ->
+          let u =
+            match t.view with
+            | Type | Kind -> t
+            | Var v ->
+              begin match Map.find t self with
+                | u -> u
+                | exception Not_found -> var' {v with v_ty=aux v.v_ty}
+              end
+            | App (f, u) ->
+              let f' = aux f in
+              let u' = aux u in
+              if f==f' && u==u' then t else app f' u'
+            | Lambda (y, body) -> lambda (aux y) (aux body)
+            | Pi (y, body) -> pi (aux y) (aux body)
+            | Arrow (a,b) -> arrow (aux a) (aux b)
+          in
+          Tbl.add tbl t u;
+          u
+      in
+      aux
+  end
+  type subst = Subst.t
 end
 
 
@@ -253,6 +351,8 @@ module Thm : sig
   val concl : t -> Expr.t
   val hyps : t -> Expr.Set.t
 
+  val view_l: t -> Expr.t * Expr.t list
+
   (** Creation of new terms *)
 
   val refl : Expr.t -> t
@@ -264,35 +364,53 @@ module Thm : sig
   val cut : t -> t -> t
   (** [cut (F1 |- b) (F2, b |- c)] is [F1, F2 |- c] *)
 
-  (* TODO: [multi_cut thm_l thm], like cut but does _parallel_ resolution.
-     same conclusion as [thm]. *)
+  val cut_l : t list -> t -> t
+  (** [multi_cut thm_l thm] does simultaneous cuts of the hypothesis
+      of [thm] with the conclusions in [thm_l]. *)
+
+  val instantiate : t -> Expr.subst -> t
+  (** [instantiate thm σ] produces
+      [ Fσ |- Gσ]  where [thm] is [F |- G] *)
+
+
   (* TODO: [cong_t]: [ f=g, a=b |- f a=g b] *)
-  (* TODO: [inst σ thm]: [ Fσ |- Gσ]  where [thm] is [F |- G] *)
-  (* TODO: [beta (λx.u) a]: [ |- (λx.u) a = u[x:=a] ] *)
-  (* TODO: [leibniz a b P]: [a=b, P a |- P b], beta-normalized *)
   (* TODO: some connectives, like [a |- a=true], [a=true |- a],
      [~a |- a=false], [a=false |- ~a], [a, b |- a /\ b], [a |- a \/ b],
      [b |- a \/ b] *)
 
-  val cong : Expr.t -> Expr.t list -> Expr.t list -> t
+  val beta : Expr.t -> Expr.t -> t
+  (** [beta (λx.u) a] is [ |- (λx.u) a = u[x:=a] ] *)
+
+  val eq_leibniz : Expr.t -> Expr.t -> p:Expr.t -> t
+  (** [leibniz a b P]: [a=b, P a |- P b], beta-normalized *)
+
+  val cong_ax : t
+  (** axiom [f=g, x=y |- f x=g y] *)
+
+  val cong_fol : Expr.t -> Expr.t list -> Expr.t list -> t
   (** [cong f l1 l2] makes the congruence axiom for [∧l1=l2 ==> f l1=f2 l2] *)
 end = struct
   type t = {
     concl: Expr.t;
     hyps: Expr.Set.t;
   }
+  (* TODO: a bitfield to register where [beta], choice, excluded middle, etc.
+     were used? *)
 
   let concl self = self.concl
   let hyps self = self.hyps
+  let view_l self = self.concl, Expr.Set.elements self.hyps
   let pp out self =
     if Expr.Set.is_empty self.hyps then (
-      Fmt.fprintf out "@[|- %a@]" Expr.pp self.concl
+      Fmt.fprintf out "@[|- %a@]" Expr.pp_inner self.concl
     ) else (
       Fmt.fprintf out "@[%a@ |- %a@]"
-        Fmt.(list ~sep:(return ",@ ") Expr.pp) (Expr.Set.elements self.hyps) Expr.pp self.concl
+        Fmt.(list ~sep:(return ",@ ") Expr.pp_inner) (Expr.Set.elements self.hyps)
+        Expr.pp_inner self.concl
     )
 
   let make_ concl hyps : t = {concl; hyps}
+  let make_l_ concl hyps : t = {concl; hyps=Expr.Set.of_list hyps}
 
   let assume t : t =
     if not (Expr.is_a_bool t) then (
@@ -302,9 +420,47 @@ end = struct
 
   let refl t : t = make_ (Expr.eq t t) Expr.Set.empty
 
-  let cong f l1 l2 : t =
+  let beta f t : t =
+    match Expr.view f with
+    | Expr.Lambda (v, body) when Expr.Var.has_ty v (Expr.ty_exn t) ->
+      let concl =
+        Expr.eq
+          (Expr.app f t)
+          (Expr.subst1 v t ~in_:body)
+      in
+      make_ concl Expr.Set.empty
+    | _ ->
+      invalid_argf "thm.beta: f must be a lambda,@ not %a" Expr.pp f
+
+  let eq_leibniz a b ~p : t =
+    if not Expr.(equal (ty_exn a) (ty_exn b)) then (
+      invalid_argf "thm.eq_leibniz: %a and %a do not have the same type"
+        Expr.pp a Expr.pp b
+    );
+    match Expr.view p with
+    | Expr.Lambda (v, body) when Expr.Var.has_ty v (Expr.ty_exn a) ->
+      let concl = Expr.subst1 v b ~in_:body in
+      let hyps = [Expr.subst1 v a ~in_:body; Expr.eq a b] in
+      make_l_ concl hyps
+    | _ ->
+      invalid_argf "thm.eq_leibniz: P must be a lambda,@ not %a" Expr.pp_inner p
+
+  let cong_ax : t =
+    let a = Expr.new_sym "α" Expr.type_ in
+    let b = Expr.new_sym "β" Expr.type_ in
+    let f = Expr.new_sym "f" Expr.(a @-> b) in
+    let g = Expr.new_sym "g" Expr.(a @-> b) in
+    let x = Expr.new_sym "x" a in
+    let y = Expr.new_sym "y" a in
+    make_l_ Expr.(eq (app f x) (app g y)) [Expr.eq f g; Expr.eq x y]
+
+  let instantiate (t:t) (subst:Expr.subst) : t =
+    let inst = Expr.Subst.apply subst in
+    make_ (inst t.concl) (Expr.Set.map inst t.hyps)
+
+  let cong_fol f l1 l2 : t =
     if List.length l1 <> List.length l2 then (
-      invalid_arg "cong: incompatible length"
+      invalid_arg "cong_f: incompatible length"
     );
     let app1 = Expr.app_l f l1 in
     let app2 = Expr.app_l f l2 in
@@ -317,14 +473,20 @@ end = struct
 
   (* TODO: remove refl hyps, using filter? *)
 
-  let cut a b : t =
+  let cut_l l b : t =
     let {concl=concl_b; hyps=hyps_b} = b in
-    if Expr.Set.mem (concl a) hyps_b then (
-      let new_hyps =
-        Expr.Set.union (hyps a) (Expr.Set.remove (concl a) hyps_b)
+    if List.for_all (fun a -> Expr.Set.mem a.concl hyps_b) l then (
+      let hyps =
+        List.fold_left (fun hyps a -> Expr.Set.remove a.concl hyps) hyps_b l
       in
-      make_ concl_b new_hyps
+      let hyps =
+        List.fold_left (fun hyps a -> Expr.Set.union a.hyps hyps) hyps l
+      in
+      make_ concl_b hyps
     ) else (
-      invalid_argf "mp: %a@ does not belong in hyps of %a" Expr.pp (concl a) pp b
+  invalid_argf "cut: a conclusion in %a@ does not belong in hyps of %a"
+    (Fmt.Dump.list pp) l pp b
     )
+
+  let cut a b : t = cut_l [a] b
 end
