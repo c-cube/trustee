@@ -11,4 +11,4 @@
  (name trustee)
  (synopsis "LCF proof checker")
  (description "TODO")
- (depends dune containers (alcotest :with-test)))
+ (depends dune containers (alcotest :with-test) (ocaml (>= "4.04"))))
