@@ -261,8 +261,18 @@ module Thm : sig
   val assume : Expr.t -> t
   (** [assume F] is [F |- F] *)
 
-  val mp : t -> t -> t
-  (** [mp (F1, a |- b) (F2, b |- c)] is [F1, F2, a |- c] *)
+  val cut : t -> t -> t
+  (** [cut (F1 |- b) (F2, b |- c)] is [F1, F2 |- c] *)
+
+  (* TODO: [multi_cut thm_l thm], like cut but does _parallel_ resolution.
+     same conclusion as [thm]. *)
+  (* TODO: [cong_t]: [ f=g, a=b |- f a=g b] *)
+  (* TODO: [inst σ thm]: [ Fσ |- Gσ]  where [thm] is [F |- G] *)
+  (* TODO: [beta (λx.u) a]: [ |- (λx.u) a = u[x:=a] ] *)
+  (* TODO: [leibniz a b P]: [a=b, P a |- P b], beta-normalized *)
+  (* TODO: some connectives, like [a |- a=true], [a=true |- a],
+     [~a |- a=false], [a=false |- ~a], [a, b |- a /\ b], [a |- a \/ b],
+     [b |- a \/ b] *)
 
   val cong : Expr.t -> Expr.t list -> Expr.t list -> t
   (** [cong f l1 l2] makes the congruence axiom for [∧l1=l2 ==> f l1=f2 l2] *)
@@ -307,7 +317,7 @@ end = struct
 
   (* TODO: remove refl hyps, using filter? *)
 
-  let mp a b : t =
+  let cut a b : t =
     let {concl=concl_b; hyps=hyps_b} = b in
     if Expr.Set.mem (concl a) hyps_b then (
       let new_hyps =

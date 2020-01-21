@@ -30,7 +30,7 @@ let test_refl =
 
 (* prove [a=b ==> f a = f b] *)
 let test_cong =
-  A.test_case "refl" `Quick @@ fun () ->
+  A.test_case "cong" `Quick @@ fun () ->
   let u = T.new_var "u" T.type_ in
   let a = T.new_var "a" u in
   let b = T.new_var "b" u in
@@ -43,6 +43,22 @@ let test_cong =
   Format.printf "cong: %a@." Thm.pp thm;
   A.check expr_t "cong result" (T.eq fa fb) (Thm.concl thm);
   ()
+
+(* TODO: do this, and also do it in tier1. Use leibniz.
+(* prove [a=b, b=c |- a=c] *)
+let test_trans =
+  A.test_case "symm" `Quick @@ fun () ->
+  let u = T.new_var "u" T.type_ in
+  let a = T.new_var "a" u in
+  let b = T.new_var "b" u in
+  let c = T.new_var "c" u in
+  let thm =
+    Thm.cong f [a] [b]
+  in
+  Format.printf "symm: %a@." Thm.pp thm;
+  A.check expr_t "cong result" (T.eq fa fb) (Thm.concl thm);
+  ()
+   *)
 
 let suite =
   ["core", [test_expr1; test_refl; test_cong]]
