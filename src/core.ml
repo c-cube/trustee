@@ -82,8 +82,20 @@ module Expr
   val lambda : var -> t -> t
   val lambda_l : var list -> t -> t
   val pi : var -> t -> t
+
+  val true_ : t
+  val false_ : t
   val eq_const : t
+  val and_const : t
+  val or_const : t
+  val not_const : t
+
   val eq : t -> t -> t
+  val and_ : t -> t -> t
+  val or_ : t -> t -> t
+  val and_l : t list -> t
+  val or_l : t list -> t
+  val not_ : t -> t
 
   val subst1 : var -> t -> in_:t -> t
   (** [subst1 v t ~in_:u] builds the term [u [v:=t]] where all instances of
@@ -124,6 +136,7 @@ module Expr
   end
 end
 = struct
+  type display = Normal | Infix
   type t = {
     mutable id: int;
     view: view;
@@ -132,6 +145,7 @@ end
   and var_content = {
     v_name: ID.t;
     v_ty: t;
+    v_display: display;
   }
   and var = t
   and view =
@@ -188,6 +202,14 @@ end
 
   let type_ = make_ Type (fun () -> kind)
 
+  let unfold_app t =
+    let rec aux acc t =
+      match t.view with
+      | App (f, u) -> aux (u::acc) f
+      | _ -> t, acc
+    in
+    aux [] t
+
   let rec pp out t =
     match t.view with
     | Kind -> Fmt.string out "Kind"
@@ -196,7 +218,27 @@ end
     | Lambda (a,b) -> Fmt.fprintf out "@[\\%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
     | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
     | Arrow (a,b) -> Fmt.fprintf out "@[%a@ -> %a@]" pp a pp b
-    | App (a, b) -> Fmt.fprintf out "@[%a@ %a@]" pp a pp_inner b
+    | App _ ->
+      let f, args = unfold_app t in
+      assert (args<>[]);
+      begin match f.view, args with
+        | Var {v_display=Infix; v_name; _}, [a;b] ->
+          Fmt.fprintf out "@[%a@ %a %a@]" pp_inner a ID.pp v_name pp_inner b
+        | Var {v_display=Infix; v_name; _}, _::_::_ ->
+          (* display [= u a b] as [a `= u` b] *)
+          let ifx_args, args = CCList.take_drop (List.length args-2) args in
+          begin match ifx_args, args with
+            | [u], [a;b] ->
+              Fmt.fprintf out "@[%a@ @[%a_%a@] %a@]"
+                pp_inner a ID.pp v_name pp_inner u pp_inner b
+            | _, [a;b] ->
+              Fmt.fprintf out "@[%a@ `@[%a@ %a@]` %a@]"
+                pp_inner a ID.pp v_name (pp_list pp_inner) ifx_args pp_inner b
+            | _ -> assert false
+          end
+        | _ ->
+          Fmt.fprintf out "@[%a@ %a@]" pp f (pp_list pp_inner) args
+      end
 
   and pp_inner out t =
     match t.view with
@@ -205,8 +247,9 @@ end
 
   let var (v:var) : t = v
   let var' v : t = make_ (Var v) (fun () -> v.v_ty)
-  let new_var (s:string) (ty:t) : t =
-    make_ (Var {v_name=ID.make s; v_ty=ty}) (fun () -> ty)
+  let new_var_ display s ty : t =
+    make_ (Var {v_name=ID.make s; v_ty=ty; v_display=display}) (fun () -> ty)
+  let new_var name ty : t = new_var_ Normal name ty
   let new_sym = new_var
 
   let bool = new_var "Bool" type_
@@ -255,9 +298,20 @@ end
   let eq_const : t =
     let a = new_var "α" type_ in
     let ty = pi a (a @-> a @-> bool) in
-    new_var "=" ty
+    new_var_ Infix "=" ty
+
+  let true_ = new_var "true" bool
+  let false_ = new_var "false" bool
+  let and_const : t = new_var_ Infix "/\\" (bool @-> bool @-> bool)
+  let or_const : t = new_var_ Infix "\\/" (bool @-> bool @-> bool)
+  let not_const : t = new_var "~" (bool @-> bool)
 
   let eq a b : t = app_l eq_const [ty_exn a; a; b]
+  let and_ a b : t = app_l and_const [a;b]
+  let or_ a b : t = app_l or_const [a;b]
+  let not_ a : t = app not_const a
+  let rec and_l = function [] -> true_ | [t] -> t | t :: ts -> and_ t (and_l ts)
+  let rec or_l = function [] -> false_ | [t] -> t | t :: ts -> or_ t (or_l ts)
 
   let is_a_type t : bool = match t.ty with
     | Some ty -> equal ty type_
@@ -265,14 +319,6 @@ end
   let is_bool = equal bool
   let is_a_bool t = match t.ty with Some b -> is_bool b | None -> false
   let is_var t = match t.view with Var _ -> true | _ -> false
-
-  let unfold_app t =
-    let rec aux acc t =
-      match t.view with
-      | App (f, u) -> aux (u::acc) f
-      | _ -> t, acc
-    in
-    aux [] t
 
   type term = t
 
