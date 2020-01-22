@@ -42,10 +42,13 @@ bound_var:
 app_term:
   | t=atomic_term { t }
   | f=atomic_term l=atomic_term+ { T.app_l f l }
-  | t=atomic_term EQ u=atomic_term { T.eq t u }
+
+eq_term:
+  | t=app_term { t }
+  | t=app_term EQ u=app_term { T.eq t u }
 
 binder_term:
-  | t=app_term { t }
+  | t=eq_term { t }
   | LAMBDA bv=bound_var DOT body=binder_term
     { let v, remove = bv in remove(); T.lambda v body }
   | PI bv=bound_var DOT body=binder_term

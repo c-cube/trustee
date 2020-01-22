@@ -1,6 +1,7 @@
 
 (library
   (name trustee_interactive)
+  (optional)
   (public_name trustee.interactive)
   (libraries containers trustee))
 

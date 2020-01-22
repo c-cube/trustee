@@ -5,6 +5,13 @@ type t =
   | St_decl of Expr.t
   | St_prove of Goal.t
 
+(* TODO: statements for:
+   - show current goal
+   - show a symbol's type
+   - include (read a file)
+   - apply tactic to current goal?
+*)
+
 val pp : t Fmt.printer
 
 type ctx

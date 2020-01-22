@@ -5,7 +5,7 @@
 let printable_char = [^ '\n']
 let comment_line = '#' printable_char*
 
-let sym = [^ '"' '(' ')' '\\' ' ' '\t' '\r' '\n']
+let sym = [^ '"' '(' ')' '\\' ' ' '.' '\t' '\r' '\n']
 let atom = ['a' - 'z' 'A'-'Z' '0'-'9'] sym*
 
 rule token = parse
@@ -21,6 +21,7 @@ rule token = parse
   | "\\/" { OR }
   | "|-" { VDASH }
   | "," { COMMA }
+  | "->" { ARROW }
   | "=" { EQ }
   | "~" { NOT }
   | "." { DOT }
