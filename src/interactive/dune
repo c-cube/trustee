@@ -1,0 +1,16 @@
+
+(library
+  (name trustee_interactive)
+  (public_name trustee.interactive)
+  (libraries containers trustee))
+
+(ocamllex (modules Lexer))
+
+(menhir
+  (modules Tokens)
+  (flags --only-tokens))
+
+(menhir
+  (modules Tokens Parser)
+  (merge_into Parser)
+  (flags --external-tokens Tokens --explain))

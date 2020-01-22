@@ -1,4 +1,5 @@
 
 (library
   (name trustee)
+  (public_name trustee)
   (libraries containers))

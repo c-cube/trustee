@@ -1,0 +1,6 @@
+
+(executable
+  (name trustee_cli)
+  (modes native)
+  (libraries trustee trustee.interactive containers linenoise))
+
