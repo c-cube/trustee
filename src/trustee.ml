@@ -21,8 +21,8 @@
     that can be efficiently re-checked later).
 *)
 
-module ID = Core.ID
-module Expr = Core.Expr
-module Thm = Core.Thm
+module ID = Kernel_of_trust.ID
+module Expr = Kernel_of_trust.Expr
+module Thm = Kernel_of_trust.Thm
 
 module Tier1 = Tier1

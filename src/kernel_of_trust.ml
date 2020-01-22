@@ -48,7 +48,6 @@ module Expr
 
   type var
   type var_content
-  type subst
 
   type view =
     | Type
@@ -111,29 +110,51 @@ module Expr
 
   type term = t
 
-  module Set : Set.S with type elt = t
-  module Tbl : Hashtbl.S with type key = t
-
   module Var : sig
     type t = var
+
+    val equal : t -> t -> bool
+
     val ty : var -> term
+
     val pp : t Fmt.printer
+
     val has_ty : var -> term -> bool
     (** [Var.has_ty v ty] is true iff [ty v = ty] *)
+
+    module Set : Set.S with type elt = t
+    module Map : Map.S with type key = t
+    module Tbl : Hashtbl.S with type key = t
   end
+
+  type subst
 
   module Subst : sig
     type t = subst
 
     val empty : t
+    (** Empty substitution *)
+
     val add : var -> term -> t -> t
+    (** [add v t subst] binds [v |-> t] in a new substitution *)
+
+    val find : t -> var -> term option
+
+    val find_exn : t -> var -> term
+    (** @raise Not_found if the variable isn't bound *)
+
     val of_list : (var*term) list -> t
+    val to_list : t -> (var*term) list
+    val iter : (var -> term -> unit) -> t -> unit
     val pp : t Fmt.printer
 
     val apply : t -> (term -> term)
     (** [apply subst] is a function that instantiates terms it's applied to
         using [subst]. It contains an internal cache. *)
   end
+
+  module Set : Set.S with type elt = t
+  module Tbl : Hashtbl.S with type key = t
 end
 = struct
   type display = Normal | Infix
@@ -269,7 +290,8 @@ end
         (* substitute [b] for [a_v] in [a_body] *)
         subst1 a_v b ~in_:a_body
       | _ ->
-        invalid_argf "@[type mismatch:@ cannot apply @[%a@ : %a@]@ to %a@]" pp a pp (ty_exn a) pp b
+        invalid_argf "@[type mismatch:@ cannot apply @[%a@ : %a@]@ to @[%a : %a@]@]"
+          pp_inner a pp_inner (ty_exn a) pp_inner b pp_inner (ty_exn b)
     in
     make_ (App (a,b)) get_ty
 
@@ -336,7 +358,12 @@ end
     type t = var
     let pp = pp
     let ty = ty_exn
+    let equal = equal
     let has_ty v t = equal (ty v) t
+
+    module Set = Set
+    module Tbl = Tbl
+    module Map = Map
   end
 
   module Subst = struct
@@ -346,7 +373,10 @@ end
       assert (is_var v);
       Map.add v t self
 
+    let find_exn self v = Map.find v self
+    let find self v = try Some (find_exn self v) with Not_found -> None
     let to_list self = Map.fold (fun v t l -> (v,t) :: l) self []
+    let iter = Map.iter
 
     let pp out (self:t) =
       let pp_binding out (v,t) = Fmt.fprintf out "(@[%a@ := %a@])" pp v pp t in
@@ -372,12 +402,23 @@ end
               let f' = aux f in
               let u' = aux u in
               if f==f' && u==u' then t else app f' u'
-            | Lambda (y, body) -> lambda (aux y) (aux body)
-            | Pi (y, body) -> pi (aux y) (aux body)
+            | Lambda (y, body) ->
+              let y' = rebind_ y in
+              lambda y' (aux body)
+            | Pi (y, body) ->
+              let y' = rebind_ y in
+              pi y' (aux body)
             | Arrow (a,b) -> arrow (aux a) (aux b)
           in
           Tbl.add tbl t u;
           u
+      and rebind_ (v:var) : var =
+        match v.view with
+        | Var vi ->
+          let v' = var' {vi with v_ty = aux vi.v_ty} in
+          Tbl.add tbl v v';
+          v'
+        | _ -> assert false
       in
       aux
   end

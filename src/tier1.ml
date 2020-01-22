@@ -1,10 +1,10 @@
 
 module Fmt = CCFormat
-module T = Core.Expr
-module Thm = Core.Thm
+module T = Kernel_of_trust.Expr
+module Thm = Kernel_of_trust.Thm
 
-type term = Core.Expr.t
-type thm = Core.Thm.t
+type term = T.t
+type thm = Thm.t
 
 let eq_sym a b =
   (* use leibniz on [λx. a=x] *)

@@ -31,6 +31,25 @@ let test_refl =
   ignore (Thm.refl fa : Thm.t);
   ()
 
+let test_beta =
+  A.test_case "beta" `Quick @@ fun () ->
+  let u = T.new_sym "u" T.type_ in
+  let a = T.new_sym "a" u in
+  let b = T.new_sym "b" u in
+  let f = T.new_sym "f" T.(u @-> u) in
+  let f2 = T.new_sym "f2" T.(u @-> u @-> u) in
+  let g = T.new_sym "g" T.(u @-> u) in
+  let x = T.new_var "x" u in
+  let t_lam =
+    T.lambda x (T.app f (T.app f (T.app_l f2 [T.var x; T.app (T.lambda x (T.app g (T.var x))) b]))) in
+  let thm = Thm.beta t_lam a in
+  A.check expr_t "beta reduced"
+    (T.eq (T.app t_lam a) @@
+     T.app f (T.app f (T.app_l f2 [a; T.app (T.lambda x (T.app g (T.var x))) b])))
+    (Thm.concl thm);
+  A.check expr_t_set "no hyps" T.Set.empty (Thm.hyps thm);
+  ()
+
 (* prove [a=b ==> f a = f b] *)
 let test_cong =
   A.test_case "cong" `Quick @@ fun () ->
@@ -115,7 +134,8 @@ let test_eq_reflect =
 let suite =
   ["core",
    [test_expr1; test_refl; test_cong; test_symm; test_symm2;
-    test_trans; test_eq_reflect]]
+    test_trans; test_eq_reflect; test_beta;
+   ]]
 
 let () =
   Alcotest.run "trustee" suite
