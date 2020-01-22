@@ -1,8 +1,9 @@
 
 (library
-  (name trustee_interactive)
+  (name trustee_syn)
   (optional)
-  (public_name trustee.interactive)
+  (public_name trustee.syn)
+  (synopsis "basic parser for trustee")
   (libraries containers trustee))
 
 (ocamllex (modules Lexer))

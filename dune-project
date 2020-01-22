@@ -12,6 +12,7 @@
  (synopsis "LCF proof checker")
  (description "TODO")
  (depopts menhir)
- (depends dune containers (alcotest :with-test) (ocaml (>= "4.04"))))
+ (depends dune containers (alcotest :with-test) (menhir :with-test)
+          (ocaml (>= "4.04"))))
 
 (using menhir 1.0)

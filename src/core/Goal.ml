@@ -1,6 +1,6 @@
 
-module Expr = Trustee.Expr
-module Thm = Trustee.Thm
+module Expr = Kernel_of_trust.Expr
+module Thm = Kernel_of_trust.Thm
 module Fmt = CCFormat
 
 let pp_list ppx out l =

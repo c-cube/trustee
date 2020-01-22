@@ -10,12 +10,12 @@
 %}
 
 %parameter <PARAM : sig
-  val ctx : Statement.ctx
+  val ctx : Trustee.Statement.ctx
 end>
 
 %start <Trustee.Expr.t> parse_term
-%start <Statement.t> parse
-%start <Statement.t list> parse_list
+%start <Trustee.Statement.t> parse
+%start <Trustee.Statement.t list> parse_list
 
 %left OR
 %left AND

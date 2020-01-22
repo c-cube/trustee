@@ -1,4 +1,5 @@
-open Trustee
+module Expr = Kernel_of_trust.Expr
+module Thm = Kernel_of_trust.Thm
 module T = Expr
 module Fmt = CCFormat
 

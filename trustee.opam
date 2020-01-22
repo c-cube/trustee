@@ -11,8 +11,10 @@ depends: [
   "dune"
   "containers"
   "alcotest" {with-test}
+  "menhir" {with-test}
   "ocaml" {>= "4.04"}
 ]
+depopts: ["menhir"]
 build: [
   ["dune" "subst"] {pinned}
   [

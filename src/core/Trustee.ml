@@ -26,3 +26,6 @@ module Expr = Kernel_of_trust.Expr
 module Thm = Kernel_of_trust.Thm
 
 module Tier1 = Tier1
+module Goal = Goal
+module Tactic = Tactic
+module Statement = Statement
