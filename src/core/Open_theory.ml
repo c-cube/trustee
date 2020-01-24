@@ -30,8 +30,8 @@ module Name = struct
   type t = name
   let pp out (path,n) =
     match path with
-    | [] -> Fmt.string out n
-    | _ -> Fmt.fprintf out "%s.%s" (String.concat "." path) n
+    | [] -> Fmt.fprintf out "%S" n
+    | _ -> Fmt.fprintf out "\"%s.%s\"" (String.concat "." path) n
 end
 
 module Obj_ = struct
@@ -87,9 +87,30 @@ end
 module VM = struct
   type t = vm
 
+  let pp out (self:t) =
+    let pp_pair out (i,obj) =
+      Fmt.fprintf out "(@[%d :=@ %a@])" i Obj_.pp obj
+    in
+    Fmt.fprintf out
+      "{@[<hv>vm.stack=%a;@ dict=[@[%a@]];@ assumptions=%a;@ theorems=%a@]}"
+      (Fmt.Dump.list Obj_.pp) self.vm_stack
+      (Fmt.Dump.list pp_pair) (Int_tbl.to_list self.vm_dict)
+      (Fmt.Dump.list Thm.pp) self.vm_assumptions
+      (Fmt.Dump.list Thm.pp) self.vm_theorems
+
   let push_obj self o =
     Fmt.printf "OT.vm.push %a@." Obj_.pp o;
     self.vm_stack <- o :: self.vm_stack
+
+  let pop1 self =
+    match self.vm_stack with
+    | o :: st -> self.vm_stack <- st; o
+    | [] -> Error.errorf "OT.vm.pop1: empty stack@ in %a" pp self
+
+  let pop2 self =
+    match self.vm_stack with
+    | o1 :: o2 :: st -> self.vm_stack <- st; o1, o2
+    | [_] | [] -> Error.errorf "OT.vm.pop2: empty stack@ in %a" pp self
 end
 
 module Parse_ = struct
@@ -106,28 +127,90 @@ module Parse_ = struct
         | s when String.get s 0 = '#' -> false
         | _ -> true)
 
+  (* quoted string: push name *)
+  let process_name vm s =
+    let s = String.sub s 1 (String.length s-2) in
+    let l = List.rev @@ String.split_on_char '.' s in
+    let name: name =
+      match l with
+      | [] -> Error.errorf "OT: empty string not allowed"
+      | [x] -> [], x
+      | x :: rest -> List.rev rest, x
+    in
+    VM.push_obj vm (Name name)
+
+  let process_int vm s =
+    let n =
+      try int_of_string s
+      with _ -> Error.errorf "OT: cannot convert integer %S" s
+    in
+    VM.push_obj vm (Int n)
+
+  let err_bad_stack_ vm what =
+    Error.errorf "@[<2>OT.%s: wrong stack@ in %a@]" what VM.pp vm
+
+  let err_not_impl_ vm what =
+    Error.errorf "OT: not implemented: %s@ in %a" what VM.pp vm
+
+  let abs_term vm =
+    match vm.vm_stack with
+    | Term t :: Var v :: st ->
+      vm.vm_stack <- Term (Expr.lambda v t) :: st
+    | _ ->
+      Error.errorf "@[<2>OT.abs_term: wrong stack@ in %a@]" VM.pp vm
+
+  let app_term vm =
+    match VM.pop2 vm with
+    | Term x, Term f -> VM.push_obj vm @@ Term (Expr.app f x)
+    | _ -> err_bad_stack_ vm "app_term"
+
+  let assume vm =
+    match VM.pop1 vm with
+    | Term x -> VM.push_obj vm @@ Thm (Thm.assume x)
+    | _ -> err_bad_stack_ vm "assume"
+
+  let version vm =
+    match VM.pop1 vm with
+    | Int 6 -> ()
+    | Int n -> Error.errorf "OT: unsupported version %d" n
+    | _ -> err_bad_stack_ vm "version"
+
+  let axiom vm =
+    match VM.pop2 vm with
+    | Term t, List hyps ->
+      let hyps = List.map (function Term t -> t | _ -> err_bad_stack_ vm "axiom") hyps in
+      let ax = Thm.axiom hyps t in
+      Format.printf "@{<Yellow>OT.add-assumption@} %a@." Thm.pp ax;
+      vm.vm_assumptions <- ax :: vm.vm_assumptions;
+      VM.push_obj vm (Thm ax)
+    | _ -> err_bad_stack_ vm "axiom"
+
+  let nil vm = VM.push_obj vm @@ List[]
+
+  (* TODO *)
+  let abs_thm vm = err_not_impl_ vm "abs_thm"
+  let app_thm vm = err_not_impl_ vm "app_thm"
+  let def vm = err_not_impl_ vm "def"
+
   let process_line (vm:vm) s : unit =
-    Format.printf "line: %S@." s;
+    Format.printf "process line: %S@." s;
     assert (s <> "");
     if s.[0] = '"' then (
-      (* string *)
-      let s = String.sub s 1 (String.length s-2) in
-      let l = List.rev @@ String.split_on_char '.' s in
-      let name: name =
-        match l with
-        | [] -> Error.errorf "OT: empty string not allowed"
-        | [x] -> [], x
-        | x :: rest -> List.rev rest, x
-      in
-      VM.push_obj vm (Name name)
+      process_name vm s
     ) else if is_num s then (
-      let n =
-        try int_of_string s
-        with _ -> Error.errorf "OT: cannot convert integer %S" s
-      in
-      VM.push_obj vm (Int n)
+      process_int vm s
     ) else (
-      ()
+      match s with
+      | "absTerm" -> abs_term vm
+      | "absThm" -> abs_thm vm
+      | "appTerm" -> app_term vm
+      | "appThm" -> app_thm vm
+      | "assume" -> assume vm
+      | "axiom" -> axiom vm
+      | "version" -> version vm
+      | "nil" -> nil vm
+      | _ ->
+        Error.errorf "OT: unknown command %s@." s
     )
 
   let parse_gen_exn (g:string gen) : article =

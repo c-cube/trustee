@@ -47,6 +47,7 @@ let rec loop ctx =
   end
 
 let () =
+  CCFormat.set_color_default true;
   LNoise.history_load ~filename:hist_file |> warn_err_;
   LNoise.history_set ~max_length:1000 |> warn_err_;
   LNoise.catch_break true;

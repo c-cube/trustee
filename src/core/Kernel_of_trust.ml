@@ -474,6 +474,8 @@ module Thm : sig
 
   val cong_fol : Expr.t -> Expr.t list -> Expr.t list -> t
   (** [cong f l1 l2] makes the congruence axiom for [∧l1=l2 ==> f l1=f2 l2] *)
+
+  val axiom : Expr.t list -> Expr.t -> t
 end = struct
   type t = {
     concl: Expr.t;
@@ -497,10 +499,13 @@ end = struct
   let make_ concl hyps : t = {concl; hyps}
   let make_l_ concl hyps : t = {concl; hyps=Expr.Set.of_list hyps}
 
-  let assume t : t =
+  let err_unless_bool_ what t =
     if not (Expr.is_a_bool t) then (
-      Error.errorf "assume: needs boolean term, not %a" Expr.pp t
-    );
+      Error.errorf "%s: needs boolean term, not %a" what Expr.pp t
+    )
+
+  let assume t : t =
+    err_unless_bool_ "assume" t;
     make_ t (Expr.Set.singleton t)
 
   let refl t : t = make_ (Expr.eq t t) Expr.Set.empty
@@ -574,4 +579,10 @@ end = struct
     )
 
   let cut a b : t = cut_l [a] b
+
+  (* TODO: log that somewhere? *)
+  let axiom hyps concl : t =
+    err_unless_bool_ "axiom" concl;
+    List.iter (err_unless_bool_ "axiom") hyps;
+    make_l_ concl hyps
 end
