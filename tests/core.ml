@@ -106,7 +106,7 @@ let test_trans =
   let b = T.new_sym "b" u in
   let c = T.new_sym "c" u in
   let thm = Trustee.Tier1.eq_trans a b c in
-  Format.printf "symm: %a@." Thm.pp thm;
+  Format.printf "trans: %a@." Thm.pp thm;
   A.check expr_t "result.concl" (T.eq a c) (Thm.concl thm);
   A.check expr_t_set "result.hyps"
     (T.Set.of_list [T.eq a b; T.eq b c])
