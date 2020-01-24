@@ -10,8 +10,6 @@ module Fmt = CCFormat
 let pp_list ppx out l =
   Fmt.(list ~sep:(return "@ ") ppx) out l
 
-let invalid_argf msg = Fmt.kasprintf invalid_arg msg
-
 (** {2 Identifiers}
 
     Identifiers represent a given logic symbols. A handful are predefined,
@@ -182,7 +180,7 @@ end
   let hash a = CCHash.int a.id
   let view t = t.view
   let ty t = t.ty
-  let ty_exn t = match t.ty with Some ty -> ty | None -> invalid_argf "term has no type"
+  let ty_exn t = match t.ty with Some ty -> ty | None -> Error.error "term has no type"
   let compare a b = CCInt.compare a.id b.id
 
   let var_eq v1 v2 = ID.equal v1.v_name v2.v_name
@@ -290,7 +288,7 @@ end
         (* substitute [b] for [a_v] in [a_body] *)
         subst1 a_v b ~in_:a_body
       | _ ->
-        invalid_argf "@[type mismatch:@ cannot apply @[%a@ : %a@]@ to @[%a : %a@]@]"
+        Error.errorf "@[type mismatch:@ cannot apply @[%a@ : %a@]@ to @[%a : %a@]@]"
           pp_inner a pp_inner (ty_exn a) pp_inner b pp_inner (ty_exn b)
     in
     make_ (App (a,b)) get_ty
@@ -501,7 +499,7 @@ end = struct
 
   let assume t : t =
     if not (Expr.is_a_bool t) then (
-      invalid_argf "assume: needs boolean term, not %a" Expr.pp t
+      Error.errorf "assume: needs boolean term, not %a" Expr.pp t
     );
     make_ t (Expr.Set.singleton t)
 
@@ -517,11 +515,11 @@ end = struct
       in
       make_ concl Expr.Set.empty
     | _ ->
-      invalid_argf "thm.beta: f must be a lambda,@ not %a" Expr.pp f
+      Error.errorf "thm.beta: f must be a lambda,@ not %a" Expr.pp f
 
   let eq_leibniz a b ~p : t =
     if not Expr.(equal (ty_exn a) (ty_exn b)) then (
-      invalid_argf "thm.eq_leibniz: %a and %a do not have the same type"
+      Error.errorf "thm.eq_leibniz: %a and %a do not have the same type"
         Expr.pp a Expr.pp b
     );
     match Expr.view p with
@@ -530,7 +528,7 @@ end = struct
       let hyps = [Expr.subst1 v a ~in_:body; Expr.eq a b] in
       make_l_ concl hyps
     | _ ->
-      invalid_argf "thm.eq_leibniz: P must be a lambda,@ not %a" Expr.pp_inner p
+      Error.errorf "thm.eq_leibniz: P must be a lambda,@ not %a" Expr.pp_inner p
 
   let cong_ax : t =
     let a = Expr.new_sym "α" Expr.type_ in
@@ -552,7 +550,7 @@ end = struct
     let app1 = Expr.app_l f l1 in
     let app2 = Expr.app_l f l2 in
     if not (Expr.equal (Expr.ty_exn app1) (Expr.ty_exn app2)) then (
-      invalid_argf "cong: terms %a and %a have incompatible types"
+      Error.errorf "cong: terms %a and %a have incompatible types"
         Expr.pp app1 Expr.pp app2
     );
     make_ (Expr.eq app1 app2)
@@ -571,8 +569,8 @@ end = struct
       in
       make_ concl_b hyps
     ) else (
-  invalid_argf "cut: a conclusion in %a@ does not belong in hyps of %a"
-    (Fmt.Dump.list pp) l pp b
+      Error.errorf "cut: a conclusion in %a@ does not belong in hyps of %a"
+        (Fmt.Dump.list pp) l pp b
     )
 
   let cut a b : t = cut_l [a] b

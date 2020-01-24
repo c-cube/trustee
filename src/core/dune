@@ -2,4 +2,5 @@
 (library
   (name trustee)
   (public_name trustee)
+  (flags :standard -warn-error -34-37)
   (libraries containers))

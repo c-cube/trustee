@@ -19,9 +19,11 @@
 
 %token ST_DECL
 %token ST_PROVE
+%token ST_LOAD_OT
 
 (* %token IF *)
 
 %token <string>IDENT
+%token <string>QUOTED
 
 %%

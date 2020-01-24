@@ -75,5 +75,7 @@ stmt:
     { Statement.St_decl (Statement.Ctx.decl PARAM.ctx f ~ty) }
   | ST_PROVE g=goal
     { Statement.St_prove g }
+  | ST_LOAD_OT s=QUOTED
+    { Statement.St_load_opentheory (String.sub s 1 (String.length s-2)) }
 
 %%

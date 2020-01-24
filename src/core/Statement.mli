@@ -5,6 +5,7 @@ module Fmt = CCFormat
 type t =
   | St_decl of Expr.t
   | St_prove of Goal.t
+  | St_load_opentheory of string
 
 (* TODO: statements for:
    - show current goal

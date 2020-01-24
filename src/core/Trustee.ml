@@ -29,3 +29,5 @@ module Tier1 = Tier1
 module Goal = Goal
 module Tactic = Tactic
 module Statement = Statement
+module Open_theory = Open_theory
+module Error = Error

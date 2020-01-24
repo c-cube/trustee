@@ -6,10 +6,12 @@ module Fmt = CCFormat
 type t =
   | St_decl of Expr.t
   | St_prove of Goal.t
+  | St_load_opentheory of string
 
 let pp out = function
   | St_decl t -> Fmt.fprintf out "@[<2>decl %a@ : %a@]" T.pp t T.pp (T.ty_exn t)
   | St_prove g -> Fmt.fprintf out "@[<2>prove %a@]" Goal.pp g
+  | St_load_opentheory s -> Fmt.fprintf out "opentheory.load %S" s
 
 module Ctx = struct
   type t = {
