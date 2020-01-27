@@ -10,11 +10,11 @@ let expr_t_set = A.testable Fmt.(map T.Set.elements @@ Dump.list T.pp) T.Set.equ
 
 let test_expr1 =
   A.test_case "expr1" `Quick @@ fun () ->
-  let u = T.new_sym "u" T.type_ in
-  let a = T.new_sym "a" u in
-  let b = T.new_sym "b" u in
+  let u = T.new_const "u" T.type_ in
+  let a = T.new_const "a" u in
+  let b = T.new_const "b" u in
   if T.equal a b then A.failf "%a and %a must not be equal" T.pp a T.pp b;
-  let f = T.new_sym "f" T.(u @-> u) in
+  let f = T.new_const "f" T.(u @-> u) in
   let fa1 = T.app f a in
   let fa2 = T.app f a in
   A.check expr_t "hashconsing f should work" fa1 fa2;
@@ -24,21 +24,21 @@ let test_expr1 =
 
 let test_refl =
   A.test_case "refl" `Quick @@ fun () ->
-  let u = T.new_sym "u" T.type_ in
-  let a = T.new_sym "a" u in
-  let f = T.new_sym "f" T.(u @-> u) in
+  let u = T.new_const "u" T.type_ in
+  let a = T.new_const "a" u in
+  let f = T.new_const "f" T.(u @-> u) in
   let fa = T.app f a in
   ignore (Thm.refl fa : Thm.t);
   ()
 
 let test_beta =
   A.test_case "beta" `Quick @@ fun () ->
-  let u = T.new_sym "u" T.type_ in
-  let a = T.new_sym "a" u in
-  let b = T.new_sym "b" u in
-  let f = T.new_sym "f" T.(u @-> u) in
-  let f2 = T.new_sym "f2" T.(u @-> u @-> u) in
-  let g = T.new_sym "g" T.(u @-> u) in
+  let u = T.new_const "u" T.type_ in
+  let a = T.new_const "a" u in
+  let b = T.new_const "b" u in
+  let f = T.new_const "f" T.(u @-> u) in
+  let f2 = T.new_const "f2" T.(u @-> u @-> u) in
+  let g = T.new_const "g" T.(u @-> u) in
   let x = T.new_var "x" u in
   let t_lam =
     T.lambda x (T.app f (T.app f (T.app_l f2 [T.var x; T.app (T.lambda x (T.app g (T.var x))) b]))) in
@@ -53,10 +53,10 @@ let test_beta =
 (* prove [a=b ==> f a = f b] *)
 let test_cong =
   A.test_case "cong" `Quick @@ fun () ->
-  let u = T.new_sym "u" T.type_ in
-  let a = T.new_sym "a" u in
-  let b = T.new_sym "b" u in
-  let f = T.new_sym "f" T.(u @-> u) in
+  let u = T.new_const "u" T.type_ in
+  let a = T.new_const "a" u in
+  let b = T.new_const "b" u in
+  let f = T.new_const "f" T.(u @-> u) in
   let fa = T.app f a in
   let fb = T.app f b in
   let thm =
@@ -69,9 +69,9 @@ let test_cong =
 (* prove [a=b |- b=a] *)
 let test_symm =
   A.test_case "symm" `Quick @@ fun () ->
-  let u = T.new_sym "u" T.type_ in
-  let a = T.new_sym "a" u in
-  let b = T.new_sym "b" u in
+  let u = T.new_const "u" T.type_ in
+  let a = T.new_const "a" u in
+  let b = T.new_const "b" u in
   (* use leibniz on [λx. a=x] *)
   let p =
     let x = T.new_var "x" u in
@@ -90,9 +90,9 @@ let test_symm =
 (* prove [a=b |- b=a] *)
 let test_symm2 =
   A.test_case "symm2" `Quick @@ fun () ->
-  let u = T.new_sym "u" T.type_ in
-  let a = T.new_sym "a" u in
-  let b = T.new_sym "b" u in
+  let u = T.new_const "u" T.type_ in
+  let a = T.new_const "a" u in
+  let b = T.new_const "b" u in
   let thm = Trustee.Tier1.eq_sym a b in
   A.check expr_t "result.concl" (T.eq b a) (Thm.concl thm);
   A.check expr_t_l "result.hyps" [T.eq a b] (T.Set.elements @@ Thm.hyps thm);
@@ -101,10 +101,10 @@ let test_symm2 =
 (* prove [a=b, b=c |- a=c] *)
 let test_trans =
   A.test_case "trans" `Quick @@ fun () ->
-  let u = T.new_sym "u" T.type_ in
-  let a = T.new_sym "a" u in
-  let b = T.new_sym "b" u in
-  let c = T.new_sym "c" u in
+  let u = T.new_const "u" T.type_ in
+  let a = T.new_const "a" u in
+  let b = T.new_const "b" u in
+  let c = T.new_const "c" u in
   let thm = Trustee.Tier1.eq_trans a b c in
   Format.printf "trans: %a@." Thm.pp thm;
   A.check expr_t "result.concl" (T.eq a c) (Thm.concl thm);
@@ -115,11 +115,11 @@ let test_trans =
 
 let test_eq_reflect =
   A.test_case "eq_reflect" `Quick @@ fun () ->
-  let u = T.new_sym "u" T.type_ in
-  let a = T.new_sym "a" u in
-  let b = T.new_sym "b" u in
-  let c = T.new_sym "c" u in
-  let f = T.new_sym "f" T.(u @-> u @-> u @-> u @-> u) in
+  let u = T.new_const "u" T.type_ in
+  let a = T.new_const "a" u in
+  let b = T.new_const "b" u in
+  let c = T.new_const "c" u in
+  let f = T.new_const "f" T.(u @-> u @-> u @-> u @-> u) in
   let thm = Thm.cong_fol f [a; a; b; c] [a; b; b; c] in
   Format.printf "cong_fol: %a@." Thm.pp thm;
   let thm = Trustee.Tier1.eq_reflect thm in

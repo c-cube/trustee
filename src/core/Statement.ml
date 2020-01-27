@@ -27,7 +27,7 @@ module Ctx = struct
     self
 
   let decl self f ~ty =
-    let t = Expr.new_sym f ty in
+    let t = Expr.new_const f ty in
     Hashtbl.replace self.ts f t;
     t
 

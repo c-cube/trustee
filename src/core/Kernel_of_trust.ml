@@ -46,10 +46,12 @@ module Expr
 
   type var
   type var_content
+  type const_content
 
   type view =
     | Type
     | Kind
+    | Const of const_content
     | Var of var_content
     | App of t * t
     | Lambda of var * t
@@ -73,7 +75,7 @@ module Expr
   val arrow : t -> t -> t
   val arrow_l : t list -> t -> t
   val (@->) : t -> t -> t
-  val new_sym : string -> t -> t
+  val new_const : string -> t -> t
   val new_var : string -> t -> var
   val var : var -> t
   val lambda : var -> t -> t
@@ -162,14 +164,19 @@ end
     mutable ty: t option; (* computed lazily; only kind has no type *)
   }
   and var_content = {
-    v_name: ID.t;
+    v_name: string;
     v_ty: t;
-    v_display: display;
+  }
+  and const_content = {
+    c_name: ID.t;
+    c_ty: t;
+    c_display: display;
   }
   and var = t
   and view =
     | Type
     | Kind
+    | Const of const_content
     | Var of var_content
     | App of t * t
     | Lambda of var * t
@@ -183,8 +190,10 @@ end
   let ty_exn t = match t.ty with Some ty -> ty | None -> Error.error "term has no type"
   let compare a b = CCInt.compare a.id b.id
 
-  let var_eq v1 v2 = ID.equal v1.v_name v2.v_name
-  let var_hash v = ID.hash v.v_name
+  let const_eq c1 c2 = ID.equal c1.c_name c2.c_name
+  let const_hash c = ID.hash c.c_name
+  let var_eq v1 v2 = String.equal v1.v_name v2.v_name && equal v1.v_ty v2.v_ty
+  let var_hash v = CCHash.(combine2 (string v.v_name) (hash v.v_ty))
 
   module H = Hashcons.Make(struct
       type nonrec t = t
@@ -194,13 +203,15 @@ end
         | Lambda (a1,a2), Lambda (b1,b2) -> equal a1 b1 && equal a2 b2
         | Pi (a1,a2), Pi (b1,b2) -> equal a1 b1 && equal a2 b2
         | Arrow (a1,a2), Arrow (b1,b2) -> equal a1 b1 && equal a2 b2
+        | Const v1, Const v2 -> const_eq v1 v2
         | Var v1, Var v2 -> var_eq v1 v2
         | App (a1,b1), App (a2,b2) -> equal a1 a2 && equal b1 b2
-        | (Lambda _ | Arrow _ | Pi _ | Type | Kind | App _ | Var _), _ -> false
+        | (Lambda _ | Arrow _ | Pi _ | Type | Kind | App _ | Const _ | Var _), _ -> false
 
       let hash ty = match ty.view with
         | Kind -> 222
         | Type -> 1
+        | Const v -> CCHash.(combine2 5 (const_hash v))
         | Var v -> CCHash.(combine2 10 (var_hash v))
         | App (a, b) -> CCHash.(combine3 20 (hash a) (hash b))
         | Lambda (a, b) -> CCHash.(combine3 30 (hash a) (hash b))
@@ -233,7 +244,8 @@ end
     match t.view with
     | Kind -> Fmt.string out "Kind"
     | Type -> Fmt.string out "Type"
-    | Var v -> ID.pp out v.v_name
+    | Const c -> ID.pp out c.c_name
+    | Var v -> Fmt.string out v.v_name
     | Lambda (a,b) -> Fmt.fprintf out "@[\\%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
     | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
     | Arrow (a,b) -> Fmt.fprintf out "@[%a@ -> %a@]" pp a pp b
@@ -241,18 +253,18 @@ end
       let f, args = unfold_app t in
       assert (args<>[]);
       begin match f.view, args with
-        | Var {v_display=Infix; v_name; _}, [a;b] ->
-          Fmt.fprintf out "@[%a@ %a %a@]" pp_inner a ID.pp v_name pp_inner b
-        | Var {v_display=Infix; v_name; _}, _::_::_ ->
+        | Const {c_display=Infix; c_name; _}, [a;b] ->
+          Fmt.fprintf out "@[%a@ %a %a@]" pp_inner a ID.pp c_name pp_inner b
+        | Const {c_display=Infix; c_name; _}, _::_::_ ->
           (* display [= u a b] as [a `= u` b] *)
           let ifx_args, args = CCList.take_drop (List.length args-2) args in
           begin match ifx_args, args with
             | [u], [a;b] ->
               Fmt.fprintf out "@[%a@ @[%a_%a@] %a@]"
-                pp_inner a ID.pp v_name pp_inner u pp_inner b
+                pp_inner a ID.pp c_name pp_inner u pp_inner b
             | _, [a;b] ->
               Fmt.fprintf out "@[%a@ `@[%a@ %a@]` %a@]"
-                pp_inner a ID.pp v_name (pp_list pp_inner) ifx_args pp_inner b
+                pp_inner a ID.pp c_name (pp_list pp_inner) ifx_args pp_inner b
             | _ -> assert false
           end
         | _ ->
@@ -262,14 +274,17 @@ end
   and pp_inner out t =
     match t.view with
     | Lambda _ | Arrow _ | Pi _ | App _ -> Fmt.fprintf out "(@[%a@])" pp t
-    | Type | Kind | Var _ -> pp out t
+    | Type | Kind | Var _ | Const _ -> pp out t
 
   let var (v:var) : t = v
   let var' v : t = make_ (Var v) (fun () -> v.v_ty)
-  let new_var_ display s ty : t =
-    make_ (Var {v_name=ID.make s; v_ty=ty; v_display=display}) (fun () -> ty)
-  let new_var name ty : t = new_var_ Normal name ty
-  let new_sym = new_var
+  let new_const_ display s ty : t =
+    make_ (Const {c_name=ID.make s; c_ty=ty; c_display=display})
+      (fun () ->
+         (* TODO: assert that the type is closed *)
+         ty)
+  let new_const = new_const_ Normal
+  let new_var s ty : t = make_ (Var {v_name=s; v_ty=ty; }) (fun () -> ty)
 
   let bool = new_var "Bool" type_
   let arrow a b : t = make_ (Arrow (a,b)) (fun () -> type_)
@@ -299,7 +314,7 @@ end
       if equal t x then by
       else (
         match t.view with
-        | Type | Kind -> t
+        | Type | Kind | Const _ -> t
         | Var v -> var' {v with v_ty=aux v.v_ty}
         | App (f, u) ->
           let f' = aux f in
@@ -318,12 +333,12 @@ end
   let eq_const : t =
     let a = new_var "α" type_ in
     let ty = pi a (a @-> a @-> bool) in
-    new_var_ Infix "=" ty
+    new_const_ Infix "=" ty
 
   let true_ = new_var "true" bool
   let false_ = new_var "false" bool
-  let and_const : t = new_var_ Infix "/\\" (bool @-> bool @-> bool)
-  let or_const : t = new_var_ Infix "\\/" (bool @-> bool @-> bool)
+  let and_const : t = new_const_ Infix "/\\" (bool @-> bool @-> bool)
+  let or_const : t = new_const_ Infix "\\/" (bool @-> bool @-> bool)
   let not_const : t = new_var "~" (bool @-> bool)
 
   let eq a b : t = app_l eq_const [ty_exn a; a; b]
@@ -390,7 +405,7 @@ end
         | exception Not_found ->
           let u =
             match t.view with
-            | Type | Kind -> t
+            | Type | Kind | Const _ -> t
             | Var v ->
               begin match Map.find t self with
                 | u -> u
@@ -536,12 +551,12 @@ end = struct
       Error.errorf "thm.eq_leibniz: P must be a lambda,@ not %a" Expr.pp_inner p
 
   let cong_ax : t =
-    let a = Expr.new_sym "α" Expr.type_ in
-    let b = Expr.new_sym "β" Expr.type_ in
-    let f = Expr.new_sym "f" Expr.(a @-> b) in
-    let g = Expr.new_sym "g" Expr.(a @-> b) in
-    let x = Expr.new_sym "x" a in
-    let y = Expr.new_sym "y" a in
+    let a = Expr.new_const "α" Expr.type_ in
+    let b = Expr.new_const "β" Expr.type_ in
+    let f = Expr.new_const "f" Expr.(a @-> b) in
+    let g = Expr.new_const "g" Expr.(a @-> b) in
+    let x = Expr.new_const "x" a in
+    let y = Expr.new_const "y" a in
     make_l_ Expr.(eq (app f x) (app g y)) [Expr.eq f g; Expr.eq x y]
 
   let instantiate (t:t) (subst:Expr.subst) : t =
