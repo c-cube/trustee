@@ -450,8 +450,9 @@ module Thm : sig
   val pp : t Fmt.printer
   val concl : t -> Expr.t
   val hyps : t -> Expr.Set.t
+  val dep_on_axioms : t -> t list
 
-  val view_l: t -> Expr.t * Expr.t list
+  val view_l: t -> Expr.t * Expr.t list * t list
 
   (** Creation of new terms *)
 
@@ -463,10 +464,6 @@ module Thm : sig
 
   val cut : t -> t -> t
   (** [cut (F1 |- b) (F2, b |- c)] is [F1, F2 |- c] *)
-
-  val cut_l : t list -> t -> t
-  (** [multi_cut thm_l thm] does simultaneous cuts of the hypothesis
-      of [thm] with the conclusions in [thm_l]. *)
 
   val instantiate : t -> Expr.subst -> t
   (** [instantiate thm σ] produces
@@ -491,17 +488,21 @@ module Thm : sig
   (** [cong f l1 l2] makes the congruence axiom for [∧l1=l2 ==> f l1=f2 l2] *)
 
   val axiom : Expr.t list -> Expr.t -> t
+  (** Create a new axiom [assumptions |- concl]
+      {b use with caution} *)
 end = struct
   type t = {
     concl: Expr.t;
     hyps: Expr.Set.t;
+    dep_on_axioms: t list; (* axioms this depends on *)
   }
   (* TODO: a bitfield to register where [beta], choice, excluded middle, etc.
      were used? *)
 
   let concl self = self.concl
   let hyps self = self.hyps
-  let view_l self = self.concl, Expr.Set.elements self.hyps
+  let dep_on_axioms self = self.dep_on_axioms
+  let view_l self = self.concl, Expr.Set.elements self.hyps, self.dep_on_axioms
   let pp out self =
     if Expr.Set.is_empty self.hyps then (
       Fmt.fprintf out "@[|- %a@]" Expr.pp_inner self.concl
@@ -511,8 +512,9 @@ end = struct
         Expr.pp_inner self.concl
     )
 
-  let make_ concl hyps : t = {concl; hyps}
-  let make_l_ concl hyps : t = {concl; hyps=Expr.Set.of_list hyps}
+  let make_ concl hyps dep_on_axioms : t = {concl; hyps; dep_on_axioms}
+  let make_l_ concl hyps dep_on_axioms : t =
+    make_ concl (Expr.Set.of_list hyps) dep_on_axioms
 
   let err_unless_bool_ what t =
     if not (Expr.is_a_bool t) then (
@@ -521,9 +523,9 @@ end = struct
 
   let assume t : t =
     err_unless_bool_ "assume" t;
-    make_ t (Expr.Set.singleton t)
+    make_ t (Expr.Set.singleton t) []
 
-  let refl t : t = make_ (Expr.eq t t) Expr.Set.empty
+  let refl t : t = make_ (Expr.eq t t) Expr.Set.empty []
 
   let beta f t : t =
     match Expr.view f with
@@ -533,10 +535,11 @@ end = struct
           (Expr.app f t)
           (Expr.subst1 v t ~in_:body)
       in
-      make_ concl Expr.Set.empty
+      make_ concl Expr.Set.empty []
     | _ ->
       Error.errorf "thm.beta: f must be a lambda,@ not %a" Expr.pp f
 
+  (* TODO: replace with basic axioms *)
   let eq_leibniz a b ~p : t =
     if not Expr.(equal (ty_exn a) (ty_exn b)) then (
       Error.errorf "thm.eq_leibniz: %a and %a do not have the same type"
@@ -546,7 +549,7 @@ end = struct
     | Expr.Lambda (v, body) when Expr.Var.has_ty v (Expr.ty_exn a) ->
       let concl = Expr.subst1 v b ~in_:body in
       let hyps = [Expr.subst1 v a ~in_:body; Expr.eq a b] in
-      make_l_ concl hyps
+      make_l_ concl hyps []
     | _ ->
       Error.errorf "thm.eq_leibniz: P must be a lambda,@ not %a" Expr.pp_inner p
 
@@ -557,12 +560,13 @@ end = struct
     let g = Expr.new_const "g" Expr.(a @-> b) in
     let x = Expr.new_const "x" a in
     let y = Expr.new_const "y" a in
-    make_l_ Expr.(eq (app f x) (app g y)) [Expr.eq f g; Expr.eq x y]
+    make_l_ Expr.(eq (app f x) (app g y)) [Expr.eq f g; Expr.eq x y] []
 
   let instantiate (t:t) (subst:Expr.subst) : t =
     let inst = Expr.Subst.apply subst in
-    make_ (inst t.concl) (Expr.Set.map inst t.hyps)
+    make_ (inst t.concl) (Expr.Set.map inst t.hyps) t.dep_on_axioms
 
+  (* TODO: move to tier 1 *)
   let cong_fol f l1 l2 : t =
     if List.length l1 <> List.length l2 then (
       invalid_arg "cong_f: incompatible length"
@@ -574,30 +578,26 @@ end = struct
         Expr.pp app1 Expr.pp app2
     );
     make_ (Expr.eq app1 app2)
-      (List.map2 Expr.eq l1 l2 |> Expr.Set.of_list)
+      (List.map2 Expr.eq l1 l2 |> Expr.Set.of_list) []
 
   (* TODO: remove refl hyps, using filter? *)
 
-  let cut_l l b : t =
-    let {concl=concl_b; hyps=hyps_b} = b in
-    if List.for_all (fun a -> Expr.Set.mem a.concl hyps_b) l then (
-      let hyps =
-        List.fold_left (fun hyps a -> Expr.Set.remove a.concl hyps) hyps_b l
-      in
-      let hyps =
-        List.fold_left (fun hyps a -> Expr.Set.union a.hyps hyps) hyps l
-      in
-      make_ concl_b hyps
+  let cut a b : t =
+    let {concl=concl_b; hyps=hyps_b; dep_on_axioms=_} = b in
+    if Expr.Set.mem a.concl hyps_b then (
+      let hyps = Expr.Set.remove a.concl hyps_b in
+      let hyps = Expr.Set.union a.hyps hyps in
+      make_ concl_b hyps (List.rev_append a.dep_on_axioms b.dep_on_axioms)
     ) else (
-      Error.errorf "cut: a conclusion in %a@ does not belong in hyps of %a"
-        (Fmt.Dump.list pp) l pp b
+      Error.errorf "cut: conclusion of %a@ does not belong in hyps of %a"
+        pp a pp b
     )
 
-  let cut a b : t = cut_l [a] b
-
-  (* TODO: log that somewhere? *)
   let axiom hyps concl : t =
     err_unless_bool_ "axiom" concl;
     List.iter (err_unless_bool_ "axiom") hyps;
-    make_l_ concl hyps
+    let rec ax = {
+      concl; hyps=Expr.Set.of_list hyps; dep_on_axioms=[ax];
+    } in
+    ax
 end

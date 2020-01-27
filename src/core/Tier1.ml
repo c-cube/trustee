@@ -39,10 +39,8 @@ let eq_reflect thm =
   if T.Set.is_empty trivial_eqn_members then (
     thm
   ) else (
-    let refl_l =
-      T.Set.fold (fun t l -> Thm.refl t :: l) trivial_eqn_members []
-    in
-    Thm.cut_l refl_l thm
+    T.Set.fold
+      (fun t thm -> Thm.cut (Thm.refl t) thm) trivial_eqn_members thm
   )
 
 let eq_proof _ _ = assert false (* TODO *)
