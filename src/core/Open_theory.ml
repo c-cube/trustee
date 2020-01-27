@@ -179,7 +179,7 @@ module Parse_ = struct
     match VM.pop2 vm with
     | Term t, List hyps ->
       let hyps = List.map (function Term t -> t | _ -> err_bad_stack_ vm "axiom") hyps in
-      let ax = Thm.axiom hyps t in
+      let ax, _ = Thm.axiom "_ot_axiom" hyps t in
       Format.printf "@{<Yellow>OT.add-assumption@} %a@." Thm.pp ax;
       vm.vm_assumptions <- ax :: vm.vm_assumptions;
       VM.push_obj vm (Thm ax)

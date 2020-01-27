@@ -7,6 +7,7 @@
 
 module Fmt = CCFormat
 
+type 'a iter = ('a -> unit) -> unit
 let pp_list ppx out l =
   Fmt.(list ~sep:(return "@ ") ppx) out l
 
@@ -20,12 +21,15 @@ module ID : sig
   val make : string -> t
 
   val equal : t -> t -> bool
+  val compare : t -> t -> int
   val hash : t -> int
   val pp : t Fmt.printer
+  module Map : Map.S with type key = t
 end = struct
   type t = {name: string; id: int}
 
-  let equal r1 r2 = r1.id = r2.id && String.equal r1.name r2.name
+  let equal r1 r2 = CCInt.equal r1.id r2.id
+  let compare r1 r2 = CCInt.compare r1.id r2.id
   let hash {name;id} = CCHash.(combine3 10 (string name)(int id))
 
   let pp out {name;id=_} = Fmt.string out name
@@ -35,6 +39,10 @@ end = struct
     fun name ->
       incr n;
       {name; id= !n}
+
+
+  module As_key = struct type nonrec t=t let compare=compare end
+  module Map = Map.Make(As_key)
 end
 
 (** {2 Exprs}
@@ -447,12 +455,17 @@ end
 module Thm : sig
   type t
 
+  type axiom = {
+    ax_name: ID.t;
+    ax_thm: t;
+  }
+
   val pp : t Fmt.printer
   val concl : t -> Expr.t
   val hyps : t -> Expr.Set.t
-  val dep_on_axioms : t -> t list
+  val dep_on_axioms : t -> axiom iter
 
-  val view_l: t -> Expr.t * Expr.t list * t list
+  val view_l: t -> Expr.t * Expr.t list * axiom iter
 
   (** Creation of new terms *)
 
@@ -468,7 +481,6 @@ module Thm : sig
   val instantiate : t -> Expr.subst -> t
   (** [instantiate thm σ] produces
       [ Fσ |- Gσ]  where [thm] is [F |- G] *)
-
 
   (* TODO: [cong_t]: [ f=g, a=b |- f a=g b] *)
   (* TODO: some connectives, like [a |- a=true], [a=true |- a],
@@ -487,22 +499,27 @@ module Thm : sig
   val cong_fol : Expr.t -> Expr.t list -> Expr.t list -> t
   (** [cong f l1 l2] makes the congruence axiom for [∧l1=l2 ==> f l1=f2 l2] *)
 
-  val axiom : Expr.t list -> Expr.t -> t
-  (** Create a new axiom [assumptions |- concl]
+  val axiom : string -> Expr.t list -> Expr.t -> t * axiom
+  (** Create a new axiom [assumptions |- concl] with the given name.
       {b use with caution} *)
 end = struct
   type t = {
     concl: Expr.t;
     hyps: Expr.Set.t;
-    dep_on_axioms: t list; (* axioms this depends on *)
+    dep_on_axioms: axiom ID.Map.t lazy_t; (* axioms this depends on *)
+  }
+  and axiom = {
+    ax_name: ID.t;
+    ax_thm: t;
   }
   (* TODO: a bitfield to register where [beta], choice, excluded middle, etc.
      were used? *)
 
+  let _deps self k = ID.Map.iter (fun _ ax -> k ax) (Lazy.force self.dep_on_axioms)
   let concl self = self.concl
   let hyps self = self.hyps
-  let dep_on_axioms self = self.dep_on_axioms
-  let view_l self = self.concl, Expr.Set.elements self.hyps, self.dep_on_axioms
+  let dep_on_axioms self = _deps self
+  let view_l self = self.concl, Expr.Set.elements self.hyps, _deps self
   let pp out self =
     if Expr.Set.is_empty self.hyps then (
       Fmt.fprintf out "@[|- %a@]" Expr.pp_inner self.concl
@@ -512,9 +529,19 @@ end = struct
         Expr.pp_inner self.concl
     )
 
+  let _no_ax = lazy ID.Map.empty
   let make_ concl hyps dep_on_axioms : t = {concl; hyps; dep_on_axioms}
   let make_l_ concl hyps dep_on_axioms : t =
     make_ concl (Expr.Set.of_list hyps) dep_on_axioms
+
+  let merge_ax_ (lazy m1) (lazy m2) =
+    lazy (
+      let merge_ _id ax1 ax2 = match ax1, ax2 with
+        | Some ax, _ | _, Some ax -> Some ax
+        | None, None -> None
+      in
+      ID.Map.merge merge_ m1 m2
+    )
 
   let err_unless_bool_ what t =
     if not (Expr.is_a_bool t) then (
@@ -523,9 +550,9 @@ end = struct
 
   let assume t : t =
     err_unless_bool_ "assume" t;
-    make_ t (Expr.Set.singleton t) []
+    make_ t (Expr.Set.singleton t) _no_ax
 
-  let refl t : t = make_ (Expr.eq t t) Expr.Set.empty []
+  let refl t : t = make_ (Expr.eq t t) Expr.Set.empty _no_ax
 
   let beta f t : t =
     match Expr.view f with
@@ -535,7 +562,7 @@ end = struct
           (Expr.app f t)
           (Expr.subst1 v t ~in_:body)
       in
-      make_ concl Expr.Set.empty []
+      make_ concl Expr.Set.empty _no_ax
     | _ ->
       Error.errorf "thm.beta: f must be a lambda,@ not %a" Expr.pp f
 
@@ -549,7 +576,7 @@ end = struct
     | Expr.Lambda (v, body) when Expr.Var.has_ty v (Expr.ty_exn a) ->
       let concl = Expr.subst1 v b ~in_:body in
       let hyps = [Expr.subst1 v a ~in_:body; Expr.eq a b] in
-      make_l_ concl hyps []
+      make_l_ concl hyps _no_ax
     | _ ->
       Error.errorf "thm.eq_leibniz: P must be a lambda,@ not %a" Expr.pp_inner p
 
@@ -560,7 +587,7 @@ end = struct
     let g = Expr.new_const "g" Expr.(a @-> b) in
     let x = Expr.new_const "x" a in
     let y = Expr.new_const "y" a in
-    make_l_ Expr.(eq (app f x) (app g y)) [Expr.eq f g; Expr.eq x y] []
+    make_l_ Expr.(eq (app f x) (app g y)) [Expr.eq f g; Expr.eq x y] _no_ax
 
   let instantiate (t:t) (subst:Expr.subst) : t =
     let inst = Expr.Subst.apply subst in
@@ -578,7 +605,7 @@ end = struct
         Expr.pp app1 Expr.pp app2
     );
     make_ (Expr.eq app1 app2)
-      (List.map2 Expr.eq l1 l2 |> Expr.Set.of_list) []
+      (List.map2 Expr.eq l1 l2 |> Expr.Set.of_list) _no_ax
 
   (* TODO: remove refl hyps, using filter? *)
 
@@ -587,17 +614,22 @@ end = struct
     if Expr.Set.mem a.concl hyps_b then (
       let hyps = Expr.Set.remove a.concl hyps_b in
       let hyps = Expr.Set.union a.hyps hyps in
-      make_ concl_b hyps (List.rev_append a.dep_on_axioms b.dep_on_axioms)
+      make_ concl_b hyps (merge_ax_ a.dep_on_axioms b.dep_on_axioms)
     ) else (
       Error.errorf "cut: conclusion of %a@ does not belong in hyps of %a"
         pp a pp b
     )
 
-  let axiom hyps concl : t =
+  let axiom name hyps concl : t * axiom =
     err_unless_bool_ "axiom" concl;
     List.iter (err_unless_bool_ "axiom") hyps;
-    let rec ax = {
-      concl; hyps=Expr.Set.of_list hyps; dep_on_axioms=[ax];
-    } in
-    ax
+    let ax_name = ID.make name in
+    let rec thm = {
+      concl; hyps=Expr.Set.of_list hyps;
+      dep_on_axioms=lazy (ID.Map.singleton ax_name ax);
+    } and ax = {
+        ax_name;
+        ax_thm=thm;
+    }in
+    thm, ax
 end
