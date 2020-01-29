@@ -29,6 +29,7 @@ module Thm = KoT.Thm
 exception Error = KoT.Error
 
 module Core = Core
+module Bool = Bool
 module Goal = Goal
 module Tactic = Tactic
 module Statement = Statement

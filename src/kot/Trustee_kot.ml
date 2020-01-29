@@ -104,6 +104,7 @@ module Expr
   val arrow_l : t list -> t -> t
   val (@->) : t -> t -> t
   val new_const : string -> t -> t
+  val new_const_infix : string -> t -> t
   val new_var : string -> t -> var
   val new_var' : string -> t -> t
   val var : var -> t
@@ -115,17 +116,9 @@ module Expr
   val false_ : t
   val eq_const : t
   val imply_const : t
-  val and_const : t
-  val or_const : t
-  val not_const : t
 
   val eq : t -> t -> t
   val imply : t -> t -> t
-  val and_ : t -> t -> t
-  val or_ : t -> t -> t
-  val and_l : t list -> t
-  val or_l : t list -> t
-  val not_ : t -> t
 
   val subst1 : var -> t -> in_:t -> t
   (** [subst1 v t ~in_:u] builds the term [u [v:=t]] where all instances of
@@ -386,6 +379,7 @@ end
          ty)
 
   let new_const = new_const_ Normal
+  let new_const_infix = new_const_ Infix
   let new_var s ty : t = make_ (Var {v_name=s; v_ty=ty; }) (fun () -> ty)
   let new_var' = new_var
 
@@ -402,9 +396,10 @@ end
     let get_ty () = match a.ty, b.ty with
       | Some {view=Arrow (a_arg, a_ret); _}, Some ty_b when equal a_arg ty_b ->
         a_ret
-      | Some {view=Pi (a_v, a_body); _}, Some ty_b when equal (ty_exn a_v) ty_b ->
-        (* substitute [b] for [a_v] in [a_body] *)
-        subst1 a_v b ~in_:a_body
+      | Some {view=Pi (a_v, a_ty_body); _}, Some ty_b when equal (ty_exn a_v) ty_b ->
+        (* substitute [b] for [a_v] in [a_ty_body] to obtain the type
+           of [a b] *)
+        subst1 a_v b ~in_:a_ty_body
       | _ ->
         errorf_
           (fun k->k "@[type mismatch:@ cannot apply @[%a@ : %a@]@ to @[%a : %a@]@]"
@@ -412,8 +407,9 @@ end
     in
     make_ (App (a,b)) get_ty
 
-  (* substitution of [x] with [by] *)
+  (** substitution of [x] with [by] *)
   and subst1 (x:var) by ~in_ : t =
+    (* TODO: use a local table to traverse term as a DAG? *)
     let rec aux t =
       if equal t x then by
       else (
@@ -442,17 +438,9 @@ end
   let true_ = new_const "true" bool
   let false_ = new_const "false" bool
   let imply_const : t = new_const_ Infix "==>" (bool @-> bool @-> bool)
-  let and_const : t = new_const_ Infix "/\\" (bool @-> bool @-> bool)
-  let or_const : t = new_const_ Infix "\\/" (bool @-> bool @-> bool)
-  let not_const : t = new_const "~" (bool @-> bool)
 
   let eq a b : t = app_l eq_const [ty_exn a; a; b]
   let imply a b : t = app_l imply_const [a;b]
-  let and_ a b : t = app_l and_const [a;b]
-  let or_ a b : t = app_l or_const [a;b]
-  let not_ a : t = app not_const a
-  let rec and_l = function [] -> true_ | [t] -> t | t :: ts -> and_ t (and_l ts)
-  let rec or_l = function [] -> false_ | [t] -> t | t :: ts -> or_ t (or_l ts)
 
   let is_a_type t : bool = match t.ty with
     | Some ty -> equal ty type_
@@ -590,25 +578,32 @@ module Thm : sig
   val trans : t -> t -> t
   (** [trans (F1 |- a=b) (F2 |- b=c)] is [F1, F2 |- a=c] *)
 
-  val cong : t -> t -> t
-  (** [cong (F1 |- f=g) (F2 |- t=u)] is [F1, F2 |- f t=g u] *)
+  val congr : t -> t -> t
+  (** [congr (F1 |- f=g) (F2 |- t=u)] is [F1, F2 |- f t=g u] *)
 
   val abs : Expr.var -> t -> t
   (** [abs x (F |- t=u)] is [F |- (λx.t)=(λx.u)] *)
 
-  val cut : t -> t -> t
-  (** [cut (F1 |- b) (F2, b |- c)] is [F1, F2 |- c] *)
+  val cut : lemma:t -> t -> t
+  (** [cut (F1 |- b) ~lemma:(F2, b |- c)] is [F1, F2 |- c].
+      This fails if [b] does not occur in the hypothesis
+      of the second theorem.
+
+      NOTE: this is not strictly necessary, as it's not an axiom in HOL light,
+      but we include it here anyway.
+  *)
 
   val mp : t -> t -> t
   (** [mp (F1 |- a) (F2 |- a ==> b)] is [F1, F2 |- b] *)
 
-  val bool_eq : t -> t -> t
-  (** [bool_eq (F1 |- a=b) (F2 |- a)] is [F1, F2 |- b].
+  val bool_eq : eq:t -> t -> t
+  (** [bool_eq ~eq:(F1 |- a=b) (F2 |- a)] is [F1, F2 |- b].
       This is the boolean equivalent of transitivity. *)
 
   val bool_eq_intro : t -> t -> t
   (** [bool_eq_intro (F1, a |- b) (F2, b |- a) is [F1, F2 |- a=b].
-      This is a way of building a boolean [a=b] from proofs of [a==>b] and [b==>a].
+      This is a way of building a boolean [a=b] from proofs of
+      [a==>b] and [b==>a] (or [a|-b] and [b|-a]).
       *)
 
   val instantiate : t -> Expr.subst -> t
@@ -675,7 +670,7 @@ end = struct
       let concl = Expr.eq (Expr.app f t) rhs in
       make_ concl Expr.Set.empty _no_ax, rhs
     | _ ->
-      errorf_ (fun k->k "thm.beta: f must be a lambda,@ not %a" Expr.pp f)
+      errorf_ (fun k->k "(@[thm.beta:@ %a is not a lambda@])" Expr.pp f)
 
   let abs x (th:t) : t =
     try
@@ -684,51 +679,51 @@ end = struct
         (Expr.eq (Expr.lambda x t) (Expr.lambda x u))
         th.hyps th.dep_on_axioms
     with Error msg ->
-      error_wrapf_ msg (fun k->k"in @[abs %a@ %a@]" Expr.Var.pp x pp th)
+      error_wrapf_ msg (fun k->k"(@[in@ abs %a@ %a@])" Expr.Var.pp x pp th)
 
   let mp t1 t2 =
     match Expr.unfold_app t2.concl with
     | f, [a;b] when Expr.equal Expr.imply_const f ->
       if not (Expr.equal a t1.concl) then (
-        errorf_ (fun k->k "mp: LHS of implication in %a@ does not match" pp t2)
+        errorf_ (fun k->k "(@[mp: LHS of implication@ in %a@ does not match@])" pp t2)
       );
       make_ b (Expr.Set.union t1.hyps t2.hyps)
         (merge_ax_ t1.dep_on_axioms t2.dep_on_axioms)
     | _ ->
-      errorf_ (fun k->k "mp: thm %a@ should have an implication as conclusion" pp t2)
+      errorf_ (fun k->k "(@[mp: thm %a@ should have an implication as conclusion@])" pp t2)
 
-  let bool_eq th1 th2 : t =
+  let bool_eq ~eq:th1 th2 : t =
     try
       let a, b = Expr.unfold_eq_exn th1.concl in
       err_unless_bool_ "bool_eq" a;
       err_unless_bool_ "bool_eq" b;
       if not (Expr.equal a th2.concl) then (
-        errorf_ (fun k->k "conclusion of %a does not match LHS of %a" pp th2 pp th1);
+        errorf_ (fun k->k "(@[conclusion of %a@ does not match LHS of %a@])" pp th2 pp th1);
       );
       make_ b (Expr.Set.union th1.hyps th2.hyps)
         (merge_ax_ th1.dep_on_axioms th2.dep_on_axioms)
     with Error msg ->
-      error_wrapf_ msg (fun k->k"bool-eq %a %a" pp th1 pp th2)
+      error_wrapf_ msg (fun k->k "(@[in@ bool-eq@ %a@ %a@])" pp th1 pp th2)
 
   let bool_eq_intro th1 th2 : t =
     make_ (Expr.eq th1.concl th2.concl)
       Expr.Set.(union (remove th1.concl th2.hyps) (remove th2.concl th1.hyps))
       (merge_ax_ th1.dep_on_axioms th2.dep_on_axioms)
 
-  let trans t1 t2 =
+  let trans t1 t2 : t =
     match Expr.unfold_app t1.concl, Expr.unfold_app t2.concl with
     | (f1, [_;a1;b1]), (f2, [_;a2;b2])
       when Expr.equal Expr.eq_const f1 && Expr.equal Expr.eq_const f2 ->
       if not (Expr.equal b1 a2) then (
         errorf_
-          (fun k->k "trans: %a and %a do not match" Expr.pp b1 Expr.pp a2)
+          (fun k->k "(@[trans:@ %a@ and %a do not match@])" Expr.pp b1 Expr.pp a2)
       );
       make_ (Expr.eq a1 b2) (Expr.Set.union t1.hyps t2.hyps)
         (merge_ax_ t1.dep_on_axioms t2.dep_on_axioms)
     | _ ->
       errorf_ (fun k->k"trans: invalid args %a@ and %a" pp t1 pp t2)
 
-  let cong th1 th2 : t =
+  let congr th1 th2 : t =
     try
       let f, g = Expr.unfold_eq_exn th1.concl in
       let t, u = Expr.unfold_eq_exn th2.concl in
@@ -737,22 +732,22 @@ end = struct
         (Expr.Set.union th1.hyps th2.hyps)
         (merge_ax_ th1.dep_on_axioms th2.dep_on_axioms)
     with Error f ->
-      error_wrapf_ f (fun k->k "in (@[cong@ %a@ %a@])" pp th1 pp th2)
+      error_wrapf_ f (fun k->k "(@[in congr@ :th1 %a@ :th2 %a@])" pp th1 pp th2)
 
   let instantiate (t:t) (subst:Expr.subst) : t =
     let inst = Expr.Subst.apply subst in
     make_ (inst t.concl) (Expr.Set.map inst t.hyps) t.dep_on_axioms
 
-  let cut a b : t =
-    let {concl=concl_b; hyps=hyps_b; dep_on_axioms=_} = b in
-    if Expr.Set.mem a.concl hyps_b then (
-      let hyps = Expr.Set.remove a.concl hyps_b in
+  let cut ~lemma:l a : t =
+    let {concl=concl_l; hyps=hyps_l; dep_on_axioms=_} = l in
+    if Expr.Set.mem a.concl hyps_l then (
+      let hyps = Expr.Set.remove a.concl hyps_l in
       let hyps = Expr.Set.union a.hyps hyps in
-      make_ concl_b hyps (merge_ax_ a.dep_on_axioms b.dep_on_axioms)
+      make_ concl_l hyps (merge_ax_ a.dep_on_axioms l.dep_on_axioms)
     ) else (
       errorf_
-        (fun k->k "cut: conclusion of %a@ does not belong in hyps of %a"
-            pp a pp b)
+        (fun k->k "(@[cut:@ conclusion of %a@ does not appear in hyps of %a@])"
+            pp a pp l)
     )
 
   let axiom name hyps concl : t * axiom =

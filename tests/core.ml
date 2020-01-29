@@ -60,7 +60,7 @@ let test_cong =
   let fa = T.app f a in
   let fb = T.app f b in
   let thm =
-    Thm.cong (Thm.refl f) (Thm.assume (T.eq a b))
+    Thm.congr (Thm.refl f) (Thm.assume (T.eq a b))
   in
   Format.printf "cong: %a@." Thm.pp thm;
   A.check expr_t "cong result" (T.eq fa fb) (Thm.concl thm);
@@ -75,6 +75,20 @@ let test_symm =
   let thm = Trustee.Core.eq_sym a b in
   A.check expr_t "result.concl" (T.eq b a) (Thm.concl thm);
   A.check expr_t_l "result.hyps" [T.eq a b] (T.Set.elements @@ Thm.hyps thm);
+  ()
+
+(* prove the cut rule again *)
+let test_cut =
+  A.test_case "cut'" `Quick @@ fun () ->
+  let a = T.new_const "a" T.bool in
+  let b = T.new_const "b" T.bool in
+  let thm = Trustee.Core.cut'
+      (Thm.axiom "cut-a" [] a |> fst)
+      (Thm.axiom "cut-a->b" [a] b |> fst)
+  in
+  Format.printf "%a@." Thm.pp thm;
+  A.check expr_t "result.concl" b (Thm.concl thm);
+  A.check expr_t_l "result.hyps" [] (T.Set.elements @@ Thm.hyps thm);
   ()
 
 (* prove [a=b, b=c |- a=c] *)
@@ -112,7 +126,7 @@ let test_eq_reflect =
 
 let suite =
   ["core",
-   [test_expr1; test_refl; test_cong; test_symm;
+   [test_expr1; test_refl; test_cong; test_symm; test_cut;
     test_trans; test_eq_reflect; test_beta;
    ]]
 

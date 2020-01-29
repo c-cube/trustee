@@ -7,6 +7,7 @@
 %{
   open Trustee
   module T = Expr
+  module F = Bool
 %}
 
 %parameter <PARAM : sig
@@ -56,12 +57,12 @@ binder_term:
 
 prefix_term:
   | t=binder_term { t }
-  | NOT t=prefix_term { T.not_ t }
+  | NOT t=prefix_term { F.not_ t }
 
 term:
   | t=prefix_term { t }
-  | t=term AND u=term { T.and_ t u }
-  | t=term OR u=term { T.or_ t u }
+  | t=term AND u=term { F.and_ t u }
+  | t=term OR u=term { F.or_ t u }
   | t=term ARROW u=term { T.arrow t u }
 
 goal:
