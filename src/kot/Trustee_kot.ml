@@ -43,7 +43,6 @@ end = struct
       incr n;
       {name; id= !n}
 
-
   module As_key = struct type nonrec t=t let compare=compare end
   module Map = Map.Make(As_key)
 end
@@ -137,6 +136,8 @@ module Expr
   val is_a_bool : t -> bool
   val is_var : t -> bool
 
+  val is_closed : t -> bool
+
   val unfold_app : t -> t * t list
   (** [unfold_app (f a b c)] is [f, [a;b;c]] *)
 
@@ -213,7 +214,7 @@ end
   }
   and const_content = {
     c_name: ID.t;
-    c_ty: t;
+    c_ty: t; (** invariant: this type is closed *)
     c_display: display;
   }
   and var = t
@@ -292,6 +293,16 @@ end
       let set_id ty id = assert (ty.id = -1); ty.id <- id
     end)
 
+  module As_key = struct
+    type nonrec t = t
+    let equal = equal
+    let hash = hash
+    let compare=compare
+  end
+  module Set = Set.Make(As_key)
+  module Tbl = Hashtbl.Make(As_key)
+  module Map = Map.Make(As_key)
+
   let kind = H.hashcons {view=Kind; id= -1; ty=None}
   let make_ view ty =
     let t = {view; id= -1; ty=None} in
@@ -316,7 +327,7 @@ end
     | Kind -> Fmt.string out "Kind"
     | Type -> Fmt.string out "Type"
     | Const c -> ID.pp out c.c_name
-    | Var v -> Fmt.string out v.v_name
+    | Var v -> Fmt.fprintf out "%s" v.v_name
     | Lambda (a,b) -> Fmt.fprintf out "(@[\\%a:%a.@ %a@])" pp a pp (ty_exn a) pp b
     | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
     | Arrow (a,b) -> Fmt.fprintf out "@[%a@ -> %a@]" pp a pp b
@@ -347,18 +358,38 @@ end
     | Arrow _ | Pi _ | App _ -> Fmt.fprintf out "(@[%a@])" pp t
     | Lambda _ | Type | Kind | Var _ | Const _ -> pp out t
 
+  (** is [t] a closed term? *)
+  let is_closed (t:t) : bool =
+    let rec aux bnd t =
+      match t.view with
+      | Kind | Type | Const _ -> true
+      | Var _ -> Set.mem t bnd
+      | Pi (x,u) | Lambda (x,u) ->
+        aux bnd (ty_exn x) && aux (Set.add x bnd) u
+      | App (f,t) -> aux bnd f && aux bnd t
+      | Arrow (a,b) -> aux bnd a && aux bnd b
+    in
+    aux Set.empty t
+
   let var (v:var) : t = v
   let var' v : t = make_ (Var v) (fun () -> v.v_ty)
+
   let new_const_ display s ty : t =
     make_ (Const {c_name=ID.make s; c_ty=ty; c_display=display})
       (fun () ->
-         (* TODO: assert that the type is closed *)
+         (* type must be closed! *)
+         if not (is_closed ty) then (
+           errorf_
+             (fun k->k"cannot declare constant %s@ with non-closed type %a"
+                 s pp ty)
+         );
          ty)
+
   let new_const = new_const_ Normal
   let new_var s ty : t = make_ (Var {v_name=s; v_ty=ty; }) (fun () -> ty)
   let new_var' = new_var
 
-  let bool = new_var "Bool" type_
+  let bool = new_const "Bool" type_
   let arrow a b : t = make_ (Arrow (a,b)) (fun () -> type_)
   let arrow_l l ret : t = List.fold_right arrow l ret
   let (@->) = arrow
@@ -408,12 +439,12 @@ end
     let ty = pi a (a @-> a @-> bool) in
     new_const_ Infix "=" ty
 
-  let true_ = new_var "true" bool
-  let false_ = new_var "false" bool
+  let true_ = new_const "true" bool
+  let false_ = new_const "false" bool
   let imply_const : t = new_const_ Infix "==>" (bool @-> bool @-> bool)
   let and_const : t = new_const_ Infix "/\\" (bool @-> bool @-> bool)
   let or_const : t = new_const_ Infix "\\/" (bool @-> bool @-> bool)
-  let not_const : t = new_var "~" (bool @-> bool)
+  let not_const : t = new_const "~" (bool @-> bool)
 
   let eq a b : t = app_l eq_const [ty_exn a; a; b]
   let imply a b : t = app_l imply_const [a;b]
@@ -452,16 +483,6 @@ end
     | _ -> errorf_ (fun k->k"%a is not a lambda" pp t)
 
   type term = t
-
-  module As_key = struct
-    type nonrec t = t
-    let equal = equal
-    let hash = hash
-    let compare=compare
-  end
-  module Set = Set.Make(As_key)
-  module Tbl = Hashtbl.Make(As_key)
-  module Map = Map.Make(As_key)
 
   module Var = struct
     type t = var
@@ -594,10 +615,6 @@ module Thm : sig
   (** [instantiate thm σ] produces
       [ Fσ |- Gσ]  where [thm] is [F |- G] *)
 
-  (* TODO: some connectives, like [a |- a=true], [a=true |- a],
-     [~a |- a=false], [a=false |- ~a], [a, b |- a /\ b], [a |- a \/ b],
-     [b |- a \/ b] *)
-
   val beta : Expr.t -> Expr.t -> t * Expr.t
   (** [beta (λx.u) a] is [ |- (λx.u) a = u[x:=a] ].
       [u[x:=a]] is returned along. *)
@@ -616,8 +633,6 @@ end = struct
     ax_name: ID.t;
     ax_thm: t;
   }
-  (* TODO: a bitfield to register where [beta], choice, excluded middle, etc.
-     were used? *)
 
   let _deps self k = ID.Map.iter (fun _ ax -> k ax) (Lazy.force self.dep_on_axioms)
   let concl self = self.concl
@@ -635,8 +650,6 @@ end = struct
 
   let _no_ax = lazy ID.Map.empty
   let make_ concl hyps dep_on_axioms : t = {concl; hyps; dep_on_axioms}
-  let make_l_ concl hyps dep_on_axioms : t =
-    make_ concl (Expr.Set.of_list hyps) dep_on_axioms
 
   let merge_ax_ (lazy m1) (lazy m2) =
     lazy (
