@@ -40,8 +40,8 @@ let rec loop ctx =
         Format.printf "%a@." Statement.pp s;
         begin try
             process_statement ctx s;
-          with Error.Error msg ->
-            Format.printf "@{<Red>Error@}: %s@." msg
+          with Trustee.Error msg ->
+            Format.printf "@[<1>@{<Red>Error@}:@ %a@]@." msg ()
         end;
         loop ctx
   end

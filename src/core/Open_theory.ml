@@ -1,6 +1,5 @@
 
-module Expr = Kernel_of_trust.Expr
-module Thm = Kernel_of_trust.Thm
+open Trustee_kot
 module Fmt = CCFormat
 
 module Int_tbl = CCHashtbl.Make(CCInt)
@@ -105,12 +104,13 @@ module VM = struct
   let pop1 self =
     match self.vm_stack with
     | o :: st -> self.vm_stack <- st; o
-    | [] -> Error.errorf "OT.vm.pop1: empty stack@ in %a" pp self
+    | [] -> error_ (fun out () -> Fmt.fprintf out "OT.vm.pop1: empty stack@ in %a" pp self)
 
   let pop2 self =
     match self.vm_stack with
     | o1 :: o2 :: st -> self.vm_stack <- st; o1, o2
-    | [_] | [] -> Error.errorf "OT.vm.pop2: empty stack@ in %a" pp self
+    | [_] | [] ->
+      error_ (fun out () -> Fmt.fprintf out "OT.vm.pop2: empty stack@ in %a" pp self)
 end
 
 module Parse_ = struct
@@ -133,7 +133,7 @@ module Parse_ = struct
     let l = List.rev @@ String.split_on_char '.' s in
     let name: name =
       match l with
-      | [] -> Error.errorf "OT: empty string not allowed"
+      | [] -> errorf_ (fun k->k"OT: empty string not allowed")
       | [x] -> [], x
       | x :: rest -> List.rev rest, x
     in
@@ -142,22 +142,22 @@ module Parse_ = struct
   let process_int vm s =
     let n =
       try int_of_string s
-      with _ -> Error.errorf "OT: cannot convert integer %S" s
+      with _ -> errorf_ (fun k->k"OT: cannot convert integer %S" s)
     in
     VM.push_obj vm (Int n)
 
   let err_bad_stack_ vm what =
-    Error.errorf "@[<2>OT.%s: wrong stack@ in %a@]" what VM.pp vm
+    errorf_ (fun k->k"@[<2>OT.%s: wrong stack@ in %a@]" what VM.pp vm)
 
   let err_not_impl_ vm what =
-    Error.errorf "OT: not implemented: %s@ in %a" what VM.pp vm
+    errorf_ (fun k->k"OT: not implemented: %s@ in %a" what VM.pp vm)
 
   let abs_term vm =
     match vm.vm_stack with
     | Term t :: Var v :: st ->
       vm.vm_stack <- Term (Expr.lambda v t) :: st
     | _ ->
-      Error.errorf "@[<2>OT.abs_term: wrong stack@ in %a@]" VM.pp vm
+      errorf_ (fun k->k"@[<2>OT.abs_term: wrong stack@ in %a@]" VM.pp vm)
 
   let app_term vm =
     match VM.pop2 vm with
@@ -172,7 +172,7 @@ module Parse_ = struct
   let version vm =
     match VM.pop1 vm with
     | Int 6 -> ()
-    | Int n -> Error.errorf "OT: unsupported version %d" n
+    | Int n -> errorf_ (fun k->k"OT: unsupported version %d" n)
     | _ -> err_bad_stack_ vm "version"
 
   let axiom vm =
@@ -210,7 +210,7 @@ module Parse_ = struct
       | "version" -> version vm
       | "nil" -> nil vm
       | _ ->
-        Error.errorf "OT: unknown command %s@." s
+        errorf_ (fun k->k"OT: unknown command %s@." s)
     )
 
   let parse_gen_exn (g:string gen) : article =
@@ -225,7 +225,7 @@ let parse_gen_exn = Parse_.parse_gen_exn
 
 let parse_gen g : _ result =
   try Ok (parse_gen_exn g)
-  with Error.Error msg -> Error msg
+  with Error msg -> Error (Format.asprintf "%a" msg ())
 
 let parse_exn (s:string) : article =
   let g = CCString.Split.gen_cpy ~by:"\n" s in
@@ -233,7 +233,7 @@ let parse_exn (s:string) : article =
 
 let parse s : _ result =
   try Ok (parse_exn s)
-  with Error.Error msg -> Error msg
+  with Error msg -> Error (Format.asprintf "%a" msg())
 
 module Article = struct
   type t = article

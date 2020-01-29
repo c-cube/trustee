@@ -21,13 +21,15 @@
     that can be efficiently re-checked later).
 *)
 
-module ID = Kernel_of_trust.ID
-module Expr = Kernel_of_trust.Expr
-module Thm = Kernel_of_trust.Thm
+module KoT = Trustee_kot
+module ID = KoT.ID
+module Expr = KoT.Expr
+module Thm = KoT.Thm
 
-module Tier1 = Tier1
+exception Error = KoT.Error
+
+module Core = Core
 module Goal = Goal
 module Tactic = Tactic
 module Statement = Statement
 module Open_theory = Open_theory
-module Error = Error

@@ -1,8 +1,7 @@
 
 (** {1 Parser for OpenTheory files} *)
 
-module Expr = Kernel_of_trust.Expr
-module Thm = Kernel_of_trust.Thm
+open Trustee_kot
 module Fmt = CCFormat
 
 type 'a gen = unit -> 'a option

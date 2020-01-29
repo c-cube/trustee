@@ -1,4 +1,4 @@
-module Expr = Kernel_of_trust.Expr
-module Thm = Kernel_of_trust.Thm
+module Expr = Trustee_kot.Expr
+module Thm = Trustee_kot.Thm
 
 type t = unit

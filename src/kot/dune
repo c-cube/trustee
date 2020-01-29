@@ -1,0 +1,8 @@
+
+
+(library
+  (name trustee_kot)
+  (public_name trustee.kot)
+  (synopsis "Kernel of Trust for Trustee")
+  (flags :standard -warn-error -26-32-34-37)
+  (libraries containers))

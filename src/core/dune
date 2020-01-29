@@ -2,5 +2,6 @@
 (library
   (name trustee)
   (public_name trustee)
-  (flags :standard -warn-error -32-34-37)
-  (libraries containers))
+  (synopsis "core Trustee library")
+  (flags :standard -warn-error -26-32-34-37)
+  (libraries trustee.kot containers))

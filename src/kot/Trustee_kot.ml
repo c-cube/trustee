@@ -1,8 +1,11 @@
 
-(** {1 The Core data structures for Trustee}
+(** {1 The Kernel of Trust for Trustee}
 
     This file contains the whole kernel of trust for Trustee: terms (with
     type-checking constructors), and theorems.
+
+    If this code is correct, then the rest of Trustee cannot build an invalid
+    theorem, even by introducing new axioms (since they are tracked in theorems).
 *)
 
 module Fmt = CCFormat
@@ -45,6 +48,24 @@ end = struct
   module Map = Map.Make(As_key)
 end
 
+exception Error of unit Fmt.printer
+
+let error_ f = raise (Error f)
+let errorf_ ?(pre=fun _->()) k =
+  raise (Error (fun out () ->
+      pre out;
+      k (fun fmt ->
+          Format.kfprintf (fun fmt -> Format.fprintf fmt "@?") out fmt)))
+
+let error_wrapf_ f1 f2 =
+  errorf_ ~pre:(fun out -> Fmt.fprintf out "%a@ " f1 ()) f2
+
+let () =
+  Printexc.register_printer
+    (function
+      | Error f -> Some (Fmt.asprintf "@[<1>@{<Red>Error@}:@ %a@]" f ())
+      | _ -> None)
+
 (** {2 Exprs}
 
     Logical expressions, types, and formulas. *)
@@ -85,6 +106,7 @@ module Expr
   val (@->) : t -> t -> t
   val new_const : string -> t -> t
   val new_var : string -> t -> var
+  val new_var' : string -> t -> t
   val var : var -> t
   val lambda : var -> t -> t
   val lambda_l : var list -> t -> t
@@ -93,11 +115,13 @@ module Expr
   val true_ : t
   val false_ : t
   val eq_const : t
+  val imply_const : t
   val and_const : t
   val or_const : t
   val not_const : t
 
   val eq : t -> t -> t
+  val imply : t -> t -> t
   val and_ : t -> t -> t
   val or_ : t -> t -> t
   val and_l : t list -> t
@@ -115,6 +139,18 @@ module Expr
 
   val unfold_app : t -> t * t list
   (** [unfold_app (f a b c)] is [f, [a;b;c]] *)
+
+  val as_var_exn : t -> var
+  (** [as_var_exn v] is the variable [v].
+      @raise Error if the term is not a variable. *)
+
+  val unfold_eq_exn : t -> t * t
+  (** [unfold_eq_exn (= a b)] is [(a,b)].
+      @raise Error if the term is not an equality. *)
+
+  val unfold_lambda_exn : t -> var * t
+  (** [unfold_lambda_exn (λx. t)] is [(x,t)].
+      @raise Error if the term is not a lambda. *)
 
   type term = t
 
@@ -195,7 +231,9 @@ end
   let hash a = CCHash.int a.id
   let view t = t.view
   let ty t = t.ty
-  let ty_exn t = match t.ty with Some ty -> ty | None -> Error.error "term has no type"
+  let ty_exn t = match t.ty with
+    | Some ty -> ty
+    | None -> errorf_ (fun k->k "term has no type")
   let compare a b = CCInt.compare a.id b.id
 
   let const_eq c1 c2 = ID.equal c1.c_name c2.c_name
@@ -203,7 +241,32 @@ end
   let var_eq v1 v2 = String.equal v1.v_name v2.v_name && equal v1.v_ty v2.v_ty
   let var_hash v = CCHash.(combine2 (string v.v_name) (hash v.v_ty))
 
-  module H = Hashcons.Make(struct
+  module type HASHCONSABLE = sig
+    type t
+    val equal : t -> t -> bool
+    val hash : t -> int
+    val set_id : t -> int -> unit
+  end
+
+  module Make_hashcons(A : HASHCONSABLE): sig
+    val hashcons : A.t -> A.t
+  end = struct
+    module W = Weak.Make(A)
+
+    let tbl_ = W.create 1024
+    let n_ = ref 0
+
+    (* hashcons terms *)
+    let hashcons t =
+      let t' = W.merge tbl_ t in
+      if t == t' then (
+        incr n_;
+        A.set_id t' !n_;
+      );
+      t'
+  end
+
+  module H = Make_hashcons(struct
       type nonrec t = t
       let equal a b =
         match a.view, b.view with
@@ -254,7 +317,7 @@ end
     | Type -> Fmt.string out "Type"
     | Const c -> ID.pp out c.c_name
     | Var v -> Fmt.string out v.v_name
-    | Lambda (a,b) -> Fmt.fprintf out "@[\\%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
+    | Lambda (a,b) -> Fmt.fprintf out "(@[\\%a:%a.@ %a@])" pp a pp (ty_exn a) pp b
     | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
     | Arrow (a,b) -> Fmt.fprintf out "@[%a@ -> %a@]" pp a pp b
     | App _ ->
@@ -281,8 +344,8 @@ end
 
   and pp_inner out t =
     match t.view with
-    | Lambda _ | Arrow _ | Pi _ | App _ -> Fmt.fprintf out "(@[%a@])" pp t
-    | Type | Kind | Var _ | Const _ -> pp out t
+    | Arrow _ | Pi _ | App _ -> Fmt.fprintf out "(@[%a@])" pp t
+    | Lambda _ | Type | Kind | Var _ | Const _ -> pp out t
 
   let var (v:var) : t = v
   let var' v : t = make_ (Var v) (fun () -> v.v_ty)
@@ -293,6 +356,7 @@ end
          ty)
   let new_const = new_const_ Normal
   let new_var s ty : t = make_ (Var {v_name=s; v_ty=ty; }) (fun () -> ty)
+  let new_var' = new_var
 
   let bool = new_var "Bool" type_
   let arrow a b : t = make_ (Arrow (a,b)) (fun () -> type_)
@@ -311,8 +375,9 @@ end
         (* substitute [b] for [a_v] in [a_body] *)
         subst1 a_v b ~in_:a_body
       | _ ->
-        Error.errorf "@[type mismatch:@ cannot apply @[%a@ : %a@]@ to @[%a : %a@]@]"
-          pp_inner a pp_inner (ty_exn a) pp_inner b pp_inner (ty_exn b)
+        errorf_
+          (fun k->k "@[type mismatch:@ cannot apply @[%a@ : %a@]@ to @[%a : %a@]@]"
+             pp_inner a pp_inner (ty_exn a) pp_inner b pp_inner (ty_exn b))
     in
     make_ (App (a,b)) get_ty
 
@@ -345,11 +410,13 @@ end
 
   let true_ = new_var "true" bool
   let false_ = new_var "false" bool
+  let imply_const : t = new_const_ Infix "==>" (bool @-> bool @-> bool)
   let and_const : t = new_const_ Infix "/\\" (bool @-> bool @-> bool)
   let or_const : t = new_const_ Infix "\\/" (bool @-> bool @-> bool)
   let not_const : t = new_var "~" (bool @-> bool)
 
   let eq a b : t = app_l eq_const [ty_exn a; a; b]
+  let imply a b : t = app_l imply_const [a;b]
   let and_ a b : t = app_l and_const [a;b]
   let or_ a b : t = app_l or_const [a;b]
   let not_ a : t = app not_const a
@@ -362,6 +429,27 @@ end
   let is_bool = equal bool
   let is_a_bool t = match t.ty with Some b -> is_bool b | None -> false
   let is_var t = match t.view with Var _ -> true | _ -> false
+
+  let as_var_exn t = match t.view with
+    | Var _ -> t
+    | _ -> errorf_ (fun k->k "%a is not a variable" pp t)
+
+  let unfold_eq_exn t =
+    try
+      match t.view with
+      | App (a, b) ->
+        (match a.view with
+         | App (a1,a2) ->
+           (match a1.view with
+            | App (f, _ty) when equal f eq_const -> a2,b
+            | _ -> raise_notrace Exit)
+         | _ -> raise_notrace Exit)
+      | _ -> raise_notrace Exit
+    with Exit -> errorf_ (fun k->k "%a is not an equation" pp t)
+
+  let unfold_lambda_exn t = match t.view with
+    | Lambda (x, u) -> x, u
+    | _ -> errorf_ (fun k->k"%a is not a lambda" pp t)
 
   type term = t
 
@@ -451,7 +539,10 @@ end
 
     Here lies the core of the LCF system: the only values of type
     {!Thm.t} that can be constructed are valid consequences of the
-    logic's axioms. *)
+    logic's axioms.
+
+    The rules are heavily inspired from HOL light's "fusion.ml" module.
+*)
 module Thm : sig
   type t
 
@@ -475,32 +566,45 @@ module Thm : sig
   val assume : Expr.t -> t
   (** [assume F] is [F |- F] *)
 
+  val trans : t -> t -> t
+  (** [trans (F1 |- a=b) (F2 |- b=c)] is [F1, F2 |- a=c] *)
+
+  val cong : t -> t -> t
+  (** [cong (F1 |- f=g) (F2 |- t=u)] is [F1, F2 |- f t=g u] *)
+
+  val abs : Expr.var -> t -> t
+  (** [abs x (F |- t=u)] is [F |- (λx.t)=(λx.u)] *)
+
   val cut : t -> t -> t
   (** [cut (F1 |- b) (F2, b |- c)] is [F1, F2 |- c] *)
+
+  val mp : t -> t -> t
+  (** [mp (F1 |- a) (F2 |- a ==> b)] is [F1, F2 |- b] *)
+
+  val bool_eq : t -> t -> t
+  (** [bool_eq (F1 |- a=b) (F2 |- a)] is [F1, F2 |- b].
+      This is the boolean equivalent of transitivity. *)
+
+  val bool_eq_intro : t -> t -> t
+  (** [bool_eq_intro (F1, a |- b) (F2, b |- a) is [F1, F2 |- a=b].
+      This is a way of building a boolean [a=b] from proofs of [a==>b] and [b==>a].
+      *)
 
   val instantiate : t -> Expr.subst -> t
   (** [instantiate thm σ] produces
       [ Fσ |- Gσ]  where [thm] is [F |- G] *)
 
-  (* TODO: [cong_t]: [ f=g, a=b |- f a=g b] *)
   (* TODO: some connectives, like [a |- a=true], [a=true |- a],
      [~a |- a=false], [a=false |- ~a], [a, b |- a /\ b], [a |- a \/ b],
      [b |- a \/ b] *)
 
-  val beta : Expr.t -> Expr.t -> t
-  (** [beta (λx.u) a] is [ |- (λx.u) a = u[x:=a] ] *)
-
-  val eq_leibniz : Expr.t -> Expr.t -> p:Expr.t -> t
-  (** [leibniz a b P]: [a=b, P a |- P b], beta-normalized *)
-
-  val cong_ax : t
-  (** axiom [f=g, x=y |- f x=g y] *)
-
-  val cong_fol : Expr.t -> Expr.t list -> Expr.t list -> t
-  (** [cong f l1 l2] makes the congruence axiom for [∧l1=l2 ==> f l1=f2 l2] *)
+  val beta : Expr.t -> Expr.t -> t * Expr.t
+  (** [beta (λx.u) a] is [ |- (λx.u) a = u[x:=a] ].
+      [u[x:=a]] is returned along. *)
 
   val axiom : string -> Expr.t list -> Expr.t -> t * axiom
   (** Create a new axiom [assumptions |- concl] with the given name.
+      The axiom is tracked in all theorems that use it, see {!dep_on_axioms}.
       {b use with caution} *)
 end = struct
   type t = {
@@ -536,16 +640,13 @@ end = struct
 
   let merge_ax_ (lazy m1) (lazy m2) =
     lazy (
-      let merge_ _id ax1 ax2 = match ax1, ax2 with
-        | Some ax, _ | _, Some ax -> Some ax
-        | None, None -> None
-      in
-      ID.Map.merge merge_ m1 m2
+      let merge_ _id ax1 _ax2 = Some ax1 in
+      ID.Map.union merge_ m1 m2
     )
 
   let err_unless_bool_ what t =
     if not (Expr.is_a_bool t) then (
-      Error.errorf "%s: needs boolean term, not %a" what Expr.pp t
+      errorf_ (fun k->k "%s: needs boolean term, not %a" what Expr.pp t)
     )
 
   let assume t : t =
@@ -554,60 +655,80 @@ end = struct
 
   let refl t : t = make_ (Expr.eq t t) Expr.Set.empty _no_ax
 
-  let beta f t : t =
+  let beta f t : t * _ =
     match Expr.view f with
     | Expr.Lambda (v, body) when Expr.Var.has_ty v (Expr.ty_exn t) ->
-      let concl =
-        Expr.eq
-          (Expr.app f t)
-          (Expr.subst1 v t ~in_:body)
-      in
-      make_ concl Expr.Set.empty _no_ax
+      let rhs = Expr.subst1 v t ~in_:body in
+      let concl = Expr.eq (Expr.app f t) rhs in
+      make_ concl Expr.Set.empty _no_ax, rhs
     | _ ->
-      Error.errorf "thm.beta: f must be a lambda,@ not %a" Expr.pp f
+      errorf_ (fun k->k "thm.beta: f must be a lambda,@ not %a" Expr.pp f)
 
-  (* TODO: replace with basic axioms *)
-  let eq_leibniz a b ~p : t =
-    if not Expr.(equal (ty_exn a) (ty_exn b)) then (
-      Error.errorf "thm.eq_leibniz: %a and %a do not have the same type"
-        Expr.pp a Expr.pp b
-    );
-    match Expr.view p with
-    | Expr.Lambda (v, body) when Expr.Var.has_ty v (Expr.ty_exn a) ->
-      let concl = Expr.subst1 v b ~in_:body in
-      let hyps = [Expr.subst1 v a ~in_:body; Expr.eq a b] in
-      make_l_ concl hyps _no_ax
+  let abs x (th:t) : t =
+    try
+      let t, u = Expr.unfold_eq_exn th.concl in
+      make_
+        (Expr.eq (Expr.lambda x t) (Expr.lambda x u))
+        th.hyps th.dep_on_axioms
+    with Error msg ->
+      error_wrapf_ msg (fun k->k"in @[abs %a@ %a@]" Expr.Var.pp x pp th)
+
+  let mp t1 t2 =
+    match Expr.unfold_app t2.concl with
+    | f, [a;b] when Expr.equal Expr.imply_const f ->
+      if not (Expr.equal a t1.concl) then (
+        errorf_ (fun k->k "mp: LHS of implication in %a@ does not match" pp t2)
+      );
+      make_ b (Expr.Set.union t1.hyps t2.hyps)
+        (merge_ax_ t1.dep_on_axioms t2.dep_on_axioms)
     | _ ->
-      Error.errorf "thm.eq_leibniz: P must be a lambda,@ not %a" Expr.pp_inner p
+      errorf_ (fun k->k "mp: thm %a@ should have an implication as conclusion" pp t2)
 
-  let cong_ax : t =
-    let a = Expr.new_const "α" Expr.type_ in
-    let b = Expr.new_const "β" Expr.type_ in
-    let f = Expr.new_const "f" Expr.(a @-> b) in
-    let g = Expr.new_const "g" Expr.(a @-> b) in
-    let x = Expr.new_const "x" a in
-    let y = Expr.new_const "y" a in
-    make_l_ Expr.(eq (app f x) (app g y)) [Expr.eq f g; Expr.eq x y] _no_ax
+  let bool_eq th1 th2 : t =
+    try
+      let a, b = Expr.unfold_eq_exn th1.concl in
+      err_unless_bool_ "bool_eq" a;
+      err_unless_bool_ "bool_eq" b;
+      if not (Expr.equal a th2.concl) then (
+        errorf_ (fun k->k "conclusion of %a does not match LHS of %a" pp th2 pp th1);
+      );
+      make_ b (Expr.Set.union th1.hyps th2.hyps)
+        (merge_ax_ th1.dep_on_axioms th2.dep_on_axioms)
+    with Error msg ->
+      error_wrapf_ msg (fun k->k"bool-eq %a %a" pp th1 pp th2)
+
+  let bool_eq_intro th1 th2 : t =
+    make_ (Expr.eq th1.concl th2.concl)
+      Expr.Set.(union (remove th1.concl th2.hyps) (remove th2.concl th1.hyps))
+      (merge_ax_ th1.dep_on_axioms th2.dep_on_axioms)
+
+  let trans t1 t2 =
+    match Expr.unfold_app t1.concl, Expr.unfold_app t2.concl with
+    | (f1, [_;a1;b1]), (f2, [_;a2;b2])
+      when Expr.equal Expr.eq_const f1 && Expr.equal Expr.eq_const f2 ->
+      if not (Expr.equal b1 a2) then (
+        errorf_
+          (fun k->k "trans: %a and %a do not match" Expr.pp b1 Expr.pp a2)
+      );
+      make_ (Expr.eq a1 b2) (Expr.Set.union t1.hyps t2.hyps)
+        (merge_ax_ t1.dep_on_axioms t2.dep_on_axioms)
+    | _ ->
+      errorf_ (fun k->k"trans: invalid args %a@ and %a" pp t1 pp t2)
+
+  let cong th1 th2 : t =
+    try
+      let f, g = Expr.unfold_eq_exn th1.concl in
+      let t, u = Expr.unfold_eq_exn th2.concl in
+      make_
+        (Expr.eq (Expr.app f t) (Expr.app g u))
+        (Expr.Set.union th1.hyps th2.hyps)
+        (merge_ax_ th1.dep_on_axioms th2.dep_on_axioms)
+    with Error f ->
+      error_wrapf_ f (fun k->k "in (@[cong@ %a@ %a@])" pp th1 pp th2)
 
   let instantiate (t:t) (subst:Expr.subst) : t =
     let inst = Expr.Subst.apply subst in
     make_ (inst t.concl) (Expr.Set.map inst t.hyps) t.dep_on_axioms
-
-  (* TODO: move to tier 1 *)
-  let cong_fol f l1 l2 : t =
-    if List.length l1 <> List.length l2 then (
-      invalid_arg "cong_f: incompatible length"
-    );
-    let app1 = Expr.app_l f l1 in
-    let app2 = Expr.app_l f l2 in
-    if not (Expr.equal (Expr.ty_exn app1) (Expr.ty_exn app2)) then (
-      Error.errorf "cong: terms %a and %a have incompatible types"
-        Expr.pp app1 Expr.pp app2
-    );
-    make_ (Expr.eq app1 app2)
-      (List.map2 Expr.eq l1 l2 |> Expr.Set.of_list) _no_ax
-
-  (* TODO: remove refl hyps, using filter? *)
 
   let cut a b : t =
     let {concl=concl_b; hyps=hyps_b; dep_on_axioms=_} = b in
@@ -616,8 +737,9 @@ end = struct
       let hyps = Expr.Set.union a.hyps hyps in
       make_ concl_b hyps (merge_ax_ a.dep_on_axioms b.dep_on_axioms)
     ) else (
-      Error.errorf "cut: conclusion of %a@ does not belong in hyps of %a"
-        pp a pp b
+      errorf_
+        (fun k->k "cut: conclusion of %a@ does not belong in hyps of %a"
+            pp a pp b)
     )
 
   let axiom name hyps concl : t * axiom =
@@ -627,9 +749,10 @@ end = struct
     let rec thm = {
       concl; hyps=Expr.Set.of_list hyps;
       dep_on_axioms=lazy (ID.Map.singleton ax_name ax);
-    } and ax = {
-        ax_name;
-        ax_thm=thm;
+    }
+    and ax = {
+      ax_name;
+      ax_thm=thm;
     }in
     thm, ax
 end
