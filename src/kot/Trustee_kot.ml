@@ -112,8 +112,6 @@ module Expr
   val lambda_l : var list -> t -> t
   val pi : var -> t -> t
 
-  val true_ : t
-  val false_ : t
   val eq_const : t
   val imply_const : t
 
@@ -153,11 +151,12 @@ module Expr
 
     val equal : t -> t -> bool
 
-    val ty : var -> term
+    val name : t -> string
+    val ty : t -> term
 
     val pp : t Fmt.printer
 
-    val has_ty : var -> term -> bool
+    val has_ty : t -> term -> bool
     (** [Var.has_ty v ty] is true iff [ty v = ty] *)
 
     module Set : Set.S with type elt = t
@@ -435,8 +434,6 @@ end
     let ty = pi a (a @-> a @-> bool) in
     new_const_ Infix "=" ty
 
-  let true_ = new_const "true" bool
-  let false_ = new_const "false" bool
   let imply_const : t = new_const_ Infix "==>" (bool @-> bool @-> bool)
 
   let eq a b : t = app_l eq_const [ty_exn a; a; b]
@@ -476,6 +473,7 @@ end
     type t = var
     let pp = pp
     let ty = ty_exn
+    let name v = match v.view with Var v -> v.v_name | _ -> assert false
     let equal = equal
     let has_ty v t = equal (ty v) t
 
@@ -505,31 +503,34 @@ end
     let apply (self:t) : term -> term =
       let tbl = Tbl.create 8 in
       let rec aux t =
-        match Tbl.find tbl t with
-        | u -> u
-        | exception Not_found ->
-          let u =
-            match t.view with
-            | Type | Kind | Const _ -> t
-            | Var v ->
-              begin match Map.find t self with
-                | u -> u
-                | exception Not_found -> var' {v with v_ty=aux v.v_ty}
-              end
-            | App (f, u) ->
-              let f' = aux f in
-              let u' = aux u in
-              if f==f' && u==u' then t else app f' u'
-            | Lambda (y, body) ->
-              let y' = rebind_ y in
-              lambda y' (aux body)
-            | Pi (y, body) ->
-              let y' = rebind_ y in
-              pi y' (aux body)
-            | Arrow (a,b) -> arrow (aux a) (aux b)
-          in
-          Tbl.add tbl t u;
-          u
+        match t.view with
+        | Type | Kind | Const _ -> t
+        | t_view ->
+          match Tbl.find tbl t with
+          | u -> u
+          | exception Not_found ->
+            let u =
+              match t_view with
+              | Type | Kind | Const _ -> assert false
+              | Var v ->
+                begin match Map.find t self with
+                  | u -> u
+                  | exception Not_found -> var' {v with v_ty=aux v.v_ty}
+                end
+              | App (f, u) ->
+                let f' = aux f in
+                let u' = aux u in
+                if f==f' && u==u' then t else app f' u'
+              | Lambda (y, body) ->
+                let y' = rebind_ y in
+                lambda y' (aux body)
+              | Pi (y, body) ->
+                let y' = rebind_ y in
+                pi y' (aux body)
+              | Arrow (a,b) -> arrow (aux a) (aux b)
+            in
+            Tbl.add tbl t u;
+            u
       and rebind_ (v:var) : var =
         match v.view with
         | Var vi ->
@@ -613,6 +614,12 @@ module Thm : sig
   val beta : Expr.t -> Expr.t -> t * Expr.t
   (** [beta (λx.u) a] is [ |- (λx.u) a = u[x:=a] ].
       [u[x:=a]] is returned along. *)
+
+  val new_basic_definition : Expr.t -> t * Expr.t
+  (** [new_basic_definition (x=t)] where [x] is a variable and [t] a term
+      with a closed type,
+      returns a theorem [|- x=t] where [x] is now a constant, along with
+      the constant [x] *)
 
   val axiom : string -> Expr.t list -> Expr.t -> t * axiom
   (** Create a new axiom [assumptions |- concl] with the given name.
@@ -749,6 +756,19 @@ end = struct
         (fun k->k "(@[cut:@ conclusion of %a@ does not appear in hyps of %a@])"
             pp a pp l)
     )
+
+  let new_basic_definition (t:Expr.t) : t * Expr.t =
+    try
+      let x, rhs = Expr.unfold_eq_exn t in
+      if not (Expr.is_var x) then (
+        errorf_ (fun k->k"new_basic_definition: %a should be a variable" Expr.pp x);
+      );
+      let x = Expr.as_var_exn x in
+      let c = Expr.new_const (Expr.Var.name x) (Expr.Var.ty x) in
+      let th = make_ (Expr.eq c rhs) Expr.Set.empty _no_ax in
+      th, c
+    with Error msg ->
+      error_wrapf_ msg (fun k->k "(@[in new_basic_definition@ %a@])" Expr.pp t)
 
   let axiom name hyps concl : t * axiom =
     err_unless_bool_ "axiom" concl;

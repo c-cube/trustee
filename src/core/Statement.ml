@@ -2,6 +2,7 @@ module Expr = Trustee_kot.Expr
 module Thm = Trustee_kot.Thm
 module T = Expr
 module Fmt = CCFormat
+module B = Bool
 
 type t =
   | St_decl of Expr.t
@@ -20,8 +21,8 @@ module Ctx = struct
 
   let create () : t =
     let self = { ts=Hashtbl.create 32; } in
-    Hashtbl.add self.ts "true" T.true_;
-    Hashtbl.add self.ts "false" T.false_;
+    Hashtbl.add self.ts "true" B.true_;
+    Hashtbl.add self.ts "false" B.false_;
     Hashtbl.add self.ts "type" T.type_;
     Hashtbl.add self.ts "bool" T.bool;
     self

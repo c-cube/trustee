@@ -3,6 +3,7 @@ module A = Alcotest
 module T = Trustee.Expr
 module Thm = Trustee.Thm
 module Fmt = CCFormat
+module B = Trustee.Bool
 
 let expr_t = A.testable T.pp T.equal
 let expr_t_l = A.testable (Fmt.Dump.list T.pp) (CCList.equal T.equal)
@@ -124,10 +125,25 @@ let test_eq_reflect =
     (Thm.hyps thm);
   ()
 
+let test_eq_true_intro =
+  A.test_case "eq_true_intro" `Quick @@ fun () ->
+  let a = T.new_const "a" T.bool in
+  let thm = Trustee.Bool.true_eq_intro (Thm.assume a) in
+  A.check expr_t "result.concl" (T.eq a B.true_) (Thm.concl thm);
+  ()
+
+let test_eq_true_elim =
+  A.test_case "eq_true_elim" `Quick @@ fun () ->
+  let a = T.new_const "a" T.bool in
+  let thm = Trustee.Bool.true_eq_elim (Thm.assume (T.eq a B.true_)) in
+  A.check expr_t "result.concl" a (Thm.concl thm);
+  ()
+
 let suite =
   ["core",
    [test_expr1; test_refl; test_cong; test_symm; test_cut;
     test_trans; test_eq_reflect; test_beta;
+    test_eq_true_intro; test_eq_true_elim;
    ]]
 
 let () =
