@@ -82,9 +82,10 @@ module Expr
     | Const of const_content
     | Var of var_content
     | App of t * t
-    | Lambda of var * t
+    | DB of int (** DB index *)
+    | Lambda of t * t (** Ty + Body *)
+    | Pi of t * t (** Ty + Body *)
     | Arrow of t * t
-    | Pi of var * t
 
   val view : t -> view
   val ty : t -> t option
@@ -108,6 +109,11 @@ module Expr
   val new_var : string -> t -> var
   val new_var' : string -> t -> t
   val var : var -> t
+
+  val db : int -> t -> t
+  val db_lambda : t -> t -> t
+  val db_pi : t -> t -> t
+
   val lambda : var -> t -> t
   val lambda_l : var list -> t -> t
   val pi : var -> t -> t
@@ -117,10 +123,6 @@ module Expr
 
   val eq : t -> t -> t
   val imply : t -> t -> t
-
-  val subst1 : var -> t -> in_:t -> t
-  (** [subst1 v t ~in_:u] builds the term [u [v:=t]] where all instances of
-      [v] are replaced by [t]. *)
 
   val is_bool : t -> bool
   val is_a_type : t -> bool
@@ -199,6 +201,7 @@ end
     mutable id: int;
     view: view;
     mutable ty: t option; (* computed lazily; only kind has no type *)
+    mutable db_env : t option list; (* computed lazily: list of tys of DB inside *)
   }
   and var_content = {
     v_name: string;
@@ -216,9 +219,10 @@ end
     | Const of const_content
     | Var of var_content
     | App of t * t
-    | Lambda of var * t
+    | DB of int (* DB index *)
+    | Lambda of t * t
+    | Pi of t * t
     | Arrow of t * t
-    | Pi of var * t
 
   let equal a b = a.id = b.id
   let hash a = CCHash.int a.id
@@ -261,18 +265,24 @@ end
 
   module H = Make_hashcons(struct
       type nonrec t = t
+      let same_ty_ a b = match a.ty, b.ty with
+        | Some a, Some b -> equal a b
+        | None, None -> true
+        | Some _, _ | _, Some _ -> false
       let equal a b =
         match a.view, b.view with
         | Type, Type | Kind, Kind -> true
+        | DB i1, DB i2 -> i1=i2 && same_ty_ a b
         | Lambda (a1,a2), Lambda (b1,b2) -> equal a1 b1 && equal a2 b2
         | Pi (a1,a2), Pi (b1,b2) -> equal a1 b1 && equal a2 b2
         | Arrow (a1,a2), Arrow (b1,b2) -> equal a1 b1 && equal a2 b2
         | Const v1, Const v2 -> const_eq v1 v2
         | Var v1, Var v2 -> var_eq v1 v2
         | App (a1,b1), App (a2,b2) -> equal a1 a2 && equal b1 b2
-        | (Lambda _ | Arrow _ | Pi _ | Type | Kind | App _ | Const _ | Var _), _ -> false
+        | (Lambda _ | Arrow _ | Pi _ | Type | Kind | App _
+          | Const _ | Var _ | DB _), _ -> false
 
-      let hash ty = match ty.view with
+      let hash t = match t.view with
         | Kind -> 222
         | Type -> 1
         | Const v -> CCHash.(combine2 5 (const_hash v))
@@ -281,6 +291,7 @@ end
         | Lambda (a, b) -> CCHash.(combine3 30 (hash a) (hash b))
         | Pi (a, b) -> CCHash.(combine3 40 (hash a) (hash b))
         | Arrow (a, b) -> CCHash.(combine3 50 (hash a) (hash b))
+        | DB i -> CCHash.combine3 60 (CCHash.int i) (hash @@ ty_exn t)
 
       let set_id ty id = assert (ty.id = -1); ty.id <- id
     end)
@@ -295,16 +306,18 @@ end
   module Tbl = Hashtbl.Make(As_key)
   module Map = Map.Make(As_key)
 
-  let kind = H.hashcons {view=Kind; id= -1; ty=None}
-  let make_ view ty =
-    let t = {view; id= -1; ty=None} in
+  let kind = H.hashcons {view=Kind; id= -1; ty=None; db_env=[]; }
+  let make_ view ty env_ : t =
+    let t = {view; id= -1; ty=None; db_env=[]} in
     let u = H.hashcons t in
     if t == u then (
-      u.ty <- Some (ty ());
+      let t_ty = ty() in
+      u.ty <- Some t_ty;
+      u.db_env <- env_ t_ty; (* compute type of free vars *)
     );
     u
 
-  let type_ = make_ Type (fun () -> kind)
+  let type_ = make_ Type (fun () -> kind) (fun _ -> [])
 
   let unfold_app t =
     let rec aux acc t =
@@ -319,6 +332,7 @@ end
     | Kind -> Fmt.string out "Kind"
     | Type -> Fmt.string out "Type"
     | Const c -> ID.pp out c.c_name
+    | DB i -> Fmt.fprintf out "x%d" i (* TODO: dispatch by ty? carry env? *)
     | Var v -> Fmt.fprintf out "%s" v.v_name
     | Lambda (a,b) -> Fmt.fprintf out "(@[\\%a:%a.@ %a@])" pp a pp (ty_exn a) pp b
     | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
@@ -347,85 +361,151 @@ end
 
   and pp_inner out t =
     match t.view with
-    | Arrow _ | Pi _ | App _ -> Fmt.fprintf out "(@[%a@])" pp t
+    | Arrow _ | DB _ | Pi _ | App _ -> Fmt.fprintf out "(@[%a@])" pp t
     | Lambda _ | Type | Kind | Var _ | Const _ -> pp out t
 
   (** is [t] a closed term? *)
   let is_closed (t:t) : bool =
-    let rec aux bnd t =
-      match t.view with
-      | Kind | Type | Const _ -> true
-      | Var _ -> Set.mem t bnd
-      | Pi (x,u) | Lambda (x,u) ->
-        aux bnd (ty_exn x) && aux (Set.add x bnd) u
-      | App (f,t) -> aux bnd f && aux bnd t
-      | Arrow (a,b) -> aux bnd a && aux bnd b
-    in
-    aux Set.empty t
+    match t.db_env with
+    | [] -> true
+    | _ -> false
 
   let var (v:var) : t = v
-  let var' v : t = make_ (Var v) (fun () -> v.v_ty)
+  let var' v : t = make_ (Var v) (fun () -> v.v_ty) (fun ty -> ty.db_env)
 
   let new_const_ display s ty : t =
     make_ (Const {c_name=ID.make s; c_ty=ty; c_display=display})
-      (fun () ->
+      (fun () -> ty)
+      (fun ty ->
          (* type must be closed! *)
          if not (is_closed ty) then (
            errorf_
              (fun k->k"cannot declare constant %s@ with non-closed type %a"
                  s pp ty)
          );
-         ty)
+         [])
 
   let new_const = new_const_ Normal
   let new_const_infix = new_const_ Infix
-  let new_var s ty : t = make_ (Var {v_name=s; v_ty=ty; }) (fun () -> ty)
+  let new_var s ty : t =
+    make_ (Var {v_name=s; v_ty=ty; }) (fun () -> ty) (fun ty -> ty.db_env)
   let new_var' = new_var
 
+  let rec merge_db_env_ l1 l2 : _ list =
+    match l1, l2 with
+    | [], _ -> l2
+    | _, [] -> l1
+    | hd1 :: tl1, hd2 :: tl2->
+      let hd = match hd1, hd2 with
+        | None, _ -> hd2
+        | _, None -> hd1
+        | Some ty1, Some ty2 ->
+          if equal ty1 ty2 then Some ty1
+          else (
+            errorf_ (fun k->k "incompatible DB environments:@ in %a,@ %a"
+                       Fmt.Dump.(list @@ option pp) l1
+                       Fmt.Dump.(list @@ option pp) l2);
+          )
+      in
+      hd :: merge_db_env_ tl1 tl2
+
   let bool = new_const "Bool" type_
-  let arrow a b : t = make_ (Arrow (a,b)) (fun () -> type_)
+  let arrow a b : t =
+    make_
+      (Arrow (a,b)) (fun () -> type_)
+      (fun _ -> merge_db_env_ a.db_env b.db_env)
+
   let arrow_l l ret : t = List.fold_right arrow l ret
   let (@->) = arrow
 
-  let lambda v body : t = make_ (Lambda (v,body)) (fun () -> arrow (ty_exn v) (ty_exn body))
-  let lambda_l vs body : t = List.fold_right lambda vs body
-  let pi v body : t = make_ (Pi (v,body)) (fun () -> type_)
+  let db i ty : t =
+    (* the list [[None; None; …; None; Some ty]] of length [i+1] *)
+    let rec mk_env_ j =
+      if i=j then [Some ty] else None :: mk_env_ (j+1)
+    in
+    make_ (DB i) (fun () -> ty) (fun ty -> merge_db_env_ ty.db_env @@ mk_env_ 0)
+
+  let db_lambda ty body : t =
+    let db_env = match body.db_env with
+      | [] -> []
+      | None :: tl -> tl
+      | Some ty' :: tl ->
+        (* must check the type compatibility here *)
+        if not (equal ty ty') then (
+          errorf_
+            (fun k->k"db_lambda: incompatible type %a@ and %a@ for the variable"
+                pp ty pp ty')
+        );
+        tl
+    in
+    make_ (Lambda (ty,body))
+      (fun () -> arrow ty (ty_exn body))
+      (fun _ -> db_env)
+
+  let db_pi ty body : t =
+    if not (equal ty type_) then (
+      errorf_
+        (fun k->k "cannot create `@[pi _:%a. %a@]`@ with anything but Type"
+            pp ty pp body);
+    );
+    let db_env = match body.db_env with
+      | [] -> []
+      | None :: tl -> tl
+      | Some ty' :: tl ->
+        (* must check the type compatibility here *)
+        if not (equal ty ty') then (
+          errorf_
+            (fun k->k"db_lambda: incompatible type %a@ and %a@ for the variable"
+                pp ty pp ty')
+        );
+        tl
+    in
+    make_ (Pi (ty,body))
+      (fun () -> arrow ty (ty_exn body))
+      (fun _ty -> db_env)
 
   let rec app a b : t =
     let get_ty () = match a.ty, b.ty with
       | Some {view=Arrow (a_arg, a_ret); _}, Some ty_b when equal a_arg ty_b ->
         a_ret
-      | Some {view=Pi (a_v, a_ty_body); _}, Some ty_b when equal (ty_exn a_v) ty_b ->
+      | Some {view=Pi (a_ty_var, a_ty_body); _}, Some ty_b when equal a_ty_var ty_b ->
         (* substitute [b] for [a_v] in [a_ty_body] to obtain the type
            of [a b] *)
-        subst1 a_v b ~in_:a_ty_body
+        subst1 ~db0:b a_ty_body
       | _ ->
         errorf_
           (fun k->k "@[type mismatch:@ cannot apply @[%a@ : %a@]@ to @[%a : %a@]@]"
              pp_inner a pp_inner (ty_exn a) pp_inner b pp_inner (ty_exn b))
     in
-    make_ (App (a,b)) get_ty
+    make_ (App (a,b))
+      get_ty
+      (fun _ -> merge_db_env_ a.db_env b.db_env)
 
-  (** substitution of [x] with [by] *)
-  and subst1 (x:var) by ~in_ : t =
-    (* TODO: use a local table to traverse term as a DAG? *)
-    let rec aux t =
-      if equal t x then by
-      else (
-        match t.view with
-        | Type | Kind | Const _ -> t
-        | Var v -> var' {v with v_ty=aux v.v_ty}
-        | App (f, u) ->
-          let f' = aux f in
-          let u' = aux u in
-          if f==f' && u==u' then t else app f' u'
-        | Pi (y, _) | Lambda (y, _) when equal x y -> t (* shadowed *)
-        | Lambda (y, body) -> lambda (aux y) (aux body)
-        | Pi (y, body) -> pi (aux y) (aux body)
-        | Arrow (a,b) -> arrow (aux a) (aux b)
-      )
+  (** substitution of DB 0 with [db0] in [t] *)
+  and subst1 ~db0 t : t =
+    (* TODO: use a local table indexed by [t,k] to traverse term as a DAG? *)
+    let rec aux t k =
+      match t.view with
+      | Type | Kind | Const _ -> t
+      | DB i when i=k -> db0 (* TODO: shift... *)
+      | DB i when i<k -> t
+      | DB i -> db (i+k) (ty_exn t) (* shift *)
+      | Var v -> var' {v with v_ty=aux v.v_ty k}
+      | App (f, u) ->
+        let f' = aux f k in
+        let u' = aux u k in
+        if f==f' && u==u' then t else app f' u'
+      | Lambda (y, body) -> db_lambda (aux y k) (aux body (k+1))
+      | Pi (y, body) -> db_pi (aux y k) (aux body (k+1))
+      | Arrow (a,b) -> arrow (aux a k) (aux b k)
     in
-    aux in_
+    aux t 0
+
+  let lambda v body : t =
+    make_ (Lambda (v,body)) (fun () -> arrow (ty_exn v) (ty_exn body))
+
+  let lambda_l vs body : t = List.fold_right lambda vs body
+  let pi v body : t = make_ (Pi (v,body)) (fun () -> type_)
 
   let app_l f l = List.fold_left app f l
 
