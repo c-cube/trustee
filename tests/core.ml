@@ -71,7 +71,7 @@ let () = add_t "cong" @@ fun () ->
   let thm =
     Thm.congr (Thm.refl f) (Thm.assume (T.eq a b))
   in
-  Format.printf "cong: %a@." Thm.pp thm;
+  (*   Format.printf "cong: %a@." Thm.pp thm; *)
   assert_equal ~printer:t_to_str ~cmp:T.equal ~msg:"cong result" (T.eq fa fb) (Thm.concl thm);
   ()
 
@@ -94,7 +94,7 @@ let () = add_t "cut" @@  fun () ->
       (Thm.axiom "cut-a" [] a |> fst)
       (Thm.axiom "cut-a->b" [a] b |> fst)
   in
-  Format.printf "%a@." Thm.pp thm;
+  (*   Format.printf "%a@." Thm.pp thm; *)
   assert_equal ~printer:t_to_str ~cmp:T.equal ~msg:"result.concl" b (Thm.concl thm);
   assert_equal ~printer:tl_to_str ~cmp:(CCList.equal T.equal) ~msg:"result.hyps"
     [] (T.Set.elements @@ Thm.hyps thm);
@@ -107,7 +107,7 @@ let () = add_t "trans" @@ fun () ->
   let b = T.new_const "b" u in
   let c = T.new_const "c" u in
   let thm = Trustee.Core.eq_trans a b c in
-  Format.printf "trans: %a@." Thm.pp thm;
+  (* Format.printf "trans: %a@." Thm.pp thm; *)
   assert_equal ~printer:t_to_str ~cmp:T.equal ~msg:"result.concl" (T.eq a c) (Thm.concl thm);
   assert_equal ~printer:tset_to_str ~cmp:T.Set.equal ~msg:"result.hyps"
     (T.Set.of_list [T.eq a b; T.eq b c])
@@ -121,9 +121,9 @@ let () = add_t "eq_reflect" @@ fun () ->
   let c = T.new_const "c" u in
   let f = T.new_const "f" T.(u @-> u @-> u @-> u @-> u) in
   let thm = Trustee.Core.cong_fol f [a; a; b; c] [a; b; b; c] in
-  Format.printf "cong_fol: %a@." Thm.pp thm;
+  (*   Format.printf "cong_fol: %a@." Thm.pp thm; *)
   let thm = Trustee.Core.eq_reflect thm in
-  Format.printf "eq_reflect: %a@." Thm.pp thm;
+  (*   Format.printf "eq_reflect: %a@." Thm.pp thm; *)
   assert_equal ~printer:t_to_str ~cmp:T.equal ~msg:"result.concl"
     (T.eq (T.app_l f [a;a;b;c]) (T.app_l f [a;b;b;c])) (Thm.concl thm);
   assert_equal ~printer:tset_to_str ~cmp:T.Set.equal ~msg:"result.hyps"

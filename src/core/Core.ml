@@ -81,7 +81,7 @@ let eq_reflect thm =
       (fun t l -> match as_trivial_eq t with Some x -> T.Set.add x l | None -> l)
       (Thm.hyps thm) T.Set.empty
   in
-  Format.printf "trivial: %a@." Fmt.Dump.(list T.pp) (T.Set.elements trivial_eqn_members);
+  (*Format.printf "trivial: %a@." Fmt.Dump.(list T.pp) (T.Set.elements trivial_eqn_members); *)
   if T.Set.is_empty trivial_eqn_members then (
     thm
   ) else (
