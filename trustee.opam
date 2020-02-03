@@ -10,7 +10,7 @@ bug-reports: "https://github.com/c-cube/trustee/issues"
 depends: [
   "dune"
   "containers"
-  "alcotest" {with-test}
+  "ounit2" {with-test}
   "menhir" {with-test}
   "ocaml" {>= "4.04"}
 ]

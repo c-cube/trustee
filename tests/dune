@@ -1,5 +1,10 @@
 
-(tests
+(executables
   (names core)
   (flags :standard)
-  (libraries trustee alcotest))
+  (modes native)
+  (libraries trustee ounit2))
+
+(alias
+  (name runtest)
+  (action (run ./core.exe)))
