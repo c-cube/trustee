@@ -67,7 +67,7 @@ term:
 
 goal:
   | hyps=separated_list(COMMA, term) VDASH concl=term
-    { let hyps = List.map (fun t -> "", Thm.assume t) hyps in
+    { let hyps = List.map (fun t -> "", t) hyps in
       Goal.make ~hyps concl
     }
 

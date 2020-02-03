@@ -8,6 +8,8 @@
     theorem, even by introducing new axioms (since they are tracked in theorems).
 *)
 
+(* TODO: wrap into a generative functor *)
+
 module Fmt = CCFormat
 
 type 'a iter = ('a -> unit) -> unit
@@ -251,6 +253,7 @@ end
 
     (* hashcons terms *)
     let hashcons t =
+      if !n_ = max_int then errorf_ (fun k->k"kot: hashconsing: id set exhausted");
       let t' = W.merge tbl_ t in
       if t == t' then (
         incr n_;
@@ -387,6 +390,7 @@ end
   let arrow_l l ret : t = List.fold_right arrow l ret
   let (@->) = arrow
 
+  (* TODO: if [v.ty == type], type should not be arrow but [pi v. ty body]? *)
   let lambda v body : t = make_ (Lambda (v,body)) (fun () -> arrow (ty_exn v) (ty_exn body))
   let lambda_l vs body : t = List.fold_right lambda vs body
   let pi v body : t = make_ (Pi (v,body)) (fun () -> type_)

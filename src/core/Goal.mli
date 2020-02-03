@@ -5,15 +5,15 @@ module Fmt = CCFormat
 
 (** A goal is a sequent that we haven't proved yet. *)
 type t = private {
-  hyps: (string * Thm.t) list;
+  hyps: (string * Expr.t) list;
   concl: Expr.t;
 }
 
-val hyps : t -> (string * Thm.t) list
+val hyps : t -> (string * Expr.t) list
 val concl : t -> Expr.t
 val pp : t Fmt.printer
 
 val make :
-  ?hyps:(string * Thm.t) list ->
+  ?hyps:(string * Expr.t) list ->
   Expr.t ->
   t
