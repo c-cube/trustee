@@ -110,8 +110,8 @@ module Expr
   val new_var : string -> t -> var
   val new_var' : string -> t -> t
   val var : var -> t
+  val var_of_c : var_content -> var
   val lambda : var -> t -> t
-  val lambda_l : var list -> t -> t
   val pi : var -> t -> t
 
   val eq_const : t
@@ -135,9 +135,6 @@ module Expr
   val unfold_app : t -> t * t list
   (** [unfold_app (f a b c)] is [f, [a;b;c]] *)
 
-  val unfold_arrow : t -> t list * t
-  (** [unfold_arrow (a -> b -> c)] is [[a;b], c] *)
-
   val as_var_exn : t -> var
   (** [as_var_exn v] is the variable [v].
       @raise Error if the term is not a variable. *)
@@ -145,10 +142,6 @@ module Expr
   val unfold_eq_exn : t -> t * t
   (** [unfold_eq_exn (= a b)] is [(a,b)].
       @raise Error if the term is not an equality. *)
-
-  val unfold_lambda_exn : t -> var * t
-  (** [unfold_lambda_exn (λx. t)] is [(x,t)].
-      @raise Error if the term is not a lambda. *)
 
   type term = t
 
@@ -181,6 +174,9 @@ module Expr
     val add : var -> term -> t -> t
     (** [add v t subst] binds [v |-> t] in a new substitution *)
 
+    val remove : var -> t -> t
+    (** [remove v subst] removes [v] from the substitution, if present *)
+
     val find : t -> var -> term option
 
     val find_exn : t -> var -> term
@@ -209,6 +205,7 @@ end
   and var_content = {
     v_name: string;
     v_ty: t;
+    mutable v_self: t;
   }
   and const_content = {
     c_name: ID.t;
@@ -303,13 +300,15 @@ end
   module Map = Map.Make(As_key)
 
   let kind = H.hashcons {view=Kind; id= -1; ty=None}
-  let make_ view ty =
+  let make_with_ ~k view =
     let t = {view; id= -1; ty=None} in
     let u = H.hashcons t in
     if t == u then (
-      u.ty <- Some (ty ());
+      k u;
     );
     u
+
+  let make_ view ty = make_with_ view ~k:(fun u -> u.ty <- Some (ty ()))
 
   let type_ = make_ Type (fun () -> kind)
 
@@ -335,24 +334,24 @@ end
     | Type -> Fmt.string out "Type"
     | Const c -> ID.pp out c.c_name
     | Var v -> Fmt.fprintf out "%s" v.v_name
-    | Lambda (a,b) -> Fmt.fprintf out "(@[\\%a:%a.@ %a@])" pp_rec a pp_rec (ty_exn a) pp_rec b
-    | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp_rec a pp_rec (ty_exn a) pp_rec b
+    | Lambda (a,b) -> Fmt.fprintf out "(@[\\%a:%a.@ %a@])" pp_rec a pp_inner (ty_exn a) pp_rec b
+    | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp_rec a pp_inner (ty_exn a) pp_rec b
     | Arrow (a,b) -> Fmt.fprintf out "@[%a@ -> %a@]" pp_inner a pp_rec b
     | App _ ->
       let f, args = unfold_app t in
       assert (args<>[]);
       begin match f.view, args with
         | Const {c_display=Infix; c_name; _}, [a;b] ->
-          Fmt.fprintf out "@[%a@ %a %a@]" pp_inner a ID.pp c_name pp_inner b
+          Fmt.fprintf out "@[%a@ @[<1>%a@ %a@]@]" pp_inner a ID.pp c_name pp_inner b
         | Const {c_display=Infix; c_name; _}, _::_::_ ->
           (* display [= u a b] as [a `= u` b] *)
           let ifx_args, args = CCList.take_drop (List.length args-2) args in
           begin match ifx_args, args with
             | [u], [a;b] ->
-              Fmt.fprintf out "@[%a@ @[%a_%a@] %a@]"
+              Fmt.fprintf out "@[%a@ @[<1>@[%a_%a@]@ %a@]@]"
                 pp_inner a ID.pp c_name pp_inner u pp_inner b
             | _, [a;b] ->
-              Fmt.fprintf out "@[%a@ `@[%a@ %a@]` %a@]"
+              Fmt.fprintf out "@[%a@ @[<1>`@[%a@ %a@]`@ %a@]@]"
                 pp_inner a ID.pp c_name (pp_list pp_inner) ifx_args pp_inner b
             | _ -> assert false
           end
@@ -370,13 +369,18 @@ end
   (** is [t] a closed term? *)
   let is_closed (t:t) : bool =
     let rec aux bnd t =
-      match t.view with
-      | Kind | Type | Const _ -> true
-      | Var _ -> Set.mem t bnd
-      | Pi (x,u) | Lambda (x,u) ->
-        aux bnd (ty_exn x) && aux (Set.add x bnd) u
-      | App (f,t) -> aux bnd f && aux bnd t
-      | Arrow (a,b) -> aux bnd a && aux bnd b
+      begin match t.ty with
+        | None -> true | Some ty -> aux bnd ty
+      end
+      &&
+      begin match t.view with
+        | Kind | Type | Const _ -> true
+        | Var _ -> Set.mem t bnd
+        | Pi (x,u) | Lambda (x,u) ->
+          aux bnd (ty_exn x) && aux (Set.add x bnd) u
+        | App (f,t) -> aux bnd f && aux bnd t
+        | Arrow (a,b) -> aux bnd a && aux bnd b
+      end
     in
     aux Set.empty t
 
@@ -384,19 +388,37 @@ end
   let var' v : t = make_ (Var v) (fun () -> v.v_ty)
 
   let new_const_ display s ty : t =
+    (* type must be closed! *)
+    if not (is_closed ty) then (
+      errorf_
+        (fun k->k"cannot declare constant %s@ with non-closed type %a"
+            s pp ty)
+    );
     make_ (Const {c_name=ID.make s; c_ty=ty; c_display=display})
-      (fun () ->
-         (* type must be closed! *)
-         if not (is_closed ty) then (
-           errorf_
-             (fun k->k"cannot declare constant %s@ with non-closed type %a"
-                 s pp ty)
-         );
-         ty)
+      (fun () -> ty)
+
+  type term = t
+
+  module Var = struct
+    type t = var
+    let pp = pp
+    let ty = ty_exn
+    let name v = match v.view with Var v -> v.v_name | _ -> assert false
+    let equal = equal
+    let has_ty v t = equal (ty v) t
+
+    module Set = Set
+    module Tbl = Tbl
+    module Map = Map
+  end
 
   let new_const = new_const_ Normal
   let new_const_infix = new_const_ Infix
-  let new_var s ty : t = make_ (Var {v_name=s; v_ty=ty; }) (fun () -> ty)
+  let var_of_c v = v.v_self
+
+  let new_var s ty : t =
+    let vc = {v_name=s; v_ty=ty; v_self=ty } in
+    make_with_ (Var vc) ~k:(fun self -> self.ty <- Some ty; vc.v_self <- self)
   let new_var' = new_var
 
   let bool = new_const "Bool" type_
@@ -404,10 +426,31 @@ end
   let arrow_l l ret : t = List.fold_right arrow l ret
   let (@->) = arrow
 
-  (* TODO: if [v.ty == type], type should not be arrow but [pi v. ty body]? *)
-  let lambda v body : t = make_ (Lambda (v,body)) (fun () -> arrow (ty_exn v) (ty_exn body))
-  let lambda_l vs body : t = List.fold_right lambda vs body
-  let pi v body : t = make_ (Pi (v,body)) (fun () -> type_)
+  let pi v body : t =
+    if not @@ Var.has_ty v type_ then (
+      errorf_
+        (fun k->k"@[pi: variable %a@ should have type Type, not %a@]"
+            Var.pp v pp_inner (Var.ty v));
+    );
+    if not @@ equal type_ (ty_exn body) then (
+      errorf_
+        (fun k->k"@[pi: body %a@ should have type Type, not %a@]"
+            pp body pp_inner (ty_exn body));
+    );
+    make_ (Pi (v,body)) (fun () -> type_)
+
+  let lambda v body : t =
+    (* type of [λx:a. body] is [a->b] where [body:b],
+       except if [a==type] in which case we use [Πx:type. b] *)
+    let mk_ty() =
+      let ty_v = Var.ty v in
+      if equal ty_v type_ then (
+        pi v (ty_exn body)
+      ) else (
+        arrow ty_v (ty_exn body)
+      )
+    in
+    make_ (Lambda (v,body)) mk_ty
 
   let rec app a b : t =
     let get_ty () = match a.ty, b.ty with
@@ -486,29 +529,6 @@ end
       | _ -> raise_notrace Exit
     with Exit -> errorf_ (fun k->k "%a is not an equation" pp t)
 
-  let unfold_lambda_exn t = match t.view with
-    | Lambda (x, u) -> x, u
-    | _ -> errorf_ (fun k->k"%a is not a lambda" pp t)
-
-  let rec unfold_arrow t = match t.view with
-    | Arrow (a, b) -> let args, ty = unfold_arrow b in a::args, ty
-    | _ -> [], t
-
-  type term = t
-
-  module Var = struct
-    type t = var
-    let pp = pp
-    let ty = ty_exn
-    let name v = match v.view with Var v -> v.v_name | _ -> assert false
-    let equal = equal
-    let has_ty v t = equal (ty v) t
-
-    module Set = Set
-    module Tbl = Tbl
-    module Map = Map
-  end
-
   module Subst = struct
     type t = term Map.t
     let empty : t = Map.empty
@@ -516,6 +536,7 @@ end
       assert (is_var v);
       Map.add v t self
 
+    let remove = Map.remove
     let find_exn self v = Map.find v self
     let find self v = try Some (find_exn self v) with Not_found -> None
     let to_list self = Map.fold (fun v t l -> (v,t) :: l) self []
@@ -786,11 +807,13 @@ end = struct
 
   let new_basic_definition (t:Expr.t) : t * Expr.t =
     try
+      (* FIXME: check that [rhs] is closed, ie. not free var *)
       let x, rhs = Expr.unfold_eq_exn t in
       if not (Expr.is_var x) then (
         errorf_ (fun k->k"new_basic_definition: %a should be a variable" Expr.pp x);
       );
       let x = Expr.as_var_exn x in
+      (* checks that the type of [x] is closed *)
       let c = Expr.new_const (Expr.Var.name x) (Expr.Var.ty x) in
       let th = make_ (Expr.eq c rhs) Expr.Set.empty _no_ax in
       th, c
