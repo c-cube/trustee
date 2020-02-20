@@ -22,15 +22,17 @@
 *)
 
 module KoT = Trustee_kot
-module ID = KoT.ID
-module Expr = KoT.Expr
-module Thm = KoT.Thm
 
-exception Error = KoT.Error
+module Make(KoT : Trustee_kot.S) = struct
+  module KoT = KoT
+  module ID = KoT.ID
+  module Expr = KoT.Expr
+  module Thm = KoT.Thm
 
-module Core = Core
-module Bool = Bool
-module Goal = Goal
-module Tactic = Tactic
-module Statement = Statement
-module Open_theory = Open_theory
+  module Core = Core.Make(KoT)
+  module Bool = Bool.Make(Core)
+  module Goal = Goal.Make(Core)
+  module Tactic = Tactic.Make(Core)
+  module Statement = Statement.Make(Core)
+  module Open_theory = Open_theory.Make(Core)
+end

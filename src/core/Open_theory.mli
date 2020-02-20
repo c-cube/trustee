@@ -1,31 +1,39 @@
 
 (** {1 Parser for OpenTheory files} *)
 
-open Trustee_kot
 module Fmt = CCFormat
-
 type 'a gen = unit -> 'a option
-type thm = Thm.t
 
-type article = {
-  assumptions: thm list;
-  theorems: thm list;
-}
+module Make(C : Core.S) : sig
+  open C.KoT
+  type thm = Thm.t
 
-val parse_gen : string gen -> (article, string) result
+  module Defs : sig
+    type t
+    val create : unit -> t
+  end
 
-val parse_gen_exn : string gen -> article
-(** Try to parse the article.
-    @raise Error.Error in case of problem. *)
+  type article = {
+    defs: Defs.t;
+    assumptions: thm list;
+    theorems: thm list;
+  }
 
-val parse : string -> (article, string) result
+  val parse_gen : Defs.t -> string gen -> (article, string) result
 
-val parse_exn : string -> article
-(** Try to parse the article.
-    @raise Error.Error in case of problem. *)
+  val parse_gen_exn : Defs.t -> string gen -> article
+  (** Try to parse the article.
+      @raise Error.Error in case of problem. *)
 
-module Article : sig
-  type t = article
+  val parse : Defs.t -> string -> (article, string) result
 
-  val pp : t Fmt.printer
+  val parse_exn : Defs.t -> string -> article
+  (** Try to parse the article.
+      @raise Error.Error in case of problem. *)
+
+  module Article : sig
+    type t = article
+
+    val pp : t Fmt.printer
+  end
 end

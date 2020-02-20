@@ -4,19 +4,21 @@
 (* vim:SyntasticToggleMode:
    vim:set ft=yacc: *)
 
+%parameter <PARAM : sig
+  module KoT : Trustee_kot.S
+  module Trustee : module type of struct include Trustee.Make(KoT) end
+  val ctx : Trustee.Statement.ctx
+end>
+
 %{
-  open Trustee
+  open PARAM.Trustee
   module T = Expr
   module F = Bool
 %}
 
-%parameter <PARAM : sig
-  val ctx : Trustee.Statement.ctx
-end>
-
-%start <Trustee.Expr.t> parse_term
-%start <Trustee.Statement.t> parse
-%start <Trustee.Statement.t list> parse_list
+%start <PARAM.Trustee.Expr.t> parse_term
+%start <PARAM.Trustee.Statement.t> parse
+%start <PARAM.Trustee.Statement.t list> parse_list
 
 %left OR
 %left AND

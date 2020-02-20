@@ -1,6 +1,8 @@
 
+module KoT = Trustee_kot.Make()
+module P = Trustee_syn.Parse.Make(KoT)
+module Trustee = P.Trustee
 open Trustee
-module P = Trustee_syn.Parse
 
 let hist_file =
   try Sys.getenv "HOME" ^ "/.trustee-hist"
@@ -14,12 +16,15 @@ let warn_err_ = function
   | Ok () -> ()
   | Error msg -> Format.printf "warning: %s@." msg
 
-let process_statement _ctx s =
+let process_statement ctx s =
   match s with
   | Statement.St_load_opentheory p ->
+    Format.printf "@{<Cyan>OT.load@} %S@." p;
     let art =
       CCIO.with_in p
-        (fun ic -> CCIO.read_lines_gen ic |> Open_theory.parse_gen_exn) in
+        (fun ic ->
+           CCIO.read_lines_gen ic
+           |> Open_theory.parse_gen_exn (Statement.Ctx.defs ctx)) in
     Format.printf "@[<1>article:@ %a@]@." Open_theory.Article.pp art
   | Statement.St_decl _ -> ()
   | Statement.St_prove _ ->
@@ -51,7 +56,7 @@ let loop ~to_load ctx =
         Format.printf "%a@." Statement.pp s;
         begin try
             process_statement ctx s;
-          with Trustee.Error msg ->
+          with KoT.Error msg ->
             Format.printf "@[<1>@{<Red>Error@}:@ %a@]@." msg ()
         end;
         loop ()
