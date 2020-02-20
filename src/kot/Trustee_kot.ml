@@ -41,6 +41,8 @@ module type S = sig
     val hash : t -> int
     val pp : t Fmt.printer
     module Map : Map.S with type key = t
+
+    val pp_int_ : bool ref
   end
 
   (** {2 Exprs}
@@ -125,7 +127,7 @@ module type S = sig
 
       val equal : t -> t -> bool
 
-      val name : t -> string
+      val name : t -> ID.t
       val ty : t -> term
 
       val pp : t Fmt.printer
@@ -279,8 +281,12 @@ module Make() : S = struct
     let equal r1 r2 = CCInt.equal r1.id r2.id
     let compare r1 r2 = CCInt.compare r1.id r2.id
     let hash {name;id} = CCHash.(combine3 10 (string name)(int id))
+    let name id = id.name
 
-    let pp out {name;id=_} = Fmt.string out name
+    let pp_int_ = ref false
+    let pp out {name;id} =
+      if !pp_int_ then Fmt.fprintf out "%s/%d" name id
+      else Fmt.string out name
 
     let make =
       let n = ref 0 in
@@ -300,7 +306,7 @@ module Make() : S = struct
       mutable ty: t option; (* computed lazily; only kind has no type *)
     }
     and var_content = {
-      v_name: string;
+      v_name: ID.t;
       v_ty: t;
       mutable v_self: t;
     }
@@ -331,8 +337,8 @@ module Make() : S = struct
 
     let const_eq c1 c2 = ID.equal c1.c_name c2.c_name
     let const_hash c = ID.hash c.c_name
-    let var_eq v1 v2 = String.equal v1.v_name v2.v_name && equal v1.v_ty v2.v_ty
-    let var_hash v = CCHash.(combine2 (string v.v_name) (hash v.v_ty))
+    let var_eq v1 v2 = ID.equal v1.v_name v2.v_name && equal v1.v_ty v2.v_ty
+    let var_hash v = CCHash.(combine2 (ID.hash v.v_name) (hash v.v_ty))
 
     module type HASHCONSABLE = sig
       type t
@@ -422,7 +428,7 @@ module Make() : S = struct
       | Kind -> Fmt.string out "Kind"
       | Type -> Fmt.string out "Type"
       | Const c -> ID.pp out c.c_name
-      | Var v -> Fmt.fprintf out "%s" v.v_name
+      | Var v -> ID.pp out v.v_name
       | Lambda (a,b) -> Fmt.fprintf out "(@[\\%a:%a.@ %a@])" pp_rec a pp_inner (ty_exn a) pp_rec b
       | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp_rec a pp_inner (ty_exn a) pp_rec b
       | Arrow (a,b) -> Fmt.fprintf out "@[%a@ -> %a@]" pp_inner a pp_rec b
@@ -506,7 +512,7 @@ module Make() : S = struct
     let var_of_c v = v.v_self
 
     let new_var s ty : t =
-      let vc = {v_name=s; v_ty=ty; v_self=ty } in
+      let vc = {v_name=ID.make s; v_ty=ty; v_self=ty } in
       make_with_ (Var vc) ~k:(fun self -> self.ty <- Some ty; vc.v_self <- self)
     let new_var' = new_var
 
@@ -822,7 +828,7 @@ module Make() : S = struct
         );
         let x = Expr.as_var_exn x in
         (* checks that the type of [x] is closed *)
-        let c = Expr.new_const (Expr.Var.name x) (Expr.Var.ty x) in
+        let c = Expr.new_const (ID.name @@ Expr.Var.name x) (Expr.Var.ty x) in
         let th = make_ (Expr.eq c rhs) Expr.Set.empty _no_ax in
         th, c
       with Error msg ->

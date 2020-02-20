@@ -68,6 +68,7 @@ let () =
   let to_load = ref [] in
   let opts = [
     "--load", Arg.String (CCList.Ref.push to_load), " load given script";
+    "--pp-id", Arg.Set KoT.ID.pp_int_, " print full IDs";
     "-bt", Arg.Unit (fun () -> Printexc.record_backtrace true), " record backtraces";
   ] |> Arg.align in
   Arg.parse opts

@@ -149,6 +149,7 @@ module Make(C : Core.S) = struct
           | s when String.get s 0 = '#' -> false
           | _ -> true)
 
+    (* TODO: replace `\\` by `\` in names *)
     (* quoted string: push name *)
     let process_name vm s =
       let s = String.sub s 1 (String.length s-2) in
@@ -331,7 +332,8 @@ module Make(C : Core.S) = struct
       | Term _phi, List l, Thm thm ->
         let _l = List.map (function Term t->t | _ -> err_bad_stack_ vm "thm") l in
         (* FIXME: alpha rename with [l] and [phi] *)
-        Format.printf "@[<1>@{<Green>## add theorem@}@ %a@]@." Thm.pp thm;
+        Format.printf "@[<1>@{<Green>## add theorem@}@ %a@ :phi %a@]@."
+          Thm.pp thm Expr.pp _phi;
         vm.vm_theorems <- thm :: vm.vm_theorems
       | _ -> err_bad_stack_ vm "thm"
 
