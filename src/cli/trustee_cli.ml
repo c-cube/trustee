@@ -20,7 +20,7 @@ let process_statement _ctx s =
     let art =
       CCIO.with_in p
         (fun ic -> CCIO.read_lines_gen ic |> Open_theory.parse_gen_exn) in
-    Format.printf "article: %a@." Open_theory.Article.pp art
+    Format.printf "@[<1>article:@ %a@]@." Open_theory.Article.pp art
   | Statement.St_decl _ -> ()
   | Statement.St_prove _ ->
     Format.printf "@{<Yellow> TODO@}: proof system@."
@@ -63,6 +63,7 @@ let () =
   let to_load = ref [] in
   let opts = [
     "--load", Arg.String (CCList.Ref.push to_load), " load given script";
+    "-bt", Arg.Unit (fun () -> Printexc.record_backtrace true), " record backtraces";
   ] |> Arg.align in
   Arg.parse opts
     (fun _ -> raise (Arg.Bad "no arguments")) "cli [option*]";
