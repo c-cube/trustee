@@ -116,6 +116,7 @@ module Expr
 
   val eq_const : t
   val imply_const : t
+  val select_const : t
 
   val eq : t -> t -> t
   val imply : t -> t -> t
@@ -133,6 +134,9 @@ module Expr
 
   val unfold_app : t -> t * t list
   (** [unfold_app (f a b c)] is [f, [a;b;c]] *)
+
+  val unfold_arrow : t -> t list * t
+  (** [unfold_arrow (a -> b -> c)] is [[a;b], c] *)
 
   val as_var_exn : t -> var
   (** [as_var_exn v] is the variable [v].
@@ -317,15 +321,23 @@ end
     in
     aux [] t
 
-  let rec pp out t =
+  let unfold_app t =
+    let rec aux acc t =
+      match t.view with
+      | App (f, u) -> aux (u::acc) f
+      | _ -> t, acc
+    in
+    aux [] t
+
+  let rec pp_rec out t =
     match t.view with
     | Kind -> Fmt.string out "Kind"
     | Type -> Fmt.string out "Type"
     | Const c -> ID.pp out c.c_name
     | Var v -> Fmt.fprintf out "%s" v.v_name
-    | Lambda (a,b) -> Fmt.fprintf out "(@[\\%a:%a.@ %a@])" pp a pp (ty_exn a) pp b
-    | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp a pp (ty_exn a) pp b
-    | Arrow (a,b) -> Fmt.fprintf out "@[%a@ -> %a@]" pp a pp b
+    | Lambda (a,b) -> Fmt.fprintf out "(@[\\%a:%a.@ %a@])" pp_rec a pp_rec (ty_exn a) pp_rec b
+    | Pi (a,b) -> Fmt.fprintf out "@[@<1>Π%a:%a.@ %a@]" pp_rec a pp_rec (ty_exn a) pp_rec b
+    | Arrow (a,b) -> Fmt.fprintf out "@[%a@ -> %a@]" pp_inner a pp_rec b
     | App _ ->
       let f, args = unfold_app t in
       assert (args<>[]);
@@ -345,13 +357,15 @@ end
             | _ -> assert false
           end
         | _ ->
-          Fmt.fprintf out "@[%a@ %a@]" pp f (pp_list pp_inner) args
+          Fmt.fprintf out "@[%a@ %a@]" pp_rec f (pp_list pp_inner) args
       end
 
   and pp_inner out t =
     match t.view with
-    | Arrow _ | Pi _ | App _ -> Fmt.fprintf out "(@[%a@])" pp t
-    | Lambda _ | Type | Kind | Var _ | Const _ -> pp out t
+    | Arrow _ | Pi _ | App _ -> Fmt.fprintf out "(@[%a@])" pp_rec t
+    | Lambda _ | Type | Kind | Var _ | Const _ -> pp_rec out t
+
+  let pp out t = pp_rec out t
 
   (** is [t] a closed term? *)
   let is_closed (t:t) : bool =
@@ -440,6 +454,11 @@ end
 
   let imply_const : t = new_const_ Infix "==>" (bool @-> bool @-> bool)
 
+  let select_const : t =
+    let a = new_var "α" type_ in
+    let ty = pi a ((a @-> bool) @-> a) in
+    new_const_ Normal "select" ty
+
   let eq a b : t = app_l eq_const [ty_exn a; a; b]
   let imply a b : t = app_l imply_const [a;b]
 
@@ -470,6 +489,10 @@ end
   let unfold_lambda_exn t = match t.view with
     | Lambda (x, u) -> x, u
     | _ -> errorf_ (fun k->k"%a is not a lambda" pp t)
+
+  let rec unfold_arrow t = match t.view with
+    | Arrow (a, b) -> let args, ty = unfold_arrow b in a::args, ty
+    | _ -> [], t
 
   type term = t
 
