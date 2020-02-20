@@ -28,11 +28,14 @@ type obj =
 
 module Name = struct
   type t = name
-  let pp out (path,n) =
+  let debug out (path,n) =
     match path with
     | [] -> Fmt.fprintf out "%S" n
     | _ -> Fmt.fprintf out "\"%s.%s\"" (String.concat "." path) n
-  let to_string s = Format.asprintf "%a" pp s
+  let to_string (path,n) =
+    match path with
+    | [] -> n
+    | _ -> String.concat "." path ^ "." ^ n
 end
 
 module Obj_ = struct
@@ -40,13 +43,13 @@ module Obj_ = struct
 
   let rec pp out = function
     | Int i -> Fmt.fprintf out "[int %d]" i
-    | Name n -> Fmt.fprintf out "[name %a]" Name.pp n
+    | Name n -> Fmt.fprintf out "[name %a]" Name.debug n
     | List l -> Fmt.fprintf out "[@[List %a@]]" (Fmt.Dump.list pp) l
-    | Type_operator (n,_s) -> Fmt.fprintf out "[@[type-op@ %a@]]" Name.pp n
+    | Type_operator (n,_s) -> Fmt.fprintf out "[@[type-op@ %a@]]" Name.debug n
     | Type s -> Fmt.fprintf out "[@[type@ %a@]]" Expr.pp s
     | Var s -> Fmt.fprintf out "[@[var@ %a@]]" Expr.Var.pp s
     | Term s -> Fmt.fprintf out "[@[term@ %a@]]" Expr.pp s
-    | Const (n,_) -> Fmt.fprintf out "[@[const@ %a@]]" Name.pp n
+    | Const (n,_) -> Fmt.fprintf out "[@[const@ %a@]]" Name.debug n
     | Thm s -> Fmt.fprintf out "[@[thm@ %a@]]" Thm.pp s
 end
 
@@ -114,6 +117,12 @@ module VM = struct
     | o1 :: o2 :: st -> self.vm_stack <- st; o1, o2
     | [_] | [] ->
       error_ (fun out () -> Fmt.fprintf out "OT.vm.pop2: empty stack@ in %a" pp self)
+
+  let pop3 self =
+    match self.vm_stack with
+    | o1 :: o2 :: o3 :: st -> self.vm_stack <- st; o1, o2, o3
+    | [_;_] | [_] | [] ->
+      error_ (fun out () -> Fmt.fprintf out "OT.vm.pop3: empty stack@ in %a" pp self)
 end
 
 module Parse_ = struct
@@ -218,6 +227,17 @@ module Parse_ = struct
       end
     | _ -> err_bad_stack_ vm "ref"
 
+  let remove vm = match VM.pop1 vm with
+    | Int n ->
+      begin match Int_tbl.find vm.vm_dict n with
+        | exception Not_found ->
+          errorf_ (fun k->k"didn't find object %d in dictionary" n)
+        | x ->
+          Int_tbl.remove vm.vm_dict n;
+          VM.push_obj vm x
+      end
+    | _ -> err_bad_stack_ vm "remove"
+
   let var_type vm = match VM.pop1 vm with
     | Name ([], n) -> VM.push_obj vm (Type (Expr.new_var' n Expr.type_))
     | Name _ -> err_bad_stack_ vm "varType: bad name for a type var"
@@ -234,19 +254,19 @@ module Parse_ = struct
       begin match n with
         | [], "=" ->
           let c ty =
-            match Expr.unfold_arrow ty with
+            match Core.unfold_arrow ty with
             | [a;_], _ -> Expr.app Expr.eq_const a
             | _ -> errorf_ (fun k->k"cannot make `=` with type %a" Expr.pp ty)
           in
           VM.push_obj vm (Const (n, c))
         | [], "select" ->
           let c ty =
-            match Expr.unfold_arrow ty with
+            match Core.unfold_arrow ty with
             | [_], a -> Expr.app Expr.select_const a
             | _ -> errorf_ (fun k->k"cannot make `select` with type %a" Expr.pp ty)
           in
           VM.push_obj vm (Const (n, c))
-        | _ -> errorf_ (fun k->k"no constant named %a" Name.pp n)
+        | _ -> errorf_ (fun k->k"no constant named %a" Name.debug n)
       end [@warning "-8"]
     | _ -> err_bad_stack_ vm "const"
 
@@ -254,7 +274,7 @@ module Parse_ = struct
     | Type ty, Name ([], n) ->
       VM.push_obj vm (Var (Expr.new_var n ty))
     | _, Name n ->
-      errorf_ (fun k->k"bad name for a var: %a" Name.pp n)
+      errorf_ (fun k->k"bad name for a var: %a" Name.debug n)
     | _ -> err_bad_stack_ vm "var"
 
   let const_term vm = match VM.pop2 vm with
@@ -269,11 +289,36 @@ module Parse_ = struct
   let define_const vm = match VM.pop2 vm with
     | Term t, Name n ->
       (* make a definition [n := t] *)
-      let eqn = Expr.eq (Expr.new_var' (Name.to_string n) (Expr.ty_exn t)) t in
-      let thm, c = Thm.new_basic_definition eqn in
-      VM.push_obj vm (Const (n, fun _ty -> c)); (* FIXME: unify type *)
+      let thm, c, vars = Core.new_poly_def (Name.to_string n) t in
+      Format.printf "@[<2>@{<Yellow>## define const@} %a@ with thm %a@ :vars %a@]@."
+        Name.debug n Thm.pp thm (Fmt.Dump.list Expr.Var.pp) vars;
+      (* type of [c] applied to [vars] *)
+      let c_ty_vars =
+        Expr.ty_exn @@ Expr.app_l c (List.map Expr.var vars)
+      in
+      let mk_c ty =
+        let subst =
+          try Core.unify_exn c_ty_vars ty
+          with Core.Unif_fail (t1,t2,subst) ->
+            errorf_ (fun k->k"unification failed@ between `%a`@ and `%a`@ with subst %a"
+                        Expr.pp t1 Expr.pp t2 Expr.Subst.pp subst)
+        in
+        Expr.app_l c
+          (List.map
+             (fun v -> Expr.Subst.find subst v |> CCOpt.get_or ~default:(Expr.var v))
+             vars)
+      in
+      VM.push_obj vm (Const (n, mk_c));
       VM.push_obj vm (Thm thm);
-    | _ -> err_bad_stack_ vm "var"
+    | _ -> err_bad_stack_ vm "defineConst"
+
+  let thm vm = match VM.pop3 vm with
+    | Term _phi, List l, Thm thm ->
+      let _l = List.map (function Term t->t | _ -> err_bad_stack_ vm "thm") l in
+      (* FIXME: alpha rename with [l] and [phi] *)
+      Format.printf "@[<1>@{<Green>## add theorem@}@ %a@]@." Thm.pp thm;
+      vm.vm_theorems <- thm :: vm.vm_theorems
+    | _ -> err_bad_stack_ vm "thm"
 
   let pop vm = match VM.pop1 vm with
     | _ -> ()
@@ -311,6 +356,8 @@ module Parse_ = struct
       | "varTerm" -> var_term vm
       | "defineConst" -> define_const vm
       | "pop" -> pop vm
+      | "remove" -> remove vm
+      | "thm" -> thm vm
       | _ ->
         errorf_ (fun k->k"OT: unknown command %s@." s)
     )
@@ -341,7 +388,7 @@ module Article = struct
   type t = article
 
   let pp out self =
-    Fmt.fprintf out "@{@[<hv>article.assumptions=%a; theorems=%a]@}"
+    Fmt.fprintf out "{@[<hv>article.assumptions=%a;@ theorems=%a@]}"
       (Fmt.Dump.list Thm.pp) self.assumptions
       (Fmt.Dump.list Thm.pp) self.theorems
 end

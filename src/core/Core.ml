@@ -4,21 +4,170 @@ open Trustee_kot
 
 module Fmt = CCFormat
 module T = Expr
+module Subst = T.Subst
 
-type term = T.t
+type var = Expr.var
+type term = Expr.t
 type thm = Thm.t
+type subst = Expr.Subst.t
 
-(** [app_term f (F |- t=u)] is [F |- (f t)=(f u)] *)
+(* === TERMS === *)
+
+let unfold_lambda_exn t = match T.view t with
+  | Lambda (x, u) -> x, u
+  | _ -> errorf_ (fun k->k"%a is not a lambda" T.pp t)
+
+let rec unfold_arrow t = match T.view t with
+  | Arrow (a, b) -> let args, ty = unfold_arrow b in a::args, ty
+  | _ -> [], t
+
+let iter_immediate ~f t : unit =
+  match T.view t with
+  | T.Var _ | T.Const _ | T.Type | T.Kind -> ()
+  | T.App (a,b) -> f a; f b
+  | T.Pi (_, t) | T.Lambda (_,t) -> f t
+  | T.Arrow (a,b) -> f a; f b
+
+let iter ~f t : unit =
+  let rec aux t =
+    f t;
+    CCOpt.iter f (T.ty t);
+    iter_immediate ~f:aux t
+  in
+  aux t
+
+let free_vars (t:term) : T.Var.Set.t =
+  let res = ref T.Var.Set.empty in
+  let rec aux bound t =
+    CCOpt.iter (aux bound) (T.ty t);
+    match T.view t with
+    | T.Type | T.Kind | T.Const _ -> ()
+    | T.Var vc ->
+      let v = T.var_of_c vc in
+      if not @@ T.Var.Set.mem v bound then (
+        res := T.Var.Set.add v !res
+      )
+    | T.Pi (v, u) | T.Lambda (v,u) ->
+      aux (T.Var.Set.add v bound) u
+    | T.App (a,b) | T.Arrow (a,b) -> aux bound a; aux bound b
+  in
+  aux T.Var.Set.empty t;
+  !res
+
+let free_vars_l t = T.Var.Set.elements @@ free_vars t
+
+let lambda_l vs body : term = List.fold_right T.lambda vs body
+
+let pi_l vars t = List.fold_right T.pi vars t
+
 let app1_term f th : Thm.t = Thm.congr (Thm.refl f) th
 
-(** [app_term x (F |- f=g)] is [F |- (f x)=(g x)] *)
 let app2_term x th = Thm.congr th (Thm.refl x)
 
-let eq_lhs t = fst @@ T.unfold_eq_exn t
-let eq_rhs t = snd @@ T.unfold_eq_exn t
+let[@inline] eq_lhs t = fst @@ T.unfold_eq_exn t
+let[@inline] eq_rhs t = snd @@ T.unfold_eq_exn t
 
-(** [cut (F1 |- b) (F2, b |- c)] is [F1, F2 |- c].
-    We reimplement it here to show it's redundant. *)
+exception Unif_fail of term * term * subst
+
+module T2_tbl = CCHashtbl.Make(struct
+    type t = term*term
+    let equal (a1,b1) (a2,b2) = T.equal a1 a2 && T.equal b1 b2
+    let hash (a,b) = CCHash.combine3 10 (T.hash a) (T.hash b)
+    end)
+
+let unify_exn ?(subst=Subst.empty) t1 t2 : subst =
+  let solved = T2_tbl.create 8 in
+  let subst = ref subst in
+  (* dereference variables following [subst] *)
+  let rec deref t = match T.view t with
+    | T.Var v ->
+      begin match Subst.find !subst (T.var_of_c v) with
+        | None -> t
+        | Some u -> deref u
+      end
+    | _ -> t
+  in
+  let rec occur_check (v:var) t =
+    let t = deref t in
+    CCOpt.exists (occur_check v) (T.ty t) ||
+    begin match T.view t with
+      | T.Var v' -> T.Var.equal v (T.var_of_c v')
+      | T.App (a,b) | T.Arrow (a,b) -> occur_check v a || occur_check v b
+      | T.Type | T.Kind | T.Const _ -> false
+      | T.Lambda (v',bod) | T.Pi (v', bod) ->
+        not (T.Var.equal v v') && occur_check v bod
+  end
+  in
+  let rec aux t1 t2 : unit =
+    if T.equal t1 t2 then ()
+    else if T2_tbl.mem solved (t1,t2) then ()
+    else (
+      T2_tbl.add solved (t1,t2) ();
+      (* unify types *)
+      begin match T.ty t1, T.ty t2 with
+        | None, None -> ()
+        | Some ty1, Some ty2 -> aux ty1 ty2
+        | Some _, None | None, Some _ -> raise (Unif_fail (t1,t2,!subst))
+      end;
+      match T.view t1, T.view t2 with
+      | (T.Type | T.Kind | T.Const _), _ ->
+        raise (Unif_fail (t1,t2,!subst)) (* would be equal *)
+      | T.Var v, _ ->
+        let v = T.var_of_c v in
+        if occur_check v t2 then (
+          raise (Unif_fail (t1,t2,!subst))
+        );
+        subst := Subst.add v t2 !subst;
+      | _, T.Var v ->
+        let v = T.var_of_c v in
+        if occur_check v t2 then (
+          raise (Unif_fail (t1,t2,!subst))
+        );
+        subst := Subst.add v t2 !subst;
+      | App (a1,b1), App (a2,b2)
+      | Arrow (a1,b1), Arrow (a2,b2) ->
+        aux a1 a2; aux b1 b2
+      | Pi (v1, bod1), Pi (v2,bod2)
+      | Lambda (v1, bod1), Lambda (v2,bod2) ->
+        aux (T.Var.ty v1) (T.Var.ty v2);
+        (* locally bind [v1 := v2] *)
+        if not (T.Var.equal v1 v2) then (
+          subst := Subst.add v1 (T.var v2) !subst;
+        );
+        aux bod1 bod2;
+        subst := Subst.remove v1 !subst;
+      | (App _ | Lambda _ | Pi _ | Arrow _), _ ->
+        raise (Unif_fail (t1,t2,!subst))
+    )
+  in
+  aux t1 t2;
+  !subst
+
+let unify ?subst t1 t2 =
+  try Ok (unify_exn ?subst t1 t2)
+  with Unif_fail (a,b,s) -> Error (a,b,s)
+
+let new_poly_def (c:string) (rhs:term) : _ * _ * _ =
+  (* make a definition [c := rhs] *)
+  let ty = T.ty_exn rhs in
+  let vars = free_vars_l ty in
+  (* check that we only close over type vars *)
+  if not @@ List.for_all (fun v -> T.Var.has_ty v T.type_) vars then (
+    errorf_
+      (fun k->k"cannot make a polymorphic definition of %s@ using rhs %a@ \
+                the RHS contains non-type free variables"
+          c T.pp rhs);
+  );
+  let ty_closed = pi_l vars ty in
+  let rhs_closed = lambda_l vars rhs in
+  let eqn =
+    T.eq (T.new_var' c ty_closed) rhs_closed
+  in
+  let thm, c = Thm.new_basic_definition eqn in
+  thm, c, vars
+
+(* === RULES === *)
+
 let cut' th1 th2 =
   let c1 = Thm.concl th1 in
   if T.Set.mem c1 (Thm.hyps th2) then (
@@ -35,7 +184,6 @@ let cut' th1 th2 =
 let eq_trans a b c =
   Thm.trans (Thm.assume (T.eq a b)) (Thm.assume (T.eq b c))
 
-(** [sym (F |- t=u)] is [F |- u=t] *)
 let sym (th:Thm.t) : Thm.t =
   try
     (* start with [F |- t=u].
@@ -54,9 +202,8 @@ let sym (th:Thm.t) : Thm.t =
   with Error msg ->
     error_wrapf_ msg (fun k->k"(@[in@ sym %a])" Thm.pp th)
 
-(* [eq_sym t u] is [t=u |- u=t] *)
 let eq_sym a b = sym (Thm.assume (T.eq a b))
-  (* from [a=b] we get [(a=b) = (a=b)] *)
+(* from [a=b] we get [(a=b) = (a=b)] *)
 
 (*
   let p =
@@ -66,8 +213,6 @@ let eq_sym a b = sym (Thm.assume (T.eq a b))
   Thm.eq_leibniz a b ~p |> Thm.cut (Thm.refl a)
    *)
 
-(** [eq_reflect (F, a=a, b=b |- t)] is [F |- t].
-    Trivial equations in hypothesis are removed. *)
 let eq_reflect thm =
   let as_trivial_eq t =
     match T.unfold_eq_exn t with
