@@ -9,18 +9,19 @@ type 'a gen = unit -> 'a option
 (** Namespaced identifier *)
 type name = string list * string
 type term = Expr.t
-type type_op = Expr.t
+type type_op = Expr.t list -> Expr.t
 type type_ = Expr.t
-type const = Expr.t
 type var = Expr.var
 type thm = Thm.t
+type const = type_ -> Expr.t
 
 type obj =
   | Int of int
   | Name of name
   | List of obj list
-  | Type_operator of type_op
+  | Type_operator of name*type_op
   | Type of type_
+  | Const of name*const
   | Var of var
   | Term of term
   | Thm of thm
@@ -31,6 +32,7 @@ module Name = struct
     match path with
     | [] -> Fmt.fprintf out "%S" n
     | _ -> Fmt.fprintf out "\"%s.%s\"" (String.concat "." path) n
+  let to_string s = Format.asprintf "%a" pp s
 end
 
 module Obj_ = struct
@@ -40,10 +42,11 @@ module Obj_ = struct
     | Int i -> Fmt.fprintf out "[int %d]" i
     | Name n -> Fmt.fprintf out "[name %a]" Name.pp n
     | List l -> Fmt.fprintf out "[@[List %a@]]" (Fmt.Dump.list pp) l
-    | Type_operator s -> Fmt.fprintf out "[@[type-op@ %a@]" Expr.pp s
-    | Type s -> Fmt.fprintf out "[@[type@ %a@]" Expr.pp s
+    | Type_operator (n,_s) -> Fmt.fprintf out "[@[type-op@ %a@]]" Name.pp n
+    | Type s -> Fmt.fprintf out "[@[type@ %a@]]" Expr.pp s
     | Var s -> Fmt.fprintf out "[@[var@ %a@]]" Expr.Var.pp s
     | Term s -> Fmt.fprintf out "[@[term@ %a@]]" Expr.pp s
+    | Const (n,_) -> Fmt.fprintf out "[@[const@ %a@]]" Name.pp n
     | Thm s -> Fmt.fprintf out "[@[thm@ %a@]]" Thm.pp s
 end
 
@@ -185,12 +188,99 @@ module Parse_ = struct
       VM.push_obj vm (Thm ax)
     | _ -> err_bad_stack_ vm "axiom"
 
+  let type_op vm = match VM.pop1 vm with
+    | Name n ->
+      begin match n with
+        | [], "bool" -> VM.push_obj vm (Type_operator (n,fun [] -> Expr.bool))
+        | [], "->" -> VM.push_obj vm (Type_operator (n,fun [a;b] -> Expr.arrow a b))
+        | _ -> err_bad_stack_ vm "typeOf"
+      end [@warning "-8"]
+    | _ -> err_bad_stack_ vm "typeOp"
+
+  let def vm = match VM.pop2 vm with
+    | Int k, x ->
+      Int_tbl.replace vm.vm_dict k x;
+      VM.push_obj vm x; (* push x back *)
+    | _ -> err_bad_stack_ vm "def"
+
+  let cons vm = match VM.pop2 vm with
+    | List k, x -> VM.push_obj vm (List (x::k))
+    | _ -> err_bad_stack_ vm "cons"
+
   let nil vm = VM.push_obj vm @@ List[]
+
+  let ref vm = match VM.pop1 vm with
+    | Int n ->
+      begin match Int_tbl.find vm.vm_dict n with
+        | exception Not_found ->
+          errorf_ (fun k->k"didn't find object %d in dictionary" n)
+        | x -> VM.push_obj vm x
+      end
+    | _ -> err_bad_stack_ vm "ref"
+
+  let var_type vm = match VM.pop1 vm with
+    | Name ([], n) -> VM.push_obj vm (Type (Expr.new_var' n Expr.type_))
+    | Name _ -> err_bad_stack_ vm "varType: bad name for a type var"
+    | _ -> err_bad_stack_ vm "var_type"
+
+  let op_type vm = match VM.pop2 vm with
+    | List l, Type_operator (_,f) ->
+      let l = List.map (function Type t -> t | _ -> errorf_ (fun k->k"expected types")) l in
+      VM.push_obj vm (Type (f l))
+    | _ -> err_bad_stack_ vm "opType"
+
+  let const vm = match VM.pop1 vm with
+    | Name n  ->
+      begin match n with
+        | [], "=" ->
+          let c ty =
+            match Expr.unfold_arrow ty with
+            | [a;_], _ -> Expr.app Expr.eq_const a
+            | _ -> errorf_ (fun k->k"cannot make `=` with type %a" Expr.pp ty)
+          in
+          VM.push_obj vm (Const (n, c))
+        | [], "select" ->
+          let c ty =
+            match Expr.unfold_arrow ty with
+            | [_], a -> Expr.app Expr.select_const a
+            | _ -> errorf_ (fun k->k"cannot make `select` with type %a" Expr.pp ty)
+          in
+          VM.push_obj vm (Const (n, c))
+        | _ -> errorf_ (fun k->k"no constant named %a" Name.pp n)
+      end [@warning "-8"]
+    | _ -> err_bad_stack_ vm "const"
+
+  let var vm = match VM.pop2 vm with
+    | Type ty, Name ([], n) ->
+      VM.push_obj vm (Var (Expr.new_var n ty))
+    | _, Name n ->
+      errorf_ (fun k->k"bad name for a var: %a" Name.pp n)
+    | _ -> err_bad_stack_ vm "var"
+
+  let const_term vm = match VM.pop2 vm with
+    | Type ty, Const (_,c)  ->
+      VM.push_obj vm (Term (c ty))
+    | _ -> err_bad_stack_ vm "constTerm"
+
+  let var_term vm = match VM.pop1 vm with
+    | Var v -> VM.push_obj vm (Term (Expr.var v))
+    | _ -> err_bad_stack_ vm "varTerm"
+
+  let define_const vm = match VM.pop2 vm with
+    | Term t, Name n ->
+      (* make a definition [n := t] *)
+      let eqn = Expr.eq (Expr.new_var' (Name.to_string n) (Expr.ty_exn t)) t in
+      let thm, c = Thm.new_basic_definition eqn in
+      VM.push_obj vm (Const (n, fun _ty -> c)); (* FIXME: unify type *)
+      VM.push_obj vm (Thm thm);
+    | _ -> err_bad_stack_ vm "var"
+
+  let pop vm = match VM.pop1 vm with
+    | _ -> ()
 
   (* TODO *)
   let abs_thm vm = err_not_impl_ vm "abs_thm"
   let app_thm vm = err_not_impl_ vm "app_thm"
-  let def vm = err_not_impl_ vm "def"
 
   let process_line (vm:vm) s : unit =
     Format.printf "process line: %S@." s;
@@ -209,6 +299,18 @@ module Parse_ = struct
       | "axiom" -> axiom vm
       | "version" -> version vm
       | "nil" -> nil vm
+      | "typeOp" -> type_op vm
+      | "def" -> def vm
+      | "cons" -> cons vm
+      | "ref" -> ref vm
+      | "varType" -> var_type vm
+      | "opType" -> op_type vm
+      | "const" -> const vm
+      | "constTerm" -> const_term vm
+      | "var" -> var vm
+      | "varTerm" -> var_term vm
+      | "defineConst" -> define_const vm
+      | "pop" -> pop vm
       | _ ->
         errorf_ (fun k->k"OT: unknown command %s@." s)
     )
