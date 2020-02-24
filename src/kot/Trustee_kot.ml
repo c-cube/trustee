@@ -211,7 +211,8 @@ module type S = sig
     (** [congr (F1 |- f=g) (F2 |- t=u)] is [F1, F2 |- f t=g u] *)
 
     val abs : Expr.var -> t -> t
-    (** [abs x (F |- t=u)] is [F |- (λx.t)=(λx.u)] *)
+    (** [abs x (F |- t=u)] is [F |- (λx.t)=(λx.u)].
+        Fails if [x] occurs freely in [F]. *)
 
     val cut : lemma:t -> t -> t
     (** [cut (F1 |- b) ~lemma:(F2, b |- c)] is [F1, F2 |- c].

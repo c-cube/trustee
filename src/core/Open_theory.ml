@@ -67,6 +67,7 @@ module Make(C : Core.S) = struct
   }
 
   type vm = {
+    vm_ty_vars: (string, Expr.var) Hashtbl.t;
     vm_defs: Defs.t;
     mutable vm_stack: obj list;
     vm_dict: obj Int_tbl.t;
@@ -75,6 +76,7 @@ module Make(C : Core.S) = struct
   }
 
   let create ~defs () : vm = {
+    vm_ty_vars=Hashtbl.create 16;
     vm_defs=defs;
     vm_stack=[];
     vm_dict=Int_tbl.create 32;
@@ -249,9 +251,20 @@ module Make(C : Core.S) = struct
         end
       | _ -> err_bad_stack_ vm "remove"
 
+    let get_ty_var vm (n:name) : Expr.var =
+      let n = match n with
+        | [], s -> s
+        | _ -> errorf_ (fun k->k"bad type variable name %a" Name.debug n)
+      in
+      match Hashtbl.find vm.vm_ty_vars n with
+      | v -> v
+      | exception Not_found ->
+        let v = Expr.new_var n Expr.type_ in
+        Hashtbl.add vm.vm_ty_vars n v;
+        v
+
     let var_type vm = match VM.pop1 vm with
-      | Name ([], n) -> VM.push_obj vm (Type (Expr.new_var' n Expr.type_))
-      | Name _ -> err_bad_stack_ vm "varType: bad name for a type var"
+      | Name n -> VM.push_obj vm (Type (Expr.var (get_ty_var vm n)))
       | _ -> err_bad_stack_ vm "var_type"
 
     let op_type vm = match VM.pop2 vm with
@@ -337,12 +350,49 @@ module Make(C : Core.S) = struct
         vm.vm_theorems <- thm :: vm.vm_theorems
       | _ -> err_bad_stack_ vm "thm"
 
+    let refl vm = match VM.pop1 vm with
+      | Term t -> VM.push_obj vm (Thm (Thm.refl t))
+      | _ -> err_bad_stack_ vm "refl"
+
     let pop vm = match VM.pop1 vm with
       | _ -> ()
 
-    (* TODO *)
-    let abs_thm vm = err_not_impl_ vm "abs_thm"
-    let app_thm vm = err_not_impl_ vm "app_thm"
+    let subst vm = match VM.pop2 vm with
+      | Thm thm, List [List ty_subst; List term_subst] ->
+        let ty_subst =
+          List.map
+            (function
+              | List [Name a; Type ty] -> get_ty_var vm a, ty (* FIXME: map name->tyvar?*)
+              | _ -> err_bad_stack_ vm "subst")
+            ty_subst
+        and term_subst =
+          List.map
+            (function
+              | List [Var v; Term e] -> v, e
+              | _ -> err_bad_stack_ vm "subst")
+            term_subst
+        in
+        let subst = Expr.Subst.of_list (ty_subst @ term_subst) in
+        let thm' = Thm.instantiate thm subst in
+        Format.printf "(@[instantiate@ %a@ :into %a@ :subst %a@])@."
+          Thm.pp thm Thm.pp thm' Expr.Subst.pp subst;
+        VM.push_obj vm (Thm thm')
+      | _ -> err_bad_stack_ vm "subst"
+
+    let abs_thm vm = match VM.pop2 vm with
+      | Thm th, Var x ->
+        VM.push_obj vm (Thm (Thm.abs x th))
+      | _ -> err_bad_stack_ vm "abs_thm"
+
+    let app_thm vm = match VM.pop2 vm with
+      | Thm th1, Thm th2 ->
+        VM.push_obj vm (Thm (Thm.congr th2 th1))
+      | _ -> err_bad_stack_ vm "app_thm"
+
+    let trans vm = match VM.pop2 vm with
+      | Thm th1, Thm th2 ->
+        VM.push_obj vm (Thm (Thm.trans th2 th1)) (* FIXME: alpha renaming! *)
+      | _ -> err_bad_stack_ vm "app_thm"
 
     let process_line (vm:vm) s : unit =
       Format.printf "process line: %S@." s;
@@ -375,6 +425,9 @@ module Make(C : Core.S) = struct
         | "pop" -> pop vm
         | "remove" -> remove vm
         | "thm" -> thm vm
+        | "subst" -> subst vm
+        | "refl" -> refl vm
+        | "trans" -> trans vm
         | _ ->
           errorf_ (fun k->k"OT: unknown command %s@." s)
       )
