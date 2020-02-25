@@ -1,5 +1,5 @@
 
-module KoT = Trustee_kot.Make()
+module KoT = Trustee_kernel.Make()
 module P = Trustee_syn.Parse.Make(KoT)
 module Trustee = P.Trustee
 open Trustee

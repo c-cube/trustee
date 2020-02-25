@@ -2,8 +2,8 @@
 open OUnit2
 
 module Test = struct
-  module KoT = Trustee.KoT.Make()
-  module Trustee = Trustee.Make(KoT)
+  module K = Trustee.Kernel.Make()
+  module Trustee = Trustee.Make(K)
   module T = Trustee.Expr
   module Thm = Trustee.Thm
   module Fmt = CCFormat

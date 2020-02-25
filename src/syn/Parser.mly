@@ -5,8 +5,8 @@
    vim:set ft=yacc: *)
 
 %parameter <PARAM : sig
-  module KoT : Trustee_kot.S
-  module Trustee : module type of struct include Trustee.Make(KoT) end
+  module K : Trustee_kernel.S
+  module Trustee : module type of struct include Trustee.Make(K) end
   val ctx : Trustee.Statement.ctx
 end>
 

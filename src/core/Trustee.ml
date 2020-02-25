@@ -21,15 +21,15 @@
     that can be efficiently re-checked later).
 *)
 
-module KoT = Trustee_kot
+module Kernel = Trustee_kernel
 
-module Make(KoT : Trustee_kot.S) = struct
-  module KoT = KoT
-  module ID = KoT.ID
-  module Expr = KoT.Expr
-  module Thm = KoT.Thm
+module Make(K : Trustee_kernel.S) = struct
+  module K = K
+  module ID = K.ID
+  module Expr = K.Expr
+  module Thm = K.Thm
 
-  module Core = Core.Make(KoT)
+  module Core = Core.Make(K)
   module Bool = Bool.Make(Core)
   module Goal = Goal.Make(Core)
   module Tactic = Tactic.Make(Core)

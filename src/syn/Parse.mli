@@ -1,5 +1,5 @@
 
-module Make(KoT : Trustee_kot.S) : sig
+module Make(KoT : Trustee_kernel.S) : sig
   module Trustee : module type of Trustee.Make(KoT)
   open Trustee
   module Ctx = Statement.Ctx

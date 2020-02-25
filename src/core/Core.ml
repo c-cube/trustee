@@ -3,7 +3,7 @@
 module Fmt = CCFormat
 
 module type S = sig
-  module KoT : Trustee_kot.S
+  module KoT : Trustee_kernel.S
   open KoT
 
   type var = Expr.var
@@ -76,7 +76,7 @@ module type S = sig
   (** [cong_fol f l1 l2] is [l1 = l2 |- f l1 = f l2] *)
 end
 
-module Make(KoT : Trustee_kot.S)
+module Make(KoT : Trustee_kernel.S)
     : S with module KoT = KoT
 = struct
   module KoT = KoT

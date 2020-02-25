@@ -4,7 +4,7 @@
   (optional)
   (public_name trustee.syn)
   (synopsis "basic parser for trustee")
-  (libraries containers trustee.kot trustee))
+  (libraries containers trustee.kernel trustee))
 
 (ocamllex (modules Lexer))
 
