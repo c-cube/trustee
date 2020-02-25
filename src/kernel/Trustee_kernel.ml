@@ -447,16 +447,20 @@ module Make() : S = struct
           | Const {c_display=Infix; c_name; _}, [a;b] ->
             Fmt.fprintf out "@[%a@ @[<1>%a@ %a@]@]" pp_inner a ID.pp c_name pp_inner b
           | Const {c_display=Infix; c_name; _}, _::_::_ ->
-            (* display [= u a b] as [a `= u` b] *)
+            (* display [= u a b] as [a = b] *)
             let ifx_args, args = CCList.take_drop (List.length args-2) args in
-            begin match ifx_args, args with
-              | [u], [a;b] ->
-                Fmt.fprintf out "@[%a@ @[<1>@[%a_%a@]@ %a@]@]"
-                  pp_inner a ID.pp c_name pp_inner u pp_inner b
-              | _, [a;b] ->
-                Fmt.fprintf out "@[%a@ @[<1>`@[%a@ %a@]`@ %a@]@]"
-                  pp_inner a ID.pp c_name (pp_list pp_inner) ifx_args pp_inner b
-              | _ -> assert false
+            let ifx_all_types =
+              List.for_all
+                (fun a -> CCOpt.map_or ~default:false (equal type_) (ty a))
+                ifx_args
+            in
+            begin match args with
+              | [a;b] when ifx_all_types  ->
+                Fmt.fprintf out "@[%a@ %a %a@]@]"
+                  pp_inner a ID.pp c_name pp_inner b
+              | _ ->
+                (* just default to prefix notation *)
+                Fmt.fprintf out "@[%a@ %a@]" pp_rec f (pp_list pp_inner) args
             end
           | _ ->
             Fmt.fprintf out "@[%a@ %a@]" pp_rec f (pp_list pp_inner) args
