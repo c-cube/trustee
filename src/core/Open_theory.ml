@@ -399,10 +399,25 @@ module Make(C : Core.S) = struct
         VM.push_obj vm (Thm (Thm.bool_eq ~eq:th2 th1))
       | _ -> err_bad_stack_ vm "eq_mp"
 
+    let deduct_antisym vm = match VM.pop2 vm with
+      | Thm th1, Thm th2 ->
+        VM.push_obj vm (Thm (Thm.bool_eq_intro th2 th1))
+      | _ -> err_bad_stack_ vm "deduct_antisym"
+
+    let prove_hyp vm = match VM.pop2 vm with
+      | Thm th1, Thm th2 ->
+        VM.push_obj vm (Thm (Thm.cut ~fail_if_not_found:false ~lemma:th2 th1))
+      | _ -> err_bad_stack_ vm "prove_hyp"
+
     let sym vm = match VM.pop1 vm with
       | Thm th ->
         VM.push_obj vm (Thm (C.sym th))
       | _ -> err_bad_stack_ vm "sym"
+
+    let beta_conv vm = match VM.pop1 vm with
+      | Term t ->
+        VM.push_obj vm (Thm (Thm.beta_conv t))
+      | _ -> err_bad_stack_ vm "beta_conv"
 
     let process_line (vm:vm) s : unit =
       Format.printf "process line: %S@." s;
@@ -440,6 +455,9 @@ module Make(C : Core.S) = struct
         | "trans" -> trans vm
         | "sym" -> sym vm
         | "eqMp" -> eq_mp vm
+        | "betaConv" -> beta_conv vm
+        | "deductAntisym" -> deduct_antisym vm
+        | "proveHyp" -> prove_hyp vm
         | _ ->
           errorf_ (fun k->k"OT: unknown command %s@." s)
       )

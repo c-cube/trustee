@@ -1,6 +1,7 @@
 
-module KoT = Trustee_kernel.Make()
-module P = Trustee_syn.Parse.Make(KoT)
+module Fmt = CCFormat
+module Kernel = Trustee_kernel.Make()
+module P = Trustee_syn.Parse.Make(Kernel)
 module Trustee = P.Trustee
 open Trustee
 
@@ -56,8 +57,9 @@ let loop ~to_load ctx =
         Format.printf "%a@." Statement.pp s;
         begin try
             process_statement ctx s;
-          with KoT.Error msg ->
-            Format.printf "@[<1>@{<Red>Error@}:@ %a@]@." msg ()
+          with
+          | Kernel.Error msg ->
+            Fmt.printf "@[<1>@{<Red>Error@}:@ %a@]@." msg ()
         end;
         loop ()
   in
@@ -68,7 +70,7 @@ let () =
   let to_load = ref [] in
   let opts = [
     "--load", Arg.String (CCList.Ref.push to_load), " load given script";
-    "--pp-id", Arg.Set KoT.ID.pp_int_, " print full IDs";
+    "--pp-id", Arg.Set Kernel.ID.pp_int_, " print full IDs";
     "-bt", Arg.Unit (fun () -> Printexc.record_backtrace true), " record backtraces";
   ] |> Arg.align in
   Arg.parse opts
