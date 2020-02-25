@@ -220,7 +220,7 @@ module type S = sig
     (** [abs x (F |- t=u)] is [F |- (λx.t)=(λx.u)].
         Fails if [x] occurs freely in [F]. *)
 
-    val cut : lemma:t -> t -> t
+    val cut : ?fail_if_not_found:bool -> lemma:t -> t -> t
     (** [cut (F1 |- b) ~lemma:(F2, b |- c)] is [F1, F2 |- c].
         This fails if [b] does not occur {b syntactically} in the hypothesis
         of the second theorem.
@@ -251,6 +251,10 @@ module type S = sig
     (** [beta (λx.u) a] is [ |- (λx.u) a = u[x:=a] ].
         [u[x:=a]] is returned along. *)
 
+    val beta_conv : Expr.t -> t
+    (** [beta_conv ((λx.u) a)] is [ |- (λx.u) a = u[x:=a]].
+        Fails if the term is not a beta-redex. *)
+
     val new_basic_definition : Expr.t -> t * Expr.t
     (** [new_basic_definition (x=t)] where [x] is a variable and [t] a term
         with a closed type,
@@ -280,7 +284,7 @@ module Make() : S = struct
   let () =
     Printexc.register_printer
       (function
-        | Error f -> Some (Fmt.asprintf "@[<1>@{<Red>Error@}:@ %a@]" f ())
+        | Error f -> Some (Fmt.sprintf "@[<v1>@{<Red>Error@}:@ %a@]" f ())
         | _ -> None)
 
   module ID = struct
@@ -456,7 +460,7 @@ module Make() : S = struct
             in
             begin match args with
               | [a;b] when ifx_all_types  ->
-                Fmt.fprintf out "@[%a@ %a %a@]@]"
+                Fmt.fprintf out "@[%a@ %a %a@]"
                   pp_inner a ID.pp c_name pp_inner b
               | _ ->
                 (* just default to prefix notation *)
@@ -724,8 +728,6 @@ module Make() : S = struct
         aux
     end
     type subst = Subst.t
-
-    (* TODO: alpha-equiv check, {b AS A DAG} *)
   end
 
   module Thm = struct
@@ -783,6 +785,11 @@ module Make() : S = struct
       | _ ->
         errorf_ (fun k->k "(@[thm.beta:@ %a is not a lambda@])" Expr.pp f)
 
+    let beta_conv t : t =
+      match Expr.view t with
+      | App (a, b) -> fst (beta a b)
+      | _ -> errorf_ (fun k->k"@[<1>beta_conv: not a redex:@ %a@]" Expr.pp t)
+
     let abs x (th:t) : t =
       try
         let t, u = Expr.unfold_eq_exn th.concl in
@@ -809,7 +816,9 @@ module Make() : S = struct
         err_unless_bool_ "bool_eq" a;
         err_unless_bool_ "bool_eq" b;
         if not (Expr.equal a th2.concl || Expr.alpha_equiv a th2.concl) then (
-          errorf_ (fun k->k "(@[conclusion of %a@ does not match LHS of %a@])" pp th2 pp th1);
+          errorf_
+            (fun k->k "(@[<hv1>conclusion of %a@ does not match LHS of@ %a@])"
+                pp th1 pp th2);
         );
         make_ b (Expr.Set.union th1.hyps th2.hyps)
           (merge_ax_ th1.dep_on_axioms th2.dep_on_axioms)
@@ -849,9 +858,9 @@ module Make() : S = struct
       let inst = Expr.Subst.apply subst in
       make_ (inst t.concl) (Expr.Set.map inst t.hyps) t.dep_on_axioms
 
-    let cut ~lemma:l a : t =
+    let cut ?(fail_if_not_found=true) ~lemma:l a : t =
       let {concl=concl_l; hyps=hyps_l; dep_on_axioms=_} = l in
-      if Expr.Set.mem a.concl hyps_l then (
+      if not fail_if_not_found || Expr.Set.mem a.concl hyps_l then (
         let hyps = Expr.Set.remove a.concl hyps_l in
         let hyps = Expr.Set.union a.hyps hyps in
         make_ concl_l hyps (merge_ax_ a.dep_on_axioms l.dep_on_axioms)
