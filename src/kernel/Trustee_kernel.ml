@@ -804,7 +804,7 @@ module Make() : S = struct
         let a, b = Expr.unfold_eq_exn th1.concl in
         err_unless_bool_ "bool_eq" a;
         err_unless_bool_ "bool_eq" b;
-        if not (Expr.equal a th2.concl) then (
+        if not (Expr.equal a th2.concl || Expr.alpha_equiv a th2.concl) then (
           errorf_ (fun k->k "(@[conclusion of %a@ does not match LHS of %a@])" pp th2 pp th1);
         );
         make_ b (Expr.Set.union th1.hyps th2.hyps)
