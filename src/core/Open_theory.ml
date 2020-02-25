@@ -391,8 +391,18 @@ module Make(C : Core.S) = struct
 
     let trans vm = match VM.pop2 vm with
       | Thm th1, Thm th2 ->
-        VM.push_obj vm (Thm (Thm.trans th2 th1)) (* FIXME: alpha renaming! *)
+        VM.push_obj vm (Thm (Thm.trans th2 th1))
       | _ -> err_bad_stack_ vm "trans"
+
+    let eq_mp vm = match VM.pop2 vm with
+      | Thm th1, Thm th2 ->
+        VM.push_obj vm (Thm (Thm.bool_eq ~eq:th2 th1))
+      | _ -> err_bad_stack_ vm "eq_mp"
+
+    let sym vm = match VM.pop1 vm with
+      | Thm th ->
+        VM.push_obj vm (Thm (C.sym th))
+      | _ -> err_bad_stack_ vm "sym"
 
     let process_line (vm:vm) s : unit =
       Format.printf "process line: %S@." s;
@@ -428,6 +438,8 @@ module Make(C : Core.S) = struct
         | "subst" -> subst vm
         | "refl" -> refl vm
         | "trans" -> trans vm
+        | "sym" -> sym vm
+        | "eqMp" -> eq_mp vm
         | _ ->
           errorf_ (fun k->k"OT: unknown command %s@." s)
       )
