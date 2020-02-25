@@ -686,6 +686,8 @@ module Make() : S = struct
         aux
     end
     type subst = Subst.t
+
+    (* TODO: alpha-equiv check, {b AS A DAG} *)
   end
 
   module Thm = struct
@@ -754,6 +756,7 @@ module Make() : S = struct
     let mp t1 t2 =
       match Expr.unfold_app t2.concl with
       | f, [a;b] when Expr.equal Expr.imply_const f ->
+        (* FIXME: check alpha-equiv if equality fails *)
         if not (Expr.equal a t1.concl) then (
           errorf_ (fun k->k "(@[mp: LHS of implication@ in %a@ does not match@])" pp t2)
         );
@@ -781,17 +784,18 @@ module Make() : S = struct
         (merge_ax_ th1.dep_on_axioms th2.dep_on_axioms)
 
     let trans t1 t2 : t =
-      match Expr.unfold_app t1.concl, Expr.unfold_app t2.concl with
-      | (f1, [_;a1;b1]), (f2, [_;a2;b2])
-        when Expr.equal Expr.eq_const f1 && Expr.equal Expr.eq_const f2 ->
+      try
+        let a1, b1 = Expr.unfold_eq_exn t1.concl in
+        let a2, b2 = Expr.unfold_eq_exn t2.concl in
+        (* TODO: alpha-equiv *)
         if not (Expr.equal b1 a2) then (
           errorf_
-            (fun k->k "(@[trans:@ %a@ and %a do not match@])" Expr.pp b1 Expr.pp a2)
+            (fun k->k "(@[<1>trans:@ %a@ and %a do not match@])" Expr.pp b1 Expr.pp a2)
         );
         make_ (Expr.eq a1 b2) (Expr.Set.union t1.hyps t2.hyps)
           (merge_ax_ t1.dep_on_axioms t2.dep_on_axioms)
-      | _ ->
-        errorf_ (fun k->k"trans: invalid args %a@ and %a" pp t1 pp t2)
+      with Error e ->
+        error_wrapf_ e (fun k->k"@[<1>in trans@ with thm1: %a@ and thm2: %a@]" pp t1 pp t2)
 
     let congr th1 th2 : t =
       try

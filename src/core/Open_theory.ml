@@ -392,7 +392,7 @@ module Make(C : Core.S) = struct
     let trans vm = match VM.pop2 vm with
       | Thm th1, Thm th2 ->
         VM.push_obj vm (Thm (Thm.trans th2 th1)) (* FIXME: alpha renaming! *)
-      | _ -> err_bad_stack_ vm "app_thm"
+      | _ -> err_bad_stack_ vm "trans"
 
     let process_line (vm:vm) s : unit =
       Format.printf "process line: %S@." s;
