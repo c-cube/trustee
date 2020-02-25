@@ -17,7 +17,7 @@ module Test = struct
 
   let t_to_str = Fmt.to_string T.pp
   let tl_to_str = Fmt.to_string (Fmt.Dump.list T.pp)
-  let tset_to_str = Fmt.to_string Fmt.(map T.Set.elements @@ Dump.list T.pp)
+  let tl_equal l1 l2 = CCList.equal T.equal (List.sort T.compare l1) (List.sort T.compare l2)
   let failf msg = Format.kasprintf OUnit2.assert_failure msg
 
   let tests = ref []
@@ -60,8 +60,8 @@ module Test = struct
       (T.eq (T.app t_lam a) @@
        T.app f (T.app f (T.app_l f2 [a; T.app (T.lambda x (T.app g (T.var x))) b])))
       (Thm.concl thm);
-    assert_equal ~printer:tset_to_str ~cmp:T.Set.equal ~msg:"no hyps"
-      T.Set.empty (Thm.hyps thm);
+    assert_equal ~printer:tl_to_str ~cmp:tl_equal ~msg:"no hyps"
+      [] (Thm.hyps_l thm);
     ()
 
   (* prove [a=b ==> f a = f b] *)
@@ -86,8 +86,8 @@ module Test = struct
     let b = T.new_const "b" u in
     let thm = Trustee.Core.eq_sym a b in
     assert_equal ~printer:t_to_str ~cmp:T.equal ~msg:"result.concl" (T.eq b a) (Thm.concl thm);
-    assert_equal ~printer:tl_to_str ~cmp:(CCList.equal T.equal) ~msg:"result.hyps"
-      [T.eq a b] (T.Set.elements @@ Thm.hyps thm);
+    assert_equal ~printer:tl_to_str ~cmp:tl_equal ~msg:"result.hyps"
+      [T.eq a b] (Thm.hyps_l thm);
     ()
 
   (* prove the cut rule again *)
@@ -100,8 +100,8 @@ module Test = struct
     in
     (*   Format.printf "%a@." Thm.pp thm; *)
     assert_equal ~printer:t_to_str ~cmp:T.equal ~msg:"result.concl" b (Thm.concl thm);
-    assert_equal ~printer:tl_to_str ~cmp:(CCList.equal T.equal) ~msg:"result.hyps"
-      [] (T.Set.elements @@ Thm.hyps thm);
+    assert_equal ~printer:tl_to_str ~cmp:tl_equal ~msg:"result.hyps"
+      [] (Thm.hyps_l thm);
     ()
 
   (* prove [a=b, b=c |- a=c] *)
@@ -113,9 +113,9 @@ module Test = struct
     let thm = Trustee.Core.eq_trans a b c in
     (* Format.printf "trans: %a@." Thm.pp thm; *)
     assert_equal ~printer:t_to_str ~cmp:T.equal ~msg:"result.concl" (T.eq a c) (Thm.concl thm);
-    assert_equal ~printer:tset_to_str ~cmp:T.Set.equal ~msg:"result.hyps"
-      (T.Set.of_list [T.eq a b; T.eq b c])
-      (Thm.hyps thm);
+    assert_equal ~printer:tl_to_str ~cmp:tl_equal ~msg:"result.hyps"
+      [T.eq a b; T.eq b c]
+      (Thm.hyps_l thm);
     ()
 
   let () = add_t "eq_reflect" @@ fun () ->
@@ -130,9 +130,9 @@ module Test = struct
     (*   Format.printf "eq_reflect: %a@." Thm.pp thm; *)
     assert_equal ~printer:t_to_str ~cmp:T.equal ~msg:"result.concl"
       (T.eq (T.app_l f [a;a;b;c]) (T.app_l f [a;b;b;c])) (Thm.concl thm);
-    assert_equal ~printer:tset_to_str ~cmp:T.Set.equal ~msg:"result.hyps"
-      (T.Set.of_list [T.eq a b])
-      (Thm.hyps thm);
+    assert_equal ~printer:tl_to_str ~cmp:tl_equal ~msg:"result.hyps"
+      [T.eq a b]
+      (Thm.hyps_l thm);
     ()
 
   let () = add_t  "eq_true_intro" @@ fun () ->

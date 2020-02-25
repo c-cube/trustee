@@ -249,7 +249,7 @@ module Make(KoT : Trustee_kernel.S)
 
   let cut' th1 th2 =
     let c1 = Thm.concl th1 in
-    if T.Set.mem c1 (Thm.hyps th2) then (
+    if Iter.exists (T.alpha_equiv c1) (Thm.hyps_iter th2) then (
       (* [F1,F2 |- b=c] *)
       let th_bc = Thm.bool_eq_intro th1 th2 in
       (* booleq with [F1 |- b] to get [F1,F2 |- c] *)
@@ -301,9 +301,9 @@ module Make(KoT : Trustee_kernel.S)
     in
     (* find all the [t] such that [(t=t) \in thm.hyps] *)
     let trivial_eqn_members =
-      T.Set.fold
-        (fun t l -> match as_trivial_eq t with Some x -> T.Set.add x l | None -> l)
-        (Thm.hyps thm) T.Set.empty
+      Iter.fold
+        (fun l t -> match as_trivial_eq t with Some x -> T.Set.add x l | None -> l)
+        T.Set.empty (Thm.hyps_iter thm)
     in
     (*Format.printf "trivial: %a@." Fmt.Dump.(list T.pp) (T.Set.elements trivial_eqn_members); *)
     if T.Set.is_empty trivial_eqn_members then (
