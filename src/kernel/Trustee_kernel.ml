@@ -238,7 +238,7 @@ module type S = sig
         This is the boolean equivalent of transitivity. *)
 
     val bool_eq_intro : t -> t -> t
-    (** [bool_eq_intro (F1, a |- b) (F2, b |- a) is [F1, F2 |- a=b].
+    (** [bool_eq_intro (F1, a |- b) (F2, b |- a) is [F1, F2 |- b=a].
         This is a way of building a boolean [a=b] from proofs of
         [a==>b] and [b==>a] (or [a|-b] and [b|-a]).
         *)
