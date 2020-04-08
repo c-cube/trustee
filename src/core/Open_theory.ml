@@ -104,35 +104,57 @@ module Make(C : Core.S) = struct
   module VM = struct
     type t = vm
 
-    let pp out (self:t) =
+    (* print with given stack *)
+    let pp_with_st out (self, stack) =
       let pp_pair out (i,obj) =
         Fmt.fprintf out "(@[%d :=@ %a@])" i Obj_.pp obj
       in
       Fmt.fprintf out
         "{@[<hv>vm.stack=%a;@ dict=[@[%a@]];@ assumptions=%a;@ theorems=%a@]}"
-        (Fmt.Dump.list Obj_.pp) self.vm_stack
+        (Fmt.Dump.list Obj_.pp) stack
         (Fmt.Dump.list pp_pair) (Int_tbl.to_list self.vm_dict)
         (Fmt.Dump.list Thm.pp) self.vm_assumptions
         (Fmt.Dump.list Thm.pp) self.vm_theorems
+
+    let pp out (self:t) = pp_with_st out (self, self.vm_stack)
 
     let push_obj self o =
       Fmt.printf "OT.vm.push %a@." Obj_.pp o;
       self.vm_stack <- o :: self.vm_stack
 
-    let pop1 self =
+    let pop1 what self f =
       match self.vm_stack with
-      | o :: st -> self.vm_stack <- st; o
-      | [] -> error_ (fun out () -> Fmt.fprintf out "OT.vm.pop1: empty stack@ in %a" pp self)
+      | o :: st as old_st ->
+        Format.printf "@[<2>%s.pop1:@ %a@]@." what Obj_.pp o;
+        self.vm_stack <- st;
+        (try f o
+         with Error e ->
+           error_wrapf_ e
+             (fun k->k"in %s using VM.pop1@ with %a" what pp_with_st (self,old_st)))
+      | [] ->
+        error_ (fun out () -> Fmt.fprintf out "OT.vm.pop1: empty stack@ in %a" pp self)
 
-    let pop2 self =
+    let pop2 what self f =
       match self.vm_stack with
-      | o1 :: o2 :: st -> self.vm_stack <- st; o1, o2
+      | o1 :: o2 :: st as old_st ->
+        Format.printf "@[<2>%s.pop2@ %a;@ %a@]@." what Obj_.pp o1 Obj_.pp o2;
+        self.vm_stack <- st;
+        (try f (o1,o2)
+         with Error e ->
+           error_wrapf_ e
+             (fun k->k"in %s using VM.pop2@ with %a" what pp_with_st (self,old_st)))
       | [_] | [] ->
         error_ (fun out () -> Fmt.fprintf out "OT.vm.pop2: empty stack@ in %a" pp self)
 
-    let pop3 self =
+    let pop3 what self f =
       match self.vm_stack with
-      | o1 :: o2 :: o3 :: st -> self.vm_stack <- st; o1, o2, o3
+      | o1 :: o2 :: o3 :: st as old_st ->
+        Format.printf "@[<2>%s.pop3:@ %a;@ %a;@ %a@]@." what Obj_.pp o1 Obj_.pp o2 Obj_.pp o3;
+        self.vm_stack <- st;
+        (try f (o1,o2,o3)
+         with Error e ->
+           error_wrapf_ e
+             (fun k->k"in %s using VM.pop3 with %a" what pp_with_st (self,old_st)))
       | [_;_] | [_] | [] ->
         error_ (fun out () -> Fmt.fprintf out "OT.vm.pop3: empty stack@ in %a" pp self)
   end
@@ -178,39 +200,40 @@ module Make(C : Core.S) = struct
       errorf_ (fun k->k"OT: not implemented: %s@ in %a" what VM.pp vm)
 
     let abs_term vm =
-      match vm.vm_stack with
-      | Term t :: Var v :: st ->
-        vm.vm_stack <- Term (Expr.lambda v t) :: st
+      VM.pop2 "absTerm" vm @@ function
+      | Term t, Var v ->
+        VM.push_obj vm @@ Term (Expr.lambda v t)
       | _ ->
         errorf_ (fun k->k"@[<2>OT.abs_term: wrong stack@ in %a@]" VM.pp vm)
 
     let app_term vm =
-      match VM.pop2 vm with
-      | Term x, Term f -> VM.push_obj vm @@ Term (Expr.app f x)
+      VM.pop2 "appTerm" vm @@ function
+      | (Term x, Term f) -> VM.push_obj vm @@ Term (Expr.app f x)
       | _ -> err_bad_stack_ vm "app_term"
 
     let assume vm =
-      match VM.pop1 vm with
-      | Term x -> VM.push_obj vm @@ Thm (Thm.assume x)
-      | _ -> err_bad_stack_ vm "assume"
+      VM.pop1 "assume" vm @@ function
+          | Term x -> VM.push_obj vm @@ Thm (Thm.assume x)
+          | _ -> err_bad_stack_ vm "assume"
 
     let version vm =
-      match VM.pop1 vm with
-      | Int 6 -> ()
-      | Int n -> errorf_ (fun k->k"OT: unsupported version %d" n)
-      | _ -> err_bad_stack_ vm "version"
+      VM.pop1 "version" vm @@ function
+          | Int 6 -> ()
+          | Int n -> errorf_ (fun k->k"OT: unsupported version %d" n)
+          | _ -> err_bad_stack_ vm "version"
 
     let axiom vm =
-      match VM.pop2 vm with
-      | Term t, List hyps ->
-        let hyps = List.map (function Term t -> t | _ -> err_bad_stack_ vm "axiom") hyps in
-        let ax, _ = Thm.axiom "_ot_axiom" hyps t in
-        Format.printf "@{<Yellow>OT.add-assumption@} %a@." Thm.pp ax;
-        vm.vm_assumptions <- ax :: vm.vm_assumptions;
-        VM.push_obj vm (Thm ax)
-      | _ -> err_bad_stack_ vm "axiom"
+      VM.pop2 "axiom" vm @@ function
+        | Term t, List hyps ->
+          let hyps = List.map (function Term t -> t | _ -> err_bad_stack_ vm "axiom") hyps in
+          let ax, _ = Thm.axiom "_ot_axiom" hyps t in
+          Format.printf "@{<Yellow>OT.add-assumption@} %a@." Thm.pp ax;
+          vm.vm_assumptions <- ax :: vm.vm_assumptions;
+          VM.push_obj vm (Thm ax)
+        | _ -> err_bad_stack_ vm "axiom"
 
-    let type_op vm = match VM.pop1 vm with
+    let type_op vm =
+      VM.pop1 "typeOp" vm @@ function
       | Name n ->
         begin match n with
           | [], "bool" -> VM.push_obj vm (Type_operator (n,fun [] -> Expr.bool))
@@ -219,19 +242,22 @@ module Make(C : Core.S) = struct
         end [@warning "-8"]
       | _ -> err_bad_stack_ vm "typeOp"
 
-    let def vm = match VM.pop2 vm with
+    let def vm =
+      VM.pop2 "def" vm @@ function
       | Int k, x ->
         Int_tbl.replace vm.vm_dict k x;
         VM.push_obj vm x; (* push x back *)
       | _ -> err_bad_stack_ vm "def"
 
-    let cons vm = match VM.pop2 vm with
+    let cons vm =
+      VM.pop2 "cons" vm @@ function
       | List k, x -> VM.push_obj vm (List (x::k))
       | _ -> err_bad_stack_ vm "cons"
 
     let nil vm = VM.push_obj vm @@ List[]
 
-    let ref vm = match VM.pop1 vm with
+    let ref vm =
+      VM.pop1 "ref" vm @@ function
       | Int n ->
         begin match Int_tbl.find vm.vm_dict n with
           | exception Not_found ->
@@ -240,7 +266,8 @@ module Make(C : Core.S) = struct
         end
       | _ -> err_bad_stack_ vm "ref"
 
-    let remove vm = match VM.pop1 vm with
+    let remove vm =
+      VM.pop1 "remove" vm @@ function
       | Int n ->
         begin match Int_tbl.find vm.vm_dict n with
           | exception Not_found ->
@@ -263,17 +290,20 @@ module Make(C : Core.S) = struct
         Hashtbl.add vm.vm_ty_vars n v;
         v
 
-    let var_type vm = match VM.pop1 vm with
+    let var_type vm =
+      VM.pop1 "varType" vm @@ function
       | Name n -> VM.push_obj vm (Type (Expr.var (get_ty_var vm n)))
       | _ -> err_bad_stack_ vm "var_type"
 
-    let op_type vm = match VM.pop2 vm with
+    let op_type vm =
+      VM.pop2 "opType" vm @@ function
       | List l, Type_operator (_,f) ->
         let l = List.map (function Type t -> t | _ -> errorf_ (fun k->k"expected types")) l in
         VM.push_obj vm (Type (f l))
       | _ -> err_bad_stack_ vm "opType"
 
-    let const vm = match VM.pop1 vm with
+    let const vm =
+      VM.pop1 "const" vm @@ function
       | Name n  ->
         let c = match n with
           | [], "=" ->
@@ -298,23 +328,27 @@ module Make(C : Core.S) = struct
         VM.push_obj vm (Const (n, c))
       | _ -> err_bad_stack_ vm "const"
 
-    let var vm = match VM.pop2 vm with
+    let var vm =
+      VM.pop2 "var" vm @@ function
       | Type ty, Name ([], n) ->
         VM.push_obj vm (Var (Expr.new_var n ty))
       | _, Name n ->
         errorf_ (fun k->k"bad name for a var: %a" Name.debug n)
       | _ -> err_bad_stack_ vm "var"
 
-    let const_term vm = match VM.pop2 vm with
+    let const_term vm =
+      VM.pop2 "constTerm" vm @@ function
       | Type ty, Const (_,c)  ->
         VM.push_obj vm (Term (c ty))
       | _ -> err_bad_stack_ vm "constTerm"
 
-    let var_term vm = match VM.pop1 vm with
+    let var_term vm =
+      VM.pop1 "varTerm" vm @@ function
       | Var v -> VM.push_obj vm (Term (Expr.var v))
       | _ -> err_bad_stack_ vm "varTerm"
 
-    let define_const vm = match VM.pop2 vm with
+    let define_const vm =
+      VM.pop2 "defineConst" vm @@ function
       | Term t, Name n ->
         (* make a definition [n := t] *)
         let thm, c, vars = C.new_poly_def (Name.to_string n) t in
@@ -341,7 +375,8 @@ module Make(C : Core.S) = struct
         VM.push_obj vm (Thm thm);
       | _ -> err_bad_stack_ vm "defineConst"
 
-    let thm vm = match VM.pop3 vm with
+    let thm vm =
+      VM.pop3 "thm" vm @@ function
       | Term _phi, List l, Thm thm ->
         let _l = List.map (function Term t->t | _ -> err_bad_stack_ vm "thm") l in
         (* FIXME: alpha rename with [l] and [phi] *)
@@ -350,14 +385,15 @@ module Make(C : Core.S) = struct
         vm.vm_theorems <- thm :: vm.vm_theorems
       | _ -> err_bad_stack_ vm "thm"
 
-    let refl vm = match VM.pop1 vm with
+    let refl vm =
+      VM.pop1 "refl" vm @@ function
       | Term t -> VM.push_obj vm (Thm (Thm.refl t))
       | _ -> err_bad_stack_ vm "refl"
 
-    let pop vm = match VM.pop1 vm with
-      | _ -> ()
+    let pop vm = VM.pop1 "pop" vm ignore
 
-    let subst vm = match VM.pop2 vm with
+    let subst vm =
+      VM.pop2 "subst" vm @@ function
       | Thm thm, List [List ty_subst; List term_subst] ->
         let ty_subst =
           List.map
@@ -379,42 +415,50 @@ module Make(C : Core.S) = struct
         VM.push_obj vm (Thm thm')
       | _ -> err_bad_stack_ vm "subst"
 
-    let abs_thm vm = match VM.pop2 vm with
+    let abs_thm vm =
+      VM.pop2 "absThm" vm @@ function
       | Thm th, Var x ->
         VM.push_obj vm (Thm (Thm.abs x th))
       | _ -> err_bad_stack_ vm "abs_thm"
 
-    let app_thm vm = match VM.pop2 vm with
+    let app_thm vm =
+      VM.pop2 "appThm" vm @@ function
       | Thm th1, Thm th2 ->
         VM.push_obj vm (Thm (Thm.congr th2 th1))
       | _ -> err_bad_stack_ vm "app_thm"
 
-    let trans vm = match VM.pop2 vm with
+    let trans vm =
+      VM.pop2 "trans" vm @@ function
       | Thm th1, Thm th2 ->
         VM.push_obj vm (Thm (Thm.trans th2 th1))
       | _ -> err_bad_stack_ vm "trans"
 
-    let eq_mp vm = match VM.pop2 vm with
+    let eq_mp vm =
+      VM.pop2 "eqMp" vm @@ function
       | Thm th1, Thm th2 ->
         VM.push_obj vm (Thm (Thm.bool_eq ~eq:th2 th1))
       | _ -> err_bad_stack_ vm "eq_mp"
 
-    let deduct_antisym vm = match VM.pop2 vm with
+    let deduct_antisym vm =
+      VM.pop2 "deductAntisym" vm @@ function
       | Thm th1, Thm th2 ->
         VM.push_obj vm (Thm (Thm.bool_eq_intro th2 th1))
       | _ -> err_bad_stack_ vm "deduct_antisym"
 
-    let prove_hyp vm = match VM.pop2 vm with
+    let prove_hyp vm =
+      VM.pop2 "proveHyp" vm @@ function
       | Thm th1, Thm th2 ->
-        VM.push_obj vm (Thm (Thm.cut ~fail_if_not_found:false ~lemma:th2 th1))
+        VM.push_obj vm (Thm (Thm.cut ~fail_if_not_found:false ~lemma:th1 th2))
       | _ -> err_bad_stack_ vm "prove_hyp"
 
-    let sym vm = match VM.pop1 vm with
+    let sym vm =
+      VM.pop1 "sym" vm @@ function
       | Thm th ->
         VM.push_obj vm (Thm (C.sym th))
       | _ -> err_bad_stack_ vm "sym"
 
-    let beta_conv vm = match VM.pop1 vm with
+    let beta_conv vm =
+      VM.pop1 "betaConv" vm @@ function
       | Term t ->
         VM.push_obj vm (Thm (Thm.beta_conv t))
       | _ -> err_bad_stack_ vm "beta_conv"
