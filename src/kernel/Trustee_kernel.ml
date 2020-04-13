@@ -40,6 +40,7 @@ module type S = sig
     val compare : t -> t -> int
     val hash : t -> int
     val pp : t Fmt.printer
+    val fresh_copy : t -> t
     module Map : Map.S with type key = t
 
     val pp_int_ : bool ref
@@ -102,6 +103,9 @@ module type S = sig
     (** [subst1 v t ~in_:u] builds the term [u [v:=t]] where all instances of
         [v] are replaced by [t]. *)
 
+    val var_map_ty : var -> (t -> t) -> var
+    (** Apply [f] to the variable's type *)
+
     val is_bool : t -> bool
     val is_a_type : t -> bool
     val is_a_bool : t -> bool
@@ -132,6 +136,7 @@ module type S = sig
       val equal : t -> t -> bool
 
       val name : t -> ID.t
+      val name_str : t -> string
       val ty : t -> term
 
       val pp : t Fmt.printer
@@ -305,6 +310,8 @@ module Make() : S = struct
       fun name ->
         incr n;
         {name; id= !n}
+
+    let fresh_copy self = make self.name
 
     module As_key = struct type nonrec t=t let compare=compare end
     module Map = Map.Make(As_key)
@@ -515,6 +522,7 @@ module Make() : S = struct
       let pp = pp
       let ty = ty_exn
       let name v = match v.view with Var v -> v.v_name | _ -> assert false
+      let name_str v = ID.name (name v)
       let equal = equal
       let has_ty v t = equal (ty v) t
 
@@ -562,6 +570,11 @@ module Make() : S = struct
         )
       in
       make_ (Lambda (v,body)) mk_ty
+
+    let var_map_ty v f =
+      match v.view with
+      | Var v -> var' {v with v_ty=f v.v_ty}
+      | _ -> assert false
 
     let rec app a b : t =
       let get_ty () = match a.ty, b.ty with
@@ -687,12 +700,12 @@ module Make() : S = struct
       let of_list l : t = List.fold_left (fun s (v,t) -> add v t s) empty l
 
       let apply (self:t) : term -> term =
-        let tbl = Tbl.create 8 in
+        let apply_cache = Tbl.create 16 in
         let rec aux t =
           match t.view with
           | Type | Kind | Const _ -> t
           | t_view ->
-            match Tbl.find tbl t with
+            match Tbl.find apply_cache t with
             | u -> u
             | exception Not_found ->
               let u =
@@ -715,13 +728,16 @@ module Make() : S = struct
                   pi y' (aux body)
                 | Arrow (a,b) -> arrow (aux a) (aux b)
               in
-              Tbl.add tbl t u;
+              Tbl.add apply_cache t u;
               u
         and rebind_ (v:var) : var =
           match v.view with
           | Var vi ->
-            let v' = var' {vi with v_ty = aux vi.v_ty} in
-            Tbl.add tbl v v';
+            let v' =
+              {vi with v_name=ID.fresh_copy vi.v_name; v_ty = aux vi.v_ty}
+              |> var'
+            in
+            Tbl.add apply_cache v v';
             v'
           | _ -> assert false
         in

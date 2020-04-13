@@ -20,7 +20,7 @@ module type S = sig
   val unfold_arrow : term -> term list * term
   (** [unfold_arrow (a -> b -> c)] is [[a;b], c] *)
 
-  val free_vars : term -> Expr.Var.Set.t
+  val free_vars : ?init:Expr.Var.Set.t -> term -> Expr.Var.Set.t
   (** Free variables of the term *)
 
   val free_vars_l : term -> var list
@@ -115,8 +115,8 @@ module Make(KoT : Trustee_kernel.S)
     in
     aux t
 
-  let free_vars (t:term) : T.Var.Set.t =
-    let res = ref T.Var.Set.empty in
+  let free_vars ?(init=T.Var.Set.empty) (t:term) : T.Var.Set.t =
+    let res = ref init in
     let rec aux bound t =
       CCOpt.iter (aux bound) (T.ty t);
       match T.view t with

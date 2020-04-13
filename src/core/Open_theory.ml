@@ -60,14 +60,22 @@ module Make(C : Core.S) = struct
     let create() : t = N_tbl.create 16
   end
 
+  module N_ty_tbl = CCHashtbl.Make(struct
+      type t = string * Expr.t
+      let equal = CCEqual.pair String.equal Expr.equal
+      let hash = CCHash.pair CCHash.string Expr.hash
+  end)
+
   type article = {
     defs: Defs.t;
     assumptions: thm list;
     theorems: thm list;
   }
 
+  type ty_var = Expr.var
   type vm = {
-    vm_ty_vars: (string, Expr.var) Hashtbl.t;
+    vm_ty_vars: (string, ty_var) Hashtbl.t;
+    vm_vars: (string, Expr.var * ty_var) Hashtbl.t; (* "x" -> (x, α) *)
     vm_defs: Defs.t;
     mutable vm_stack: obj list;
     vm_dict: obj Int_tbl.t;
@@ -77,6 +85,7 @@ module Make(C : Core.S) = struct
 
   let create ~defs () : vm = {
     vm_ty_vars=Hashtbl.create 16;
+    vm_vars=Hashtbl.create 16;
     vm_defs=defs;
     vm_stack=[];
     vm_dict=Int_tbl.create 32;
@@ -256,7 +265,7 @@ module Make(C : Core.S) = struct
 
     let nil vm = VM.push_obj vm @@ List[]
 
-    let ref vm =
+    let ref_ vm =
       VM.pop1 "ref" vm @@ function
       | Int n ->
         begin match Int_tbl.find vm.vm_dict n with
@@ -298,7 +307,8 @@ module Make(C : Core.S) = struct
     let op_type vm =
       VM.pop2 "opType" vm @@ function
       | List l, Type_operator (_,f) ->
-        let l = List.map (function Type t -> t | _ -> errorf_ (fun k->k"expected types")) l in
+        let l = List.map
+            (function Type t -> t | _ -> errorf_ (fun k->k"expected types")) l in
         VM.push_obj vm (Type (f l))
       | _ -> err_bad_stack_ vm "opType"
 
@@ -328,12 +338,30 @@ module Make(C : Core.S) = struct
         VM.push_obj vm (Const (n, c))
       | _ -> err_bad_stack_ vm "const"
 
+    let get_var vm (n:name) ty : Expr.var =
+      let n = match n with
+        | [], s -> s
+        | _ -> errorf_ (fun k->k"bad variable name %a" Name.debug n)
+      in
+      let v =
+        match Hashtbl.find vm.vm_vars n with
+        | (v,alpha) ->
+          (* reuse [v] but with the given type [ty] *)
+          Expr.var_map_ty v (fun ty_v -> Expr.subst1 alpha ty ~in_:ty_v)
+        | exception Not_found ->
+          let alpha = Expr.new_var "α" Expr.type_ in
+          let v = Expr.new_var n (Expr.var alpha) in
+          Hashtbl.add vm.vm_vars n (v,alpha);
+          Expr.var_map_ty v (fun ty_v -> Expr.subst1 alpha ty ~in_:ty_v)
+      in
+      assert (Expr.equal (Expr.Var.ty v) ty);
+      v
+
     let var vm =
       VM.pop2 "var" vm @@ function
-      | Type ty, Name ([], n) ->
-        VM.push_obj vm (Var (Expr.new_var n ty))
-      | _, Name n ->
-        errorf_ (fun k->k"bad name for a var: %a" Name.debug n)
+      | Type ty, Name n ->
+        let v = get_var vm n ty in
+        VM.push_obj vm (Var v)
       | _ -> err_bad_stack_ vm "var"
 
     let const_term vm =
@@ -362,8 +390,10 @@ module Make(C : Core.S) = struct
           let subst =
             try C.unify_exn c_ty_vars ty
             with C.Unif_fail (t1,t2,subst) ->
-              errorf_ (fun k->k"unification failed@ between `%a`@ and `%a`@ with subst %a"
-                          Expr.pp t1 Expr.pp t2 Expr.Subst.pp subst)
+              errorf_
+                (fun k->k"unification failed@ between `%a`@ \
+                          and `%a`@ with subst %a"
+                    Expr.pp t1 Expr.pp t2 Expr.Subst.pp subst)
           in
           Expr.app_l c
             (List.map
@@ -398,7 +428,8 @@ module Make(C : Core.S) = struct
         let ty_subst =
           List.map
             (function
-              | List [Name a; Type ty] -> get_ty_var vm a, ty (* FIXME: map name->tyvar?*)
+              | List [Name a; Type ty] ->
+                get_ty_var vm a, ty (* FIXME: map name->tyvar?*)
               | _ -> err_bad_stack_ vm "subst")
             ty_subst
         and term_subst =
@@ -483,7 +514,7 @@ module Make(C : Core.S) = struct
         | "typeOp" -> type_op vm
         | "def" -> def vm
         | "cons" -> cons vm
-        | "ref" -> ref vm
+        | "ref" -> ref_ vm
         | "varType" -> var_type vm
         | "opType" -> op_type vm
         | "const" -> const vm
