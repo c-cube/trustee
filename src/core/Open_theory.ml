@@ -2,6 +2,9 @@ module Fmt = CCFormat
 module Int_tbl = CCHashtbl.Make(CCInt)
 type 'a gen = unit -> 'a option
 
+(* perform more sanity checks *)
+let sanity_checks_ = true
+
 module Make(C : Core.S) = struct
   open C.KoT
 
@@ -443,6 +446,9 @@ module Make(C : Core.S) = struct
         let thm' = Thm.instantiate thm subst in
         Format.printf "(@[instantiate@ %a@ :into %a@ :subst %a@])@."
           Thm.pp thm Thm.pp thm' Expr.Subst.pp subst;
+        if sanity_checks_ && Thm.alpha_equiv thm thm' then (
+          Format.printf "@{<Red>warning@}: subst gives the same result@.";
+        );
         VM.push_obj vm (Thm thm')
       | _ -> err_bad_stack_ vm "subst"
 

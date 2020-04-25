@@ -206,7 +206,10 @@ module type S = sig
 
     val view_l: t -> Expr.t * Expr.t list * axiom iter
 
-    (** Creation of new terms *)
+    val alpha_equiv : t -> t -> bool
+    (** Are the theorems alpha equivalent? *)
+
+    (** Creation of new theorems *)
 
     val refl : Expr.t -> t
     (** [refl t] is [ |- t=t ] *)
@@ -612,32 +615,43 @@ module Make() : S = struct
       in
       aux in_
 
-    let alpha_equiv t u : bool =
-      let n = ref 0 in
-      let rec check (vm:int Var.Map.t) t1 t2 : bool =
+    type alpha_equiv_st = {
+      mutable ae_n: int;
+      mutable ae_rename: int Var.Map.t;
+    }
+
+    let alpha_equiv_start () : alpha_equiv_st =
+      { ae_n=0; ae_rename=Var.Map.empty; }
+
+    let alpha_equiv_ (st:alpha_equiv_st) t u : bool =
+      let rec check t1 t2 : bool =
         t1 == t2 ||
         begin match t1.view, t2.view with
           | Type, _ | Kind, _ | Const _, _ -> false (* would be equal *)
           | Var _, Var _ ->
-            begin match Var.Map.find t1 vm, Var.Map.find t2 vm with
+            begin match Var.Map.find t1 st.ae_rename, Var.Map.find t2 st.ae_rename with
               | i, j -> i=j
               | exception Not_found -> false
             end
           | Arrow (a1,b1), Arrow (a2,b2) | App (a1,b1), App (a2,b2) ->
-            check vm a1 a2 && check vm b1 b2
+            check a1 a2 && check b1 b2
           | Pi (x1,b1), Pi (x2,b2) | Lambda (x1,b1), Lambda (x2,b2) ->
-            check vm (Var.ty x1) (Var.ty x2) &&
+            check (Var.ty x1) (Var.ty x2) &&
             (* check [x1=x2 |- b1 = b2] *)
             begin
-              let i = !n in
-              incr n;
-              let vm = vm |> Var.Map.add x1 i |> Var.Map.add x2 i in
-              check vm b1 b2
+              let i = st.ae_n in
+              st.ae_n <- 1 + st.ae_n;
+              st.ae_rename <- st.ae_rename |> Var.Map.add x1 i |> Var.Map.add x2 i;
+              check b1 b2
             end
           | (Var _ | App _ | Arrow _ | Pi _ | Lambda _), _ -> false
         end
       in
-      check Var.Map.empty t u
+      check t u
+
+    let alpha_equiv t u : bool =
+      let st = alpha_equiv_start () in
+      alpha_equiv_ st t u
 
     let app_l f l = List.fold_left app f l
 
@@ -771,6 +785,16 @@ module Make() : S = struct
           Fmt.(list ~sep:(return ",@ ") Expr.pp_inner) (Expr.Set.elements self.hyps)
           Expr.pp_inner self.concl
       )
+
+    let alpha_equiv t1 t2 : bool =
+      Expr.Set.cardinal t1.hyps = Expr.Set.cardinal t2.hyps &&
+      begin
+        let st = Expr.alpha_equiv_start () in
+        Expr.alpha_equiv_ st t1.concl t2.concl &&
+        List.for_all2 (Expr.alpha_equiv_ st)
+          (Expr.Set.elements t1.hyps)
+          (Expr.Set.elements t2.hyps)
+      end
 
     let _no_ax = lazy ID.Map.empty
     let make_ concl hyps dep_on_axioms : t = {concl; hyps; dep_on_axioms}
