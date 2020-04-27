@@ -31,7 +31,7 @@ impl Symbol {
 }
 
 /// De Buijn indices.
-pub type DbIndex = u16;
+pub type DbIndex = u32;
 
 ///! ## Expressions (and types)
 
@@ -45,36 +45,37 @@ pub type Type = Expr;
 /// The public view of an expression's root.
 #[derive(Clone, Eq, PartialEq, Hash)]
 pub enum ExprView {
-    Type,
-    Kind,
-    Const(ConstContent),
-    Var(VarContent),
-    BoundVar(BoundVarContent),
-    App(Expr, Expr),
-    Lambda(Type, Expr),
-    Pi(Type, Expr),
+    EType,
+    EKind,
+    EConst(ConstContent),
+    EVar(Var),
+    EBoundVar(BoundVarContent),
+    EApp(Expr, Expr),
+    ELambda(Type, Expr),
+    EPi(Type, Expr),
 }
 
-use ExprView::*;
+pub use ExprView::*;
+
+/// A free variable.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct Var {
+    name: Symbol,
+    ty: Expr,
+}
 
 /// The content of an expression.
 struct ExprImpl {
     /// The view of the expression.
     view: ExprView,
     /// Number of DB indices missing. 0 means the term is closed.
-    db_depth: u16,
+    db_depth: DbIndex,
     /// Type of the expression. Always present except for `Kind`.
     ty: Option<Expr>,
 }
 
 #[derive(Clone, Eq, PartialEq, Hash)]
 pub struct ConstContent {
-    name: Symbol,
-    ty: Expr,
-}
-
-#[derive(Clone, Eq, PartialEq, Hash)]
-pub struct VarContent {
     name: Symbol,
     ty: Expr,
 }
@@ -128,12 +129,33 @@ impl std::borrow::Borrow<ExprView> for Expr {
     }
 }
 
-impl VarContent {
-    fn map_ty<F>(&self, f: F) -> Self
+impl Var {
+    #[inline]
+    pub fn name(&self) -> &Symbol {
+        &self.name
+    }
+
+    #[inline]
+    pub fn ty(&self) -> &Type {
+        &self.ty
+    }
+
+    #[inline]
+    pub fn new(name: Symbol, ty: Type) -> Var {
+        Var { name, ty }
+    }
+
+    /// Make a free variable.
+    pub fn from_str(name: &str, ty: Type) -> Var {
+        Var { name: Symbol::from_str(name), ty }
+    }
+
+    /// Transform the type using `f`.
+    pub fn map_ty<F>(&self, f: F) -> Self
     where
         F: FnOnce(&Expr) -> Expr,
     {
-        VarContent { name: self.name.clone(), ty: f(&self.ty) }
+        Var { name: self.name.clone(), ty: f(&self.ty) }
     }
 }
 
@@ -146,15 +168,47 @@ impl BoundVarContent {
     }
 }
 
+#[inline]
+fn pred_db_idx(n: DbIndex) -> DbIndex {
+    if n == 0 {
+        0
+    } else {
+        n - 1
+    }
+}
+
 // compute the deepest DB index
-fn compute_db_depth(e: &ExprView) -> u16 {
+fn compute_db_depth(e: &ExprView) -> DbIndex {
     match e {
-        Kind | Type => 0,
-        Const(c) => c.ty.db_depth(),
-        Var(v) => v.ty.db_depth(),
-        BoundVar(v) => v.ty.db_depth(),
-        App(a, b) => a.db_depth().max(b.db_depth()),
-        Lambda(v_ty, e) | Pi(v_ty, e) => v_ty.db_depth().max(e.db_depth()),
+        EKind | EType => 0u32,
+        EConst(c) => c.ty.db_depth(),
+        EVar(v) => v.ty.db_depth(),
+        EBoundVar(v) => v.ty.db_depth(),
+        EApp(a, b) => a.db_depth().max(b.db_depth()),
+        ELambda(v_ty, e) | EPi(v_ty, e) => {
+            // `e`'s depth is decremented here
+            v_ty.db_depth().max(pred_db_idx(e.db_depth()))
+        }
+    }
+}
+
+impl ExprView {
+    /// Shallow map, with a depth parameter.
+    pub fn map<F>(&self, mut f: F, k: DbIndex) -> Self
+    where
+        F: FnMut(&Expr, DbIndex) -> Expr,
+    {
+        match self {
+            EType | EKind => self.clone(),
+            EConst(c) => EConst(ConstContent { ty: f(&c.ty, k), ..c.clone() }),
+            EVar(v) => EVar(Var { ty: f(&v.ty, k), ..v.clone() }),
+            EBoundVar(v) => {
+                EBoundVar(BoundVarContent { ty: f(&v.ty, k), ..v.clone() })
+            }
+            EApp(a, b) => EApp(f(a, k), f(b, k)),
+            EPi(ty_a, b) => EPi(f(ty_a, k), f(b, k + 1)),
+            ELambda(ty_a, b) => ELambda(f(ty_a, k), f(b, k + 1)),
+        }
     }
 }
 
@@ -169,7 +223,7 @@ impl Expr {
     #[inline]
     pub fn is_kind(&self) -> bool {
         match self.0.view {
-            ExprView::Kind => true,
+            EKind => true,
             _ => false,
         }
     }
@@ -178,7 +232,7 @@ impl Expr {
     #[inline]
     pub fn is_type(&self) -> bool {
         match self.0.view {
-            ExprView::Type => true,
+            EType => true,
             _ => false,
         }
     }
@@ -200,7 +254,7 @@ impl Expr {
     pub fn unfold_app(&self) -> (&Expr, Vec<&Expr>) {
         let mut e = self;
         let mut v = vec![];
-        while let App(f, a) = e.view() {
+        while let EApp(f, a) = e.view() {
             e = f;
             v.push(a);
         }
@@ -208,11 +262,25 @@ impl Expr {
         (e, v)
     }
 
+    /// `e.unfold_pi()` returns a tuple `(ty_args, body)` such
+    /// that `e == pi 0:a1. pi 1:a2. …. body` with `ty_args = (a1,a2,…)`.
+    ///
+    /// The length of `ty_args` indicates how many pi abstractions have been done.
+    pub fn unfold_pi(&self) -> (Vec<&Type>, &Expr) {
+        let mut e = self;
+        let mut v = vec![];
+        while let EPi(ty_arg, body) = e.view() {
+            e = body;
+            v.push(ty_arg);
+        }
+        (v, e)
+    }
+
     /// Deepest bound variable in the expr.
     ///
     /// 0 means it's a closed term.
     #[inline]
-    fn db_depth(&self) -> u16 {
+    fn db_depth(&self) -> DbIndex {
         self.0.db_depth
     }
 
@@ -231,12 +299,12 @@ impl Expr {
     // pretty print
     fn pp_(&self, k: DbIndex, out: &mut fmt::Formatter) -> fmt::Result {
         match self.view() {
-            Kind => write!(out, "kind"),
-            Type => write!(out, "type"),
-            Const(c) => write!(out, "{}", c.name.name()),
-            Var(v) => write!(out, "{}", v.name.name()),
-            BoundVar(v) => write!(out, "x{}", (k - v.idx)),
-            App(..) => {
+            EKind => write!(out, "kind"),
+            EType => write!(out, "type"),
+            EConst(c) => write!(out, "{}", c.name.name()),
+            EVar(v) => write!(out, "{}", v.name.name()),
+            EBoundVar(v) => write!(out, "x{}", (k - v.idx)),
+            EApp(..) => {
                 let (f, args) = self.unfold_app();
                 write!(out, "(")?;
                 f.pp_(k, out)?;
@@ -245,14 +313,14 @@ impl Expr {
                 }
                 write!(out, ")")
             }
-            Lambda(ty_x, body) => {
+            ELambda(ty_x, body) => {
                 write!(out, "(%x{} : ", k)?;
                 ty_x.pp_(k, out)?;
                 write!(out, ". ")?;
                 body.pp_(k + 1, out)?;
                 write!(out, ")")
             }
-            Pi(_x, body) => {
+            EPi(_x, body) => {
                 debug_assert!(_x.is_type());
                 write!(out, "(Πx{}. ", k)?;
                 body.pp_(k + 1, out)?;
@@ -266,6 +334,13 @@ impl fmt::Debug for Expr {
     // printer
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
         self.pp_(0, out)
+    }
+}
+
+impl fmt::Debug for Var {
+    // printer
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        write!(out, "{}", self.name.name())
     }
 }
 
@@ -297,7 +372,7 @@ impl ExprManager {
             None => {
                 // need to insert the term, so first we need to compute its type.
                 drop(tbl);
-                let ty = self.compute_ty(&ev);
+                let ty = self.compute_ty_(&ev);
                 let e = Expr::make_(ev, ty);
                 // lock table, again, but this time we'll write to it.
                 // invariant: computing the type doesn't insert `e` in the table.
@@ -322,21 +397,21 @@ impl ExprManager {
     }
 
     // compute the type for this expression
-    fn compute_ty(&self, e: &ExprView) -> Option<Expr> {
+    fn compute_ty_(&self, e: &ExprView) -> Option<Expr> {
         match e {
-            Kind => None,
-            Type => Some(self.builtins_().ty.clone()),
-            Const(c) => Some(c.ty.clone()),
-            Var(v) => Some(v.ty.clone()),
-            BoundVar(v) => Some(v.ty.clone()),
-            Lambda(v_ty, e) => {
+            EKind => None,
+            EType => Some(self.builtins_().ty.clone()),
+            EConst(c) => Some(c.ty.clone()),
+            EVar(v) => Some(v.ty.clone()),
+            EBoundVar(v) => Some(v.ty.clone()),
+            ELambda(v_ty, e) => {
                 // type of `λx:a. t` is `Πx:a. typeof(b)`.
-                Some(self.hashcons_(Pi(v_ty.clone(), e.ty().clone())))
+                Some(self.hashcons_(EPi(v_ty.clone(), e.ty().clone())))
             }
-            Pi(v_ty, e) => {
-                if !v_ty.is_type() {
+            EPi(v_ty, e) => {
+                if !v_ty.is_type() && !v_ty.ty().is_type() {
                     panic!(
-                        "pi: variable must have type `type`, not {:?}",
+                        "pi: variable must be a type or be of type `type`, not {:?}",
                         v_ty
                     );
                 };
@@ -345,46 +420,137 @@ impl ExprManager {
                 };
                 Some(self.builtins_().ty.clone())
             }
-            App(a, b) => match &a.ty().0.view {
-                Pi(ty_var_a, ref body_a) => {
-                    if ty_var_a != b.ty() {
+            EApp(f, arg) => match &f.ty().0.view {
+                EPi(ty_var_f, ref ty_body_f) => {
+                    // rule: `f: Πx:tya. b`, `arg: tya` ==> `f arg : b[arg/x]`
+                    if ty_var_f != arg.ty() {
                         panic!(
-                                "apply: incompatible types: \
-                                function `{:?}` has type `{:?}`, argument `{:?}` has type `{:?}`",
-                                a,ty_var_a,
-                                b, b.ty()
-                            );
+                            "apply: incompatible types: \
+                                function `{:?}` has type `{:?}`, \
+                                argument `{:?}` has type `{:?}`",
+                            f,
+                            ty_var_f,
+                            arg,
+                            arg.ty()
+                        );
                     }
-                    Some(self.subst1_(body_a, b))
+                    Some(self.subst1_(ty_body_f, 0, arg))
                 }
                 _ => panic!("cannot apply term with a non-pi type"),
             },
         }
     }
 
-    /// Replace DB0 in `t` by `u`.
-    fn subst1_(&self, t: &Expr, u: &Expr) -> Expr {
+    /// Replace DB0 in `t` by `u`, below `k` intermediate binders.
+    fn subst1_(&self, t: &Expr, k: u32, u: &Expr) -> Expr {
         if t.is_closed() {
             return t.clone(); // shortcut
         }
 
         match t.view() {
-            Kind | Type | Const(..) => t.clone(),
-            App(a, b) => self.mk_app(self.subst1_(a, u), self.subst1_(b, u)),
-            Lambda(v_ty, body) => self.hashcons_(Lambda(
-                self.subst1_(v_ty, u),
-                self.subst1_(body, u),
-            )),
-            Pi(v_ty, body) => {
-                debug_assert!(v_ty.is_type()); // no need to substitute there
-                self.hashcons_(Pi(v_ty.clone(), self.subst1_(body, u)))
+            EKind | EType | EConst(..) => t.clone(),
+            EApp(a, b) => {
+                self.mk_app(self.subst1_(a, k, u), self.subst1_(b, k, u))
             }
-            Var(v) => self.hashcons_(Var(v.map_ty(|ty| self.subst1_(ty, u)))),
-            BoundVar(v) if v.idx == 0 => u.clone(), // substitute here
-            BoundVar(v) => {
-                self.hashcons_(BoundVar(v.map_ty(|ty| self.subst1_(ty, u))))
+            ELambda(v_ty, body) => self.hashcons_(ELambda(
+                self.subst1_(v_ty, k, u),
+                self.subst1_(body, k + 1, u),
+            )),
+            EPi(v_ty, body) => {
+                debug_assert!(v_ty.is_type()); // no need to substitute there
+                self.hashcons_(EPi(v_ty.clone(), self.subst1_(body, k + 1, u)))
+            }
+            EVar(v) => {
+                self.hashcons_(EVar(v.map_ty(|ty| self.subst1_(ty, k, u))))
+            }
+            EBoundVar(v) if v.idx == 0 => {
+                // substitute here, accounting for the `k` intermediate binders
+                self.shift_(u, k)
+            }
+            EBoundVar(v) => {
+                self.hashcons_(EBoundVar(v.map_ty(|ty| self.subst1_(ty, k, u))))
             }
         }
+    }
+
+    /// Shift free DB vars by `k`
+    fn shift_(&self, t: &Expr, k: u32) -> Expr {
+        if k == 0 || t.is_closed() {
+            return t.clone(); // shortcut for identity
+        }
+
+        match t.view() {
+            EKind | EType | EConst(..) => t.clone(),
+            EApp(a, b) => self.mk_app(self.shift_(a, k), self.shift_(b, k)),
+            ELambda(v_ty, body) => self.hashcons_(ELambda(
+                self.shift_(v_ty, k),
+                self.shift_(body, k + 1),
+            )),
+            EPi(v_ty, body) => {
+                debug_assert!(v_ty.is_type()); // no need to substitute there
+                self.hashcons_(EPi(v_ty.clone(), self.shift_(body, k + 1)))
+            }
+            EVar(v) => self.hashcons_(EVar(v.map_ty(|ty| self.shift_(ty, k)))),
+            EBoundVar(v) if v.idx < k => t.clone(), // keep
+            EBoundVar(v) => {
+                // shift bound var
+                self.hashcons_(EBoundVar(BoundVarContent {
+                    idx: v.idx + k,
+                    ty: self.shift_(&v.ty, k),
+                }))
+            }
+        }
+    }
+
+    /// For each pair `(x,u)` in `subst`, replace instances of the free
+    /// variable `x` by `u` in `t`.
+    pub fn subst(&self, t: &Expr, subst: &[(Var, Expr)]) -> Expr {
+        struct Replace<'a> {
+            cache: fnv::FnvHashMap<Expr, Expr>,
+            em: &'a ExprManager,
+            subst: &'a [(Var, Expr)],
+        }
+
+        impl<'a> Replace<'a> {
+            // replace in `t`, under `k` intermediate binders.
+            fn replace(&mut self, t: &Expr, k: DbIndex) -> Expr {
+                match self.cache.get(t) {
+                    Some(t2) => t2.clone(),
+                    None => {
+                        match t.view() {
+                            // fast cases first
+                            EType | EKind | EConst(..) => t.clone(),
+                            EVar(v) => {
+                                // lookup `v` in `subst`
+                                for (v2, u2) in self.subst.iter() {
+                                    if v == v2 {
+                                        return self.em.shift_(u2, k);
+                                    }
+                                }
+                                // otherwise just substitute in the type
+                                let u = self
+                                    .em
+                                    .mk_var(v.map_ty(|ty| self.replace(ty, k)));
+                                self.cache.insert(t.clone(), u.clone());
+                                u
+                            }
+                            ev => {
+                                // shallow map + cache
+                                let uv =
+                                    ev.map(|sub, k| self.replace(sub, k), k);
+                                let u = self.em.hashcons_(uv);
+                                self.cache.insert(t.clone(), u.clone());
+                                u
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut replace =
+            Replace { cache: fnv::new_fnv_map_cap(32), em: self, subst };
+        replace.replace(t, 0)
     }
 
     #[inline]
@@ -404,17 +570,32 @@ impl ExprManager {
             builtins: None,
         };
         // insert initial builtins
-        let kind = tm.hashcons_builtin_(Kind, None);
-        let ty = tm.hashcons_builtin_(Type, Some(kind.clone()));
+        let kind = tm.hashcons_builtin_(EKind, None);
+        let ty = tm.hashcons_builtin_(EType, Some(kind.clone()));
         let s_bool = Symbol::from_str("Bool");
         let bool = tm.hashcons_builtin_(
-            Const(ConstContent { name: s_bool.clone(), ty: ty.clone() }),
+            EConst(ConstContent { name: s_bool.clone(), ty: ty.clone() }),
             Some(ty.clone()),
         );
         tm.add_const_(s_bool, bool.clone());
         let builtins = Builtins { bool, kind, ty };
         tm.builtins = Some(builtins);
         tm
+    }
+
+    /// Cleanup terms that are only referenced by this table.
+    pub fn cleanup(&self) {
+        let mut tbl = self.tbl.write().unwrap();
+        tbl.retain(|k, _| {
+            // if `k` (and `v`) are not used anywhere else, they're the only
+            // references and should have a strong count of 2.
+            // This is thread safe as the only way this is 2 is if it's already
+            // not referenced anywhere, and we don't provide any way to produce
+            // a weak ref.
+            let n = Arc::strong_count(&k.0);
+            debug_assert!(n >= 2);
+            n > 2
+        })
     }
 
     ///! ### Creation of new terms.
@@ -451,8 +632,18 @@ impl ExprManager {
     }
 
     /// Apply `a` to `b`.
+    ///
+    /// ```
+    /// # use trustee::*;
+    /// # let em = ExprManager::new();
+    /// let p = em.mk_var_str("p", em.mk_arrow(em.mk_bool(), em.mk_bool()));
+    /// let a = em.mk_var_str("a", em.mk_bool());
+    /// let pa = em.mk_app(p, a);
+    /// assert!(match pa.view() { EApp(..) => true, _ => false });
+    /// assert!(pa.is_closed());
+    /// ```
     pub fn mk_app(&self, a: Expr, b: Expr) -> Expr {
-        self.hashcons_(App(a, b))
+        self.hashcons_(EApp(a, b))
     }
 
     /// Apply `f` to the given arguments.
@@ -474,26 +665,71 @@ impl ExprManager {
     }
 
     /// Make a free variable.
-    pub fn mk_var(&self, name: Symbol, ty_var: Type) -> Expr {
-        self.hashcons_(Var(VarContent { name, ty: ty_var }))
+    pub fn mk_var(&self, v: Var) -> Expr {
+        self.hashcons_(EVar(v))
+    }
+
+    /// Make a free variable.
+    pub fn mk_var_str(&self, name: &str, ty_var: Type) -> Expr {
+        self.mk_var(Var::from_str(name, ty_var))
     }
 
     /// Make a bound variable with given type and index.
     pub fn mk_bound_var(&self, idx: DbIndex, ty_var: Type) -> Expr {
-        self.hashcons_(BoundVar(BoundVarContent { idx, ty: ty_var }))
+        self.hashcons_(EBoundVar(BoundVarContent { idx, ty: ty_var }))
     }
 
     /// Make a lambda term.
     pub fn mk_lambda(&self, ty_var: Type, body: Expr) -> Expr {
-        self.hashcons_(Lambda(ty_var, body))
+        self.hashcons_(ELambda(ty_var, body))
+    }
+
+    /// Make a lambda term by abstracting on `v`.
+    ///
+    /// ```
+    /// # use trustee::*;
+    /// # let em = ExprManager::new();
+    /// let p = em.mk_var_str("p", em.mk_arrow(em.mk_bool(), em.mk_bool()));
+    /// let x = Var::from_str("x", em.mk_bool());
+    /// let body = em.mk_app(p, em.mk_var(x.clone()));
+    /// let f = em.mk_lambda_abs(x, body);
+    /// assert!(match f.view() { ELambda(..) => true, _ => false });
+    /// assert!(f.is_closed());
+    /// let (ty_args, ty_body) = f.ty().unfold_pi();
+    /// assert_eq!(ty_args.len(), 1);
+    /// assert_eq!(ty_args[0], &em.mk_bool());
+    /// assert_eq!(ty_body, &em.mk_bool());
+    /// ```
+    pub fn mk_lambda_abs(&self, v: Var, body: Expr) -> Expr {
+        let v_ty = v.ty.clone();
+        if !v_ty.is_closed() {
+            panic!("mk_abs: var {:?} has non-closed type", &v);
+        }
+        // replace `v` with `db0` in `body`. This should also take
+        // care of shifting the DB as appropriate.
+        let db0 = self.mk_bound_var(0, v_ty.clone());
+        let body = self.subst(&body, &[(v, db0)]);
+        self.mk_lambda(v_ty, body)
     }
 
     /// Make a pi term.
     pub fn mk_pi(&self, ty_var: Expr, body: Expr) -> Expr {
-        self.hashcons_(Pi(ty_var, body))
+        self.hashcons_(EPi(ty_var, body))
     }
 
-    pub fn new_constant(&self, s: Symbol, ty: Type) -> Expr {
+    /// Make an arrow `a -> b` term.
+    ///
+    /// This builds `Π_:a. b`.
+    pub fn mk_arrow(&self, ty1: Expr, ty2: Expr) -> Expr {
+        // need to shift ty2 to account for the binder
+        self.mk_pi(ty1, self.shift_(&ty2, 1))
+    }
+
+    /// Declare a new constant with given name and type.
+    ///
+    /// panics if some constant with the same name exists, or if
+    /// the type is not closed.
+    pub fn mk_new_const(&self, s: Symbol, ty: Type) -> Expr {
         if self.consts.read().unwrap().contains_key(&s) {
             panic!("a constant named {:?} already exists", &s);
         }
@@ -503,7 +739,7 @@ impl ExprManager {
                 &s, &ty
             );
         }
-        let c = self.hashcons_(Const(ConstContent { name: s.clone(), ty }));
+        let c = self.hashcons_(EConst(ConstContent { name: s.clone(), ty }));
         self.add_const_(s, c.clone());
         c
     }
