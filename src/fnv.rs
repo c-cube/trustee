@@ -17,8 +17,9 @@ impl FNV {
 impl std::hash::Hasher for FNV {
     fn write(&mut self, bytes: &[u8]) {
         for b in bytes {
-            self.0 = self.0.wrapping_mul(PRIME);
+            // fnv-1a
             self.0 ^= *b as u64;
+            self.0 = self.0.wrapping_mul(PRIME);
         }
     }
 
