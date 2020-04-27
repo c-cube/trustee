@@ -1,7 +1,7 @@
 //! Kernel of Trust: Terms and Theorems
 
 use crate::fnv;
-use std::{fmt, ops::Deref, sync::Arc, sync::RwLock};
+use std::{fmt, ops::Deref, sync::Arc, sync::Mutex};
 
 ///! ## Symbols.
 
@@ -147,7 +147,10 @@ impl Var {
 
     /// Make a free variable.
     pub fn from_str(name: &str, ty: Type) -> Var {
-        Var { name: Symbol::from_str(name), ty }
+        Var {
+            name: Symbol::from_str(name),
+            ty,
+        }
     }
 
     /// Transform the type using `f`.
@@ -155,7 +158,10 @@ impl Var {
     where
         F: FnOnce(&Expr) -> Expr,
     {
-        Var { name: self.name.clone(), ty: f(&self.ty) }
+        Var {
+            name: self.name.clone(),
+            ty: f(&self.ty),
+        }
     }
 }
 
@@ -164,7 +170,10 @@ impl BoundVarContent {
     where
         F: FnOnce(&Expr) -> Expr,
     {
-        BoundVarContent { idx: self.idx, ty: f(&self.ty) }
+        BoundVarContent {
+            idx: self.idx,
+            ty: f(&self.ty),
+        }
     }
 }
 
@@ -200,11 +209,18 @@ impl ExprView {
     {
         match self {
             EType | EKind => self.clone(),
-            EConst(c) => EConst(ConstContent { ty: f(&c.ty, k), ..c.clone() }),
-            EVar(v) => EVar(Var { ty: f(&v.ty, k), ..v.clone() }),
-            EBoundVar(v) => {
-                EBoundVar(BoundVarContent { ty: f(&v.ty, k), ..v.clone() })
-            }
+            EConst(c) => EConst(ConstContent {
+                ty: f(&c.ty, k),
+                ..c.clone()
+            }),
+            EVar(v) => EVar(Var {
+                ty: f(&v.ty, k),
+                ..v.clone()
+            }),
+            EBoundVar(v) => EBoundVar(BoundVarContent {
+                ty: f(&v.ty, k),
+                ..v.clone()
+            }),
             EApp(a, b) => EApp(f(a, k), f(b, k)),
             EPi(ty_a, b) => EPi(f(ty_a, k), f(b, k + 1)),
             ELambda(ty_a, b) => ELambda(f(ty_a, k), f(b, k + 1)),
@@ -293,7 +309,11 @@ impl Expr {
     // helper for building expressions
     fn make_(v: ExprView, ty: Option<Expr>) -> Self {
         let db_depth = compute_db_depth(&v);
-        Expr(Arc::new(ExprImpl { view: v, ty, db_depth }))
+        Expr(Arc::new(ExprImpl {
+            view: v,
+            ty,
+            db_depth,
+        }))
     }
 
     // pretty print
@@ -347,8 +367,8 @@ impl fmt::Debug for Var {
 /// Global manager for expressions, used to implement perfect sharing, allocating
 /// new terms, etc.
 pub struct ExprManager {
-    tbl: RwLock<fnv::FnvHashMap<Expr, Expr>>,
-    consts: RwLock<fnv::FnvHashMap<Symbol, Expr>>,
+    tbl: Mutex<fnv::FnvHashMap<Expr, Expr>>,
+    consts: Mutex<fnv::FnvHashMap<Symbol, Expr>>,
     builtins: Option<Builtins>,
 }
 
@@ -366,7 +386,7 @@ impl ExprManager {
 
     /// Add to the internal table, return the canonical representant.
     fn hashcons_(&self, ev: ExprView) -> Expr {
-        let tbl = self.tbl.read().unwrap(); // lock tbl
+        let tbl = self.tbl.lock().unwrap(); // lock tbl
         match tbl.get(&ev) {
             Some(v) => v.clone(),
             None => {
@@ -376,7 +396,7 @@ impl ExprManager {
                 let e = Expr::make_(ev, ty);
                 // lock table, again, but this time we'll write to it.
                 // invariant: computing the type doesn't insert `e` in the table.
-                let mut tbl = self.tbl.write().unwrap();
+                let mut tbl = self.tbl.lock().unwrap();
                 tbl.insert(e.clone(), e.clone());
                 e
             }
@@ -384,7 +404,7 @@ impl ExprManager {
     }
 
     fn hashcons_builtin_(&self, ev: ExprView, ty: Option<Expr>) -> Expr {
-        let mut tbl = self.tbl.write().unwrap();
+        let mut tbl = self.tbl.lock().unwrap();
         debug_assert!(!tbl.contains_key(&ev));
         let e = Expr::make_(ev, ty);
         tbl.insert(e.clone(), e.clone());
@@ -392,7 +412,7 @@ impl ExprManager {
     }
 
     fn add_const_(&self, c: Symbol, e: Expr) {
-        let mut consts = self.consts.write().unwrap();
+        let mut consts = self.consts.lock().unwrap();
         consts.insert(c, e);
     }
 
@@ -449,9 +469,7 @@ impl ExprManager {
 
         match t.view() {
             EKind | EType | EConst(..) => t.clone(),
-            EApp(a, b) => {
-                self.mk_app(self.subst1_(a, k, u), self.subst1_(b, k, u))
-            }
+            EApp(a, b) => self.mk_app(self.subst1_(a, k, u), self.subst1_(b, k, u)),
             ELambda(v_ty, body) => self.hashcons_(ELambda(
                 self.subst1_(v_ty, k, u),
                 self.subst1_(body, k + 1, u),
@@ -460,16 +478,12 @@ impl ExprManager {
                 debug_assert!(v_ty.is_type()); // no need to substitute there
                 self.hashcons_(EPi(v_ty.clone(), self.subst1_(body, k + 1, u)))
             }
-            EVar(v) => {
-                self.hashcons_(EVar(v.map_ty(|ty| self.subst1_(ty, k, u))))
-            }
+            EVar(v) => self.hashcons_(EVar(v.map_ty(|ty| self.subst1_(ty, k, u)))),
             EBoundVar(v) if v.idx == 0 => {
                 // substitute here, accounting for the `k` intermediate binders
                 self.shift_(u, k)
             }
-            EBoundVar(v) => {
-                self.hashcons_(EBoundVar(v.map_ty(|ty| self.subst1_(ty, k, u))))
-            }
+            EBoundVar(v) => self.hashcons_(EBoundVar(v.map_ty(|ty| self.subst1_(ty, k, u)))),
         }
     }
 
@@ -482,10 +496,9 @@ impl ExprManager {
         match t.view() {
             EKind | EType | EConst(..) => t.clone(),
             EApp(a, b) => self.mk_app(self.shift_(a, k), self.shift_(b, k)),
-            ELambda(v_ty, body) => self.hashcons_(ELambda(
-                self.shift_(v_ty, k),
-                self.shift_(body, k + 1),
-            )),
+            ELambda(v_ty, body) => {
+                self.hashcons_(ELambda(self.shift_(v_ty, k), self.shift_(body, k + 1)))
+            }
             EPi(v_ty, body) => {
                 debug_assert!(v_ty.is_type()); // no need to substitute there
                 self.hashcons_(EPi(v_ty.clone(), self.shift_(body, k + 1)))
@@ -528,16 +541,13 @@ impl ExprManager {
                                     }
                                 }
                                 // otherwise just substitute in the type
-                                let u = self
-                                    .em
-                                    .mk_var(v.map_ty(|ty| self.replace(ty, k)));
+                                let u = self.em.mk_var(v.map_ty(|ty| self.replace(ty, k)));
                                 self.cache.insert(t.clone(), u.clone());
                                 u
                             }
                             ev => {
                                 // shallow map + cache
-                                let uv =
-                                    ev.map(|sub, k| self.replace(sub, k), k);
+                                let uv = ev.map(|sub, k| self.replace(sub, k), k);
                                 let u = self.em.hashcons_(uv);
                                 self.cache.insert(t.clone(), u.clone());
                                 u
@@ -548,8 +558,11 @@ impl ExprManager {
             }
         }
 
-        let mut replace =
-            Replace { cache: fnv::new_fnv_map_cap(32), em: self, subst };
+        let mut replace = Replace {
+            cache: fnv::new_table_with_cap(32),
+            em: self,
+            subst,
+        };
         replace.replace(t, 0)
     }
 
@@ -563,10 +576,10 @@ impl ExprManager {
 
     /// Create a new term manager with given initial capacity.
     pub fn with_capacity(n: usize) -> Self {
-        let tbl = fnv::new_fnv_map_cap(n);
+        let tbl = fnv::new_table_with_cap(n);
         let mut tm = ExprManager {
-            tbl: RwLock::new(tbl),
-            consts: RwLock::new(fnv::new_fnv_map_cap(n)),
+            tbl: Mutex::new(tbl),
+            consts: Mutex::new(fnv::new_table_with_cap(n)),
             builtins: None,
         };
         // insert initial builtins
@@ -574,7 +587,10 @@ impl ExprManager {
         let ty = tm.hashcons_builtin_(EType, Some(kind.clone()));
         let s_bool = Symbol::from_str("Bool");
         let bool = tm.hashcons_builtin_(
-            EConst(ConstContent { name: s_bool.clone(), ty: ty.clone() }),
+            EConst(ConstContent {
+                name: s_bool.clone(),
+                ty: ty.clone(),
+            }),
             Some(ty.clone()),
         );
         tm.add_const_(s_bool, bool.clone());
@@ -585,7 +601,7 @@ impl ExprManager {
 
     /// Cleanup terms that are only referenced by this table.
     pub fn cleanup(&self) {
-        let mut tbl = self.tbl.write().unwrap();
+        let mut tbl = self.tbl.lock().unwrap();
         tbl.retain(|k, _| {
             // if `k` (and `v`) are not used anywhere else, they're the only
             // references and should have a strong count of 2.
@@ -730,7 +746,7 @@ impl ExprManager {
     /// panics if some constant with the same name exists, or if
     /// the type is not closed.
     pub fn mk_new_const(&self, s: Symbol, ty: Type) -> Expr {
-        if self.consts.read().unwrap().contains_key(&s) {
+        if self.consts.lock().unwrap().contains_key(&s) {
             panic!("a constant named {:?} already exists", &s);
         }
         if !ty.is_closed() {
@@ -739,7 +755,10 @@ impl ExprManager {
                 &s, &ty
             );
         }
-        let c = self.hashcons_(EConst(ConstContent { name: s.clone(), ty }));
+        let c = self.hashcons_(EConst(ConstContent {
+            name: s.clone(),
+            ty,
+        }));
         self.add_const_(s, c.clone());
         c
     }

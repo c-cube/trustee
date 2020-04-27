@@ -1,49 +1,46 @@
-//! Vendored from https://github.com/servo/rust-fnv/blob/master/lib.rs
+//! From https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
 
 use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hash};
 
-/// An implementation of the Fowler–Noll–Vo hash function.
-///
-/// See the [crate documentation](index.html) for more details.
-#[allow(missing_copy_implementations)]
-pub struct FnvHasher(u64);
+pub struct FNV(u64);
 
-impl Default for FnvHasher {
+const INIT: u64 = 0xcbf29ce484222325;
+const PRIME: u64 = 0x100000001b3;
+
+impl FNV {
     #[inline]
-    fn default() -> FnvHasher {
-        FnvHasher(0xcbf29ce484222325)
+    fn new() -> Self {
+        FNV(INIT)
     }
 }
 
-impl std::hash::Hasher for FnvHasher {
+impl std::hash::Hasher for FNV {
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = self.0.wrapping_mul(PRIME);
+            self.0 ^= *b as u64;
+        }
+    }
+
     #[inline]
     fn finish(&self) -> u64 {
         self.0
     }
+}
 
-    #[inline]
-    fn write(&mut self, bytes: &[u8]) {
-        let FnvHasher(mut hash) = *self;
-
-        for byte in bytes.iter() {
-            hash = hash ^ (*byte as u64);
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-
-        *self = FnvHasher(hash);
+pub struct FNVBuildHasher;
+impl std::hash::BuildHasher for FNVBuildHasher {
+    type Hasher = FNV;
+    fn build_hasher(&self) -> FNV {
+        FNV::new()
     }
 }
 
-/// A builder for default FNV hashers.
-pub type FnvBuildHasher = BuildHasherDefault<FnvHasher>;
+pub type FnvHashMap<K, V> = std::collections::HashMap<K, V, FNVBuildHasher>;
 
-/// A `HashMap` using a default FNV hasher.
-pub type FnvHashMap<K, V> = HashMap<K, V, FnvBuildHasher>;
-
-/// A `HashSet` using a default FNV hasher.
-//pub type FnvHashSet<T> = HashSet<T, FnvBuildHasher>;
-
-pub fn new_fnv_map_cap<K: Eq + Hash, V>(n: usize) -> FnvHashMap<K, V> {
-    HashMap::with_capacity_and_hasher(n, FnvBuildHasher::default())
+pub fn new_table<K, V>() -> FnvHashMap<K, V> {
+    HashMap::with_hasher(FNVBuildHasher)
+}
+pub fn new_table_with_cap<K, V>(n: usize) -> FnvHashMap<K, V> {
+    HashMap::with_capacity_and_hasher(n, FNVBuildHasher)
 }
