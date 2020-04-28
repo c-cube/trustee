@@ -515,7 +515,11 @@ pub struct ExprManager {
     consts: fnv::FnvHashMap<Symbol, Expr>,
     eq: Option<Expr>,
     imply: Option<Expr>,
+    next_cleanup: usize,
 }
+
+// period between 2 cleanups
+const CLEANUP_PERIOD: usize = 500;
 
 /// A set of builtin symbols.
 struct ExprBuiltins {
@@ -548,6 +552,7 @@ impl ExprManager {
             consts: fnv::new_table_with_cap(n),
             eq: None,
             imply: None,
+            next_cleanup: CLEANUP_PERIOD,
         };
         // insert initial builtins
         let kind = em.hashcons_builtin_(EKind, None);
@@ -575,12 +580,17 @@ impl ExprManager {
         match tbl.get(&ev) {
             Some(v) => v.clone(),
             None => {
-                // TODO: every n cycles, do a `cleanup`?
-                // maybe if last cleanups were ineffective, increase n,
-                // otherwise decrease n (down to some min value)
-
                 // need to insert the term, so first we need to compute its type.
                 drop(tbl);
+
+                // every n cycles, do a `cleanup`
+                // TODO: maybe if last cleanups were ineffective, increase n,
+                // otherwise decrease n (down to some min value)
+                if self.next_cleanup == 0 {
+                    self.next_cleanup = CLEANUP_PERIOD;
+                    self.cleanup();
+                }
+
                 let ty = self.compute_ty_(&ev);
                 let e = Expr::make_(ev, ty);
                 // lock table, again, but this time we'll write to it.
@@ -846,6 +856,10 @@ impl ExprManager {
 
     /// Cleanup terms that are only referenced by this table.
     pub fn cleanup(&mut self) {
+        // TODO: do cleanup in topological order? examine roots first,
+        // or some kind of fixpoint, since when we remove a term we also
+        // decrease its subterms' refcount
+
         self.tbl.retain(|k, _| {
             // if `k` (and `v`) are not used anywhere else, they're the only
             // references and should have a strong count of 2.
@@ -1137,124 +1151,4 @@ impl ExprManager {
         {b use with caution} *)
     */
 }
-
-/// A temporary, self-cleaning, handle to an `ExprManager`.`
-///
-/// See `ExprManager::get` to obtain that.
-pub struct ExprManagerGuard<'a>(std::sync::MutexGuard<'a, ExprManager>);
-
-impl<'a> std::ops::Deref for ExprManagerGuard<'a> {
-    type Target = ExprManager;
-    fn deref(&self) -> &Self::Target {
-        &*self.0
-    }
-}
-
-impl<'a> std::ops::DerefMut for ExprManagerGuard<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.0
-    }
-}
-
-///! # Expression manager reference, shareable between threads.
-
-/// Expression manager that can be shared between threads.
-#[derive(Clone)]
-pub struct ExprManagerRef {
-    em: Arc<Mutex<ExprManager>>,
-}
-
-impl ExprManagerRef {
-    /// Create a new term manager.
-    pub fn new() -> Self {
-        Self::with_capacity(2_048)
-    }
-
-    /// Create a new term manager with given initial capacity.
-    pub fn with_capacity(n: usize) -> Self {
-        let em = Arc::new(Mutex::new(ExprManager::with_capacity(n)));
-        ExprManagerRef { em }
-    }
-
-    /// Obtain a temporary RAII-cleaned reference to the inner ExprManager.
-    pub fn get(&self) -> ExprManagerGuard {
-        ExprManagerGuard(self.em.lock().unwrap())
-    }
-
-    ///! Delegates
-
-    pub fn cleanup(&self) {
-        self.get().cleanup()
-    }
-
-    pub fn mk_ty(&self) -> Expr {
-        self.get().mk_ty()
-    }
-
-    pub fn mk_kind(&self) -> Expr {
-        self.get().mk_kind()
-    }
-
-    pub fn mk_bool(&self) -> Expr {
-        self.get().mk_bool()
-    }
-
-    pub fn mk_eq(&self) -> Expr {
-        self.get().mk_eq()
-    }
-
-    pub fn mk_imply(&self) -> Expr {
-        self.get().mk_imply()
-    }
-
-    pub fn mk_app(&self, a: Expr, b: Expr) -> Expr {
-        self.get().mk_app(a, b)
-    }
-
-    pub fn mk_app_iter<I>(&self, f: Expr, args: I) -> Expr
-    where
-        I: IntoIterator<Item = Expr>,
-    {
-        self.get().mk_app_iter(f, args)
-    }
-
-    pub fn mk_app_l(&self, f: Expr, args: &[Expr]) -> Expr {
-        self.get().mk_app_l(f, args)
-    }
-
-    pub fn mk_var(&self, v: Var) -> Expr {
-        self.get().mk_var(v)
-    }
-
-    pub fn mk_var_str(&self, name: &str, ty_var: Type) -> Expr {
-        self.mk_var(Var::from_str(name, ty_var))
-    }
-
-    pub fn mk_bound_var(&mut self, idx: DbIndex, ty_var: Type) -> Expr {
-        self.get().mk_bound_var(idx, ty_var)
-    }
-
-    pub fn mk_lambda(&mut self, ty_var: Type, body: Expr) -> Expr {
-        self.get().mk_lambda(ty_var, body)
-    }
-
-    pub fn mk_lambda_abs(&mut self, v: Var, body: Expr) -> Expr {
-        self.get().mk_lambda_abs(v, body)
-    }
-
-    pub fn mk_pi(&self, ty_var: Expr, body: Expr) -> Expr {
-        self.get().mk_pi(ty_var, body)
-    }
-
-    pub fn mk_arrow(&self, ty1: Expr, ty2: Expr) -> Expr {
-        self.get().mk_arrow(ty1, ty2)
-    }
-
-    /// Declare a new constant with given name and type.
-    ///
-    /// panics if some constant with the same name exists, or if
-    /// the type is not closed.
-    pub fn mk_new_const(&self, s: Symbol, ty: Type) -> Expr {
-        self.get().mk_new_const(s, ty)
-    }
 }
