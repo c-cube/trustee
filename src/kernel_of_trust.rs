@@ -350,8 +350,11 @@ pub struct ExprManager {
     tbl: fnv::FnvHashMap<Expr, Expr>,
     builtins: Option<ExprBuiltins>,
     consts: fnv::FnvHashMap<Symbol, Expr>,
+    eq: Option<Expr>,
+    imply: Option<Expr>,
 }
 
+/// A set of builtin symbols.
 struct ExprBuiltins {
     kind: Expr,
     ty: Expr,
@@ -366,16 +369,20 @@ impl ExprManager {
             tbl,
             builtins: None,
             consts: fnv::new_table_with_cap(n),
+            eq: None,
+            imply: None,
         };
         // insert initial builtins
         let kind = tm.hashcons_builtin_(EKind, None);
         let ty = tm.hashcons_builtin_(EType, Some(kind.clone()));
-        let s_bool = Symbol::from_str("Bool");
-        let bool = tm.hashcons_builtin_(
-            EConst(ConstContent { name: s_bool.clone(), ty: ty.clone() }),
-            Some(ty.clone()),
-        );
-        tm.add_const_(s_bool, bool.clone());
+        let bool = {
+            let name = Symbol::from_str("Bool");
+            tm.hashcons_builtin_(
+                EConst(ConstContent { name, ty: ty.clone() }),
+                Some(ty.clone()),
+            )
+        };
+        tm.add_const_(bool.clone());
         let builtins = ExprBuiltins { bool, kind, ty };
         tm.builtins = Some(builtins);
         tm
@@ -408,9 +415,14 @@ impl ExprManager {
         }
     }
 
-    fn add_const_(&mut self, c: Symbol, e: Expr) {
+    fn add_const_(&mut self, e: Expr) {
         let consts = &mut self.consts;
-        consts.insert(c, e);
+        let name = if let EConst(ref c) = e.0.view {
+            c.name.clone()
+        } else {
+            unreachable!();
+        };
+        consts.insert(name, e);
     }
 
     fn hashcons_builtin_(&mut self, ev: ExprView, ty: Option<Expr>) -> Expr {
@@ -419,6 +431,41 @@ impl ExprManager {
         let e = Expr::make_(ev, ty);
         tbl.insert(e.clone(), e.clone());
         e
+    }
+
+    /// Get the `=` constant
+    pub fn mk_eq(&mut self) -> Expr {
+        match self.eq {
+            Some(ref c) => c.clone(),
+            None => {
+                let ty = self.mk_ty();
+                let bool = self.mk_bool();
+                let db0 = self.mk_bound_var(0, ty.clone());
+                let arr = self.mk_arrow(db0.clone(), bool.clone());
+                let arr = self.mk_arrow(db0.clone(), arr);
+                let ty_eq = self.mk_pi(ty.clone(), arr);
+                let name = Symbol::from_str("=");
+                let c = self.mk_new_const(name, ty_eq);
+                self.eq = Some(c.clone());
+                c
+            }
+        }
+    }
+
+    /// Get the `==>` constant.
+    pub fn mk_imply(&mut self) -> Expr {
+        match self.imply {
+            Some(ref c) => c.clone(),
+            None => {
+                let bool = self.mk_bool();
+                let arr = self.mk_arrow(bool.clone(), bool.clone());
+                let arr = self.mk_arrow(bool.clone(), arr);
+                let name = Symbol::from_str("==>");
+                let i = self.mk_new_const(name, arr);
+                self.imply = Some(i.clone());
+                i
+            }
+        }
     }
 
     #[inline]
@@ -771,7 +818,7 @@ impl ExprManager {
             );
         }
         let c = self.hashcons_(EConst(ConstContent { name: s.clone(), ty }));
-        self.add_const_(s, c.clone());
+        self.add_const_(c.clone());
         c
     }
 }
@@ -833,6 +880,14 @@ impl ExprManagerRef {
 
     pub fn mk_bool(&self) -> Expr {
         self.get().mk_bool()
+    }
+
+    pub fn mk_eq(&self) -> Expr {
+        self.get().mk_eq()
+    }
+
+    pub fn mk_imply(&self) -> Expr {
+        self.get().mk_imply()
     }
 
     pub fn mk_app(&self, a: Expr, b: Expr) -> Expr {
