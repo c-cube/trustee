@@ -831,6 +831,7 @@ module Make() : S = struct
       | _ -> errorf_ (fun k->k"@[<1>beta_conv: not a redex:@ %a@]" Expr.pp t)
 
     let abs x (th:t) : t =
+      (* FIXME: check hyps *)
       try
         let t, u = Expr.unfold_eq_exn th.concl in
         make_

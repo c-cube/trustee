@@ -1,6 +1,9 @@
 //! From https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
 
-use std::{collections::HashMap, hash::Hash};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+};
 
 pub struct FNV(u64);
 
@@ -37,11 +40,12 @@ impl std::hash::BuildHasher for FNVBuildHasher {
     }
 }
 
+pub type FnvHashSet<K> = std::collections::HashSet<K, FNVBuildHasher>;
 pub type FnvHashMap<K, V> = std::collections::HashMap<K, V, FNVBuildHasher>;
 
-pub fn new_table<K: Eq + Hash, V>() -> FnvHashMap<K, V> {
-    HashMap::with_hasher(FNVBuildHasher)
-}
 pub fn new_table_with_cap<K: Eq + Hash, V>(n: usize) -> FnvHashMap<K, V> {
     HashMap::with_capacity_and_hasher(n, FNVBuildHasher)
+}
+pub fn new_set_with_cap<K: Eq + Hash>(n: usize) -> FnvHashSet<K> {
+    HashSet::with_capacity_and_hasher(n, FNVBuildHasher)
 }

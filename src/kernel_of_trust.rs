@@ -3,7 +3,7 @@
 use crate::fnv;
 use std::{fmt, ops::Deref, sync::Arc, sync::Mutex};
 
-///! ## Symbols.
+///! # Symbols.
 
 #[derive(Debug, Clone, Ord, PartialOrd, Hash, Eq, PartialEq)]
 pub struct Symbol(Arc<str>);
@@ -33,7 +33,7 @@ impl Symbol {
 /// De Buijn indices.
 pub type DbIndex = u32;
 
-///! ## Expressions (and types)
+///! # Expressions, types, variables
 
 /// An expression.
 #[derive(Clone)]
@@ -58,6 +58,8 @@ pub enum ExprView {
 pub use ExprView::*;
 
 /// A free variable.
+///
+/// Variables are equal iff they have the same name and the same type.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Var {
     name: Symbol,
@@ -130,11 +132,13 @@ impl std::borrow::Borrow<ExprView> for Expr {
 }
 
 impl Var {
+    /// Symbol for the variable.
     #[inline]
     pub fn name(&self) -> &Symbol {
         &self.name
     }
 
+    /// Type of the variable.
     #[inline]
     pub fn ty(&self) -> &Type {
         &self.ty
@@ -212,6 +216,51 @@ impl ExprView {
     }
 }
 
+struct FreeVars<'a> {
+    seen: fnv::FnvHashSet<&'a Expr>,
+    st: Vec<&'a Expr>,
+}
+
+impl<'a> Iterator for FreeVars<'a> {
+    type Item = &'a Var;
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(e) = self.st.pop() {
+            if self.seen.contains(&e) {
+                continue;
+            }
+            self.seen.insert(e);
+
+            match e.view() {
+                EVar(v) => return Some(v),
+                EType | EKind => (),
+                EConst(c) => self.st.push(&c.ty),
+                EBoundVar(v) => self.st.push(&v.ty),
+                EApp(a, b) => {
+                    self.st.push(a);
+                    self.st.push(b);
+                }
+                EPi(_, body) => self.st.push(body),
+                ELambda(ty, body) => {
+                    self.st.push(ty);
+                    self.st.push(body);
+                }
+            }
+        }
+        None
+    }
+}
+
+impl<'a> FreeVars<'a> {
+    fn new() -> Self {
+        FreeVars { seen: fnv::new_set_with_cap(16), st: vec![] }
+    }
+
+    /// Add an expression to explore
+    fn push(&mut self, e: &'a Expr) {
+        self.st.push(e)
+    }
+}
+
 impl Expr {
     /// View the expression's root.
     #[inline]
@@ -274,6 +323,52 @@ impl Expr {
             v.push(ty_arg);
         }
         (v, e)
+    }
+
+    /// View a variable.
+    pub fn as_var(&self) -> Option<&Var> {
+        if let EVar(ref v) = self.0.view {
+            Some(&v)
+        } else {
+            None
+        }
+    }
+
+    /// View a constant.
+    pub fn as_const(&self) -> Option<&ConstContent> {
+        if let EConst(ref c) = self.0.view {
+            Some(&c)
+        } else {
+            None
+        }
+    }
+
+    /// View as application.
+    pub fn as_app(&self) -> Option<(&Expr, &Expr)> {
+        if let EApp(ref a, ref b) = self.0.view {
+            Some((&a, &b))
+        } else {
+            None
+        }
+    }
+
+    /// `(a=b).unfold_eq()` returns `Some((a,b))`.
+    pub fn unfold_eq(&self) -> Option<(&Expr, &Expr)> {
+        let (hd1, b) = self.as_app()?;
+        let (hd2, a) = hd1.as_app()?;
+        let (c, _alpha) = hd2.as_app()?;
+        if c.as_const()?.name.name() == "=" {
+            Some((a, b))
+        } else {
+            None
+        }
+    }
+
+    /// Free variables of a given term.
+    pub fn free_vars(&self) -> impl Iterator<Item = &Var> {
+        let mut fv = FreeVars::new();
+        fv.push(self);
+        fv
     }
 
     /// Deepest bound variable in the expr.
@@ -344,6 +439,74 @@ impl fmt::Debug for Var {
     }
 }
 
+///! # Theorems.
+///
+/// Theorems are proved correct by construction.
+
+/// A theorem.
+#[derive(Clone)]
+pub struct Thm(Arc<ThmImpl>);
+
+#[derive(Clone)]
+struct ThmImpl {
+    concl: Expr,
+    hyps: Vec<Expr>,
+    // TODO: list of axioms
+}
+
+/// Free variables of a set of terms
+pub fn free_vars_iter<'a, I>(i: I) -> impl Iterator<Item = &'a Var>
+where
+    I: Iterator<Item = &'a Expr>,
+{
+    let mut fv = FreeVars::new();
+    for t in i {
+        fv.push(t);
+    }
+    fv
+}
+
+impl Thm {
+    fn make_(concl: Expr, mut hyps: Vec<Expr>) -> Self {
+        if hyps.len() >= 2 {
+            hyps.sort_unstable();
+            hyps.dedup();
+            hyps.shrink_to_fit();
+        }
+        Thm(Arc::new(ThmImpl { concl, hyps }))
+    }
+
+    /// Conclusion of the theorem
+    #[inline]
+    pub fn concl(&self) -> &Expr {
+        &self.0.concl
+    }
+
+    /// Hypothesis of the theorem
+    #[inline]
+    pub fn hyps(&self) -> &[Expr] {
+        self.0.hyps.as_slice()
+    }
+}
+
+impl fmt::Debug for Thm {
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        if self.hyps().len() == 0 {
+            write!(out, "|- {:?}", self.concl())
+        } else {
+            for h in self.hyps() {
+                write!(out, "    {:?}\n", h)?;
+            }
+            write!(out, " |- {:?}", self.concl())
+        }
+    }
+}
+
+///! # Expression and theorem manager.
+///
+/// The state used to ensure proper hashconsing of terms and to build terms
+/// and theorems.
+
 /// Global manager for expressions, used to implement perfect sharing, allocating
 /// new terms, etc.
 pub struct ExprManager {
@@ -361,11 +524,25 @@ struct ExprBuiltins {
     bool: Expr,
 }
 
+fn hyps_merge(th1: &Thm, th2: &Thm) -> Vec<Expr> {
+    if th1.0.hyps.len() == 0 {
+        th2.0.hyps.clone()
+    } else if th2.0.hyps.len() == 0 {
+        th1.0.hyps.clone()
+    } else {
+        let mut hyps: Vec<_> = th1.0.hyps.clone();
+        hyps.extend_from_slice(&th2.0.hyps[..]);
+        hyps
+    }
+}
+
 impl ExprManager {
+    //! ## Setup
+
     /// Create a new term manager with given initial capacity.
     pub fn with_capacity(n: usize) -> Self {
         let tbl = fnv::new_table_with_cap(n);
-        let mut tm = ExprManager {
+        let mut em = ExprManager {
             tbl,
             builtins: None,
             consts: fnv::new_table_with_cap(n),
@@ -373,19 +550,19 @@ impl ExprManager {
             imply: None,
         };
         // insert initial builtins
-        let kind = tm.hashcons_builtin_(EKind, None);
-        let ty = tm.hashcons_builtin_(EType, Some(kind.clone()));
+        let kind = em.hashcons_builtin_(EKind, None);
+        let ty = em.hashcons_builtin_(EType, Some(kind.clone()));
         let bool = {
             let name = Symbol::from_str("Bool");
-            tm.hashcons_builtin_(
+            em.hashcons_builtin_(
                 EConst(ConstContent { name, ty: ty.clone() }),
                 Some(ty.clone()),
             )
         };
-        tm.add_const_(bool.clone());
+        em.add_const_(bool.clone());
         let builtins = ExprBuiltins { bool, kind, ty };
-        tm.builtins = Some(builtins);
-        tm
+        em.builtins = Some(builtins);
+        em
     }
 
     pub fn new() -> Self {
@@ -450,6 +627,17 @@ impl ExprManager {
                 c
             }
         }
+    }
+
+    /// Make `a = b`.
+    ///
+    /// Panics if `a` and `b` do not have the same type.
+    pub fn mk_eq_app(&mut self, a: Expr, b: Expr) -> Expr {
+        if a.ty() != b.ty() {
+            panic!("mk_eq: {:?} and {:?} have incompatible types", &a, &b);
+        }
+        let eq = self.mk_eq();
+        self.mk_app_l(eq, &[a.ty().clone(), a, b])
     }
 
     /// Get the `==>` constant.
@@ -670,7 +858,7 @@ impl ExprManager {
         })
     }
 
-    ///! ### Creation of new terms.
+    ///! ## Creation of new terms.
 
     /// The type of types. This has type `self.mk_kind()`.
     /// ```
@@ -821,6 +1009,133 @@ impl ExprManager {
         self.add_const_(c.clone());
         c
     }
+
+    ///! ## Builtin axioms and rules.
+
+    /// `assume F` is `F |- F`
+    pub fn thm_assume(&mut self, e: &Expr) -> Thm {
+        Thm::make_(e.clone(), vec![e.clone()])
+    }
+
+    /// `refl t` is `|- t=t`
+    pub fn thm_refl(&mut self, e: Expr) -> Thm {
+        let t = self.mk_eq_app(e.clone(), e.clone());
+        Thm::make_(t, vec![])
+    }
+
+    /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
+    ///
+    /// Can fail if the conclusions don't match properly.
+    pub fn thm_trans(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
+        let (a, b) =
+            th1.concl().unfold_eq().ok_or("trans: th1 must be an equation")?;
+        let (b2, c) =
+            th2.concl().unfold_eq().ok_or("trans: th2 must be an equation")?;
+        if b != b2 {
+            Err("trans: th1 and th2's conclusions do not align")?;
+        }
+
+        let hyps = hyps_merge(th1, th2);
+        let eq_a_c = self.mk_eq_app(a.clone(), c.clone());
+        let th = Thm::make_(eq_a_c, hyps);
+        Ok(th)
+    }
+
+    /// `congr (F1 |- f=g) (F2 |- t=u)` is `F1, F2 |- f t=g u`
+    pub fn thm_congr(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
+        let (f, g) =
+            th1.0.concl.unfold_eq().ok_or("congr: th1 must be an equality")?;
+        let (t, u) =
+            th2.0.concl.unfold_eq().ok_or("congr: th2 must be an equality")?;
+        let ft = self.mk_app(f.clone(), t.clone());
+        let gu = self.mk_app(g.clone(), u.clone());
+        let eq = self.mk_eq_app(ft, gu);
+        let hyps = hyps_merge(th1, th2);
+        Ok(Thm::make_(eq, hyps))
+    }
+
+    /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
+    pub fn thm_instantiate(&mut self, th: &Thm, subst: &[(Var, Expr)]) -> Thm {
+        let mut hyps = th.0.hyps.clone();
+        let concl = self.subst(&th.0.concl, subst);
+        for t in hyps.iter_mut() {
+            *t = self.subst(t, subst);
+        }
+        Thm::make_(concl, hyps)
+    }
+
+    /// `abs x (F |- t=u)` is `F |- (λx.t)=(λx.u)`
+    ///
+    /// Panics if `x` occurs freely in `F`.
+    pub fn thm_abs(&mut self, v: &Var, th: &Thm) -> Result<Thm, String> {
+        if free_vars_iter(th.0.hyps.iter()).any(|v2| v == v2) {
+            panic!("abs: variable {:?} occurs in hyps of {:?}", v, th);
+        }
+
+        let (t, u) =
+            th.0.concl
+                .unfold_eq()
+                .ok_or("abs: thm's conclusion should be an equality")?;
+        let lam_t = self.mk_lambda_abs(v.clone(), t.clone());
+        let lam_u = self.mk_lambda_abs(v.clone(), u.clone());
+        let eq = self.mk_eq_app(lam_t, lam_u);
+        Ok(Thm::make_(eq, th.0.hyps.clone()))
+    }
+
+    /// `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`
+    ///
+    /// This fails if `b` does not occur _syntactically_ in the hypothesis
+    /// of the second theorem.
+    ///
+    /// NOTE: this is not strictly necessary, as it's not an axiom in HOL light,
+    /// but we include it here anyway.
+    pub fn thm_cut(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
+        let th1_c = &th1.0.concl;
+        if !th2.0.hyps.contains(th1_c) {
+            Err("cut: th2's hyps do not contain th1's conclusion")?
+        }
+        let concl = th2.0.concl.clone();
+        let mut hyps = th2.0.hyps.clone();
+        hyps.retain(|u| u != th1_c);
+        hyps.extend_from_slice(&th1.0.hyps[..]);
+        Ok(Thm::make_(concl, hyps))
+    }
+
+    // TODO
+    /*
+    val mp : t -> t -> t
+    (** [mp (F1 |- a) (F2 |- a' ==> b)] is [F1, F2 |- b]
+        where [a] and [a'] are alpha equivalent. *)
+
+    val bool_eq : eq:t -> t -> t
+    (** [bool_eq ~eq:(F1 |- a=b) (F2 |- a)] is [F1, F2 |- b].
+        This is the boolean equivalent of transitivity. *)
+
+    val bool_eq_intro : t -> t -> t
+    (** [bool_eq_intro (F1, a |- b) (F2, b |- a) is [F1, F2 |- b=a].
+        This is a way of building a boolean [a=b] from proofs of
+        [a==>b] and [b==>a] (or [a|-b] and [b|-a]).
+        *)
+
+    val beta : Expr.t -> Expr.t -> t * Expr.t
+    (** [beta (λx.u) a] is [ |- (λx.u) a = u[x:=a] ].
+        [u[x:=a]] is returned along. *)
+
+    val beta_conv : Expr.t -> t
+    (** [beta_conv ((λx.u) a)] is [ |- (λx.u) a = u[x:=a]].
+        Fails if the term is not a beta-redex. *)
+
+    val new_basic_definition : Expr.t -> t * Expr.t
+    (** [new_basic_definition (x=t)] where [x] is a variable and [t] a term
+        with a closed type,
+        returns a theorem [|- x=t] where [x] is now a constant, along with
+        the constant [x] *)
+
+    val axiom : string -> Expr.t list -> Expr.t -> t * axiom
+    (** Create a new axiom [assumptions |- concl] with the given name.
+        The axiom is tracked in all theorems that use it, see {!dep_on_axioms}.
+        {b use with caution} *)
+    */
 }
 
 /// A temporary, self-cleaning, handle to an `ExprManager`.`
@@ -840,6 +1155,8 @@ impl<'a> std::ops::DerefMut for ExprManagerGuard<'a> {
         &mut *self.0
     }
 }
+
+///! # Expression manager reference, shareable between threads.
 
 /// Expression manager that can be shared between threads.
 #[derive(Clone)]

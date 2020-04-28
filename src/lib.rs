@@ -1,5 +1,5 @@
 mod fnv;
-mod kernel_of_trust;
+pub mod kernel_of_trust;
 
 pub use kernel_of_trust::ExprView::*;
 pub use kernel_of_trust::{
