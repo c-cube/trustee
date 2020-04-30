@@ -1,7 +1,7 @@
 //! Kernel of Trust: Terms and Theorems
 
 use crate::fnv;
-use std::{fmt, ops::Deref, sync::Arc, sync::Mutex};
+use std::{fmt, ops::Deref, sync::Arc};
 
 ///! # Symbols.
 
@@ -334,7 +334,7 @@ impl Expr {
         }
     }
 
-    /// View a constant.
+    /// View as constant.
     pub fn as_const(&self) -> Option<&ConstContent> {
         if let EConst(ref c) = self.0.view {
             Some(&c)
@@ -352,12 +352,32 @@ impl Expr {
         }
     }
 
+    /// View as a lambda-expression.
+    pub fn as_lambda(&self) -> Option<(&Type, &Expr)> {
+        if let ELambda(ref ty, ref bod) = self.0.view {
+            Some((&ty, &bod))
+        } else {
+            None
+        }
+    }
+
     /// `(a=b).unfold_eq()` returns `Some((a,b))`.
     pub fn unfold_eq(&self) -> Option<(&Expr, &Expr)> {
         let (hd1, b) = self.as_app()?;
         let (hd2, a) = hd1.as_app()?;
         let (c, _alpha) = hd2.as_app()?;
         if c.as_const()?.name.name() == "=" {
+            Some((a, b))
+        } else {
+            None
+        }
+    }
+
+    /// `(a==>b).unfold_imply()` returns `Some((a,b))`.
+    pub fn unfold_imply(&self) -> Option<(&Expr, &Expr)> {
+        let (hd1, b) = self.as_app()?;
+        let (hd2, a) = hd1.as_app()?;
+        if hd2.as_const()?.name.name() == "==>" {
             Some((a, b))
         } else {
             None
@@ -449,9 +469,10 @@ pub struct Thm(Arc<ThmImpl>);
 
 #[derive(Clone)]
 struct ThmImpl {
+    /// Conclusion of the theorem.
     concl: Expr,
+    /// Hypothesis of the theorem.
     hyps: Vec<Expr>,
-    // TODO: list of axioms
 }
 
 /// Free variables of a set of terms
@@ -516,6 +537,7 @@ pub struct ExprManager {
     eq: Option<Expr>,
     imply: Option<Expr>,
     next_cleanup: usize,
+    axioms: Vec<Thm>,
 }
 
 // period between 2 cleanups
@@ -541,8 +563,6 @@ fn hyps_merge(th1: &Thm, th2: &Thm) -> Vec<Expr> {
 }
 
 impl ExprManager {
-    //! ## Setup
-
     /// Create a new term manager with given initial capacity.
     pub fn with_capacity(n: usize) -> Self {
         let tbl = fnv::new_table_with_cap(n);
@@ -553,6 +573,7 @@ impl ExprManager {
             eq: None,
             imply: None,
             next_cleanup: CLEANUP_PERIOD,
+            axioms: vec![],
         };
         // insert initial builtins
         let kind = em.hashcons_builtin_(EKind, None);
@@ -872,8 +893,6 @@ impl ExprManager {
         })
     }
 
-    ///! ## Creation of new terms.
-
     /// The type of types. This has type `self.mk_kind()`.
     /// ```
     /// # use trustee::*;
@@ -962,6 +981,8 @@ impl ExprManager {
 
     /// Make a lambda term by abstracting on `v`.
     ///
+    ///
+    /// # Examples
     /// ```
     /// # use trustee::*;
     /// # let mut em = ExprManager::new();
@@ -1009,7 +1030,7 @@ impl ExprManager {
     ///
     /// panics if some constant with the same name exists, or if
     /// the type is not closed.
-    pub fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Expr {
+    fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Expr {
         if self.consts.contains_key(&s) {
             panic!("a constant named {:?} already exists", &s);
         }
@@ -1023,8 +1044,6 @@ impl ExprManager {
         self.add_const_(c.clone());
         c
     }
-
-    ///! ## Builtin axioms and rules.
 
     /// `assume F` is `F |- F`
     pub fn thm_assume(&mut self, e: &Expr) -> Thm {
@@ -1058,9 +1077,13 @@ impl ExprManager {
     /// `congr (F1 |- f=g) (F2 |- t=u)` is `F1, F2 |- f t=g u`
     pub fn thm_congr(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
         let (f, g) =
-            th1.0.concl.unfold_eq().ok_or("congr: th1 must be an equality")?;
+            th1.0.concl.unfold_eq().ok_or_else(|| {
+                format!("congr: {:?} must be an equality", th1)
+            })?;
         let (t, u) =
-            th2.0.concl.unfold_eq().ok_or("congr: th2 must be an equality")?;
+            th2.0.concl.unfold_eq().ok_or_else(|| {
+                format!("congr: {:?} must be an equality", th2)
+            })?;
         let ft = self.mk_app(f.clone(), t.clone());
         let gu = self.mk_app(g.clone(), u.clone());
         let eq = self.mk_eq_app(ft, gu);
@@ -1115,40 +1138,100 @@ impl ExprManager {
         Ok(Thm::make_(concl, hyps))
     }
 
-    // TODO
-    /*
-    val mp : t -> t -> t
-    (** [mp (F1 |- a) (F2 |- a' ==> b)] is [F1, F2 |- b]
-        where [a] and [a'] are alpha equivalent. *)
+    /// `mp (F1 |- a) (F2 |- a' ==> b)` is `F1, F2 |- b`
+    /// where `a` and `a'` are alpha equivalent.
+    pub fn thm_mp(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
+        let th2_c = &th2.0.concl;
+        let (a, b) = th2_c.unfold_imply().ok_or_else(|| {
+            format!("mp: second theorem {:?} must be an implication", th2)
+        })?;
+        if &th1.0.concl != a {
+            let msg =format!("mp: conclusion of {:?} does not match LHS of implication of {:?}", th1, th2);
+            return Err(msg);
+        }
+        let hyps = hyps_merge(th1, th2);
+        Ok(Thm::make_(b.clone(), hyps))
+    }
 
-    val bool_eq : eq:t -> t -> t
-    (** [bool_eq ~eq:(F1 |- a=b) (F2 |- a)] is [F1, F2 |- b].
-        This is the boolean equivalent of transitivity. *)
+    /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
+    /// This is the boolean equivalent of transitivity.
+    pub fn thm_bool_eq(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
+        let th2_c = &th2.0.concl;
+        let (a, b) = th2_c
+            .unfold_eq()
+            .filter(|(a, _)| a.ty() == &self.builtins_().bool)
+            .ok_or_else(|| {
+                //Some((a, b)) if a.ty() == &self.builtins_().bool => (a, b),
+                format!(
+                "bool-eq: {:?} should have a boleean equallity as conclusion",
+                th2
+            )
+            })?;
+        if a != &th1.0.concl {
+            return Err(format!(
+                "bool-eq: the conclusion of {:?} is not compatible with {:?}",
+                th1, th2
+            ));
+        }
 
-    val bool_eq_intro : t -> t -> t
-    (** [bool_eq_intro (F1, a |- b) (F2, b |- a) is [F1, F2 |- b=a].
-        This is a way of building a boolean [a=b] from proofs of
-        [a==>b] and [b==>a] (or [a|-b] and [b|-a]).
-        *)
+        let hyps = hyps_merge(th1, th2);
+        Ok(Thm::make_(b.clone(), hyps))
+    }
 
-    val beta : Expr.t -> Expr.t -> t * Expr.t
-    (** [beta (λx.u) a] is [ |- (λx.u) a = u[x:=a] ].
-        [u[x:=a]] is returned along. *)
+    /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
+    /// This is a way of building a boolean `a=b` from proofs of
+    /// `a==>b` and `b==>a` (or `a|-b` and [b|-a`).
+    pub fn thm_bool_eq_intro(&mut self, th1: &Thm, th2: &Thm) -> Thm {
+        let mut hyps = vec![];
+        hyps.extend(th1.0.hyps.iter().filter(|x| *x != &th2.0.concl).cloned());
+        hyps.extend(th2.0.hyps.iter().filter(|x| *x != &th1.0.concl).cloned());
+        let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone());
+        Thm::make_(eq, hyps)
+    }
 
-    val beta_conv : Expr.t -> t
-    (** [beta_conv ((λx.u) a)] is [ |- (λx.u) a = u[x:=a]].
-        Fails if the term is not a beta-redex. *)
+    /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
+    /// Fails if the term is not a beta-redex.
+    pub fn thm_beta_conv(&mut self, e: &Expr) -> Result<Thm, String> {
+        let (f, arg) = e.as_app().ok_or_else(|| {
+            format!("beta-conv: expect an application, not {:?}", e)
+        })?;
+        let (ty, bod) = f.as_lambda().ok_or_else(|| {
+            format!("beta-conv: expect a lambda, not {:?}", f)
+        })?;
+        debug_assert_eq!(ty, arg.ty()); // should already be enforced by typing.
 
-    val new_basic_definition : Expr.t -> t * Expr.t
-    (** [new_basic_definition (x=t)] where [x] is a variable and [t] a term
-        with a closed type,
-        returns a theorem [|- x=t] where [x] is now a constant, along with
-        the constant [x] *)
+        let lhs = e.clone();
+        let rhs = self.subst1_(bod, 0, arg);
+        let eq = self.mk_eq_app(lhs, rhs);
+        Ok(Thm::make_(eq, vec![]))
+    }
 
-    val axiom : string -> Expr.t list -> Expr.t -> t * axiom
-    (** Create a new axiom [assumptions |- concl] with the given name.
-        The axiom is tracked in all theorems that use it, see {!dep_on_axioms}.
-        {b use with caution} *)
-    */
-}
+    /// `new_basic_definition (x=t)` where `x` is a variable and `t` a term
+    /// with a closed type,
+    /// returns a theorem `|- x=t` where `x` is now a constant, along with
+    /// the constant `x`
+    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<Thm, String> {
+        let (x, rhs) = e.unfold_eq().and_then(|(x,rhs)| {
+            x.as_var().map(|x| (x,rhs))
+        }).ok_or_else(|| format!("new definition: {:?} should be an equation `x = rhs` with rhs closed", e))?;
+        if !rhs.is_closed() {
+            Err(format!("rhs {:?} should be closed", rhs))?;
+        }
+        // checks that the type of `x` is closed
+        if !x.ty.is_closed() {
+            Err(format!("{:?} should have a closed type, not {:?}", x, x.ty))?;
+        }
+
+        let c = self.mk_new_const(x.name.clone(), x.ty.clone());
+        let eqn = self.mk_eq_app(c, rhs.clone());
+        Ok(Thm::make_(eqn, vec![]))
+    }
+
+    /// Create a new axiom `assumptions |- concl`.
+    /// **use with caution**
+    pub fn thm_axiom(&mut self, hyps: Vec<Expr>, concl: Expr) -> Thm {
+        let thm = Thm::make_(concl, hyps);
+        self.axioms.push(thm.clone());
+        thm
+    }
 }
