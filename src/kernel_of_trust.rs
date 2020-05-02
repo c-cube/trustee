@@ -540,6 +540,12 @@ pub struct ExprManager {
     axioms: Vec<Thm>,
 }
 
+impl fmt::Debug for ExprManager {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "<expr manager>")
+    }
+}
+
 // period between 2 cleanups
 const CLEANUP_PERIOD: usize = 500;
 

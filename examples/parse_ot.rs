@@ -1,12 +1,9 @@
-use std::{
-    env::args,
-    fs::File,
-    io::{BufRead, BufReader},
-};
+use std::{env::args, fs::File, io::BufReader};
 use trustee::*;
 
-fn main() -> Result<(), String> {
-    let mut vm = open_theory::VM::new();
+fn parse_all() -> Result<(), String> {
+    let mut em = ExprManager::new();
+    let mut vm = open_theory::VM::new(&mut em);
     for f in args().skip(1) {
         eprintln!("# parsing file {:?}", f);
         let file = File::open(f).map_err(|e| format!("{:?}", e))?;
@@ -14,7 +11,17 @@ fn main() -> Result<(), String> {
         vm.parse_str(&mut read)?;
     }
     println!("done parsing!");
-    println!("article: {:?}", vm.into_article());
+    let article = vm.into_article();
+    println!("article: {:?}", &article);
 
     Ok(())
+}
+fn main() {
+    match parse_all() {
+        Ok(()) => (),
+        Err(s) => {
+            eprintln!("error: {}", s);
+            std::process::exit(1)
+        }
+    }
 }

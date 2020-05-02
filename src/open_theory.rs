@@ -5,14 +5,18 @@ use {
     std::rc::Rc,
 };
 
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
-struct Name(Rc<(Vec<String>, String)>);
+#[derive(Clone, Eq, PartialEq, Hash)]
+struct Name {
+    ptr: Rc<(Vec<String>, String)>,
+}
 
 #[derive(Clone, Debug)]
 struct Obj(Rc<ObjImpl>);
 
 #[derive(Clone)]
-struct TypeOp(Rc<dyn Fn(&mut k::ExprManager, &[Expr]) -> Expr>);
+struct TypeOp(
+    Rc<dyn Fn(&mut k::ExprManager, Vec<Expr>) -> Result<Expr, String>>,
+);
 
 impl fmt::Debug for TypeOp {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
@@ -30,7 +34,7 @@ impl std::ops::Deref for Obj {
 /// An object for the VM
 #[derive(Debug, Clone)]
 enum ObjImpl {
-    Int(isize),
+    Int(usize),
     Name(Name),
     List(Vec<Obj>),
     TypeOp(Name, TypeOp),
@@ -43,10 +47,20 @@ enum ObjImpl {
 
 use ObjImpl as O;
 
+impl fmt::Debug for Name {
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        write!(out, "{}", self.to_string())
+    }
+}
+
 impl Name {
+    /// Friendly display of a name
     pub fn to_string(&self) -> String {
+        let &(ref pre, ref base) = &*self.ptr;
+        if pre.len() == 0 {
+            return base.clone(); // unqualified
+        }
         let mut s = String::new();
-        let &(ref pre, ref base) = &*self.0;
         for x in pre.iter() {
             s += x.as_str();
             s += ".";
@@ -55,19 +69,23 @@ impl Name {
         s
     }
 
-    /// Parse a line into a name
+    /// Number of components in the prefix.
+    pub fn len_pre(&self) -> usize {
+        self.ptr.0.len()
+    }
+
+    /// Parse a string nto a name.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         if s.as_bytes()[0] != b'"' || s.as_bytes()[s.len() - 1] != b'"' {
             return None;
         }
 
-        let s = &s[1..s.len() - 2];
-        let toks: Vec<&str> = s.split(".").collect();
-        let pre =
-            toks[0..toks.len() - 1].iter().map(|s| s.to_string()).collect();
-        let base = toks[toks.len() - 1].to_string();
-        Some(Name(Rc::new((pre, base))))
+        let s = &s[1..s.len() - 1];
+        let mut toks: Vec<&str> = s.split(".").collect();
+        let base = toks.pop().unwrap().to_string();
+        let pre = toks.into_iter().map(|s| s.to_string()).collect();
+        Some(Name { ptr: Rc::new((pre, base)) })
     }
 }
 
@@ -82,8 +100,9 @@ pub struct Article {
 /// Virtual machine.
 ///
 /// This is used to parse and interpret an OpenTheory file.
-#[derive(Debug, Clone)]
-pub struct VM {
+#[derive(Debug)]
+pub struct VM<'a> {
+    em: &'a mut ExprManager,
     ty_vars: fnv::FnvHashMap<String, Var>,
     vars: fnv::FnvHashMap<String, (Var, Var)>, // "x" -> (x, α)
     defs: fnv::FnvHashMap<Name, Expr>,
@@ -93,10 +112,11 @@ pub struct VM {
     theorems: Vec<Thm>,
 }
 
-impl VM {
-    /// Create a new VM.
-    pub fn new() -> Self {
+impl<'a> VM<'a> {
+    /// Create a new VM using the given expression manager.
+    pub fn new(em: &'a mut ExprManager) -> Self {
         VM {
+            em,
             ty_vars: fnv::new_table_with_cap(32),
             vars: fnv::new_table_with_cap(32),
             defs: fnv::new_table_with_cap(32),
@@ -139,7 +159,7 @@ impl VM {
             Err(format!("OT.pop1.{}: empty stack in {:?}", what, self))?
         }
         let x = self.stack.pop().unwrap();
-        f(self, x)
+        f(self, x).map_err(|e| format!("{}\nin {:?}", e, self))
     }
 
     fn pop2<F, A>(&mut self, what: &str, f: F) -> Result<A, String>
@@ -147,11 +167,11 @@ impl VM {
         F: Fn(&mut Self, Obj, Obj) -> Result<A, String>,
     {
         if self.stack.len() < 2 {
-            Err(format!("OT.pop2.{}: empty stack in {:?}", what, self))?
+            Err(format!("OT.pop2.{}: empty stack in {:#?}", what, self))?
         }
         let x = self.stack.pop().unwrap();
         let y = self.stack.pop().unwrap();
-        f(self, x, y)
+        f(self, x, y).map_err(|e| format!("{}\nin {:#?}", e, self))
     }
 
     fn pop3<F, A>(&mut self, what: &str, f: F) -> Result<A, String>
@@ -159,12 +179,12 @@ impl VM {
         F: Fn(&mut Self, Obj, Obj, Obj) -> Result<A, String>,
     {
         if self.stack.len() < 3 {
-            Err(format!("OT.pop3.{}: empty stack in {:?}", what, self))?
+            Err(format!("OT.pop3.{}: empty stack in {:#?}", what, self))?
         }
         let x = self.stack.pop().unwrap();
         let y = self.stack.pop().unwrap();
         let z = self.stack.pop().unwrap();
-        f(self, x, y, z)
+        f(self, x, y, z).map_err(|e| format!("{}\nin {:#?}", e, self))
     }
 
     fn abs_term(&mut self) -> Result<(), String> {
@@ -200,19 +220,49 @@ impl VM {
         Ok(())
     }
     fn type_op(&mut self) -> Result<(), String> {
-        todo!("type op")
+        self.pop1("type op", |vm, o| match &*o {
+            O::Name(n) if n.ptr.0.len() == 0 && n.ptr.1 == "bool" => {
+                let tyop = |em: &mut ExprManager, args: Vec<Expr>| {
+                    if args.len() != 0 {
+                        Err(format!("bool takes no arguments"))
+                    } else {
+                        Ok(em.mk_bool())
+                    }
+                };
+                Ok(vm.push_obj(O::TypeOp(n.clone(), TypeOp(Rc::new(tyop)))))
+            }
+            O::Name(n) if n.ptr.0.len() == 0 && n.ptr.1 == "->" => {
+                let tyop = |em: &mut ExprManager, mut args: Vec<Expr>| {
+                    if args.len() != 2 {
+                        return Err(format!("-> takes 2 arguments"));
+                    };
+                    let ty2 = args.pop().unwrap();
+                    let ty1 = args.pop().unwrap();
+                    debug_assert!(args.is_empty());
+                    Ok(em.mk_arrow(ty1, ty2))
+                };
+                Ok(vm.push_obj(O::TypeOp(n.clone(), TypeOp(Rc::new(tyop)))))
+            }
+            _ => Err(format!("unknown operator {:?}", o)),
+        })
     }
     fn def(&mut self) -> Result<(), String> {
-        todo!("def")
+        self.pop2("def", |vm, k, x| match &*k {
+            O::Int(i) => {
+                vm.dict.insert(*i, x);
+                Ok(())
+            }
+            _ => Err(format!("def: expected int, got {:?}", k)),
+        })
     }
     fn cons(&mut self) -> Result<(), String> {
         let a =
-            self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
+            self.pop2("cons", |_vm, a, mut b| match Rc::make_mut(&mut b.0) {
                 O::List(ref mut v) => {
-                    v.push(b);
-                    Ok(a)
+                    v.push(a);
+                    Ok(b)
                 }
-                _ => Err(format!("expected a list {:?}", b)),
+                _ => Err(format!("expected a list, got {:?}", b)),
             })?;
         self.push(a);
         Ok(())
@@ -221,10 +271,43 @@ impl VM {
         todo!("ref")
     }
     fn var_type(&mut self) -> Result<(), String> {
-        todo!("var_type")
+        self.pop1("var_type", |vm, o| match &*o {
+            O::Name(n) => {
+                if n.len_pre() != 0 {
+                    Err("var_type: need unqualified name")?
+                }
+                // make a type variable
+                let ty = vm.em.mk_ty();
+                let v = vm.em.mk_var_str(&n.ptr.1, ty);
+                vm.push_obj(O::Type(v));
+                Ok(())
+            }
+            _ => Err(format!("var_type: expected name, got {:?}", o)),
+        })
     }
     fn op_type(&mut self) -> Result<(), String> {
-        todo!("op_type")
+        self.pop2("op type", |vm, o1, o2| match (&*o1, &*o2) {
+            (O::List(l), O::TypeOp(_, f)) => {
+                let args: Result<Vec<Expr>, String> = l
+                    .iter()
+                    .map(|x| match &**x {
+                        O::Type(a) => Ok(a.clone()),
+                        _ => Err(format!(
+                            "in op type: expected type, got {:?}",
+                            x
+                        )),
+                    })
+                    .collect();
+                let args = args?;
+                let r = (*f.0)(&mut vm.em, args)?;
+                vm.push_obj(O::Type(r));
+                Ok(())
+            }
+            _ => Err(format!(
+                "op_type: expected <list,typeop>, got {:?}, {:?}",
+                o1, o2
+            )),
+        })
     }
     fn const_(&mut self) -> Result<(), String> {
         todo!("const")
@@ -282,6 +365,7 @@ impl VM {
         for line in buf.lines() {
             let line = line.map_err(|e| format!("error {:?}", e))?;
             let line = line.trim();
+            eprintln!("# parse line {}", line);
             if line.starts_with("#") {
                 continue;
             } else if line.starts_with("\"") {
@@ -289,7 +373,7 @@ impl VM {
                     format!("cannot parse name from line {:?}", line)
                 })?;
                 self.push_obj(ObjImpl::Name(name))
-            } else if let Ok(i) = line.parse::<isize>() {
+            } else if let Ok(i) = line.parse::<usize>() {
                 self.push_obj(ObjImpl::Int(i))
             } else {
                 match line {
