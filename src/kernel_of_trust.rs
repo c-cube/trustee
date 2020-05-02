@@ -435,9 +435,13 @@ impl Expr {
                 body.pp_(k + 1, out)?;
                 write!(out, ")")
             }
-            EPi(_x, body) => {
-                debug_assert!(_x.is_type());
-                write!(out, "(Πx{}. ", k)?;
+            EPi(x, body) => {
+                write!(out, "(Πx{}", k)?;
+                if !x.is_type() {
+                    write!(out, ":")?;
+                    x.pp_(k, out)?;
+                }
+                write!(out, ". ")?;
                 body.pp_(k + 1, out)?;
                 write!(out, ")")
             }
