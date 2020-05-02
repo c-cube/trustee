@@ -13,14 +13,27 @@ struct Name {
 #[derive(Clone, Debug)]
 struct Obj(Rc<ObjImpl>);
 
+/// A type operator, i.e. a type builder.
 #[derive(Clone)]
-struct TypeOp(
+struct OTypeOp(
     Rc<dyn Fn(&mut k::ExprManager, Vec<Expr>) -> Result<Expr, String>>,
 );
 
-impl fmt::Debug for TypeOp {
+impl fmt::Debug for OTypeOp {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
         write!(out, "<type op>")
+    }
+}
+
+/// A constant, parametrized by its type.
+#[derive(Clone)]
+pub struct OConst(
+    Rc<dyn Fn(&mut k::ExprManager, Expr) -> Result<Expr, String>>,
+);
+
+impl fmt::Debug for OConst {
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        write!(out, "<const>>")
     }
 }
 
@@ -37,9 +50,9 @@ enum ObjImpl {
     Int(usize),
     Name(Name),
     List(Vec<Obj>),
-    TypeOp(Name, TypeOp),
+    TypeOp(Name, OTypeOp),
     Type(Expr),
-    Const(Name, Expr),
+    Const(Name, OConst),
     Var(Var),
     Term(Expr),
     Thm(Thm),
@@ -69,6 +82,13 @@ impl Name {
         s
     }
 
+    pub fn base(&self) -> &str {
+        &self.ptr.1
+    }
+    pub fn prefix(&self) -> &[String] {
+        &self.ptr.0[..]
+    }
+
     /// Number of components in the prefix.
     pub fn len_pre(&self) -> usize {
         self.ptr.0.len()
@@ -92,7 +112,7 @@ impl Name {
 /// An article obtained by interpreting a theory file.
 #[derive(Debug)]
 pub struct Article {
-    defs: fnv::FnvHashMap<Name, Expr>,
+    defs: fnv::FnvHashMap<Name, OConst>,
     assumptions: Vec<Thm>,
     theorems: Vec<Thm>,
 }
@@ -105,7 +125,7 @@ pub struct VM<'a> {
     em: &'a mut ExprManager,
     ty_vars: fnv::FnvHashMap<String, Var>,
     vars: fnv::FnvHashMap<String, (Var, Var)>, // "x" -> (x, α)
-    defs: fnv::FnvHashMap<Name, Expr>,
+    defs: fnv::FnvHashMap<Name, OConst>,
     stack: Vec<Obj>,
     dict: fnv::FnvHashMap<usize, Obj>,
     assumptions: Vec<Thm>,
@@ -195,7 +215,17 @@ impl<'a> VM<'a> {
         todo!("abs_thm")
     }
     fn app_term(&mut self) -> Result<(), String> {
-        todo!("app_term")
+        self.pop2("app_term", |vm, x, y| match (&*x, &*y) {
+            (O::Term(x), O::Term(f)) => {
+                let e = vm.em.mk_app(f.clone(), x.clone());
+                vm.push_obj(O::Term(e));
+                Ok(())
+            }
+            _ => Err(format!(
+                "app_term: expected <term,term>, got {:?},{:?}",
+                x, y
+            )),
+        })
     }
     fn app_thm(&mut self) -> Result<(), String> {
         todo!("app_thm")
@@ -229,7 +259,7 @@ impl<'a> VM<'a> {
                         Ok(em.mk_bool())
                     }
                 };
-                Ok(vm.push_obj(O::TypeOp(n.clone(), TypeOp(Rc::new(tyop)))))
+                Ok(vm.push_obj(O::TypeOp(n.clone(), OTypeOp(Rc::new(tyop)))))
             }
             O::Name(n) if n.ptr.0.len() == 0 && n.ptr.1 == "->" => {
                 let tyop = |em: &mut ExprManager, mut args: Vec<Expr>| {
@@ -241,7 +271,7 @@ impl<'a> VM<'a> {
                     debug_assert!(args.is_empty());
                     Ok(em.mk_arrow(ty1, ty2))
                 };
-                Ok(vm.push_obj(O::TypeOp(n.clone(), TypeOp(Rc::new(tyop)))))
+                Ok(vm.push_obj(O::TypeOp(n.clone(), OTypeOp(Rc::new(tyop)))))
             }
             _ => Err(format!("unknown operator {:?}", o)),
         })
@@ -249,7 +279,8 @@ impl<'a> VM<'a> {
     fn def(&mut self) -> Result<(), String> {
         self.pop2("def", |vm, k, x| match &*k {
             O::Int(i) => {
-                vm.dict.insert(*i, x);
+                vm.dict.insert(*i, x.clone());
+                vm.push(x); // push x back
                 Ok(())
             }
             _ => Err(format!("def: expected int, got {:?}", k)),
@@ -257,18 +288,32 @@ impl<'a> VM<'a> {
     }
     fn cons(&mut self) -> Result<(), String> {
         let a =
-            self.pop2("cons", |_vm, a, mut b| match Rc::make_mut(&mut b.0) {
+            self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
                 O::List(ref mut v) => {
-                    v.push(a);
-                    Ok(b)
+                    v.push(b);
+                    Ok(a)
                 }
-                _ => Err(format!("expected a list, got {:?}", b)),
+                _ => Err(format!(
+                    "expected a as second arg list, got {:?}, {:?}",
+                    a, b
+                )),
             })?;
         self.push(a);
         Ok(())
     }
     fn ref_(&mut self) -> Result<(), String> {
-        todo!("ref")
+        self.pop1("ref", |vm, o| match &*o {
+            O::Int(n) => {
+                if let Some(x) = vm.dict.get(n) {
+                    let x = x.clone();
+                    vm.push(x); // lookup and push
+                    Ok(())
+                } else {
+                    Err(format!("ref: int {} not defined in dictionary", n))
+                }
+            }
+            _ => Err(format!("ref: expected int, got {:?}", o)),
+        })
     }
     fn var_type(&mut self) -> Result<(), String> {
         self.pop1("var_type", |vm, o| match &*o {
@@ -310,16 +355,80 @@ impl<'a> VM<'a> {
         })
     }
     fn const_(&mut self) -> Result<(), String> {
-        todo!("const")
+        self.pop1("const", |vm, o| match &*o {
+            O::Name(n) => {
+                let oc = match n.base() {
+                    "=" if n.len_pre() == 0 => {
+                        let oc = |em: &mut ExprManager, ty: Expr| {
+                            let e = em.mk_eq();
+                            Ok(em.mk_app(e, ty))
+                        };
+                        OConst(Rc::new(oc))
+                    }
+                    "select" if n.len_pre() == 0 => {
+                        todo!("select")
+                        /* TODO: generate the select constant
+                        let oc = |em: &mut ExprManager, ty: Expr| {
+                            let e = em.mk_s();
+                            Ok(em.mk_app(e, ty))
+                        };
+                        OConst(Rc::new(oc))
+                        */
+                    }
+                    _ => {
+                        // lookup in definitions
+                        if let Some(d) = vm.defs.get(n) {
+                            d.clone()
+                        } else {
+                            return Err(format!(
+                                "const: undefined constant {:?}",
+                                n
+                            ));
+                        }
+                    }
+                };
+                vm.push_obj(O::Const(n.clone(), oc));
+                Ok(())
+            }
+            _ => Err(format!("const: expected <name>, got {:?}", o)),
+        })
     }
     fn const_term(&mut self) -> Result<(), String> {
-        todo!("const_term")
+        self.pop2("const term", |vm, x, y| match (&*x, &*y) {
+            (O::Type(ty), O::Const(_, c)) => {
+                // apply constant to type
+                let e = (*c.0)(vm.em, ty.clone())?;
+                vm.push_obj(O::Term(e));
+                Ok(())
+            }
+            _ => Err(format!(
+                "const_term: expected <type,conts>, got {:?}, {:?}",
+                x, y
+            )),
+        })
     }
     fn var(&mut self) -> Result<(), String> {
-        todo!("var")
+        self.pop2("var", |vm, x, y| match (&*x, &*y) {
+            (O::Type(ty), O::Name(n)) => {
+                // TODO: avoid allocating intermediate `String`
+                let v = Var::new(Symbol::from_str(&n.to_string()), ty.clone());
+                vm.push_obj(O::Var(v));
+                Ok(())
+            }
+            _ => {
+                Err(format!("var: expected <type,name>, got {:?}, {:?}", x, y))
+            }
+        })
     }
     fn var_term(&mut self) -> Result<(), String> {
-        todo!("var_term")
+        self.pop1("var_term", |vm, o| match &*o {
+            O::Var(v) => {
+                let e = vm.em.mk_var(v.clone());
+                vm.push_obj(O::Term(e));
+                Ok(())
+            }
+            _ => Err(format!("var_term: expected <var>, got {:?}", o)),
+        })
     }
     fn define_const(&mut self) -> Result<(), String> {
         todo!("define_const")
