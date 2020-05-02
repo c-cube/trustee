@@ -11,7 +11,8 @@ struct Name(Rc<(Vec<String>, String)>);
 #[derive(Clone, Debug)]
 struct Obj(Rc<ObjImpl>);
 
-struct TypeOp(Box<dyn Fn(&mut k::ExprManager, &[Expr]) -> Expr>);
+#[derive(Clone)]
+struct TypeOp(Rc<dyn Fn(&mut k::ExprManager, &[Expr]) -> Expr>);
 
 impl fmt::Debug for TypeOp {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
@@ -19,8 +20,15 @@ impl fmt::Debug for TypeOp {
     }
 }
 
+impl std::ops::Deref for Obj {
+    type Target = ObjImpl;
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
 /// An object for the VM
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum ObjImpl {
     Int(isize),
     Name(Name),
@@ -33,6 +41,8 @@ enum ObjImpl {
     Thm(Thm),
 }
 
+use ObjImpl as O;
+
 impl Name {
     pub fn to_string(&self) -> String {
         let mut s = String::new();
@@ -43,6 +53,21 @@ impl Name {
         }
         s += base.as_str();
         s
+    }
+
+    /// Parse a line into a name
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.as_bytes()[0] != b'"' || s.as_bytes()[s.len() - 1] != b'"' {
+            return None;
+        }
+
+        let s = &s[1..s.len() - 2];
+        let toks: Vec<&str> = s.split(".").collect();
+        let pre =
+            toks[0..toks.len() - 1].iter().map(|s| s.to_string()).collect();
+        let base = toks[toks.len() - 1].to_string();
+        Some(Name(Rc::new((pre, base))))
     }
 }
 
@@ -98,8 +123,12 @@ impl VM {
 
     #[inline]
     fn push(&mut self, o: Obj) {
-        dbg!("vm.push", &o);
+        eprintln!("vm.push {:?}", &o);
         self.stack.push(o)
+    }
+
+    fn push_obj(&mut self, o: ObjImpl) {
+        self.push(Obj(Rc::new(o)))
     }
 
     fn pop1<F, A>(&mut self, what: &str, f: F) -> Result<A, String>
@@ -138,6 +167,114 @@ impl VM {
         f(self, x, y, z)
     }
 
+    fn abs_term(&mut self) -> Result<(), String> {
+        todo!("abs_term")
+    }
+
+    fn abs_thm(&mut self) -> Result<(), String> {
+        todo!("abs_thm")
+    }
+    fn app_term(&mut self) -> Result<(), String> {
+        todo!("app_term")
+    }
+    fn app_thm(&mut self) -> Result<(), String> {
+        todo!("app_thm")
+    }
+    fn assume(&mut self) -> Result<(), String> {
+        todo!("assume")
+    }
+    fn axiom(&mut self) -> Result<(), String> {
+        todo!("axiom")
+    }
+    fn version(&mut self) -> Result<(), String> {
+        self.pop1("version", |_vm, o| match *o {
+            O::Int(6) => Ok(()),
+            _ => Err(format!(
+                "OpenTheory: unsupported version -> Result<(), String> {:?}",
+                o
+            )),
+        })
+    }
+    fn nil(&mut self) -> Result<(), String> {
+        self.push_obj(O::List(vec![]));
+        Ok(())
+    }
+    fn type_op(&mut self) -> Result<(), String> {
+        todo!("type op")
+    }
+    fn def(&mut self) -> Result<(), String> {
+        todo!("def")
+    }
+    fn cons(&mut self) -> Result<(), String> {
+        let a =
+            self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
+                O::List(ref mut v) => {
+                    v.push(b);
+                    Ok(a)
+                }
+                _ => Err(format!("expected a list {:?}", b)),
+            })?;
+        self.push(a);
+        Ok(())
+    }
+    fn ref_(&mut self) -> Result<(), String> {
+        todo!("ref")
+    }
+    fn var_type(&mut self) -> Result<(), String> {
+        todo!("var_type")
+    }
+    fn op_type(&mut self) -> Result<(), String> {
+        todo!("op_type")
+    }
+    fn const_(&mut self) -> Result<(), String> {
+        todo!("const")
+    }
+    fn const_term(&mut self) -> Result<(), String> {
+        todo!("const_term")
+    }
+    fn var(&mut self) -> Result<(), String> {
+        todo!("var")
+    }
+    fn var_term(&mut self) -> Result<(), String> {
+        todo!("var_term")
+    }
+    fn define_const(&mut self) -> Result<(), String> {
+        todo!("define_const")
+    }
+    fn pop(&mut self) -> Result<(), String> {
+        todo!("pop")
+    }
+    fn remove(&mut self) -> Result<(), String> {
+        todo!("remove")
+    }
+    fn thm(&mut self) -> Result<(), String> {
+        todo!("thm")
+    }
+    fn subst(&mut self) -> Result<(), String> {
+        todo!("subst")
+    }
+    fn refl(&mut self) -> Result<(), String> {
+        todo!("refl")
+    }
+    fn trans(&mut self) -> Result<(), String> {
+        todo!("trans")
+    }
+    fn sym(&mut self) -> Result<(), String> {
+        todo!("sym")
+    }
+    fn eq_mp(&mut self) -> Result<(), String> {
+        todo!("eq_mp")
+    }
+    fn beta_conv(&mut self) -> Result<(), String> {
+        todo!("beta_conv")
+    }
+    fn deduct_antisym(&mut self) -> Result<(), String> {
+        todo!("deduct_antisym")
+    }
+    fn prove_hyp(&mut self) -> Result<(), String> {
+        todo!("prove_hyp")
+    }
+
     /// Parse the given reader.
     pub fn parse_str(&mut self, buf: &mut dyn BufRead) -> Result<(), String> {
         // skip empty lines and comments
@@ -147,11 +284,48 @@ impl VM {
             let line = line.trim();
             if line.starts_with("#") {
                 continue;
+            } else if line.starts_with("\"") {
+                let name = Name::parse(line).ok_or_else(|| {
+                    format!("cannot parse name from line {:?}", line)
+                })?;
+                self.push_obj(ObjImpl::Name(name))
+            } else if let Ok(i) = line.parse::<isize>() {
+                self.push_obj(ObjImpl::Int(i))
+            } else {
+                match line {
+                    "absTerm" => self.abs_term()?,
+                    "absThm" => self.abs_thm()?,
+                    "appTerm" => self.app_term()?,
+                    "appThm" => self.app_thm()?,
+                    "assume" => self.assume()?,
+                    "axiom" => self.axiom()?,
+                    "version" => self.version()?,
+                    "nil" => self.nil()?,
+                    "typeOp" => self.type_op()?,
+                    "def" => self.def()?,
+                    "cons" => self.cons()?,
+                    "ref" => self.ref_()?,
+                    "varType" => self.var_type()?,
+                    "opType" => self.op_type()?,
+                    "const" => self.const_()?,
+                    "constTerm" => self.const_term()?,
+                    "var" => self.var()?,
+                    "varTerm" => self.var_term()?,
+                    "defineConst" => self.define_const()?,
+                    "pop" => self.pop()?,
+                    "remove" => self.remove()?,
+                    "thm" => self.thm()?,
+                    "subst" => self.subst()?,
+                    "refl" => self.refl()?,
+                    "trans" => self.trans()?,
+                    "sym" => self.sym()?,
+                    "eqMp" => self.eq_mp()?,
+                    "betaConv" => self.beta_conv()?,
+                    "deductAntisym" => self.deduct_antisym()?,
+                    "proveHyp" => self.prove_hyp()?,
+                    _ => Err(format!("unknown command {:?}", line))?,
+                }
             }
-
-            dbg!("process line", line);
-            // process line
-            todo!() // TODO
         }
 
         Ok(())
