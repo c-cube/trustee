@@ -10,7 +10,7 @@ struct Name {
     ptr: Rc<(Vec<String>, String)>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct Obj(Rc<ObjImpl>);
 
 /// A type operator, i.e. a type builder.
@@ -18,6 +18,12 @@ struct Obj(Rc<ObjImpl>);
 struct OTypeOp(
     Rc<dyn Fn(&mut k::ExprManager, Vec<Expr>) -> Result<Expr, String>>,
 );
+
+impl fmt::Debug for Obj {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
 
 impl fmt::Debug for OTypeOp {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
@@ -208,7 +214,17 @@ impl<'a> VM<'a> {
     }
 
     fn abs_term(&mut self) -> Result<(), String> {
-        todo!("abs_term")
+        self.pop2("abs_term", |vm, x, y| match (&*x, &*y) {
+            (O::Term(body), O::Var(v)) => {
+                let e = vm.em.mk_lambda_abs(v.clone(), body.clone());
+                vm.push_obj(O::Term(e));
+                Ok(())
+            }
+            _ => Err(format!(
+                "abs_term: expected <term,var>, got {:?},{:?}",
+                x, y
+            )),
+        })
     }
 
     fn abs_thm(&mut self) -> Result<(), String> {
@@ -290,7 +306,7 @@ impl<'a> VM<'a> {
         let a =
             self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
                 O::List(ref mut v) => {
-                    v.push(b);
+                    v.insert(0, b);
                     Ok(a)
                 }
                 _ => Err(format!(
@@ -360,8 +376,12 @@ impl<'a> VM<'a> {
                 let oc = match n.base() {
                     "=" if n.len_pre() == 0 => {
                         let oc = |em: &mut ExprManager, ty: Expr| {
+                            let args = ty.unfold_pi().0;
+                            if args.len() != 2 {
+                                Err(format!("= cannot take type {:?}", ty))?
+                            }
                             let e = em.mk_eq();
-                            Ok(em.mk_app(e, ty))
+                            Ok(em.mk_app(e, args[0].clone()))
                         };
                         OConst(Rc::new(oc))
                     }
