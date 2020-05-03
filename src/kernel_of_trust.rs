@@ -185,9 +185,13 @@ fn pred_db_idx(n: DbIndex) -> DbIndex {
 fn compute_db_depth(e: &ExprView) -> DbIndex {
     match e {
         EKind | EType => 0u32,
-        EConst(c) => c.ty.db_depth(),
+        EConst(c) => {
+            let d = c.ty.db_depth();
+            debug_assert_eq!(d, 0); // constants should be closed
+            d
+        }
         EVar(v) => v.ty.db_depth(),
-        EBoundVar(v) => v.ty.db_depth(),
+        EBoundVar(v) => u32::max(v.idx + 1, v.ty.db_depth()),
         EApp(a, b) => a.db_depth().max(b.db_depth()),
         ELambda(v_ty, e) | EPi(v_ty, e) => {
             // `e`'s depth is decremented here
@@ -418,20 +422,32 @@ impl Expr {
             EType => write!(out, "type"),
             EConst(c) => write!(out, "{}", c.name.name()),
             EVar(v) => write!(out, "{}", v.name.name()),
-            EBoundVar(v) => write!(out, "x{}", (k - v.idx)),
+            EBoundVar(v) => {
+                debug_assert!(v.idx < k);
+                write!(out, "x{}", (k - v.idx - 1))
+            }
             EApp(..) => {
                 let (f, args) = self.unfold_app();
                 write!(out, "(")?;
                 f.pp_(k, out)?;
                 for x in args {
+                    write!(out, " ")?;
                     x.pp_(k, out)?;
                 }
                 write!(out, ")")
             }
             ELambda(ty_x, body) => {
-                write!(out, "(%x{} : ", k)?;
+                write!(out, "(\\x{} : ", k)?;
                 ty_x.pp_(k, out)?;
                 write!(out, ". ")?;
+                body.pp_(k + 1, out)?;
+                write!(out, ")")
+            }
+            EPi(x, body) if !x.is_type() && body.is_closed() => {
+                // TODO: precedence to know whether to print "()"
+                write!(out, "(")?;
+                x.pp_(k, out)?;
+                write!(out, " -> ")?;
                 body.pp_(k + 1, out)?;
                 write!(out, ")")
             }
@@ -738,7 +754,7 @@ impl ExprManager {
                                 function `{:?}` has type `{:?}`, \
                                 argument `{:?}` has type `{:?}`",
                             f,
-                            ty_var_f,
+                            f.ty(),
                             arg,
                             arg.ty()
                         );
@@ -777,9 +793,9 @@ impl ExprManager {
                 }
             }
             EPi(v_ty, body) => {
-                debug_assert!(v_ty.is_type()); // no need to substitute there
+                let v_ty = self.subst1_(v_ty, k, u);
                 let body2 = self.subst1_(body, k + 1, u);
-                self.hashcons_(EPi(v_ty.clone(), body2))
+                self.hashcons_(EPi(v_ty, body2))
             }
             EVar(v) => {
                 let v2 = v.map_ty(|ty| self.subst1_(ty, k, u));
@@ -815,7 +831,7 @@ impl ExprManager {
                 self.hashcons_(ELambda(v_ty2, body2))
             }
             EPi(v_ty, body) => {
-                debug_assert!(v_ty.is_type()); // no need to substitute there
+                let v_ty = self.shift_(v_ty, k);
                 let body2 = self.shift_(body, k + 1);
                 self.hashcons_(EPi(v_ty.clone(), body2))
             }
