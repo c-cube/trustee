@@ -1,9 +1,6 @@
 //! Parser and interpreter for [OpenTheory](http://www.gilith.com/opentheory/article.html)
 
-use {
-    crate::kernel_of_trust as k, crate::*, std::fmt, std::io::BufRead,
-    std::rc::Rc,
-};
+use {crate::kernel_of_trust as k, crate::*, std::fmt, std::io::BufRead, std::rc::Rc};
 
 #[derive(Clone, Eq, PartialEq, Hash)]
 struct Name {
@@ -15,9 +12,7 @@ struct Obj(Rc<ObjImpl>);
 
 /// A type operator, i.e. a type builder.
 #[derive(Clone)]
-struct OTypeOp(
-    Rc<dyn Fn(&mut k::ExprManager, Vec<Expr>) -> Result<Expr, String>>,
-);
+struct OTypeOp(Rc<dyn Fn(&mut k::ExprManager, Vec<Expr>) -> Result<Expr, String>>);
 
 impl fmt::Debug for Obj {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -33,9 +28,7 @@ impl fmt::Debug for OTypeOp {
 
 /// A constant, parametrized by its type.
 #[derive(Clone)]
-pub struct OConst(
-    Rc<dyn Fn(&mut k::ExprManager, Expr) -> Result<Expr, String>>,
-);
+pub struct OConst(Rc<dyn Fn(&mut k::ExprManager, Expr) -> Result<Expr, String>>);
 
 impl fmt::Debug for OConst {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
@@ -108,7 +101,9 @@ impl Name {
         let mut toks: Vec<&str> = s.split(".").collect();
         let base = toks.pop().unwrap().to_string();
         let pre = toks.into_iter().map(|s| s.to_string()).collect();
-        Some(Name { ptr: Rc::new((pre, base)) })
+        Some(Name {
+            ptr: Rc::new((pre, base)),
+        })
     }
 }
 
@@ -152,8 +147,17 @@ impl<'a> VM<'a> {
 
     /// Turn into an article.
     pub fn into_article(self) -> Article {
-        let VM { defs, assumptions, theorems, .. } = self;
-        Article { defs, assumptions, theorems }
+        let VM {
+            defs,
+            assumptions,
+            theorems,
+            ..
+        } = self;
+        Article {
+            defs,
+            assumptions,
+            theorems,
+        }
     }
 
     pub fn article_snapshot(&self) -> Article {
@@ -300,17 +304,16 @@ impl<'a> VM<'a> {
         })
     }
     fn cons(&mut self) -> Result<(), String> {
-        let a =
-            self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
-                O::List(ref mut v) => {
-                    v.insert(0, b);
-                    Ok(a)
-                }
-                _ => Err(format!(
-                    "expected a as second arg list, got {:?}, {:?}",
-                    a, b
-                )),
-            })?;
+        let a = self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
+            O::List(ref mut v) => {
+                v.insert(0, b);
+                Ok(a)
+            }
+            _ => Err(format!(
+                "expected a as second arg list, got {:?}, {:?}",
+                a, b
+            )),
+        })?;
         self.push(a);
         Ok(())
     }
@@ -350,10 +353,7 @@ impl<'a> VM<'a> {
                     .iter()
                     .map(|x| match &**x {
                         O::Type(a) => Ok(a.clone()),
-                        _ => Err(format!(
-                            "in op type: expected type, got {:?}",
-                            x
-                        )),
+                        _ => Err(format!("in op type: expected type, got {:?}", x)),
                     })
                     .collect();
                 let args = args?;
@@ -397,10 +397,7 @@ impl<'a> VM<'a> {
                         if let Some(d) = vm.defs.get(n) {
                             d.clone()
                         } else {
-                            return Err(format!(
-                                "const: undefined constant {:?}",
-                                n
-                            ));
+                            return Err(format!("const: undefined constant {:?}", n));
                         }
                     }
                 };
@@ -432,9 +429,7 @@ impl<'a> VM<'a> {
                 vm.push_obj(O::Var(v));
                 Ok(())
             }
-            _ => {
-                Err(format!("var: expected <type,name>, got {:?}, {:?}", x, y))
-            }
+            _ => Err(format!("var: expected <type,name>, got {:?}, {:?}", x, y)),
         })
     }
     fn var_term(&mut self) -> Result<(), String> {
@@ -504,9 +499,8 @@ impl<'a> VM<'a> {
             if line.starts_with("#") {
                 continue;
             } else if line.starts_with("\"") {
-                let name = Name::parse(line).ok_or_else(|| {
-                    format!("cannot parse name from line {:?}", line)
-                })?;
+                let name = Name::parse(line)
+                    .ok_or_else(|| format!("cannot parse name from line {:?}", line))?;
                 self.push_obj(ObjImpl::Name(name))
             } else if let Ok(i) = line.parse::<usize>() {
                 self.push_obj(ObjImpl::Int(i))

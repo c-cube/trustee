@@ -142,7 +142,10 @@ impl Var {
 
     /// Make a free variable.
     pub fn from_str(name: &str, ty: Type) -> Var {
-        Var { name: Symbol::from_str(name), ty }
+        Var {
+            name: Symbol::from_str(name),
+            ty,
+        }
     }
 
     /// Transform the type using `f`.
@@ -150,7 +153,10 @@ impl Var {
     where
         F: FnOnce(&Expr) -> Expr,
     {
-        Var { name: self.name.clone(), ty: f(&self.ty) }
+        Var {
+            name: self.name.clone(),
+            ty: f(&self.ty),
+        }
     }
 }
 
@@ -159,7 +165,10 @@ impl BoundVarContent {
     where
         F: FnOnce(&Expr) -> Expr,
     {
-        BoundVarContent { idx: self.idx, ty: f(&self.ty) }
+        BoundVarContent {
+            idx: self.idx,
+            ty: f(&self.ty),
+        }
     }
 }
 
@@ -199,11 +208,18 @@ impl ExprView {
     {
         match self {
             EType | EKind => self.clone(),
-            EConst(c) => EConst(ConstContent { ty: f(&c.ty, k), ..c.clone() }),
-            EVar(v) => EVar(Var { ty: f(&v.ty, k), ..v.clone() }),
-            EBoundVar(v) => {
-                EBoundVar(BoundVarContent { ty: f(&v.ty, k), ..v.clone() })
-            }
+            EConst(c) => EConst(ConstContent {
+                ty: f(&c.ty, k),
+                ..c.clone()
+            }),
+            EVar(v) => EVar(Var {
+                ty: f(&v.ty, k),
+                ..v.clone()
+            }),
+            EBoundVar(v) => EBoundVar(BoundVarContent {
+                ty: f(&v.ty, k),
+                ..v.clone()
+            }),
             EApp(a, b) => EApp(f(a, k), f(b, k)),
             EPi(ty_a, b) => EPi(f(ty_a, k), f(b, k + 1)),
             ELambda(ty_a, b) => ELambda(f(ty_a, k), f(b, k + 1)),
@@ -247,7 +263,10 @@ impl<'a> Iterator for FreeVars<'a> {
 
 impl<'a> FreeVars<'a> {
     fn new() -> Self {
-        FreeVars { seen: fnv::new_set_with_cap(16), st: vec![] }
+        FreeVars {
+            seen: fnv::new_set_with_cap(16),
+            st: vec![],
+        }
     }
 
     /// Add an expression to explore
@@ -403,7 +422,11 @@ impl Expr {
     // helper for building expressions
     fn make_(v: ExprView, ty: Option<Expr>) -> Self {
         let db_depth = compute_db_depth(&v);
-        Expr(Arc::new(ExprImpl { view: v, ty, db_depth }))
+        Expr(Arc::new(ExprImpl {
+            view: v,
+            ty,
+            db_depth,
+        }))
     }
 
     // pretty print
@@ -605,7 +628,10 @@ impl ExprManager {
         let bool = {
             let name = Symbol::from_str("Bool");
             em.hashcons_builtin_(
-                EConst(ConstContent { name, ty: ty.clone() }),
+                EConst(ConstContent {
+                    name,
+                    ty: ty.clone(),
+                }),
                 Some(ty.clone()),
             )
         };
@@ -856,10 +882,7 @@ impl ExprManager {
             EBoundVar(v) => {
                 // shift bound var
                 let ty = self.shift_(&v.ty, k);
-                self.hashcons_(EBoundVar(BoundVarContent {
-                    idx: v.idx + k,
-                    ty,
-                }))
+                self.hashcons_(EBoundVar(BoundVarContent { idx: v.idx + k, ty }))
             }
         }
     }
@@ -897,8 +920,7 @@ impl ExprManager {
                             }
                             ev => {
                                 // shallow map + cache
-                                let uv =
-                                    ev.map(|sub, k| self.replace(sub, k), k);
+                                let uv = ev.map(|sub, k| self.replace(sub, k), k);
                                 let u = self.em.hashcons_(uv);
                                 self.cache.insert(t.clone(), u.clone());
                                 u
@@ -909,8 +931,11 @@ impl ExprManager {
             }
         }
 
-        let mut replace =
-            Replace { cache: fnv::new_table_with_cap(32), em: self, subst };
+        let mut replace = Replace {
+            cache: fnv::new_table_with_cap(32),
+            em: self,
+            subst,
+        };
         replace.replace(t, 0)
     }
 
@@ -1077,7 +1102,10 @@ impl ExprManager {
                 &s, &ty
             );
         }
-        let c = self.hashcons_(EConst(ConstContent { name: s.clone(), ty }));
+        let c = self.hashcons_(EConst(ConstContent {
+            name: s.clone(),
+            ty,
+        }));
         self.add_const_(c.clone());
         c
     }
@@ -1097,10 +1125,14 @@ impl ExprManager {
     ///
     /// Can fail if the conclusions don't match properly.
     pub fn thm_trans(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
-        let (a, b) =
-            th1.concl().unfold_eq().ok_or("trans: th1 must be an equation")?;
-        let (b2, c) =
-            th2.concl().unfold_eq().ok_or("trans: th2 must be an equation")?;
+        let (a, b) = th1
+            .concl()
+            .unfold_eq()
+            .ok_or("trans: th1 must be an equation")?;
+        let (b2, c) = th2
+            .concl()
+            .unfold_eq()
+            .ok_or("trans: th2 must be an equation")?;
         if b != b2 {
             Err("trans: th1 and th2's conclusions do not align")?;
         }
@@ -1113,14 +1145,16 @@ impl ExprManager {
 
     /// `congr (F1 |- f=g) (F2 |- t=u)` is `F1, F2 |- f t=g u`
     pub fn thm_congr(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
-        let (f, g) =
-            th1.0.concl.unfold_eq().ok_or_else(|| {
-                format!("congr: {:?} must be an equality", th1)
-            })?;
-        let (t, u) =
-            th2.0.concl.unfold_eq().ok_or_else(|| {
-                format!("congr: {:?} must be an equality", th2)
-            })?;
+        let (f, g) = th1
+            .0
+            .concl
+            .unfold_eq()
+            .ok_or_else(|| format!("congr: {:?} must be an equality", th1))?;
+        let (t, u) = th2
+            .0
+            .concl
+            .unfold_eq()
+            .ok_or_else(|| format!("congr: {:?} must be an equality", th2))?;
         let ft = self.mk_app(f.clone(), t.clone());
         let gu = self.mk_app(g.clone(), u.clone());
         let eq = self.mk_eq_app(ft, gu);
@@ -1179,11 +1213,14 @@ impl ExprManager {
     /// where `a` and `a'` are alpha equivalent.
     pub fn thm_mp(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
         let th2_c = &th2.0.concl;
-        let (a, b) = th2_c.unfold_imply().ok_or_else(|| {
-            format!("mp: second theorem {:?} must be an implication", th2)
-        })?;
+        let (a, b) = th2_c
+            .unfold_imply()
+            .ok_or_else(|| format!("mp: second theorem {:?} must be an implication", th2))?;
         if &th1.0.concl != a {
-            let msg =format!("mp: conclusion of {:?} does not match LHS of implication of {:?}", th1, th2);
+            let msg = format!(
+                "mp: conclusion of {:?} does not match LHS of implication of {:?}",
+                th1, th2
+            );
             return Err(msg);
         }
         let hyps = hyps_merge(th1, th2);
@@ -1200,9 +1237,9 @@ impl ExprManager {
             .ok_or_else(|| {
                 //Some((a, b)) if a.ty() == &self.builtins_().bool => (a, b),
                 format!(
-                "bool-eq: {:?} should have a boleean equallity as conclusion",
-                th2
-            )
+                    "bool-eq: {:?} should have a boleean equallity as conclusion",
+                    th2
+                )
             })?;
         if a != &th1.0.concl {
             return Err(format!(
@@ -1229,12 +1266,12 @@ impl ExprManager {
     /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
     /// Fails if the term is not a beta-redex.
     pub fn thm_beta_conv(&mut self, e: &Expr) -> Result<Thm, String> {
-        let (f, arg) = e.as_app().ok_or_else(|| {
-            format!("beta-conv: expect an application, not {:?}", e)
-        })?;
-        let (ty, bod) = f.as_lambda().ok_or_else(|| {
-            format!("beta-conv: expect a lambda, not {:?}", f)
-        })?;
+        let (f, arg) = e
+            .as_app()
+            .ok_or_else(|| format!("beta-conv: expect an application, not {:?}", e))?;
+        let (ty, bod) = f
+            .as_lambda()
+            .ok_or_else(|| format!("beta-conv: expect a lambda, not {:?}", f))?;
         debug_assert_eq!(ty, arg.ty()); // should already be enforced by typing.
 
         let lhs = e.clone();
@@ -1247,13 +1284,16 @@ impl ExprManager {
     /// with a closed type,
     /// returns a theorem `|- x=t` where `x` is now a constant, along with
     /// the constant `x`.
-    pub fn thm_new_basic_definition(
-        &mut self,
-        e: Expr,
-    ) -> Result<(Thm, Expr), String> {
-        let (x, rhs) = e.unfold_eq().and_then(|(x,rhs)| {
-            x.as_var().map(|x| (x,rhs))
-        }).ok_or_else(|| format!("new definition: {:?} should be an equation `x = rhs` with rhs closed", e))?;
+    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Expr), String> {
+        let (x, rhs) = e
+            .unfold_eq()
+            .and_then(|(x, rhs)| x.as_var().map(|x| (x, rhs)))
+            .ok_or_else(|| {
+                format!(
+                    "new definition: {:?} should be an equation `x = rhs` with rhs closed",
+                    e
+                )
+            })?;
         if !rhs.is_closed() {
             Err(format!("rhs {:?} should be closed", rhs))?;
         }
