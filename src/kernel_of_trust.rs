@@ -993,26 +993,6 @@ impl ExprManager {
     }
 
     /// Make a lambda term by abstracting on `v`.
-    ///
-    ///
-    /// # Examples
-    /// ```
-    /// # use trustee::*;
-    /// # let mut em = ExprManager::new();
-    /// let b = em.mk_bool();
-    /// let b2b = em.mk_arrow(b.clone(), b.clone());
-    /// let p = em.mk_var_str("p", b2b);
-    /// let x = Var::from_str("x", b.clone());
-    /// let ex = em.mk_var(x.clone());
-    /// let body = em.mk_app(p, ex);
-    /// let f = em.mk_lambda_abs(x, body);
-    /// assert!(match f.view() { ELambda(..) => true, _ => false });
-    /// assert!(f.is_closed());
-    /// let (ty_args, ty_body) = f.ty().unfold_pi();
-    /// assert_eq!(ty_args.len(), 1);
-    /// assert_eq!(ty_args[0], &em.mk_bool());
-    /// assert_eq!(ty_body, &em.mk_bool());
-    /// ```
     pub fn mk_lambda_abs(&mut self, v: Var, body: Expr) -> Expr {
         let v_ty = &v.ty;
         if !v_ty.is_closed() {
