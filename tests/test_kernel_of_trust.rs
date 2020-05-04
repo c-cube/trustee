@@ -59,7 +59,7 @@ fn test_lambda() {
     let x = Var::from_str("x", b.clone());
     let ex = em.mk_var(x.clone());
     let body = em.mk_app(p, ex);
-    let f = em.mk_lambda_abs(x, body);
+    let f = em.mk_lambda(x, body);
     assert!(match f.view() {
         ELambda(..) => true,
         _ => false,

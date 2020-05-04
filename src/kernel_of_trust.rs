@@ -713,7 +713,7 @@ impl ExprManager {
                 let db0 = self.mk_bound_var(0, ty.clone());
                 let arr = self.mk_arrow(db0.clone(), bool.clone());
                 let arr = self.mk_arrow(db0.clone(), arr);
-                let ty_eq = self.mk_pi(ty.clone(), arr);
+                let ty_eq = self.mk_pi_(ty.clone(), arr);
                 let name = Symbol::from_str("=");
                 let c = self.mk_new_const(name, ty_eq);
                 self.eq = Some(c.clone());

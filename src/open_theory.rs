@@ -217,7 +217,7 @@ impl<'a> VM<'a> {
     fn abs_term(&mut self) -> Result<(), String> {
         self.pop2("abs_term", |vm, x, y| match (&*x, &*y) {
             (O::Term(body), O::Var(v)) => {
-                let e = vm.em.mk_lambda_abs(v.clone(), body.clone());
+                let e = vm.em.mk_lambda(v.clone(), body.clone());
                 vm.push_obj(O::Term(e));
                 Ok(())
             }
