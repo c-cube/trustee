@@ -91,9 +91,6 @@ impl Name {
     pub fn base(&self) -> &str {
         &self.ptr.1
     }
-    pub fn prefix(&self) -> &[String] {
-        &self.ptr.0[..]
-    }
 
     /// Number of components in the prefix.
     pub fn len_pre(&self) -> usize {
@@ -267,7 +264,7 @@ impl<'a> VM<'a> {
     }
     fn type_op(&mut self) -> Result<(), String> {
         self.pop1("type op", |vm, o| match &*o {
-            O::Name(n) if n.ptr.0.len() == 0 && n.ptr.1 == "bool" => {
+            O::Name(n) if n.len_pre() == 0 && n.base() == "bool" => {
                 let tyop = |em: &mut ExprManager, args: Vec<Expr>| {
                     if args.len() != 0 {
                         Err(format!("bool takes no arguments"))
@@ -277,7 +274,7 @@ impl<'a> VM<'a> {
                 };
                 Ok(vm.push_obj(O::TypeOp(n.clone(), OTypeOp(Rc::new(tyop)))))
             }
-            O::Name(n) if n.ptr.0.len() == 0 && n.ptr.1 == "->" => {
+            O::Name(n) if n.len_pre() == 0 && n.base() == "->" => {
                 let tyop = |em: &mut ExprManager, mut args: Vec<Expr>| {
                     if args.len() != 2 {
                         return Err(format!("-> takes 2 arguments"));

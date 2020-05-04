@@ -43,7 +43,7 @@ pub struct Expr(Arc<ExprImpl>);
 pub type Type = Expr;
 
 /// The public view of an expression's root.
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum ExprView {
     EType,
     EKind,
@@ -76,13 +76,13 @@ struct ExprImpl {
     ty: Option<Expr>,
 }
 
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct ConstContent {
     name: Symbol,
     ty: Expr,
 }
 
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct BoundVarContent {
     idx: DbIndex,
     ty: Expr,
@@ -112,8 +112,8 @@ impl Ord for Expr {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // simple pointer comparison
         std::cmp::Ord::cmp(
-            &(self.0.deref() as *const ExprImpl),
-            &(other.0.deref() as *const _),
+            &(self.0.as_ref() as *const ExprImpl),
+            &(other.0.as_ref() as *const _),
         )
     }
 }
@@ -121,10 +121,11 @@ impl Ord for Expr {
 impl std::hash::Hash for Expr {
     fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
         // hash pointer
-        std::ptr::hash(&(self.0.deref() as *const ExprImpl), h)
+        std::ptr::hash(self.0.as_ref() as *const ExprImpl, h)
     }
 }
 
+// used to be able to lookup in the hashconsing map using an `ExprView`
 impl std::borrow::Borrow<ExprView> for Expr {
     fn borrow(&self) -> &ExprView {
         &self.0.view
@@ -423,8 +424,8 @@ impl Expr {
             EConst(c) => write!(out, "{}", c.name.name()),
             EVar(v) => write!(out, "{}", v.name.name()),
             EBoundVar(v) => {
-                debug_assert!(v.idx < k);
-                write!(out, "x{}", (k - v.idx - 1))
+                // we may want to print non closed terms, so we need isize
+                write!(out, "x{}", (k as isize - v.idx as isize - 1))
             }
             EApp(..) => {
                 let (f, args) = self.unfold_app();
@@ -443,10 +444,13 @@ impl Expr {
                 body.pp_(k + 1, out)?;
                 write!(out, ")")
             }
-            EPi(x, body) if !x.is_type() && body.is_closed() => {
+            // TODO: disable
+            EPi(x, body) if false && !x.is_type() && body.is_closed() => {
                 // TODO: precedence to know whether to print "()"
                 write!(out, "(")?;
                 x.pp_(k, out)?;
+                write!(out, ":")?;
+                x.ty().pp_(k, out)?;
                 write!(out, " -> ")?;
                 body.pp_(k + 1, out)?;
                 write!(out, ")")
@@ -454,14 +458,16 @@ impl Expr {
             EPi(x, body) => {
                 write!(out, "(Πx{}", k)?;
                 if !x.is_type() {
-                    write!(out, ":")?;
+                    write!(out, " : ")?;
                     x.pp_(k, out)?;
                 }
                 write!(out, ". ")?;
                 body.pp_(k + 1, out)?;
                 write!(out, ")")
             }
-        }
+        }?;
+        write!(out, "/{:?}", self.0.as_ref() as *const _)?; // pp pointer
+        Ok(())
     }
 }
 
@@ -551,7 +557,7 @@ impl fmt::Debug for Thm {
 /// Global manager for expressions, used to implement perfect sharing, allocating
 /// new terms, etc.
 pub struct ExprManager {
-    tbl: fnv::FnvHashMap<Expr, Expr>,
+    tbl: fnv::FnvHashMap<ExprView, Expr>,
     builtins: Option<ExprBuiltins>,
     consts: fnv::FnvHashMap<Symbol, Expr>,
     eq: Option<Expr>,
@@ -603,7 +609,9 @@ impl ExprManager {
         };
         // insert initial builtins
         let kind = em.hashcons_builtin_(EKind, None);
+        em.tbl.insert(kind.view().clone(), kind.clone());
         let ty = em.hashcons_builtin_(EType, Some(kind.clone()));
+        em.tbl.insert(ty.view().clone(), ty.clone());
         let bool = {
             let name = Symbol::from_str("Bool");
             em.hashcons_builtin_(
@@ -627,23 +635,34 @@ impl ExprManager {
         match tbl.get(&ev) {
             Some(v) => v.clone(),
             None => {
-                // need to insert the term, so first we need to compute its type.
+                // need to use `self` to build the type, so drop `tbl` first.
                 drop(tbl);
 
                 // every n cycles, do a `cleanup`
                 // TODO: maybe if last cleanups were ineffective, increase n,
                 // otherwise decrease n (down to some min value)
                 if self.next_cleanup == 0 {
+                    eprintln!("expr.hashcons: cleanup"); // TODO: comment, or use callback
                     self.next_cleanup = CLEANUP_PERIOD;
                     self.cleanup();
+                } else {
+                    self.next_cleanup -= 1;
                 }
 
+                // need to insert the term, so first we need to compute its type.
                 let ty = self.compute_ty_(&ev);
+                let key = ev.clone();
                 let e = Expr::make_(ev, ty);
+                //#[rustfmt::skip]
+                //eprintln!("insert.expr.hashcons {:?} at {:?}", &e, e.0.as_ref() as *const _);
+                //eprintln!("ev mem: {}", self.tbl.contains_key(&ev2));
+                //eprintln!("btw table is {:#?}", &self.tbl);
+
                 // lock table, again, but this time we'll write to it.
                 // invariant: computing the type doesn't insert `e` in the table.
                 let tbl = &mut self.tbl;
-                tbl.insert(e.clone(), e.clone());
+                tbl.insert(key, e.clone());
+                //eprintln!("e.ev mem: {}", self.tbl.contains_key(&e.0.view));
                 e
             }
         }
@@ -654,8 +673,9 @@ impl ExprManager {
         let name = if let EConst(ref c) = e.0.view {
             c.name.clone()
         } else {
-            unreachable!();
+            unreachable!("not a constant: {:?}", e);
         };
+        self.tbl.insert(e.view().clone(), e.clone());
         consts.insert(name, e);
     }
 
@@ -663,7 +683,7 @@ impl ExprManager {
         let tbl = &mut self.tbl;
         debug_assert!(!tbl.contains_key(&ev));
         let e = Expr::make_(ev, ty);
-        tbl.insert(e.clone(), e.clone());
+        tbl.insert(e.view().clone(), e.clone());
         e
     }
 
@@ -729,9 +749,10 @@ impl ExprManager {
             EConst(c) => Some(c.ty.clone()),
             EVar(v) => Some(v.ty.clone()),
             EBoundVar(v) => Some(v.ty.clone()),
-            ELambda(v_ty, e) => {
+            ELambda(v_ty, body) => {
                 // type of `λx:a. t` is `Πx:a. typeof(b)`.
-                Some(self.hashcons_(EPi(v_ty.clone(), e.ty().clone())))
+                let ty_body = body.ty();
+                Some(self.hashcons_(EPi(v_ty.clone(), ty_body.clone())))
             }
             EPi(v_ty, e) => {
                 if !v_ty.is_type() && !v_ty.ty().is_type() {
@@ -752,9 +773,11 @@ impl ExprManager {
                         panic!(
                             "apply: incompatible types: \
                                 function `{:?}` has type `{:?}`, \
+                                expecting arg of type {:?}, \
                                 argument `{:?}` has type `{:?}`",
                             f,
                             f.ty(),
+                            ty_var_f,
                             arg,
                             arg.ty()
                         );
@@ -793,9 +816,9 @@ impl ExprManager {
                 }
             }
             EPi(v_ty, body) => {
-                let v_ty = self.subst1_(v_ty, k, u);
+                let v_ty2 = self.subst1_(v_ty, k, u);
                 let body2 = self.subst1_(body, k + 1, u);
-                self.hashcons_(EPi(v_ty, body2))
+                self.hashcons_(EPi(v_ty2, body2))
             }
             EVar(v) => {
                 let v2 = v.map_ty(|ty| self.subst1_(ty, k, u));
@@ -907,15 +930,15 @@ impl ExprManager {
         // or some kind of fixpoint, since when we remove a term we also
         // decrease its subterms' refcount
 
-        self.tbl.retain(|k, _| {
-            // if `k` (and `v`) are not used anywhere else, they're the only
-            // references and should have a strong count of 2.
-            // This is thread safe as the only way this is 2 is if it's already
+        self.tbl.retain(|_, v| {
+            // if `v` is not used anywhere else, it's the only
+            // references and should have a strong count of 1.
+            // This is thread safe as the only way this is 1 is if it's already
             // not referenced anywhere, and we don't provide any way to produce
             // a weak ref.
-            let n = Arc::strong_count(&k.0);
-            debug_assert!(n >= 2);
-            n > 2
+            let n = Arc::strong_count(&v.0);
+            debug_assert!(n >= 1);
+            n > 1
         })
     }
 
@@ -1027,13 +1050,15 @@ impl ExprManager {
     /// assert_eq!(ty_body, &em.mk_bool());
     /// ```
     pub fn mk_lambda_abs(&mut self, v: Var, body: Expr) -> Expr {
-        let v_ty = v.ty.clone();
+        let v_ty = &v.ty;
         if !v_ty.is_closed() {
-            panic!("mk_abs: var {:?} has non-closed type", &v);
+            panic!("mk_abs: var {:?} has non-closed type {:?}", &v, v_ty);
         }
+        let v_ty = v_ty.clone();
         // replace `v` with `db0` in `body`. This should also take
         // care of shifting the DB as appropriate.
         let db0 = self.mk_bound_var(0, v_ty.clone());
+        let body = self.shift_(&body, 1);
         let body = self.subst(&body, &[(v, db0)]);
         self.mk_lambda(v_ty, body)
     }
