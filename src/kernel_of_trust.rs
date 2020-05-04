@@ -52,8 +52,8 @@ pub use ExprView::*;
 /// Variables are equal iff they have the same name and the same type.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Var {
-    name: Symbol,
-    ty: Expr,
+    pub name: Symbol,
+    pub ty: Expr,
 }
 
 /// The content of an expression.
@@ -456,7 +456,7 @@ impl Expr {
                 write!(out, ")")
             }
         }?;
-        write!(out, "/{:?}", self.0.as_ref() as *const _)?; // pp pointer
+        //write!(out, "/{:?}", self.0.as_ref() as *const _)?; // pp pointer
         Ok(())
     }
 }
@@ -988,12 +988,12 @@ impl ExprManager {
     }
 
     /// Make a lambda term.
-    pub fn mk_lambda(&mut self, ty_var: Type, body: Expr) -> Expr {
+    fn mk_lambda_(&mut self, ty_var: Type, body: Expr) -> Expr {
         self.hashcons_(ELambda(ty_var, body))
     }
 
-    /// Make a lambda term by abstracting on `v`.
-    pub fn mk_lambda_abs(&mut self, v: Var, body: Expr) -> Expr {
+    /// Substitute `v` with db0 in `body`.
+    fn abs_on_(&mut self, v: Var, body: Expr) -> Expr {
         let v_ty = &v.ty;
         if !v_ty.is_closed() {
             panic!("mk_abs: var {:?} has non-closed type {:?}", &v, v_ty);
@@ -1004,12 +1004,54 @@ impl ExprManager {
         let db0 = self.mk_bound_var(0, v_ty.clone());
         let body = self.shift_(&body, 1);
         let body = self.subst(&body, &[(v, db0)]);
-        self.mk_lambda(v_ty, body)
+        body
+    }
+
+    /// Make a lambda term by abstracting on `v`.
+    pub fn mk_lambda(&mut self, v: Var, body: Expr) -> Expr {
+        let v_ty = v.ty.clone();
+        let body = self.abs_on_(v, body);
+        self.mk_lambda_(v_ty, body)
+    }
+
+    /// Bind several variables at once.
+    pub fn mk_lambda_l<I>(&mut self, vars: I, body: Expr) -> Expr
+    where
+        I: DoubleEndedIterator<Item = Var>,
+    {
+        let mut e = body;
+        // TODO: substitute more efficiently (with a stack, rather than one by one)?
+        // right-assoc
+        for v in vars.rev() {
+            e = self.mk_lambda(v, e);
+        }
+        e
     }
 
     /// Make a pi term.
-    pub fn mk_pi(&mut self, ty_var: Expr, body: Expr) -> Expr {
+    fn mk_pi_(&mut self, ty_var: Expr, body: Expr) -> Expr {
         self.hashcons_(EPi(ty_var, body))
+    }
+
+    /// Make a pi term by absracting on `v`.
+    pub fn mk_pi(&mut self, v: Var, body: Expr) -> Expr {
+        let v_ty = v.ty.clone();
+        let body = self.abs_on_(v, body);
+        self.mk_pi_(v_ty, body)
+    }
+
+    /// Bind several variables at once.
+    pub fn mk_pi_l<I>(&mut self, vars: I, body: Expr) -> Expr
+    where
+        I: DoubleEndedIterator<Item = Var>,
+    {
+        let mut e = body;
+        // TODO: substitute more efficiently (with a stack, rather than one by one)?
+        // right-assoc
+        for v in vars.rev() {
+            e = self.mk_pi(v, e);
+        }
+        e
     }
 
     /// Make an arrow `a -> b` term.
@@ -1018,7 +1060,7 @@ impl ExprManager {
     pub fn mk_arrow(&mut self, ty1: Expr, ty2: Expr) -> Expr {
         // need to shift ty2 to account for the binder
         let ty2 = self.shift_(&ty2, 1);
-        self.mk_pi(ty1, ty2)
+        self.mk_pi_(ty1, ty2)
     }
 
     /// Declare a new constant with given name and type.
@@ -1108,8 +1150,8 @@ impl ExprManager {
             th.0.concl
                 .unfold_eq()
                 .ok_or("abs: thm's conclusion should be an equality")?;
-        let lam_t = self.mk_lambda_abs(v.clone(), t.clone());
-        let lam_u = self.mk_lambda_abs(v.clone(), u.clone());
+        let lam_t = self.mk_lambda(v.clone(), t.clone());
+        let lam_u = self.mk_lambda(v.clone(), u.clone());
         let eq = self.mk_eq_app(lam_t, lam_u);
         Ok(Thm::make_(eq, th.0.hyps.clone()))
     }
@@ -1204,8 +1246,11 @@ impl ExprManager {
     /// `new_basic_definition (x=t)` where `x` is a variable and `t` a term
     /// with a closed type,
     /// returns a theorem `|- x=t` where `x` is now a constant, along with
-    /// the constant `x`
-    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<Thm, String> {
+    /// the constant `x`.
+    pub fn thm_new_basic_definition(
+        &mut self,
+        e: Expr,
+    ) -> Result<(Thm, Expr), String> {
         let (x, rhs) = e.unfold_eq().and_then(|(x,rhs)| {
             x.as_var().map(|x| (x,rhs))
         }).ok_or_else(|| format!("new definition: {:?} should be an equation `x = rhs` with rhs closed", e))?;
@@ -1218,8 +1263,9 @@ impl ExprManager {
         }
 
         let c = self.mk_new_const(x.name.clone(), x.ty.clone());
-        let eqn = self.mk_eq_app(c, rhs.clone());
-        Ok(Thm::make_(eqn, vec![]))
+        let eqn = self.mk_eq_app(c.clone(), rhs.clone());
+        let thm = Thm::make_(eqn, vec![]);
+        Ok((thm, c))
     }
 
     /// Create a new axiom `assumptions |- concl`.

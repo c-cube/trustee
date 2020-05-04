@@ -448,7 +448,16 @@ impl<'a> VM<'a> {
         })
     }
     fn define_const(&mut self) -> Result<(), String> {
-        todo!("define_const")
+        self.pop2("define const", |vm, x, y| match (&*x, &*y) {
+            (O::Term(t), O::Name(n)) => {
+                // make a definition `n := t`
+                todo!() // TODO: use utils.thm_new_poly_definition
+            }
+            _ => Err(format!(
+                "define const: expected <term,name>, got {:?}, {:?}",
+                x, y
+            )),
+        })
     }
     fn pop(&mut self) -> Result<(), String> {
         todo!("pop")

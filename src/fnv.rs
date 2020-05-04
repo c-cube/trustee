@@ -32,7 +32,7 @@ impl std::hash::Hasher for FNV {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct FNVBuildHasher;
 impl std::hash::BuildHasher for FNVBuildHasher {
     type Hasher = FNV;
