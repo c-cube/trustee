@@ -10,16 +10,6 @@ pub struct Symbol(Arc<str>);
 
 impl Symbol {
     /// New symbol from this string.
-    ///
-    /// ```
-    /// # use trustee::*;
-    /// let s1 = Symbol::from_str("a");
-    /// let s2 = Symbol::from_str("a");
-    /// let s3 = Symbol::from_str("b");
-    /// assert_eq!(s1, s2);
-    /// assert_ne!(s1, s3);
-    /// assert_eq!(s1.name(), "a");
-    /// ```
     pub fn from_str(s: &str) -> Self {
         let a = Arc::from(s);
         Symbol(a)
@@ -943,13 +933,6 @@ impl ExprManager {
     }
 
     /// The type of types. This has type `self.mk_kind()`.
-    /// ```
-    /// # use trustee::*;
-    /// let mut em = ExprManager::new();
-    /// let ty = em.mk_ty();
-    /// let k = em.mk_kind();
-    /// assert_eq!(&k, ty.ty());
-    /// ```
     pub fn mk_ty(&self) -> Expr {
         self.builtins_().ty.clone()
     }
@@ -957,13 +940,6 @@ impl ExprManager {
     /// The "type" of `type`. This is the only typeless expression.
     ///
     /// Trying to compute this expression's type panics.
-    ///
-    /// ```should_panic
-    /// # use trustee::*;
-    /// let mut em = ExprManager::new();
-    /// let k = em.mk_kind();
-    /// let _ = k.ty();
-    /// ```
     pub fn mk_kind(&self) -> Expr {
         self.builtins_().kind.clone()
     }
@@ -974,18 +950,6 @@ impl ExprManager {
     }
 
     /// Apply `a` to `b`.
-    ///
-    /// ```
-    /// # use trustee::*;
-    /// # let mut em = ExprManager::new();
-    /// let b = em.mk_bool();
-    /// let b2b = em.mk_arrow(b.clone(), b.clone());
-    /// let p = em.mk_var_str("p", b2b);
-    /// let a = em.mk_var_str("a", b);
-    /// let pa = em.mk_app(p, a);
-    /// assert!(match pa.view() { EApp(..) => true, _ => false });
-    /// assert!(pa.is_closed());
-    /// ```
     pub fn mk_app(&mut self, a: Expr, b: Expr) -> Expr {
         self.hashcons_(EApp(a, b))
     }
