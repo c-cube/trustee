@@ -1,6 +1,9 @@
 //! Parser and interpreter for [OpenTheory](http://www.gilith.com/opentheory/article.html)
 
-use {crate::kernel_of_trust as k, crate::*, std::fmt, std::io::BufRead, std::rc::Rc};
+use {
+    crate::kernel_of_trust as k, crate::*, std::fmt, std::io::BufRead,
+    std::rc::Rc,
+};
 
 #[derive(Clone, Eq, PartialEq, Hash)]
 struct Name {
@@ -11,8 +14,13 @@ struct Name {
 struct Obj(Rc<ObjImpl>);
 
 /// A type operator, i.e. a type builder.
-#[derive(Clone)]
-struct OTypeOp(Rc<dyn Fn(&mut k::ExprManager, Vec<Expr>) -> Result<Expr, String>>);
+trait OTypeOp: fmt::Debug {
+    fn apply(
+        &self,
+        em: &mut k::ExprManager,
+        args: Vec<Expr>,
+    ) -> Result<Expr, String>;
+}
 
 impl fmt::Debug for Obj {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -20,20 +28,17 @@ impl fmt::Debug for Obj {
     }
 }
 
+/*
 impl fmt::Debug for OTypeOp {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
         write!(out, "<type op>")
     }
 }
+*/
 
 /// A constant, parametrized by its type.
-#[derive(Clone)]
-pub struct OConst(Rc<dyn Fn(&mut k::ExprManager, Expr) -> Result<Expr, String>>);
-
-impl fmt::Debug for OConst {
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        write!(out, "<const>>")
-    }
+trait OConst: fmt::Debug {
+    fn apply(&self, em: &mut k::ExprManager, e: Expr) -> Result<Expr, String>;
 }
 
 impl std::ops::Deref for Obj {
@@ -49,9 +54,9 @@ enum ObjImpl {
     Int(usize),
     Name(Name),
     List(Vec<Obj>),
-    TypeOp(Name, OTypeOp),
+    TypeOp(Name, Rc<dyn OTypeOp>),
     Type(Expr),
-    Const(Name, OConst),
+    Const(Name, Rc<dyn OConst>),
     Var(Var),
     Term(Expr),
     Thm(Thm),
@@ -101,16 +106,14 @@ impl Name {
         let mut toks: Vec<&str> = s.split(".").collect();
         let base = toks.pop().unwrap().to_string();
         let pre = toks.into_iter().map(|s| s.to_string()).collect();
-        Some(Name {
-            ptr: Rc::new((pre, base)),
-        })
+        Some(Name { ptr: Rc::new((pre, base)) })
     }
 }
 
 /// An article obtained by interpreting a theory file.
 #[derive(Debug)]
 pub struct Article {
-    defs: fnv::FnvHashMap<Name, OConst>,
+    defs: fnv::FnvHashMap<Name, Rc<dyn OConst>>,
     assumptions: Vec<Thm>,
     theorems: Vec<Thm>,
 }
@@ -123,7 +126,7 @@ pub struct VM<'a> {
     em: &'a mut ExprManager,
     ty_vars: fnv::FnvHashMap<String, Var>,
     vars: fnv::FnvHashMap<String, (Var, Var)>, // "x" -> (x, α)
-    defs: fnv::FnvHashMap<Name, OConst>,
+    defs: fnv::FnvHashMap<Name, Rc<dyn OConst>>,
     stack: Vec<Obj>,
     dict: fnv::FnvHashMap<usize, Obj>,
     assumptions: Vec<Thm>,
@@ -147,17 +150,8 @@ impl<'a> VM<'a> {
 
     /// Turn into an article.
     pub fn into_article(self) -> Article {
-        let VM {
-            defs,
-            assumptions,
-            theorems,
-            ..
-        } = self;
-        Article {
-            defs,
-            assumptions,
-            theorems,
-        }
+        let VM { defs, assumptions, theorems, .. } = self;
+        Article { defs, assumptions, theorems }
     }
 
     pub fn article_snapshot(&self) -> Article {
@@ -267,28 +261,48 @@ impl<'a> VM<'a> {
         Ok(())
     }
     fn type_op(&mut self) -> Result<(), String> {
+        // builder for bool
+        #[derive(Debug, Clone)]
+        struct TyOpBool;
+        impl OTypeOp for TyOpBool {
+            fn apply(
+                &self,
+                em: &mut ExprManager,
+                args: Vec<Expr>,
+            ) -> Result<Expr, String> {
+                if args.len() != 0 {
+                    Err(format!("bool takes no arguments"))
+                } else {
+                    Ok(em.mk_bool())
+                }
+            }
+        };
+
+        // builder for arrow
+        #[derive(Debug, Clone)]
+        struct TyOpArrow;
+        impl OTypeOp for TyOpArrow {
+            fn apply(
+                &self,
+                em: &mut ExprManager,
+                mut args: Vec<Expr>,
+            ) -> Result<Expr, String> {
+                if args.len() != 2 {
+                    return Err(format!("-> takes 2 arguments"));
+                };
+                let ty2 = args.pop().unwrap();
+                let ty1 = args.pop().unwrap();
+                debug_assert!(args.is_empty());
+                Ok(em.mk_arrow(ty1, ty2))
+            }
+        }
+
         self.pop1("type op", |vm, o| match &*o {
             O::Name(n) if n.len_pre() == 0 && n.base() == "bool" => {
-                let tyop = |em: &mut ExprManager, args: Vec<Expr>| {
-                    if args.len() != 0 {
-                        Err(format!("bool takes no arguments"))
-                    } else {
-                        Ok(em.mk_bool())
-                    }
-                };
-                Ok(vm.push_obj(O::TypeOp(n.clone(), OTypeOp(Rc::new(tyop)))))
+                Ok(vm.push_obj(O::TypeOp(n.clone(), Rc::new(TyOpBool))))
             }
             O::Name(n) if n.len_pre() == 0 && n.base() == "->" => {
-                let tyop = |em: &mut ExprManager, mut args: Vec<Expr>| {
-                    if args.len() != 2 {
-                        return Err(format!("-> takes 2 arguments"));
-                    };
-                    let ty2 = args.pop().unwrap();
-                    let ty1 = args.pop().unwrap();
-                    debug_assert!(args.is_empty());
-                    Ok(em.mk_arrow(ty1, ty2))
-                };
-                Ok(vm.push_obj(O::TypeOp(n.clone(), OTypeOp(Rc::new(tyop)))))
+                Ok(vm.push_obj(O::TypeOp(n.clone(), Rc::new(TyOpArrow))))
             }
             _ => Err(format!("unknown operator {:?}", o)),
         })
@@ -304,16 +318,17 @@ impl<'a> VM<'a> {
         })
     }
     fn cons(&mut self) -> Result<(), String> {
-        let a = self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
-            O::List(ref mut v) => {
-                v.insert(0, b);
-                Ok(a)
-            }
-            _ => Err(format!(
-                "expected a as second arg list, got {:?}, {:?}",
-                a, b
-            )),
-        })?;
+        let a =
+            self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
+                O::List(ref mut v) => {
+                    v.insert(0, b);
+                    Ok(a)
+                }
+                _ => Err(format!(
+                    "expected a as second arg list, got {:?}, {:?}",
+                    a, b
+                )),
+            })?;
         self.push(a);
         Ok(())
     }
@@ -353,11 +368,14 @@ impl<'a> VM<'a> {
                     .iter()
                     .map(|x| match &**x {
                         O::Type(a) => Ok(a.clone()),
-                        _ => Err(format!("in op type: expected type, got {:?}", x)),
+                        _ => Err(format!(
+                            "in op type: expected type, got {:?}",
+                            x
+                        )),
                     })
                     .collect();
                 let args = args?;
-                let r = (*f.0)(&mut vm.em, args)?;
+                let r = (&**f as &dyn OTypeOp).apply(&mut vm.em, args)?;
                 vm.push_obj(O::Type(r));
                 Ok(())
             }
@@ -368,20 +386,27 @@ impl<'a> VM<'a> {
         })
     }
     fn const_(&mut self) -> Result<(), String> {
+        #[derive(Debug)]
+        struct ConstEq;
+        impl OConst for ConstEq {
+            fn apply(
+                &self,
+                em: &mut ExprManager,
+                ty: Expr,
+            ) -> Result<Expr, String> {
+                let args = ty.unfold_pi().0;
+                if args.len() != 2 {
+                    Err(format!("= cannot take type {:?}", ty))?
+                }
+                let e = em.mk_eq();
+                Ok(em.mk_app(e, args[0].clone()))
+            }
+        }
+
         self.pop1("const", |vm, o| match &*o {
             O::Name(n) => {
                 let oc = match n.base() {
-                    "=" if n.len_pre() == 0 => {
-                        let oc = |em: &mut ExprManager, ty: Expr| {
-                            let args = ty.unfold_pi().0;
-                            if args.len() != 2 {
-                                Err(format!("= cannot take type {:?}", ty))?
-                            }
-                            let e = em.mk_eq();
-                            Ok(em.mk_app(e, args[0].clone()))
-                        };
-                        OConst(Rc::new(oc))
-                    }
+                    "=" if n.len_pre() == 0 => Rc::new(ConstEq),
                     "select" if n.len_pre() == 0 => {
                         todo!("select")
                         /* TODO: generate the select constant
@@ -397,7 +422,10 @@ impl<'a> VM<'a> {
                         if let Some(d) = vm.defs.get(n) {
                             d.clone()
                         } else {
-                            return Err(format!("const: undefined constant {:?}", n));
+                            return Err(format!(
+                                "const: undefined constant {:?}",
+                                n
+                            ));
                         }
                     }
                 };
@@ -411,12 +439,12 @@ impl<'a> VM<'a> {
         self.pop2("const term", |vm, x, y| match (&*x, &*y) {
             (O::Type(ty), O::Const(_, c)) => {
                 // apply constant to type
-                let e = (*c.0)(vm.em, ty.clone())?;
+                let e = (&**c as &dyn OConst).apply(vm.em, ty.clone())?;
                 vm.push_obj(O::Term(e));
                 Ok(())
             }
             _ => Err(format!(
-                "const_term: expected <type,conts>, got {:?}, {:?}",
+                "const_term: expected <type,const>, got {:?}, {:?}",
                 x, y
             )),
         })
@@ -429,7 +457,9 @@ impl<'a> VM<'a> {
                 vm.push_obj(O::Var(v));
                 Ok(())
             }
-            _ => Err(format!("var: expected <type,name>, got {:?}, {:?}", x, y)),
+            _ => {
+                Err(format!("var: expected <type,name>, got {:?}, {:?}", x, y))
+            }
         })
     }
     fn var_term(&mut self) -> Result<(), String> {
@@ -443,10 +473,70 @@ impl<'a> VM<'a> {
         })
     }
     fn define_const(&mut self) -> Result<(), String> {
+        #[derive(Debug)]
+        struct CustomConst {
+            n: Name,
+            c: Expr,
+            c_ty_vars: Expr, // c applied to type variables
+            ty_vars: Vec<Var>,
+        }
+
+        impl OConst for CustomConst {
+            fn apply(
+                &self,
+                em: &mut ExprManager,
+                ty: Expr,
+            ) -> Result<Expr, String> {
+                let subst =
+                    utils::unify(&self.c_ty_vars, &ty).ok_or_else(|| {
+                        format!(
+                            "unification failed\nbetween {:?} and {:?}\n\
+                            when applying constant {:?}",
+                            self.c_ty_vars, ty, self.n
+                        )
+                    })?;
+                let vars: Vec<Expr> = self
+                    .ty_vars
+                    .iter()
+                    .map(|v| match subst.find_rec(&v) {
+                        Some(e) => e.clone(),
+                        None => em.mk_var(v.clone()),
+                    })
+                    .collect();
+                let t = em.mk_app_l(self.c.clone(), &vars);
+                Ok(t)
+            }
+        }
+
         self.pop2("define const", |vm, x, y| match (&*x, &*y) {
-            (O::Term(t), O::Name(n)) => {
+            (O::Term(rhs), O::Name(n)) => {
                 // make a definition `n := t`
-                todo!() // TODO: use utils.thm_new_poly_definition
+                let (thm, c, ty_vars) = utils::thm_new_poly_definition(
+                    &mut vm.em,
+                    &n.to_string(),
+                    rhs.clone(),
+                )?;
+                eprintln!(
+                    "define const {:?} with thm {:?} and vars {:?}",
+                    n, thm, ty_vars
+                );
+                // type of `c` applied to `vars`
+                let e_vars: Vec<_> =
+                    ty_vars.iter().cloned().map(|v| vm.em.mk_var(v)).collect();
+                let app = vm.em.mk_app_l(c.clone(), &e_vars);
+                let c_ty_vars = app.ty().clone();
+                // now build the constant building closure
+                let c = Rc::new(CustomConst {
+                    c: c.clone(),
+                    ty_vars,
+                    c_ty_vars,
+                    n: n.clone(),
+                });
+                // define and push
+                vm.defs.insert(n.clone(), c.clone());
+                vm.push_obj(O::Const(n.clone(), c));
+                vm.push_obj(O::Thm(thm));
+                Ok(())
             }
             _ => Err(format!(
                 "define const: expected <term,name>, got {:?}, {:?}",
@@ -455,10 +545,23 @@ impl<'a> VM<'a> {
         })
     }
     fn pop(&mut self) -> Result<(), String> {
-        todo!("pop")
+        if self.stack.pop().is_some() {
+            Ok(())
+        } else {
+            Err("pop: empty stack".to_string())
+        }
     }
     fn remove(&mut self) -> Result<(), String> {
-        todo!("remove")
+        self.pop1("remove", |vm, o| match &*o {
+            O::Int(n) => {
+                let o = vm.dict.remove(n).ok_or_else(|| {
+                    format!("remove: key {:?} not present", n)
+                })?;
+                vm.push(o);
+                Ok(())
+            }
+            _ => Err(format!("remove: expected int, not {:?}", o)),
+        })
     }
     fn thm(&mut self) -> Result<(), String> {
         todo!("thm")
@@ -499,8 +602,9 @@ impl<'a> VM<'a> {
             if line.starts_with("#") {
                 continue;
             } else if line.starts_with("\"") {
-                let name = Name::parse(line)
-                    .ok_or_else(|| format!("cannot parse name from line {:?}", line))?;
+                let name = Name::parse(line).ok_or_else(|| {
+                    format!("cannot parse name from line {:?}", line)
+                })?;
                 self.push_obj(ObjImpl::Name(name))
             } else if let Ok(i) = line.parse::<usize>() {
                 self.push_obj(ObjImpl::Int(i))
