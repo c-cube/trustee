@@ -16,6 +16,7 @@ pub fn thm_new_poly_definition(
     rhs: Expr,
 ) -> Result<(Thm, Expr, Vec<Var>), String> {
     let mut vars_ty_rhs: Vec<Var> = rhs.ty().free_vars().cloned().collect();
+    eprintln!("vars_of_ty({:?}) = {:?}", &rhs, &vars_ty_rhs);
     vars_ty_rhs.sort_unstable();
     vars_ty_rhs.dedup();
 
@@ -38,6 +39,7 @@ pub fn thm_new_poly_definition(
 
 // TODO: use binary search?
 /// A substitution obtained by unification.
+#[derive(Debug, Clone)]
 pub struct UnifySubst<'a>(Vec<(&'a Var, &'a Expr)>);
 
 impl<'a> UnifySubst<'a> {
@@ -154,13 +156,13 @@ impl<'a> UnifySt<'a> {
                     self.add_pair(v1.ty(), v2.ty())
                 }
                 (EVar(v), _) => {
-                    if self.occur_check(v, e2) {
+                    if !e2.is_closed() || self.occur_check(v, e2) {
                         break false;
                     }
                     self.subst.add_(v, e2);
                 }
                 (_, EVar(v)) => {
-                    if self.occur_check(v, e1) {
+                    if !e1.is_closed() || self.occur_check(v, e1) {
                         break false;
                     }
                     self.subst.add_(v, e1)

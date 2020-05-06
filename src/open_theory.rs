@@ -490,11 +490,15 @@ impl<'a> VM<'a> {
                 let subst =
                     utils::unify(&self.c_ty_vars, &ty).ok_or_else(|| {
                         format!(
-                            "unification failed\nbetween {:?} and {:?}\n\
+                            "unification failed\n  between {:?} and {:?}\n  \
                             when applying constant {:?}",
                             self.c_ty_vars, ty, self.n
                         )
                     })?;
+                eprintln!(
+                    "unified:\n  between {:?} and {:?}\n  yields {:?}",
+                    self.c_ty_vars, ty, subst
+                );
                 let vars: Vec<Expr> = self
                     .ty_vars
                     .iter()
@@ -504,6 +508,7 @@ impl<'a> VM<'a> {
                     })
                     .collect();
                 let t = em.mk_app_l(self.c.clone(), &vars);
+                eprintln!("result constant is {:?}", &t);
                 Ok(t)
             }
         }

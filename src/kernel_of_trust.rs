@@ -243,8 +243,7 @@ impl<'a> Iterator for FreeVars<'a> {
                     self.st.push(a);
                     self.st.push(b);
                 }
-                EPi(_, body) => self.st.push(body),
-                ELambda(ty, body) => {
+                EPi(ty, body) | ELambda(ty, body) => {
                     self.st.push(ty);
                     self.st.push(body);
                 }
@@ -485,7 +484,7 @@ impl fmt::Debug for Expr {
 impl fmt::Debug for Var {
     // printer
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        write!(out, "{}", self.name.name())
+        write!(out, "{}:{:?}", self.name.name(), self.ty)
     }
 }
 
