@@ -245,7 +245,30 @@ impl<'a> VM<'a> {
         todo!("assume")
     }
     fn axiom(&mut self) -> Result<(), String> {
-        todo!("axiom")
+        self.pop2("axiom", |vm, x, y| match (&*x, &*y) {
+            (O::Term(concl), O::List(hyps_)) => {
+                let mut hyps = Vec::with_capacity(hyps_.len());
+                for x in hyps_ {
+                    if let O::Term(t) = &*x.0 {
+                        hyps.push(t.clone())
+                    } else {
+                        return Err(format!(
+                            "axiom: hyps contain non-term {:?}",
+                            x
+                        ));
+                    }
+                }
+                let ax = vm.em.thm_axiom(hyps, concl.clone());
+                eprintln!("## add axiom {:?}", ax);
+                vm.assumptions.push(ax.clone());
+                vm.push_obj(O::Thm(ax));
+                Ok(())
+            }
+            _ => Err(format!(
+                "axiom: expected <term,list>, got {:?}, {:?}",
+                x, y
+            ))?,
+        })
     }
     fn version(&mut self) -> Result<(), String> {
         self.pop1("version", |_vm, o| match *o {
@@ -396,26 +419,39 @@ impl<'a> VM<'a> {
             ) -> Result<Expr, String> {
                 let args = ty.unfold_pi().0;
                 if args.len() != 2 {
-                    Err(format!("= cannot take type {:?}", ty))?
+                    Err(format!("`=` cannot take type {:?}", ty))?
                 }
                 let e = em.mk_eq();
                 Ok(em.mk_app(e, args[0].clone()))
+            }
+        }
+        #[derive(Debug)]
+        struct ConstSelect;
+        impl OConst for ConstSelect {
+            fn apply(
+                &self,
+                em: &mut ExprManager,
+                ty: Expr,
+            ) -> Result<Expr, String> {
+                let a = ty
+                    .as_pi()
+                    .ok_or_else(|| {
+                        format!("`select` cannot take type {:?}", ty)
+                    })?
+                    .1;
+                let e = em.mk_select();
+                Ok(em.mk_app(e, a.clone()))
             }
         }
 
         self.pop1("const", |vm, o| match &*o {
             O::Name(n) => {
                 let oc = match n.base() {
-                    "=" if n.len_pre() == 0 => Rc::new(ConstEq),
+                    "=" if n.len_pre() == 0 => {
+                        Rc::new(ConstEq) as Rc<dyn OConst>
+                    }
                     "select" if n.len_pre() == 0 => {
-                        todo!("select")
-                        /* TODO: generate the select constant
-                        let oc = |em: &mut ExprManager, ty: Expr| {
-                            let e = em.mk_s();
-                            Ok(em.mk_app(e, ty))
-                        };
-                        OConst(Rc::new(oc))
-                        */
+                        Rc::new(ConstSelect) as Rc<dyn OConst>
                     }
                     _ => {
                         // lookup in definitions
@@ -569,7 +605,31 @@ impl<'a> VM<'a> {
         })
     }
     fn thm(&mut self) -> Result<(), String> {
-        todo!("thm")
+        self.pop3("thm", |vm, x, y, z| match (&*x, &*y, &*z) {
+            (O::Term(_phi), O::List(l), O::Thm(thm)) => {
+                // TODO: do we need this?
+                let mut terms = Vec::with_capacity(l.len());
+                for x in l {
+                    match &*x.0 {
+                        O::Term(t) => terms.push(t),
+                        _ => {
+                            return Err(format!(
+                                "thm: expected term in list, not {:?}",
+                                x
+                            ))
+                        }
+                    }
+                }
+                // TODO?: alpha rename with [terms] and [phi]
+                eprintln!("## add theorem {:?} phi={:?}", thm, _phi);
+                vm.theorems.push(thm.clone());
+                Ok(())
+            }
+            _ => Err(format!(
+                "thm: expected <term, list, thm>, got {:?}, {:?}, {:?}",
+                x, y, z
+            )),
+        })
     }
     fn subst(&mut self) -> Result<(), String> {
         todo!("subst")
