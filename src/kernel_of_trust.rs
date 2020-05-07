@@ -202,6 +202,9 @@ fn compute_db_depth(e: &ExprView) -> DbIndex {
 
 impl ExprView {
     /// Shallow map, with a depth parameter.
+    ///
+    /// `k` is the current number of surrounding binders, it is passed back
+    /// to the callback `f`, possibly incremented by one.
     pub fn map<F>(&self, mut f: F, k: DbIndex) -> Self
     where
         F: FnMut(&Expr, DbIndex) -> Expr,
@@ -757,8 +760,8 @@ impl ExprManager {
             EBoundVar(v) => Some(v.ty.clone()),
             ELambda(v_ty, body) => {
                 // type of `λx:a. t` is `Πx:a. typeof(b)`.
-                let ty_body = body.ty();
-                Some(self.hashcons_(EPi(v_ty.clone(), ty_body.clone())))
+                let ty_body = body.ty().clone();
+                Some(self.hashcons_(EPi(v_ty.clone(), ty_body)))
             }
             EPi(v_ty, e) => {
                 if !v_ty.is_type() && !v_ty.ty().is_type() {
@@ -797,7 +800,7 @@ impl ExprManager {
         }
     }
 
-    /// Replace DB0 in `t` by `u`, below `k` intermediate binders.
+    /// Replace DB0 in `t` by `u`, under `k` intermediate binders.
     fn subst1_(&mut self, t: &Expr, k: u32, u: &Expr) -> Expr {
         if t.is_closed() {
             return t.clone(); // shortcut
@@ -832,9 +835,18 @@ impl ExprManager {
                 let v2 = v.map_ty(|ty| self.subst1_(ty, k, u));
                 self.hashcons_(EVar(v2))
             }
-            EBoundVar(v) if v.idx == 0 => {
-                // substitute here, accounting for the `k` intermediate binders
-                self.shift_(u, k)
+            EBoundVar(v) if v.idx == k => {
+                // substitute here, but shifting `u` by `k` to
+                // account for the `k` intermediate binders
+                self.shift_(u, k, 0)
+            }
+            EBoundVar(v) if v.idx > k => {
+                // need to unshift by 1, since we remove a binder and this is open
+                let v2 = BoundVarContent {
+                    idx: v.idx - 1,
+                    ty: self.subst1_(&v.ty, k, u),
+                };
+                self.hashcons_(EBoundVar(v2))
             }
             EBoundVar(v) => {
                 let v2 = v.map_ty(|ty| self.subst1_(ty, k, u));
@@ -843,39 +855,29 @@ impl ExprManager {
         }
     }
 
-    /// Shift free DB vars by `k`
-    fn shift_(&mut self, t: &Expr, k: u32) -> Expr {
-        if k == 0 || t.is_closed() {
+    /// Shift free DB vars by `n` under `k` intermediate binders
+    fn shift_(&mut self, t: &Expr, n: DbIndex, k: DbIndex) -> Expr {
+        if n == 0 || t.is_closed() {
             return t.clone(); // shortcut for identity
         }
 
-        match t.view() {
+        let ev = t.view();
+        match ev {
             EKind | EType | EConst(..) => t.clone(),
-            EApp(a, b) => {
-                let a2 = self.shift_(a, k);
-                let b2 = self.shift_(b, k);
-                self.hashcons_(EApp(a2, b2))
+            EApp(..) | ELambda(..) | EPi(..) | EVar(..) => {
+                let ev2 = ev.map(|u, k| self.shift_(u, n, k), k);
+                self.hashcons_(ev2)
             }
-            ELambda(v_ty, body) => {
-                let v_ty2 = self.shift_(v_ty, k);
-                let body2 = self.shift_(body, k + 1);
-                self.hashcons_(ELambda(v_ty2, body2))
+            EBoundVar(v) if v.idx < k => {
+                // keep `v`, as it's bound, but update its type
+                let v = v.map_ty(|ty| self.shift_(ty, n, k));
+                self.hashcons_(EBoundVar(v))
             }
-            EPi(v_ty, body) => {
-                let v_ty = self.shift_(v_ty, k);
-                let body2 = self.shift_(body, k + 1);
-                self.hashcons_(EPi(v_ty.clone(), body2))
-            }
-            EVar(v) => {
-                let v = v.map_ty(|ty| self.shift_(ty, k));
-                self.hashcons_(EVar(v))
-            }
-            EBoundVar(v) if v.idx < k => t.clone(), // keep
             EBoundVar(v) => {
-                // shift bound var
-                let ty = self.shift_(&v.ty, k);
+                // shift bound var by `n`
+                let ty = self.shift_(&v.ty, n, k);
                 self.hashcons_(EBoundVar(BoundVarContent {
-                    idx: v.idx + k,
+                    idx: v.idx + n,
                     ty,
                 }))
             }
@@ -887,7 +889,6 @@ impl ExprManager {
     pub fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Expr {
         struct Replace<'a> {
             // cache, relative to depth
-            cache: fnv::FnvHashMap<(Expr, DbIndex), Expr>,
             em: &'a mut ExprManager,
             subst: &'a [(Var, Expr)],
         }
@@ -895,52 +896,40 @@ impl ExprManager {
         impl<'a> Replace<'a> {
             // replace in `t`, under `k` intermediate binders.
             fn replace(&mut self, t: &Expr, k: DbIndex) -> Expr {
-                eprintln!("> replace `{:?}` shift-by {}", t, k);
-                let r = match self.cache.get(&(t.clone(), k)) {
-                    Some(t2) => t2.clone(),
-                    None => {
-                        match t.view() {
-                            // fast cases first
-                            EType | EKind | EConst(..) => t.clone(),
-                            EVar(v) => {
-                                // lookup `v` in `subst`
-                                for (v2, u2) in self.subst.iter() {
-                                    if v == v2 {
-                                        let u3 = self.em.shift_(u2, k);
-                                        eprintln!("replace {:?} with {:?}, shifted into {:?}", v, u2, u3);
-                                        return u3;
-                                    }
-                                }
-                                // otherwise just substitute in the type
-                                let v2 = v.map_ty(|ty| self.replace(ty, k));
-                                let u = self.em.mk_var(v2);
-                                self.cache.insert((t.clone(), k), u.clone());
-                                u
-                            }
-                            ev => {
-                                // shallow map + cache
-                                let uv =
-                                    ev.map(|sub, k| self.replace(sub, k), k);
-                                let u = self.em.hashcons_(uv);
-                                eprintln!("replace {:?} with {:?}", t, u);
-                                self.cache.insert((t.clone(), k), u.clone());
-                                u
+                eprintln!("> replace `{:?}` k={}", t, k);
+                let r = match t.view() {
+                    // fast cases first
+                    EType | EKind | EConst(..) => t.clone(),
+                    EVar(v) => {
+                        // lookup `v` in `subst`
+                        for (v2, u2) in self.subst.iter() {
+                            if v == v2 {
+                                let u3 = self.em.shift_(u2, k, 0);
+                                eprintln!(
+                                    ">> replace {:?} with {:?}, shifted[{}] into {:?}",
+                                    v, u2, k, u3
+                                );
+                                return u3;
                             }
                         }
+                        // otherwise just substitute in the type
+                        let v2 = v.map_ty(|ty| self.replace(ty, k));
+                        self.em.mk_var(v2)
+                    }
+                    ev => {
+                        // shallow map + cache
+                        let uv = ev.map(|sub, k| self.replace(sub, k), k);
+                        self.em.hashcons_(uv)
                     }
                 };
-                eprintln!(
-                    "< replace `{:?}` shift-by {}\n  yields `{:?}`",
-                    t, k, r
-                );
+                eprintln!("< replace `{:?}` k={}\n  yields `{:?}`", t, k, r);
                 r
             }
         }
 
         debug_assert!(subst.iter().all(|(v, t)| &v.ty == t.ty())); // type preservation
-        let mut replace =
-            Replace { cache: fnv::new_table_with_cap(32), em: self, subst };
-        eprintln!("start replace `{:?}`, subst {:?}", t, subst);
+        let mut replace = Replace { em: self, subst };
+        eprintln!("### start replace `{:?}`, subst {:?}", t, subst);
         replace.replace(t, 0)
     }
 
@@ -1030,9 +1019,9 @@ impl ExprManager {
         }
         let v_ty = v_ty.clone();
         // replace `v` with `db0` in `body`. This should also take
-        // care of shifting the DB as appropriate.
+        // care of shifting the DB by 1 as appropriate.
         let db0 = self.mk_bound_var(0, v_ty.clone());
-        let body = self.shift_(&body, 1);
+        let body = self.shift_(&body, 1, 0);
         let body = self.subst(&body, &[(v, db0)]);
         body
     }
@@ -1088,8 +1077,8 @@ impl ExprManager {
     ///
     /// This builds `Π_:a. b`.
     pub fn mk_arrow(&mut self, ty1: Expr, ty2: Expr) -> Expr {
-        // need to shift ty2 to account for the binder
-        let ty2 = self.shift_(&ty2, 1);
+        // need to shift ty2 by 1 to account for the Π binder.
+        let ty2 = self.shift_(&ty2, 1, 0);
         self.mk_pi_(ty1, ty2)
     }
 
