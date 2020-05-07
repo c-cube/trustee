@@ -603,7 +603,7 @@ impl<'a> VM<'a> {
         for line in buf.lines() {
             let line = line.map_err(|e| format!("error {:?}", e))?;
             let line = line.trim();
-            eprintln!("# parse line {}", line);
+            eprintln!("// parse line {}", line);
             if line.starts_with("#") {
                 continue;
             } else if line.starts_with("\"") {

@@ -444,7 +444,11 @@ impl Expr {
                 write!(out, ")")
             }
             ELambda(ty_x, body) => {
-                write!(out, "(\\x{} : ", k)?;
+                if ty_x.is_type() {
+                    write!(out, "(Λx{} : ", k)?;
+                } else {
+                    write!(out, "(λx{} : ", k)?;
+                }
                 ty_x.pp_(k, out)?;
                 write!(out, ". ")?;
                 body.pp_(k + 1, out)?;
