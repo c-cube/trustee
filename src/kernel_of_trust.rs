@@ -372,6 +372,15 @@ impl Expr {
         }
     }
 
+    /// View as a pi-expression.
+    pub fn as_pi(&self) -> Option<(&Type, &Expr)> {
+        if let EPi(ref ty, ref bod) = self.0.view {
+            Some((&ty, &bod))
+        } else {
+            None
+        }
+    }
+
     /// `(a=b).unfold_eq()` returns `Some((a,b))`.
     pub fn unfold_eq(&self) -> Option<(&Expr, &Expr)> {
         let (hd1, b) = self.as_app()?;
@@ -572,6 +581,7 @@ pub struct ExprManager {
     consts: fnv::FnvHashMap<Symbol, Expr>,
     eq: Option<Expr>,
     imply: Option<Expr>,
+    select: Option<Expr>,
     next_cleanup: usize,
     axioms: Vec<Thm>,
 }
@@ -617,6 +627,7 @@ impl ExprManager {
             consts: fnv::new_table_with_cap(n),
             eq: None,
             imply: None,
+            select: None,
             next_cleanup: CLEANUP_PERIOD,
             axioms: vec![],
         };
@@ -742,6 +753,26 @@ impl ExprManager {
                 let i = self.mk_new_const(name, arr);
                 self.imply = Some(i.clone());
                 i
+            }
+        }
+    }
+
+    /// Get the `select` constant.
+    pub fn mk_select(&mut self) -> Expr {
+        match self.select {
+            Some(ref c) => c.clone(),
+            None => {
+                let ty = self.mk_ty();
+                // build type `Πa. (a->bool)->a`
+                let db0 = self.mk_bound_var(0, ty.clone());
+                let bool = self.mk_bool();
+                let arr = self.mk_arrow(db0.clone(), bool.clone());
+                let arr = self.mk_arrow(arr, db0.clone());
+                let ty = self.mk_pi_(ty, arr);
+                let name = Symbol::from_str("select");
+                let res = self.mk_new_const(name, ty);
+                self.select = Some(res.clone());
+                res
             }
         }
     }
