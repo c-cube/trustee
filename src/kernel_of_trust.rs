@@ -763,8 +763,10 @@ impl ExprManager {
             EPi(v_ty, e) => {
                 if !v_ty.is_type() && !v_ty.ty().is_type() {
                     panic!(
-                        "pi: variable must be a type or be of type `type`, not {:?}",
-                        v_ty
+                        "pi: variable must be a type or be of type `type`, \
+                        not `{:?}` : `{:?}`",
+                        v_ty,
+                        v_ty.ty()
                     );
                 };
                 if !e.ty().is_type() {
@@ -884,7 +886,8 @@ impl ExprManager {
     /// variable `x` by `u` in `t`.
     pub fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Expr {
         struct Replace<'a> {
-            cache: fnv::FnvHashMap<Expr, Expr>,
+            // cache, relative to depth
+            cache: fnv::FnvHashMap<(Expr, DbIndex), Expr>,
             em: &'a mut ExprManager,
             subst: &'a [(Var, Expr)],
         }
@@ -892,7 +895,8 @@ impl ExprManager {
         impl<'a> Replace<'a> {
             // replace in `t`, under `k` intermediate binders.
             fn replace(&mut self, t: &Expr, k: DbIndex) -> Expr {
-                match self.cache.get(t) {
+                eprintln!("> replace `{:?}` shift-by {}", t, k);
+                let r = match self.cache.get(&(t.clone(), k)) {
                     Some(t2) => t2.clone(),
                     None => {
                         match t.view() {
@@ -902,13 +906,15 @@ impl ExprManager {
                                 // lookup `v` in `subst`
                                 for (v2, u2) in self.subst.iter() {
                                     if v == v2 {
-                                        return self.em.shift_(u2, k);
+                                        let u3 = self.em.shift_(u2, k);
+                                        eprintln!("replace {:?} with {:?}, shifted into {:?}", v, u2, u3);
+                                        return u3;
                                     }
                                 }
                                 // otherwise just substitute in the type
                                 let v2 = v.map_ty(|ty| self.replace(ty, k));
                                 let u = self.em.mk_var(v2);
-                                self.cache.insert(t.clone(), u.clone());
+                                self.cache.insert((t.clone(), k), u.clone());
                                 u
                             }
                             ev => {
@@ -916,17 +922,25 @@ impl ExprManager {
                                 let uv =
                                     ev.map(|sub, k| self.replace(sub, k), k);
                                 let u = self.em.hashcons_(uv);
-                                self.cache.insert(t.clone(), u.clone());
+                                eprintln!("replace {:?} with {:?}", t, u);
+                                self.cache.insert((t.clone(), k), u.clone());
                                 u
                             }
                         }
                     }
-                }
+                };
+                eprintln!(
+                    "< replace `{:?}` shift-by {}\n  yields `{:?}`",
+                    t, k, r
+                );
+                r
             }
         }
 
+        debug_assert!(subst.iter().all(|(v, t)| &v.ty == t.ty())); // type preservation
         let mut replace =
             Replace { cache: fnv::new_table_with_cap(32), em: self, subst };
+        eprintln!("start replace `{:?}`, subst {:?}", t, subst);
         replace.replace(t, 0)
     }
 
@@ -1145,13 +1159,25 @@ impl ExprManager {
     }
 
     /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
-    pub fn thm_instantiate(&mut self, th: &Thm, subst: &[(Var, Expr)]) -> Thm {
+    ///
+    /// Returns an error if the substitution is not closed.
+    pub fn thm_instantiate(
+        &mut self,
+        th: &Thm,
+        subst: &[(Var, Expr)],
+    ) -> Result<Thm, String> {
+        if let Some((v, t)) = subst.iter().find(|(_, t)| !t.is_closed()) {
+            return Err(format!(
+                    "instantiate: substitution {:?} contains non-closed binding {:?} := {:?}",
+                    subst, v, t));
+        }
+
         let mut hyps = th.0.hyps.clone();
         let concl = self.subst(&th.0.concl, subst);
         for t in hyps.iter_mut() {
             *t = self.subst(t, subst);
         }
-        Thm::make_(concl, hyps)
+        Ok(Thm::make_(concl, hyps))
     }
 
     /// `abs x (F |- t=u)` is `F |- (λx.t)=(λx.u)`
