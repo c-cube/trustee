@@ -1036,6 +1036,12 @@ impl ExprManager {
         self.mk_var(Var::from_str(name, ty_var))
     }
 
+    /// Make a free type variable.
+    pub fn mk_ty_var_str(&mut self, name: &str) -> Expr {
+        let ty = self.mk_ty();
+        self.mk_var_str(name, ty)
+    }
+
     /// Make a bound variable with given type and index.
     pub fn mk_bound_var(&mut self, idx: DbIndex, ty_var: Type) -> Expr {
         self.hashcons_(EBoundVar(BoundVarContent { idx, ty: ty_var }))
