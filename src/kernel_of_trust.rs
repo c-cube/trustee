@@ -931,7 +931,7 @@ impl ExprManager {
         impl<'a> Replace<'a> {
             // replace in `t`, under `k` intermediate binders.
             fn replace(&mut self, t: &Expr, k: DbIndex) -> Expr {
-                eprintln!("> replace `{:?}` k={}", t, k);
+                //eprintln!("> replace `{:?}` k={}", t, k);
                 let r = match t.view() {
                     // fast cases first
                     EType | EKind | EConst(..) => t.clone(),
@@ -940,10 +940,10 @@ impl ExprManager {
                         for (v2, u2) in self.subst.iter() {
                             if v == v2 {
                                 let u3 = self.em.shift_(u2, k, 0);
-                                eprintln!(
-                                    ">> replace {:?} with {:?}, shifted[{}] into {:?}",
-                                    v, u2, k, u3
-                                );
+                                //eprintln!(
+                                //    ">> replace {:?} with {:?}, shifted[{}] into {:?}",
+                                //    v, u2, k, u3
+                                //);
                                 return u3;
                             }
                         }
@@ -957,7 +957,7 @@ impl ExprManager {
                         self.em.hashcons_(uv)
                     }
                 };
-                eprintln!("< replace `{:?}` k={}\n  yields `{:?}`", t, k, r);
+                //eprintln!("< replace `{:?}` k={}\n  yields `{:?}`", t, k, r);
                 r
             }
         }
