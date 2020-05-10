@@ -80,15 +80,22 @@ impl<'a> UnifySubst<'a> {
     }
 }
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum UnifOp {
+    Match,
+    Unify,
+}
 struct UnifySt<'a> {
+    op: UnifOp,
     solved: fnv::FnvHashSet<(&'a Expr, &'a Expr)>,
     subst: UnifySubst<'a>,
     to_solve: Vec<(&'a Expr, &'a Expr)>,
 }
 
 impl<'a> UnifySt<'a> {
-    fn new() -> Self {
+    fn new(op: UnifOp) -> Self {
         UnifySt {
+            op,
             solved: fnv::new_set_with_cap(16),
             subst: UnifySubst(Vec::with_capacity(16)),
             to_solve: Vec::with_capacity(16),
@@ -161,7 +168,7 @@ impl<'a> UnifySt<'a> {
                     }
                     self.subst.add_(v, e2);
                 }
-                (_, EVar(v)) => {
+                (_, EVar(v)) if self.op == UnifOp::Unify => {
                     if !e1.is_closed() || self.occur_check(v, e1) {
                         break false;
                     }
@@ -193,10 +200,28 @@ impl<'a> UnifySt<'a> {
     }
 }
 
+/// need to rename prior to unification if there are shared variables.
+pub fn need_to_rename_before_unif(e1: &Expr, e2: &Expr) -> bool {
+    let v1: fnv::FnvHashSet<Var> = e1.free_vars().cloned().collect();
+    let v2: fnv::FnvHashSet<Var> = e2.free_vars().cloned().collect();
+
+    let inter = v1.intersection(&v2);
+    inter.take(1).count() > 0
+}
+
+// TODO: a function for variable renaming
+
 // TODO: when we have a parser, write some tests
 /// Unify the two expressions.
 pub fn unify<'a>(e1: &'a Expr, e2: &'a Expr) -> Option<UnifySubst<'a>> {
-    let mut st = UnifySt::new();
+    let mut st = UnifySt::new(UnifOp::Unify);
+    st.add_pair(e1, e2);
+    st.solve()
+}
+
+/// Match the LHS (pattern) against the RHS.
+pub fn match_<'a>(e1: &'a Expr, e2: &'a Expr) -> Option<UnifySubst<'a>> {
+    let mut st = UnifySt::new(UnifOp::Match);
     st.add_pair(e1, e2);
     st.solve()
 }

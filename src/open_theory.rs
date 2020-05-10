@@ -582,7 +582,8 @@ impl<'a> VM<'a> {
         struct CustomConst {
             n: Name,
             c: Expr,
-            c_ty_vars: Expr, // c applied to type variables
+            c_vars: Expr,    // c applied to ty_vars
+            c_ty_vars: Expr, // typeof(c_vars)
             ty_vars: Vec<Var>,
         }
 
@@ -592,6 +593,20 @@ impl<'a> VM<'a> {
                 em: &mut ExprManager,
                 ty: Expr,
             ) -> Result<Expr, String> {
+                if self.c_ty_vars == ty {
+                    // shortcut: already the right type, no unif needed
+                    let t = self.c_vars.clone();
+                    return Ok(t);
+                }
+
+                let c_ty_vars = self.c_ty_vars.clone();
+                let ty_vars = &self.ty_vars;
+                // rename if needed
+                if utils::need_to_rename_before_unif(&c_ty_vars, &ty) {
+                    eprintln!("need to rename in const {:?}:{:?}, to unify with type {:?}",
+                        self.c, self.c_ty_vars, ty);
+                    todo!("renaming before unif") // TODO: do the renaming
+                }
                 let subst =
                     utils::unify(&self.c_ty_vars, &ty).ok_or_else(|| {
                         format!(
@@ -638,6 +653,7 @@ impl<'a> VM<'a> {
                 // now build the constant building closure
                 let c = Rc::new(CustomConst {
                     c: c.clone(),
+                    c_vars: app,
                     ty_vars,
                     c_ty_vars,
                     n: n.clone(),
