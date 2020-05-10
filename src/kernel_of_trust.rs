@@ -5,18 +5,40 @@ use std::{fmt, ops::Deref, sync::Arc};
 
 ///! # Symbols.
 
+/// Builtin symbols
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Hash, Eq, PartialEq)]
+pub enum BuiltinSymbol {
+    Eq,
+    Imply,
+    Select,
+    Bool,
+}
+use BuiltinSymbol as BS;
+
+/// Any kind of symbol.
 #[derive(Debug, Clone, Ord, PartialOrd, Hash, Eq, PartialEq)]
-pub struct Symbol(Arc<str>);
+pub enum Symbol {
+    Builtin(BuiltinSymbol),
+    Named(Arc<str>),
+}
 
 impl Symbol {
     /// New symbol from this string.
     pub fn from_str(s: &str) -> Self {
         let a = Arc::from(s);
-        Symbol(a)
+        Symbol::Named(a)
     }
 
     pub fn name(&self) -> &str {
-        &*self.0
+        match &self {
+            Symbol::Builtin(s) => match s {
+                BS::Eq => "=",
+                BS::Imply => "==>",
+                BS::Select => "select",
+                BS::Bool => "Bool",
+            },
+            Symbol::Named(s) => &*s,
+        }
     }
 }
 
@@ -637,7 +659,7 @@ impl ExprManager {
         let ty = em.hashcons_builtin_(EType, Some(kind.clone()));
         em.tbl.insert(ty.view().clone(), ty.clone());
         let bool = {
-            let name = Symbol::from_str("Bool");
+            let name = Symbol::Builtin(BS::Bool);
             em.hashcons_builtin_(
                 EConst(ConstContent { name, ty: ty.clone() }),
                 Some(ty.clone()),
@@ -722,7 +744,7 @@ impl ExprManager {
                 let arr = self.mk_arrow(db0.clone(), bool.clone());
                 let arr = self.mk_arrow(db0.clone(), arr);
                 let ty_eq = self.mk_pi_(ty.clone(), arr);
-                let name = Symbol::from_str("=");
+                let name = Symbol::Builtin(BS::Eq);
                 let c = self.mk_new_const(name, ty_eq);
                 self.eq = Some(c.clone());
                 c
@@ -749,7 +771,7 @@ impl ExprManager {
                 let bool = self.mk_bool();
                 let arr = self.mk_arrow(bool.clone(), bool.clone());
                 let arr = self.mk_arrow(bool.clone(), arr);
-                let name = Symbol::from_str("==>");
+                let name = Symbol::Builtin(BS::Imply);
                 let i = self.mk_new_const(name, arr);
                 self.imply = Some(i.clone());
                 i
@@ -769,7 +791,7 @@ impl ExprManager {
                 let arr = self.mk_arrow(db0.clone(), bool.clone());
                 let arr = self.mk_arrow(arr, db0.clone());
                 let ty = self.mk_pi_(ty, arr);
-                let name = Symbol::from_str("select");
+                let name = Symbol::Builtin(BS::Select);
                 let res = self.mk_new_const(name, ty);
                 self.select = Some(res.clone());
                 res
