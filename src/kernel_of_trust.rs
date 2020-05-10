@@ -1,7 +1,7 @@
 //! Kernel of Trust: Terms and Theorems
 
 use crate::fnv;
-use std::{fmt, ops::Deref, sync::Arc};
+use std::{fmt, ops::Deref, sync::Arc, sync::Weak};
 
 ///! # Symbols.
 
@@ -50,6 +50,10 @@ pub type DbIndex = u32;
 /// An expression.
 #[derive(Clone)]
 pub struct Expr(Arc<ExprImpl>);
+
+/// A weak reference to an expression.
+#[derive(Clone)]
+struct WExpr(Weak<ExprImpl>);
 
 /// Types and Terms are the same, but this is helpful for documentation.
 pub type Type = Expr;
@@ -326,6 +330,12 @@ impl Expr {
         }
     }
 
+    /// Obtain a weak reference to this expression.
+    #[inline]
+    fn weak(&self) -> WExpr {
+        WExpr(Arc::downgrade(&self.0))
+    }
+
     /// Safe version of `ty`, that works even for `Kind`.
     pub fn ty_opt(&self) -> &Option<Expr> {
         &self.0.ty
@@ -598,7 +608,8 @@ impl fmt::Debug for Thm {
 /// Global manager for expressions, used to implement perfect sharing, allocating
 /// new terms, etc.
 pub struct ExprManager {
-    tbl: fnv::FnvHashMap<ExprView, Expr>,
+    /// Hashconsing table, with weak semantics.
+    tbl: fnv::FnvHashMap<ExprView, WExpr>,
     builtins: Option<ExprBuiltins>,
     consts: fnv::FnvHashMap<Symbol, Expr>,
     eq: Option<Expr>,
@@ -655,9 +666,9 @@ impl ExprManager {
         };
         // insert initial builtins
         let kind = em.hashcons_builtin_(EKind, None);
-        em.tbl.insert(kind.view().clone(), kind.clone());
+        em.tbl.insert(kind.view().clone(), kind.weak());
         let ty = em.hashcons_builtin_(EType, Some(kind.clone()));
-        em.tbl.insert(ty.view().clone(), ty.clone());
+        em.tbl.insert(ty.view().clone(), ty.weak());
         let bool = {
             let name = Symbol::Builtin(BS::Bool);
             em.hashcons_builtin_(
@@ -679,39 +690,40 @@ impl ExprManager {
     fn hashcons_(&mut self, ev: ExprView) -> Expr {
         let tbl = &mut self.tbl; // lock tbl
         match tbl.get(&ev) {
-            Some(v) => v.clone(),
-            None => {
-                // need to use `self` to build the type, so drop `tbl` first.
-                drop(tbl);
-
-                // every n cycles, do a `cleanup`
-                // TODO: maybe if last cleanups were ineffective, increase n,
-                // otherwise decrease n (down to some min value)
-                if self.next_cleanup == 0 {
-                    eprintln!("expr.hashcons: cleanup"); // TODO: comment, or use callback
-                    self.next_cleanup = CLEANUP_PERIOD;
-                    self.cleanup();
-                } else {
-                    self.next_cleanup -= 1;
-                }
-
-                // need to insert the term, so first we need to compute its type.
-                let ty = self.compute_ty_(&ev);
-                let key = ev.clone();
-                let e = Expr::make_(ev, ty);
-                //#[rustfmt::skip]
-                //eprintln!("insert.expr.hashcons {:?} at {:?}", &e, e.0.as_ref() as *const _);
-                //eprintln!("ev mem: {}", self.tbl.contains_key(&ev2));
-                //eprintln!("btw table is {:#?}", &self.tbl);
-
-                // lock table, again, but this time we'll write to it.
-                // invariant: computing the type doesn't insert `e` in the table.
-                let tbl = &mut self.tbl;
-                tbl.insert(key, e.clone());
-                //eprintln!("e.ev mem: {}", self.tbl.contains_key(&e.0.view));
-                e
-            }
+            Some(v) => match Weak::upgrade(&v.0) {
+                Some(t) => return Expr(t), // still alive!
+                None => (),
+            },
+            None => (),
         }
+        // need to use `self` to build the type, so drop `tbl` first.
+        drop(tbl);
+
+        // every n cycles, do a `cleanup`
+        // TODO: maybe if last cleanups were ineffective, increase n,
+        // otherwise decrease n (down to some min value)
+        if self.next_cleanup == 0 {
+            eprintln!("expr.hashcons: cleanup"); // TODO: comment, or use callback
+            self.cleanup();
+        } else {
+            self.next_cleanup -= 1;
+        }
+
+        // need to insert the term, so first we need to compute its type.
+        let ty = self.compute_ty_(&ev);
+        let key = ev.clone();
+        let e = Expr::make_(ev, ty);
+        //#[rustfmt::skip]
+        //eprintln!("insert.expr.hashcons {:?} at {:?}", &e, e.0.as_ref() as *const _);
+        //eprintln!("ev mem: {}", self.tbl.contains_key(&ev2));
+        //eprintln!("btw table is {:#?}", &self.tbl);
+
+        // lock table, again, but this time we'll write to it.
+        // invariant: computing the type doesn't insert `e` in the table.
+        let tbl = &mut self.tbl;
+        tbl.insert(key, e.weak());
+        //eprintln!("e.ev mem: {}", self.tbl.contains_key(&e.0.view));
+        e
     }
 
     fn add_const_(&mut self, e: Expr) {
@@ -721,7 +733,7 @@ impl ExprManager {
         } else {
             unreachable!("not a constant: {:?}", e);
         };
-        self.tbl.insert(e.view().clone(), e.clone());
+        self.tbl.insert(e.view().clone(), e.weak());
         consts.insert(name, e);
     }
 
@@ -729,7 +741,7 @@ impl ExprManager {
         let tbl = &mut self.tbl;
         debug_assert!(!tbl.contains_key(&ev));
         let e = Expr::make_(ev, ty);
-        tbl.insert(e.view().clone(), e.clone());
+        tbl.insert(e.view().clone(), e.weak());
         e
     }
 
@@ -991,10 +1003,11 @@ impl ExprManager {
     }
 
     /// Cleanup terms that are only referenced by this table.
+    ///
+    /// This is done regularly when new terms are created, but one can
+    /// also call `cleanup` manually.
     pub fn cleanup(&mut self) {
-        // TODO: do cleanup in topological order? examine roots first,
-        // or some kind of fixpoint, since when we remove a term we also
-        // decrease its subterms' refcount
+        self.next_cleanup = CLEANUP_PERIOD;
 
         self.tbl.retain(|_, v| {
             // if `v` is not used anywhere else, it's the only
@@ -1002,9 +1015,8 @@ impl ExprManager {
             // This is thread safe as the only way this is 1 is if it's already
             // not referenced anywhere, and we don't provide any way to produce
             // a weak ref.
-            let n = Arc::strong_count(&v.0);
-            debug_assert!(n >= 1);
-            n > 1
+            let n = Weak::strong_count(&v.0);
+            n > 0
         })
     }
 
