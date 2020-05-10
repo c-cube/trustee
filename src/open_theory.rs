@@ -227,7 +227,7 @@ impl<'a> VM<'a> {
             Err(format!("OT.pop1.{}: empty stack in {:?}", what, self))?
         }
         let x = self.stack.pop().unwrap();
-        f(self, x).map_err(|e| format!("{}\nin {:?}", e, self))
+        f(self, x)
     }
 
     fn pop2<F, A>(&mut self, what: &str, f: F) -> Result<A, String>
@@ -235,11 +235,11 @@ impl<'a> VM<'a> {
         F: Fn(&mut Self, Obj, Obj) -> Result<A, String>,
     {
         if self.stack.len() < 2 {
-            Err(format!("OT.pop2.{}: empty stack in {:#?}", what, self))?
+            Err(format!("OT.pop2.{}: empty stack in {:?}", what, self))?
         }
         let x = self.stack.pop().unwrap();
         let y = self.stack.pop().unwrap();
-        f(self, x, y).map_err(|e| format!("{}\nin {:#?}", e, self))
+        f(self, x, y)
     }
 
     fn pop3<F, A>(&mut self, what: &str, f: F) -> Result<A, String>
@@ -252,7 +252,7 @@ impl<'a> VM<'a> {
         let x = self.stack.pop().unwrap();
         let y = self.stack.pop().unwrap();
         let z = self.stack.pop().unwrap();
-        f(self, x, y, z).map_err(|e| format!("{}\nin {:#?}", e, self))
+        f(self, x, y, z)
     }
 
     fn abs_term(&mut self) -> Result<(), String> {
@@ -267,7 +267,14 @@ impl<'a> VM<'a> {
     }
 
     fn abs_thm(&mut self) -> Result<(), String> {
-        todo!("abs_thm")
+        self.pop2("abs_thm", |vm, x, y| {
+            let th = x.as_thm()?;
+            let v = y.as_var()?;
+            let th = vm.em.thm_abs(v, th)?;
+            vm.push_obj(O::Thm(th));
+            Ok(())
+        })
+        .map_err(|e| format!("OT: failure in abs_thm(<thm,var>):\n {}", e))
     }
 
     fn app_term(&mut self) -> Result<(), String> {
@@ -282,11 +289,24 @@ impl<'a> VM<'a> {
     }
 
     fn app_thm(&mut self) -> Result<(), String> {
-        todo!("app_thm")
+        self.pop2("app_thm", |vm, x, y| {
+            let th1 = x.as_thm()?;
+            let th2 = y.as_thm()?;
+            let th = vm.em.thm_congr(th2, th1)?;
+            vm.push_obj(O::Thm(th));
+            Ok(())
+        })
+        .map_err(|e| format!("OT: failure in app_thm(<thm,thm>):\n {}", e))
     }
 
     fn assume(&mut self) -> Result<(), String> {
-        todo!("assume")
+        self.pop1("assume", |vm, x| {
+            let t = x.as_term()?;
+            let th = vm.em.thm_assume(&t);
+            vm.push_obj(O::Thm(th));
+            Ok(())
+        })
+        .map_err(|e| format!("OT: failure in assume(<term>): {}", e))
     }
 
     fn axiom(&mut self) -> Result<(), String> {
@@ -682,7 +702,7 @@ impl<'a> VM<'a> {
         self.pop2("subst", |vm, x, y| {
             let thm = x.as_thm()?;
             let l = y.as_list()?;
-            // build substitution
+            // build type substitution first
             let mut subst = vec![];
             if l.len() != 2 {
                 return Err(format!("expected pair of subst, got {:?}", l));
@@ -698,6 +718,13 @@ impl<'a> VM<'a> {
                 subst.push(pair);
                 Ok(())
             })?;
+            let th1 = vm.em.thm_instantiate(thm, &subst[..])?;
+            eprintln!(
+                "instantiated\n  {:#?}\n  into {:#?}\n  with type subst {:#?}",
+                thm, th1, subst
+            );
+            // then instantiate terms
+            subst.clear();
             l[1].as_list()?.iter().try_for_each(|x| {
                 let l = x.as_list()?;
                 if l.len() != 2 {
@@ -709,10 +736,10 @@ impl<'a> VM<'a> {
                 subst.push(pair);
                 Ok(())
             })?;
-            let th2 = vm.em.thm_instantiate(thm, &subst[..])?;
+            let th2 = vm.em.thm_instantiate(&th1, &subst[..])?;
             eprintln!(
                 "instantiated\n  {:#?}\n  into {:#?}\n  with subst {:#?}",
-                thm, th2, subst
+                th1, th2, subst
             );
             vm.push_obj(O::Thm(th2));
             Ok(())
@@ -721,25 +748,84 @@ impl<'a> VM<'a> {
     }
 
     fn refl(&mut self) -> Result<(), String> {
-        todo!("refl")
+        self.pop1("refl", |vm, x| {
+            let t = x.as_term()?.clone();
+            let th = vm.em.thm_refl(t);
+            vm.push_obj(O::Thm(th));
+            Ok(())
+        })
+        .map_err(|e| format!("OT: failure in refl: {}", e))
     }
+
     fn trans(&mut self) -> Result<(), String> {
-        todo!("trans")
+        self.pop2("trans", |vm, x, y| {
+            let th1 = x.as_thm()?;
+            let th2 = y.as_thm()?;
+            let th = vm.em.thm_trans(th2, th1)?;
+            vm.push_obj(O::Thm(th));
+            Ok(())
+        })
+        .map_err(|e| format!("OT: failure in trans(<thm,thm>):\n {}", e))
     }
+
     fn sym(&mut self) -> Result<(), String> {
-        todo!("sym")
+        self.pop1("sym", |vm, x| {
+            let th1 = x.as_thm()?.clone();
+            let th = utils::thm_sym(&mut vm.em, &th1)?;
+            vm.push_obj(O::Thm(th));
+            Ok(())
+        })
+        .map_err(|e| format!("OT: failure in refl: {}", e))
     }
+
     fn eq_mp(&mut self) -> Result<(), String> {
-        todo!("eq_mp")
+        self.pop2("eq_mp", |vm, x, y| {
+            let th1 = x.as_thm()?;
+            let th2 = y.as_thm()?;
+            let th = vm.em.thm_bool_eq(th1, th2).map_err(|e| {
+                format!("in eq_mp\n {:?},\n {:?}:\n {}", th1, th2, e)
+            })?;
+            vm.push_obj(O::Thm(th));
+            Ok(())
+        })
+        .map_err(|e| format!("OT: failure in eq_mp(<thm,thm>):\n {}", e))
     }
+
     fn beta_conv(&mut self) -> Result<(), String> {
-        todo!("beta_conv")
+        self.pop1("beta_conv", |vm, x| {
+            let t = x.as_term()?.clone();
+            let th = vm.em.thm_beta_conv(&t)?;
+            vm.push_obj(O::Thm(th));
+            Ok(())
+        })
+        .map_err(|e| format!("OT: failure in beta_conv: {}", e))
     }
+
     fn deduct_antisym(&mut self) -> Result<(), String> {
-        todo!("deduct_antisym")
+        self.pop2("deduct_antisym", |vm, x, y| {
+            let th1 = x.as_thm()?;
+            let th2 = y.as_thm()?;
+            let th = vm.em.thm_bool_eq_intro(th1, th2);
+            vm.push_obj(O::Thm(th));
+            Ok(())
+        })
+        .map_err(|e| {
+            format!("OT: failure in deduct_antisym(<thm,thm>):\n {}", e)
+        })
     }
+
     fn prove_hyp(&mut self) -> Result<(), String> {
-        todo!("prove_hyp")
+        self.pop2("prove_hyp", |vm, x, y| {
+            let th1 = x.as_thm()?;
+            let th2 = y.as_thm()?;
+            let th = vm
+                .em
+                .thm_cut(th2, th1)
+                .map_err(|e| format!("in cut {:?}, {:?}:\n {}", th1, th2, e))?;
+            vm.push_obj(O::Thm(th));
+            Ok(())
+        })
+        .map_err(|e| format!("OT: failure in prove_hyp(<thm,thm>):\n {}", e))
     }
 
     /// Parse the given reader.

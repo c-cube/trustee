@@ -13,6 +13,7 @@ fn parse_all() -> Result<(), String> {
     println!("done parsing!");
     let article = vm.into_article();
     println!("article: {:#?}", &article);
+    println!("success!");
 
     Ok(())
 }
