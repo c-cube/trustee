@@ -1,6 +1,0 @@
-
-(executable
-  (name trustee_cli)
-  (modes native)
-  (libraries trustee trustee.syn containers linenoise))
-
