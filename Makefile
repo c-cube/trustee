@@ -1,12 +1,9 @@
 
 build:
-	@dune build @all
+	@cargo build --release
 
 clean:
-	@dune clean
+	@cargo clean
 
 test:
-	@dune runtest --force --no-buffer
-
-watch:
-	@dune build -w @all
+	@cargo test
