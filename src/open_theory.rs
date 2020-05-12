@@ -554,6 +554,7 @@ impl<'a> VM<'a> {
             )),
         })
     }
+
     fn var(&mut self) -> Result<(), String> {
         self.pop2("var", |vm, x, y| match (&*x, &*y) {
             (O::Type(ty), O::Name(n)) => {
@@ -567,6 +568,7 @@ impl<'a> VM<'a> {
             }
         })
     }
+
     fn var_term(&mut self) -> Result<(), String> {
         self.pop1("var_term", |vm, o| match &*o {
             O::Var(v) => {
@@ -577,6 +579,7 @@ impl<'a> VM<'a> {
             _ => Err(format!("var_term: expected <var>, got {:?}", o)),
         })
     }
+
     fn define_const(&mut self) -> Result<(), String> {
         #[derive(Debug)]
         struct CustomConst {
@@ -586,7 +589,7 @@ impl<'a> VM<'a> {
             c_ty_vars: Expr, // typeof(c_vars)
             ty_vars: Vec<Var>,
         }
-
+        use std::borrow::Cow;
         impl OConst for CustomConst {
             fn apply(
                 &self,
@@ -599,35 +602,52 @@ impl<'a> VM<'a> {
                     return Ok(t);
                 }
 
-                let c_ty_vars = self.c_ty_vars.clone();
-                let ty_vars = &self.ty_vars;
+                let mut c_ty_vars: Expr = self.c_ty_vars.clone();
+                let mut ty_vars = Cow::Borrowed(&self.ty_vars);
                 // rename if needed
-                if utils::need_to_rename_before_unif(&c_ty_vars, &ty) {
+                if let Some(mut data) =
+                    utils::need_to_rename_before_unif(&c_ty_vars, &ty)
+                {
                     eprintln!("need to rename in const {:?}:{:?}, to unify with type {:?}",
                         self.c, self.c_ty_vars, ty);
-                    todo!("renaming before unif") // TODO: do the renaming
+                    ty_vars = Cow::Owned(
+                        self.ty_vars
+                            .iter()
+                            .map(|v| data.rename_var(v))
+                            .collect::<Vec<Var>>(),
+                    );
+                    // type of `c args`
+                    c_ty_vars = {
+                        let args: Vec<_> = ty_vars
+                            .iter()
+                            .cloned()
+                            .map(|v| em.mk_var(v.clone()))
+                            .collect();
+                        em.mk_app_l(self.c.clone(), &args[..]).ty().clone()
+                    }
                 }
+                // match type, so we're sure that `ty_vars` all disappear
                 let subst =
-                    utils::unify(&self.c_ty_vars, &ty).ok_or_else(|| {
+                    utils::match_(&c_ty_vars, &ty).ok_or_else(|| {
                         format!(
                             "unification failed\n  between {:?} and {:?}\n  \
                             when applying constant {:?}",
-                            self.c_ty_vars, ty, self.n
+                            c_ty_vars, ty, self.n
                         )
                     })?;
                 eprintln!(
                     "unified:\n  between {:?} and {:?}\n  yields {:?}",
-                    self.c_ty_vars, ty, subst
+                    c_ty_vars, ty, subst
                 );
-                let vars: Vec<Expr> = self
-                    .ty_vars
+                let ty_args: Vec<Expr> = ty_vars
                     .iter()
                     .map(|v| match subst.find_rec(&v) {
                         Some(e) => e.clone(),
                         None => em.mk_var(v.clone()),
                     })
                     .collect();
-                let t = em.mk_app_l(self.c.clone(), &vars);
+                // now that we have the proper type arguments, apply `c` to them.
+                let t = em.mk_app_iter(self.c.clone(), ty_args);
                 eprintln!("result constant is {:?}", &t);
                 Ok(t)
             }
@@ -670,6 +690,12 @@ impl<'a> VM<'a> {
             )),
         })
     }
+
+    fn define_type_op(&mut self) -> Result<(), String> {
+        eprintln!("current stack: {:#?}", &self.stack);
+        todo!("define type op") // TODO
+    }
+
     fn pop(&mut self) -> Result<(), String> {
         if self.stack.pop().is_some() {
             Ok(())
@@ -677,6 +703,7 @@ impl<'a> VM<'a> {
             Err("pop: empty stack".to_string())
         }
     }
+
     fn remove(&mut self) -> Result<(), String> {
         self.pop1("remove", |vm, o| match &*o {
             O::Int(n) => {
@@ -893,6 +920,7 @@ impl<'a> VM<'a> {
                     "betaConv" => self.beta_conv()?,
                     "deductAntisym" => self.deduct_antisym()?,
                     "proveHyp" => self.prove_hyp()?,
+                    "defineTypeOp" => self.define_type_op()?,
                     _ => Err(format!("unknown command {:?}", line))?,
                 }
             }

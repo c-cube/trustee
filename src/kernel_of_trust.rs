@@ -1390,4 +1390,6 @@ impl ExprManager {
         self.axioms.push(thm.clone());
         thm
     }
+
+    // TODO: add define_type_op (with rep/res, and formula)
 }

@@ -37,6 +37,68 @@ pub fn thm_new_poly_definition(
     Ok((thm, c, vars_ty_rhs))
 }
 
+/// Data used to rename variables, if needed, prior to implementation.
+pub struct RenamingData {
+    v2: fnv::FnvHashSet<Var>,
+    var_count: usize,
+    buf: String,
+    renaming: fnv::FnvHashMap<Var, Var>,
+}
+
+impl RenamingData {
+    pub fn rename_var(&mut self, v: &Var) -> Var {
+        use std::fmt::Write;
+
+        match self.renaming.get(&v) {
+            Some(v2) => v2.clone(),
+            None => {
+                // allocate a new variable that isn't in `v2`
+                let ty = v.ty.clone();
+                let v2 = loop {
+                    self.buf.clear();
+                    write!(&mut self.buf, "_x_{}", self.var_count)
+                        .expect("cannot print temporary variable name");
+                    let new_v = Var::from_str(&self.buf[..], ty.clone());
+                    if !self.v2.contains(&new_v) {
+                        break new_v;
+                    }
+                    self.var_count += 1
+                };
+                self.renaming.insert(v.clone(), v2.clone());
+                v2
+            }
+        }
+    }
+}
+
+/// Do we need to rename `e1`prior to unification?
+///
+/// The answer is `Some(data)` if there are shared variables, where `data`
+/// can be used to perform the renaming, `None` otherwise.
+pub fn need_to_rename_before_unif(
+    e1: &Expr,
+    e2: &Expr,
+) -> Option<RenamingData> {
+    let v1: fnv::FnvHashSet<Var> = e1.free_vars().cloned().collect();
+    if v1.is_empty() {
+        return None;
+    }
+
+    let v2: fnv::FnvHashSet<Var> = e2.free_vars().cloned().collect();
+
+    let inter = v1.intersection(&v2);
+    if inter.take(1).count() > 0 {
+        Some(RenamingData {
+            v2,
+            var_count: 0,
+            buf: String::with_capacity(16),
+            renaming: fnv::new_table_with_cap(8),
+        })
+    } else {
+        None
+    }
+}
+
 // TODO: use binary search?
 /// A substitution obtained by unification.
 #[derive(Debug, Clone)]
@@ -198,15 +260,6 @@ impl<'a> UnifySt<'a> {
             None
         }
     }
-}
-
-/// need to rename prior to unification if there are shared variables.
-pub fn need_to_rename_before_unif(e1: &Expr, e2: &Expr) -> bool {
-    let v1: fnv::FnvHashSet<Var> = e1.free_vars().cloned().collect();
-    let v2: fnv::FnvHashSet<Var> = e2.free_vars().cloned().collect();
-
-    let inter = v1.intersection(&v2);
-    inter.take(1).count() > 0
 }
 
 // TODO: a function for variable renaming
