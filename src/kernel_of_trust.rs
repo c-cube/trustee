@@ -757,7 +757,7 @@ impl ExprManager {
                 let arr = self.mk_arrow(db0.clone(), arr);
                 let ty_eq = self.mk_pi_(ty.clone(), arr);
                 let name = Symbol::Builtin(BS::Eq);
-                let c = self.mk_new_const(name, ty_eq);
+                let c = self.mk_new_const(name, ty_eq).unwrap();
                 self.eq = Some(c.clone());
                 c
             }
@@ -784,7 +784,7 @@ impl ExprManager {
                 let arr = self.mk_arrow(bool.clone(), bool.clone());
                 let arr = self.mk_arrow(bool.clone(), arr);
                 let name = Symbol::Builtin(BS::Imply);
-                let i = self.mk_new_const(name, arr);
+                let i = self.mk_new_const(name, arr).unwrap();
                 self.imply = Some(i.clone());
                 i
             }
@@ -804,7 +804,7 @@ impl ExprManager {
                 let arr = self.mk_arrow(arr, db0.clone());
                 let ty = self.mk_pi_(ty, arr);
                 let name = Symbol::Builtin(BS::Select);
-                let res = self.mk_new_const(name, ty);
+                let res = self.mk_new_const(name, ty).unwrap();
                 self.select = Some(res.clone());
                 res
             }
@@ -1172,9 +1172,9 @@ impl ExprManager {
     ///
     /// panics if some constant with the same name exists, or if
     /// the type is not closed.
-    fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Expr {
+    fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr, String> {
         if self.consts.contains_key(&s) {
-            panic!("a constant named {:?} already exists", &s);
+            return Err(format!("a constant named {:?} already exists", &s));
         }
         if !ty.is_closed() {
             panic!(
@@ -1184,7 +1184,7 @@ impl ExprManager {
         }
         let c = self.hashcons_(EConst(ConstContent { name: s.clone(), ty }));
         self.add_const_(c.clone());
-        c
+        Ok(c)
     }
 
     /// `assume F` is `F |- F`
@@ -1388,7 +1388,7 @@ impl ExprManager {
             Err(format!("{:?} should have a closed type, not {:?}", x, x.ty))?;
         }
 
-        let c = self.mk_new_const(x.name.clone(), x.ty.clone());
+        let c = self.mk_new_const(x.name.clone(), x.ty.clone())?;
         let eqn = self.mk_eq_app(c.clone(), rhs.clone());
         let thm = Thm::make_(eqn, vec![]);
         Ok((thm, c))
@@ -1402,5 +1402,107 @@ impl ExprManager {
         thm
     }
 
-    // TODO: add define_type_op (with rep/res, and formula)
+    /// Introduce a new type operator.
+    ///
+    /// Here, too, we follow HOL light:
+    /// `new_basic_type_definition(tau, abs, repr, inhabited)`
+    /// where `inhabited` is the theorem `|- Phi x` with `x : ty`,
+    /// defines a new type operator named `tau` and two functions,
+    /// `abs : ty -> tau` and `repr: tau -> ty`.
+    ///
+    /// It returns a struct `NewTypeDef` containing `tau, absthm, reprthm`, where:
+    /// - `tau` is the new (possibly parametrized) type operator
+    /// - `absthm` is `|- abs (repr x) = x`
+    /// - `reprthm` is `|- Phi x <=> repr (abs x) = x`
+    pub fn thm_new_basic_type_definition(
+        &mut self,
+        name_tau: Symbol,
+        abs: Symbol,
+        repr: Symbol,
+        thm_inhabited: Thm,
+    ) -> Result<NewTypeDef, String> {
+        if thm_inhabited.hyps().len() > 0 {
+            return Err(format!(
+                "new_basic_type_def: theorem must not have hyps, {:?}",
+                thm_inhabited
+            ));
+        }
+        let (phi, x) = thm_inhabited.concl().as_app().ok_or_else(|| {
+            format!(
+                "conclusion of theorem must be `(Phi x)`, not `{:?}`",
+                thm_inhabited.concl()
+            )
+        })?;
+        // the concrete type
+        let ty = x.ty().clone();
+        // check that all free variables are type variables
+        let mut fvars: Vec<Var> =
+            thm_inhabited.concl().free_vars().cloned().collect();
+        fvars.sort_unstable();
+        fvars.dedup();
+        if let Some(v) = fvars.iter().find(|v| !v.ty.is_type()) {
+            return Err(format!(
+                "free variable `{:?}` has type `{:?}`, not `type`",
+                &v, &v.ty
+            ));
+        }
+
+        // construct new type and mapping functions
+        let tau = {
+            let ttype = self.mk_ty();
+            let ty_tau = self.mk_pi_l(fvars.iter().cloned(), ttype);
+            self.mk_new_const(name_tau, ty_tau)?
+        };
+
+        // `tau` applied to `fvars`
+        let tau_vars = self.mk_app_iter(tau.clone(), |em, f| {
+            for v in fvars.iter() {
+                let v = em.mk_var(v.clone());
+                f(em, v)
+            }
+        });
+
+        let c_abs = {
+            let ty = self.mk_arrow(ty.clone(), tau_vars.clone());
+            self.mk_new_const(abs, ty)?
+        };
+        let c_repr = {
+            let ty = self.mk_arrow(tau_vars.clone(), ty.clone());
+            self.mk_new_const(repr, ty)?
+        };
+
+        let abs_thm = {
+            // `|- abs (repr x) = x`
+            let x = self.mk_var_str("x", tau_vars.clone());
+            let t = self.mk_app(c_repr.clone(), x);
+            Thm::make_(self.mk_app(c_abs.clone(), t), vec![])
+        };
+        let repr_thm = {
+            // `|- Phi x <=> repr (abs x) = x`
+            let x = self.mk_var_str("x", ty.clone());
+            let t1 = self.mk_app(c_abs.clone(), x.clone());
+            let t2 = self.mk_app(c_repr.clone(), t1);
+            let phi_x = self.mk_app(phi.clone(), x);
+            Thm::make_(self.mk_eq_app(phi_x, t2), vec![])
+        };
+
+        let c = NewTypeDef { tau, c_repr, c_abs, fvars, abs_thm, repr_thm };
+        Ok(c)
+    }
+}
+
+/// Helper for defining new type.
+#[derive(Debug)]
+pub struct NewTypeDef {
+    /// the new type constructor
+    tau: Expr,
+    fvars: Vec<Var>,
+    /// Function from the general type to `tau`
+    c_abs: Expr,
+    /// Function from `tau` back to the general type
+    c_repr: Expr,
+    /// `abs_thm` is `|- abs (repr x) = x`
+    abs_thm: Thm,
+    /// `repr_thm` is `|- Phi x <=> repr (abs x) = x`
+    repr_thm: Thm,
 }
