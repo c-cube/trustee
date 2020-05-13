@@ -618,12 +618,13 @@ impl<'a> VM<'a> {
                     );
                     // type of `c args`
                     c_ty_vars = {
-                        let args: Vec<_> = ty_vars
-                            .iter()
-                            .cloned()
-                            .map(|v| em.mk_var(v.clone()))
-                            .collect();
-                        em.mk_app_l(self.c.clone(), &args[..]).ty().clone()
+                        let app = em.mk_app_iter(self.c.clone(), |em, f| {
+                            for x in ty_vars.iter().cloned() {
+                                let v = em.mk_var(x);
+                                f(em, v)
+                            }
+                        });
+                        app.ty().clone()
                     }
                 }
                 // match type, so we're sure that `ty_vars` all disappear
@@ -639,15 +640,18 @@ impl<'a> VM<'a> {
                     "unified:\n  between {:?} and {:?}\n  yields {:?}",
                     c_ty_vars, ty, subst
                 );
-                let ty_args: Vec<Expr> = ty_vars
-                    .iter()
-                    .map(|v| match subst.find_rec(&v) {
-                        Some(e) => e.clone(),
-                        None => em.mk_var(v.clone()),
+                // now apply `c` to the proper type arguments
+                let t = {
+                    em.mk_app_iter(self.c.clone(), |em, f| {
+                        for v in ty_vars.iter() {
+                            let ty = match subst.find_rec(v) {
+                                Some(e) => e.clone(),
+                                None => em.mk_var(v.clone()),
+                            };
+                            f(em, ty)
+                        }
                     })
-                    .collect();
-                // now that we have the proper type arguments, apply `c` to them.
-                let t = em.mk_app_iter(self.c.clone(), ty_args);
+                };
                 eprintln!("result constant is {:?}", &t);
                 Ok(t)
             }

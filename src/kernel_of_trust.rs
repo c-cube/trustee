@@ -611,7 +611,7 @@ pub struct ExprManager {
     /// Hashconsing table, with weak semantics.
     tbl: fnv::FnvHashMap<ExprView, WExpr>,
     builtins: Option<ExprBuiltins>,
-    consts: fnv::FnvHashMap<Symbol, Expr>,
+    consts: fnv::FnvHashMap<Symbol, Expr>, // TODO: WExpr + collection? duplicate with `tbl`
     eq: Option<Expr>,
     imply: Option<Expr>,
     select: Option<Expr>,
@@ -703,7 +703,7 @@ impl ExprManager {
         // TODO: maybe if last cleanups were ineffective, increase n,
         // otherwise decrease n (down to some min value)
         if self.next_cleanup == 0 {
-            eprintln!("expr.hashcons: cleanup"); // TODO: comment, or use callback
+            eprintln!("expr.hashcons: cleanup"); // TODO: comment, or use callback in expr manager
             self.cleanup();
         } else {
             self.next_cleanup -= 1;
@@ -868,6 +868,9 @@ impl ExprManager {
             },
         }
     }
+
+    // TODO: have a (dense) stack of substitutions to do? could be useful
+    // for type inference in `f t1…tn`, instantiating `n` Π types at once.
 
     /// Replace DB0 in `t` by `u`, under `k` intermediate binders.
     fn subst1_(&mut self, t: &Expr, k: u32, u: &Expr) -> Expr {
@@ -1043,21 +1046,29 @@ impl ExprManager {
     }
 
     /// Apply `f` to the given arguments.
-    pub fn mk_app_iter<I>(&mut self, f: Expr, args: I) -> Expr
+    ///
+    /// `I` is an iterator that takes a closure and calls it on
+    /// a series of expressions successively.
+    pub fn mk_app_iter<I>(&mut self, f: Expr, mut args: I) -> Expr
     where
-        I: IntoIterator<Item = Expr>,
+        I: FnMut(&mut Self, &mut dyn FnMut(&mut Self, Expr)),
     {
         // TODO: compute type in one go?
         let mut e = f;
-        for x in args {
-            e = self.mk_app(e, x);
-        }
+        args(self, &mut |em: &mut Self, x: Expr| {
+            let e2 = e.clone();
+            e = em.mk_app(e2, x);
+        });
         e
     }
 
     /// Apply `f` to the given arguments.
     pub fn mk_app_l(&mut self, f: Expr, args: &[Expr]) -> Expr {
-        self.mk_app_iter(f, args.iter().cloned())
+        self.mk_app_iter(f, |em, f| {
+            for x in args {
+                f(em, x.clone())
+            }
+        })
     }
 
     /// Make a free variable.
