@@ -39,10 +39,10 @@ fn test_type_of_kind() {
 fn test_apply() {
     let mut em = ExprManager::new();
     let b = em.mk_bool();
-    let b2b = em.mk_arrow(b.clone(), b.clone());
+    let b2b = em.mk_arrow(b.clone(), b.clone()).unwrap();
     let p = em.mk_var_str("p", b2b);
     let a = em.mk_var_str("a", b);
-    let pa = em.mk_app(p, a);
+    let pa = em.mk_app(p, a).unwrap();
     assert!(match pa.view() {
         EApp(..) => true,
         _ => false,
@@ -54,12 +54,12 @@ fn test_apply() {
 fn test_lambda() {
     let mut em = ExprManager::new();
     let b = em.mk_bool();
-    let b2b = em.mk_arrow(b.clone(), b.clone());
+    let b2b = em.mk_arrow(b.clone(), b.clone()).unwrap();
     let p = em.mk_var_str("p", b2b);
     let x = Var::from_str("x", b.clone());
     let ex = em.mk_var(x.clone());
-    let body = em.mk_app(p, ex);
-    let f = em.mk_lambda(x, body);
+    let body = em.mk_app(p, ex).unwrap();
+    let f = em.mk_lambda(x, body).unwrap();
     assert!(match f.view() {
         ELambda(..) => true,
         _ => false,
@@ -75,11 +75,11 @@ fn test_lambda() {
 fn test_assume() {
     let mut em = ExprManager::new();
     let b = em.mk_bool();
-    let b2b = em.mk_arrow(b.clone(), b.clone());
+    let b2b = em.mk_arrow(b.clone(), b.clone()).unwrap();
     let p = em.mk_var_str("p", b2b);
     let a = em.mk_var_str("a", b);
-    let pa2 = em.mk_app(p.clone(), a.clone());
-    let pa = em.mk_app(p, a);
+    let pa2 = em.mk_app(p.clone(), a.clone()).unwrap();
+    let pa = em.mk_app(p, a).unwrap();
     assert_eq!(&pa, &pa2);
     let th = em.thm_assume(&pa);
     assert_eq!(th.concl(), &pa);
