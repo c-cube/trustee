@@ -26,12 +26,13 @@ pub fn thm_new_poly_definition(
         c, rhs));
     }
 
-    let ty_closed = em.mk_pi_l(vars_ty_rhs.iter().cloned(), rhs.ty().clone());
+    let ty_closed =
+        em.mk_pi_l(vars_ty_rhs.iter().cloned(), rhs.ty().clone())?;
     let eqn = {
         let rhs_closed =
-            em.mk_lambda_l(vars_ty_rhs.iter().cloned(), rhs.clone());
+            em.mk_lambda_l(vars_ty_rhs.iter().cloned(), rhs.clone())?;
         let v = em.mk_var_str(c, ty_closed);
-        em.mk_eq_app(v, rhs_closed)
+        em.mk_eq_app(v, rhs_closed)?
     };
     let (thm, c) = em.thm_new_basic_definition(eqn)?;
     Ok((thm, c, vars_ty_rhs))
@@ -295,7 +296,7 @@ pub fn thm_sym(em: &mut ExprManager, th: &Thm) -> Result<Thm, String> {
     let refl_t = em.thm_refl(t.clone());
     let th_tequ_eq_ueqt = {
         let eq = em.mk_eq();
-        let eq_u = em.mk_app(eq, u.ty().clone());
+        let eq_u = em.mk_app(eq, u.ty().clone())?;
         let th_r = em.thm_refl(eq_u);
         let th_c_r = em.thm_congr(&th_r, th)?;
         em.thm_congr(&th_c_r, &refl_t)?

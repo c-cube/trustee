@@ -3,6 +3,10 @@
 use crate::fnv;
 use std::{fmt, ops::Deref, sync::Arc, sync::Weak};
 
+// TODO: use a proper enum for errors
+/// Result type.
+pub type Result<T> = std::result::Result<T, String>;
+
 ///! # Symbols.
 
 /// Builtin symbols
@@ -170,14 +174,6 @@ impl Var {
     pub fn from_str(name: &str, ty: Type) -> Var {
         Var { name: Symbol::from_str(name), ty }
     }
-
-    /// Transform the type using `f`.
-    pub fn map_ty<F>(&self, f: F) -> Self
-    where
-        F: FnOnce(&Expr) -> Expr,
-    {
-        Var { name: self.name.clone(), ty: f(&self.ty) }
-    }
 }
 
 impl BoundVarContent {
@@ -188,13 +184,6 @@ impl BoundVarContent {
 
     pub fn ty(&self) -> &Expr {
         &self.ty
-    }
-
-    fn map_ty<F>(&self, f: F) -> Self
-    where
-        F: FnOnce(&Expr) -> Expr,
-    {
-        BoundVarContent { idx: self.idx, ty: f(&self.ty) }
     }
 }
 
@@ -231,21 +220,23 @@ impl ExprView {
     ///
     /// `k` is the current number of surrounding binders, it is passed back
     /// to the callback `f`, possibly incremented by one.
-    pub fn map<F>(&self, mut f: F, k: DbIndex) -> Self
+    pub fn map<F>(&self, mut f: F, k: DbIndex) -> Result<Self>
     where
-        F: FnMut(&Expr, DbIndex) -> Expr,
+        F: FnMut(&Expr, DbIndex) -> Result<Expr>,
     {
-        match self {
+        Ok(match self {
             EType | EKind => self.clone(),
-            EConst(c) => EConst(ConstContent { ty: f(&c.ty, k), ..c.clone() }),
-            EVar(v) => EVar(Var { ty: f(&v.ty, k), ..v.clone() }),
-            EBoundVar(v) => {
-                EBoundVar(BoundVarContent { ty: f(&v.ty, k), ..v.clone() })
+            EConst(c) => {
+                EConst(ConstContent { ty: f(&c.ty, k)?, name: c.name.clone() })
             }
-            EApp(a, b) => EApp(f(a, k), f(b, k)),
-            EPi(ty_a, b) => EPi(f(ty_a, k), f(b, k + 1)),
-            ELambda(ty_a, b) => ELambda(f(ty_a, k), f(b, k + 1)),
-        }
+            EVar(v) => EVar(Var { ty: f(&v.ty, k)?, name: v.name.clone() }),
+            EBoundVar(v) => {
+                EBoundVar(BoundVarContent { ty: f(&v.ty, k)?, idx: v.idx })
+            }
+            EApp(a, b) => EApp(f(a, k)?, f(b, k)?),
+            EPi(ty_a, b) => EPi(f(ty_a, k)?, f(b, k + 1)?),
+            ELambda(ty_a, b) => ELambda(f(ty_a, k)?, f(b, k + 1)?),
+        })
     }
 }
 
@@ -520,6 +511,11 @@ impl Expr {
         //write!(out, "/{:?}", self.0.as_ref() as *const _)?; // pp pointer
         Ok(())
     }
+
+    /// Basic printer.
+    pub fn to_string(&self) -> String {
+        format!("{:?}", self)
+    }
 }
 
 impl fmt::Debug for Expr {
@@ -687,11 +683,11 @@ impl ExprManager {
     }
 
     /// Add to the internal table, return the canonical representant.
-    fn hashcons_(&mut self, ev: ExprView) -> Expr {
+    fn hashcons_(&mut self, ev: ExprView) -> Result<Expr> {
         let tbl = &mut self.tbl; // lock tbl
         match tbl.get(&ev) {
             Some(v) => match Weak::upgrade(&v.0) {
-                Some(t) => return Expr(t), // still alive!
+                Some(t) => return Ok(Expr(t)), // still alive!
                 None => (),
             },
             None => (),
@@ -710,7 +706,7 @@ impl ExprManager {
         }
 
         // need to insert the term, so first we need to compute its type.
-        let ty = self.compute_ty_(&ev);
+        let ty = self.compute_ty_(&ev)?;
         let key = ev.clone();
         let e = Expr::make_(ev, ty);
         //#[rustfmt::skip]
@@ -723,7 +719,7 @@ impl ExprManager {
         let tbl = &mut self.tbl;
         tbl.insert(key, e.weak());
         //eprintln!("e.ev mem: {}", self.tbl.contains_key(&e.0.view));
-        e
+        Ok(e)
     }
 
     fn add_const_(&mut self, e: Expr) {
@@ -753,9 +749,9 @@ impl ExprManager {
                 let ty = self.mk_ty();
                 let bool = self.mk_bool();
                 let db0 = self.mk_bound_var(0, ty.clone());
-                let arr = self.mk_arrow(db0.clone(), bool.clone());
-                let arr = self.mk_arrow(db0.clone(), arr);
-                let ty_eq = self.mk_pi_(ty.clone(), arr);
+                let arr = self.mk_arrow(db0.clone(), bool.clone()).unwrap();
+                let arr = self.mk_arrow(db0.clone(), arr).unwrap();
+                let ty_eq = self.mk_pi_(ty.clone(), arr).unwrap();
                 let name = Symbol::Builtin(BS::Eq);
                 let c = self.mk_new_const(name, ty_eq).unwrap();
                 self.eq = Some(c.clone());
@@ -767,9 +763,12 @@ impl ExprManager {
     /// Make `a = b`.
     ///
     /// Panics if `a` and `b` do not have the same type.
-    pub fn mk_eq_app(&mut self, a: Expr, b: Expr) -> Expr {
+    pub fn mk_eq_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
         if a.ty() != b.ty() {
-            panic!("mk_eq: {:?} and {:?} have incompatible types", &a, &b);
+            return Err(format!(
+                "mk_eq: {:?} and {:?} have incompatible types",
+                &a, &b
+            ));
         }
         let eq = self.mk_eq();
         self.mk_app_l(eq, &[a.ty().clone(), a, b])
@@ -781,8 +780,8 @@ impl ExprManager {
             Some(ref c) => c.clone(),
             None => {
                 let bool = self.mk_bool();
-                let arr = self.mk_arrow(bool.clone(), bool.clone());
-                let arr = self.mk_arrow(bool.clone(), arr);
+                let arr = self.mk_arrow(bool.clone(), bool.clone()).unwrap();
+                let arr = self.mk_arrow(bool.clone(), arr).unwrap();
                 let name = Symbol::Builtin(BS::Imply);
                 let i = self.mk_new_const(name, arr).unwrap();
                 self.imply = Some(i.clone());
@@ -800,9 +799,9 @@ impl ExprManager {
                 // build type `Πa. (a->bool)->a`
                 let db0 = self.mk_bound_var(0, ty.clone());
                 let bool = self.mk_bool();
-                let arr = self.mk_arrow(db0.clone(), bool.clone());
-                let arr = self.mk_arrow(arr, db0.clone());
-                let ty = self.mk_pi_(ty, arr);
+                let arr = self.mk_arrow(db0.clone(), bool.clone()).unwrap();
+                let arr = self.mk_arrow(arr, db0.clone()).unwrap();
+                let ty = self.mk_pi_(ty, arr).unwrap();
                 let name = Symbol::Builtin(BS::Select);
                 let res = self.mk_new_const(name, ty).unwrap();
                 self.select = Some(res.clone());
@@ -820,8 +819,8 @@ impl ExprManager {
     }
 
     // compute the type for this expression
-    fn compute_ty_(&mut self, e: &ExprView) -> Option<Expr> {
-        match e {
+    fn compute_ty_(&mut self, e: &ExprView) -> Result<Option<Expr>> {
+        Ok(match e {
             EKind => None,
             EType => Some(self.builtins_().ty.clone()),
             EConst(c) => Some(c.ty.clone()),
@@ -830,19 +829,22 @@ impl ExprManager {
             ELambda(v_ty, body) => {
                 // type of `λx:a. t` is `Πx:a. typeof(b)`.
                 let ty_body = body.ty().clone();
-                Some(self.hashcons_(EPi(v_ty.clone(), ty_body)))
+                Some(self.hashcons_(EPi(v_ty.clone(), ty_body))?)
             }
             EPi(v_ty, e) => {
                 if !v_ty.is_type() && !v_ty.ty().is_type() {
-                    panic!(
+                    return Err(format!(
                         "pi: variable must be a type or be of type `type`, \
                         not `{:?}` : `{:?}`",
                         v_ty,
                         v_ty.ty()
-                    );
+                    ));
                 };
                 if !e.ty().is_type() {
-                    panic!("pi: body must have type `type`, not {:?}", e.ty());
+                    return Err(format!(
+                        "pi: body must have type `type`, not {:?}",
+                        e.ty()
+                    ));
                 };
                 Some(self.builtins_().ty.clone())
             }
@@ -850,7 +852,7 @@ impl ExprManager {
                 EPi(ty_var_f, ref ty_body_f) => {
                     // rule: `f: Πx:tya. b`, `arg: tya` ==> `f arg : b[arg/x]`
                     if ty_var_f != arg.ty() {
-                        panic!(
+                        return Err(format!(
                             "apply: incompatible types: \
                                 function `{:?}` has type `{:?}`, \
                                 expecting arg of type {:?}, \
@@ -860,105 +862,114 @@ impl ExprManager {
                             ty_var_f,
                             arg,
                             arg.ty()
-                        );
+                        ));
                     }
-                    Some(self.subst1_(ty_body_f, 0, arg))
+                    Some(self.subst1_(ty_body_f, 0, arg)?)
                 }
                 _ => panic!("cannot apply term with a non-pi type"),
             },
-        }
+        })
     }
 
     // TODO: have a (dense) stack of substitutions to do? could be useful
     // for type inference in `f t1…tn`, instantiating `n` Π types at once.
 
     /// Replace DB0 in `t` by `u`, under `k` intermediate binders.
-    fn subst1_(&mut self, t: &Expr, k: u32, u: &Expr) -> Expr {
+    fn subst1_(&mut self, t: &Expr, k: u32, u: &Expr) -> Result<Expr> {
         if t.is_closed() {
-            return t.clone(); // shortcut
+            return Ok(t.clone()); // shortcut
         }
 
-        match t.view() {
+        Ok(match t.view() {
             EKind | EType | EConst(..) => t.clone(),
             EApp(a, b) => {
-                let a2 = self.subst1_(a, k, u);
-                let b2 = self.subst1_(b, k, u);
+                let a2 = self.subst1_(a, k, u)?;
+                let b2 = self.subst1_(b, k, u)?;
                 if a == &a2 && b == &b2 {
                     t.clone() // no need to do hashconsing
                 } else {
-                    self.hashcons_(EApp(a2, b2))
+                    self.hashcons_(EApp(a2, b2))?
                 }
             }
             ELambda(v_ty, body) => {
-                let v_ty2 = self.subst1_(v_ty, k, u);
-                let body2 = self.subst1_(body, k + 1, u);
+                let v_ty2 = self.subst1_(v_ty, k, u)?;
+                let body2 = self.subst1_(body, k + 1, u)?;
                 if v_ty == &v_ty2 && body == &body2 {
                     t.clone()
                 } else {
-                    self.hashcons_(ELambda(v_ty2, body2))
+                    self.hashcons_(ELambda(v_ty2, body2))?
                 }
             }
             EPi(v_ty, body) => {
-                let v_ty2 = self.subst1_(v_ty, k, u);
-                let body2 = self.subst1_(body, k + 1, u);
-                self.hashcons_(EPi(v_ty2, body2))
+                let v_ty2 = self.subst1_(v_ty, k, u)?;
+                let body2 = self.subst1_(body, k + 1, u)?;
+                self.hashcons_(EPi(v_ty2, body2))?
             }
             EVar(v) => {
-                let v2 = v.map_ty(|ty| self.subst1_(ty, k, u));
-                self.hashcons_(EVar(v2))
+                let v2 = Var {
+                    ty: self.subst1_(&v.ty, k, u)?,
+                    name: v.name().clone(),
+                };
+                self.hashcons_(EVar(v2))?
             }
             EBoundVar(v) if v.idx == k => {
                 // substitute here, but shifting `u` by `k` to
                 // account for the `k` intermediate binders
-                self.shift_(u, k, 0)
+                self.shift_(u, k, 0)?
             }
             EBoundVar(v) if v.idx > k => {
                 // need to unshift by 1, since we remove a binder and this is open
                 let v2 = BoundVarContent {
                     idx: v.idx - 1,
-                    ty: self.subst1_(&v.ty, k, u),
+                    ty: self.subst1_(&v.ty, k, u)?,
                 };
-                self.hashcons_(EBoundVar(v2))
+                self.hashcons_(EBoundVar(v2))?
             }
             EBoundVar(v) => {
-                let v2 = v.map_ty(|ty| self.subst1_(ty, k, u));
-                self.hashcons_(EBoundVar(v2))
+                let v2 = BoundVarContent {
+                    idx: v.idx,
+                    ty: self.subst1_(&v.ty, k, u)?,
+                };
+                self.hashcons_(EBoundVar(v2))?
             }
-        }
+        })
     }
 
     /// Shift free DB vars by `n` under `k` intermediate binders
-    fn shift_(&mut self, t: &Expr, n: DbIndex, k: DbIndex) -> Expr {
+    fn shift_(&mut self, t: &Expr, n: DbIndex, k: DbIndex) -> Result<Expr> {
         if n == 0 || t.is_closed() {
-            return t.clone(); // shortcut for identity
+            return Ok(t.clone()); // shortcut for identity
         }
 
         let ev = t.view();
-        match ev {
+        Ok(match ev {
             EKind | EType | EConst(..) => t.clone(),
             EApp(..) | ELambda(..) | EPi(..) | EVar(..) => {
-                let ev2 = ev.map(|u, k| self.shift_(u, n, k), k);
-                self.hashcons_(ev2)
+                let ev2 = ev.map(|u, k| self.shift_(u, n, k), k)?;
+                self.hashcons_(ev2)?
             }
             EBoundVar(v) if v.idx < k => {
                 // keep `v`, as it's bound, but update its type
-                let v = v.map_ty(|ty| self.shift_(ty, n, k));
-                self.hashcons_(EBoundVar(v))
+                let v = BoundVarContent {
+                    idx: v.idx,
+                    ty: self.shift_(&v.ty, n, k)?,
+                };
+                self.hashcons_(EBoundVar(v))?
             }
             EBoundVar(v) => {
                 // shift bound var by `n`
-                let ty = self.shift_(&v.ty, n, k);
+                let ty = self.shift_(&v.ty, n, k)?;
                 self.hashcons_(EBoundVar(BoundVarContent {
                     idx: v.idx + n,
                     ty,
-                }))
+                }))?
             }
-        }
+        })
     }
 
     /// For each pair `(x,u)` in `subst`, replace instances of the free
     /// variable `x` by `u` in `t`.
-    pub fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Expr {
+    pub fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr> {
         struct Replace<'a> {
             // cache, relative to depth
             em: &'a mut ExprManager,
@@ -967,7 +978,7 @@ impl ExprManager {
 
         impl<'a> Replace<'a> {
             // replace in `t`, under `k` intermediate binders.
-            fn replace(&mut self, t: &Expr, k: DbIndex) -> Expr {
+            fn replace(&mut self, t: &Expr, k: DbIndex) -> Result<Expr> {
                 //eprintln!("> replace `{:?}` k={}", t, k);
                 let r = match t.view() {
                     // fast cases first
@@ -976,26 +987,29 @@ impl ExprManager {
                         // lookup `v` in `subst`
                         for (v2, u2) in self.subst.iter() {
                             if v == v2 {
-                                let u3 = self.em.shift_(u2, k, 0);
+                                let u3 = self.em.shift_(u2, k, 0)?;
                                 //eprintln!(
                                 //    ">> replace {:?} with {:?}, shifted[{}] into {:?}",
                                 //    v, u2, k, u3
                                 //);
-                                return u3;
+                                return Ok(u3);
                             }
                         }
                         // otherwise just substitute in the type
-                        let v2 = v.map_ty(|ty| self.replace(ty, k));
+                        let v2 = Var {
+                            name: v.name.clone(),
+                            ty: self.replace(&v.ty, k)?,
+                        };
                         self.em.mk_var(v2)
                     }
                     ev => {
                         // shallow map + cache
-                        let uv = ev.map(|sub, k| self.replace(sub, k), k);
-                        self.em.hashcons_(uv)
+                        let uv = ev.map(|sub, k| self.replace(sub, k), k)?;
+                        self.em.hashcons_(uv)?
                     }
                 };
                 //eprintln!("< replace `{:?}` k={}\n  yields `{:?}`", t, k, r);
-                r
+                Ok(r)
             }
         }
 
@@ -1041,7 +1055,7 @@ impl ExprManager {
     }
 
     /// Apply `a` to `b`.
-    pub fn mk_app(&mut self, a: Expr, b: Expr) -> Expr {
+    pub fn mk_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
         self.hashcons_(EApp(a, b))
     }
 
@@ -1049,31 +1063,36 @@ impl ExprManager {
     ///
     /// `I` is an iterator that takes a closure and calls it on
     /// a series of expressions successively.
-    pub fn mk_app_iter<I>(&mut self, f: Expr, mut args: I) -> Expr
+    pub fn mk_app_iter<I>(&mut self, f: Expr, mut args: I) -> Result<Expr>
     where
-        I: FnMut(&mut Self, &mut dyn FnMut(&mut Self, Expr)),
+        I: FnMut(
+            &mut Self,
+            &mut dyn FnMut(&mut Self, Expr) -> Result<()>,
+        ) -> Result<()>,
     {
         // TODO: compute type in one go?
         let mut e = f;
         args(self, &mut |em: &mut Self, x: Expr| {
             let e2 = e.clone();
-            e = em.mk_app(e2, x);
-        });
-        e
+            e = em.mk_app(e2, x)?;
+            Ok(())
+        })?;
+        Ok(e)
     }
 
     /// Apply `f` to the given arguments.
-    pub fn mk_app_l(&mut self, f: Expr, args: &[Expr]) -> Expr {
+    pub fn mk_app_l(&mut self, f: Expr, args: &[Expr]) -> Result<Expr> {
         self.mk_app_iter(f, |em, f| {
             for x in args {
-                f(em, x.clone())
+                f(em, x.clone())?
             }
+            Ok(())
         })
     }
 
     /// Make a free variable.
     pub fn mk_var(&mut self, v: Var) -> Expr {
-        self.hashcons_(EVar(v))
+        self.hashcons_(EVar(v)).expect("mk_var can't fail")
     }
 
     /// Make a free variable.
@@ -1090,37 +1109,40 @@ impl ExprManager {
     /// Make a bound variable with given type and index.
     pub fn mk_bound_var(&mut self, idx: DbIndex, ty_var: Type) -> Expr {
         self.hashcons_(EBoundVar(BoundVarContent { idx, ty: ty_var }))
+            .expect("mk_bound_var cannot fail")
     }
 
     /// Make a lambda term.
-    fn mk_lambda_(&mut self, ty_var: Type, body: Expr) -> Expr {
+    fn mk_lambda_(&mut self, ty_var: Type, body: Expr) -> Result<Expr> {
         self.hashcons_(ELambda(ty_var, body))
     }
 
     /// Substitute `v` with db0 in `body`.
-    fn abs_on_(&mut self, v: Var, body: Expr) -> Expr {
+    fn abs_on_(&mut self, v: Var, body: Expr) -> Result<Expr> {
         let v_ty = &v.ty;
         if !v_ty.is_closed() {
-            panic!("mk_abs: var {:?} has non-closed type {:?}", &v, v_ty);
+            return Err(format!(
+                "mk_abs: var {:?} has non-closed type {:?}",
+                &v, v_ty
+            ));
         }
         let v_ty = v_ty.clone();
         // replace `v` with `db0` in `body`. This should also take
         // care of shifting the DB by 1 as appropriate.
         let db0 = self.mk_bound_var(0, v_ty.clone());
-        let body = self.shift_(&body, 1, 0);
-        let body = self.subst(&body, &[(v, db0)]);
-        body
+        let body = self.shift_(&body, 1, 0)?;
+        self.subst(&body, &[(v, db0)])
     }
 
     /// Make a lambda term by abstracting on `v`.
-    pub fn mk_lambda(&mut self, v: Var, body: Expr) -> Expr {
+    pub fn mk_lambda(&mut self, v: Var, body: Expr) -> Result<Expr> {
         let v_ty = v.ty.clone();
-        let body = self.abs_on_(v, body);
+        let body = self.abs_on_(v, body)?;
         self.mk_lambda_(v_ty, body)
     }
 
     /// Bind several variables at once.
-    pub fn mk_lambda_l<I>(&mut self, vars: I, body: Expr) -> Expr
+    pub fn mk_lambda_l<I>(&mut self, vars: I, body: Expr) -> Result<Expr>
     where
         I: DoubleEndedIterator<Item = Var>,
     {
@@ -1128,25 +1150,25 @@ impl ExprManager {
         // TODO: substitute more efficiently (with a stack, rather than one by one)?
         // right-assoc
         for v in vars.rev() {
-            e = self.mk_lambda(v, e);
+            e = self.mk_lambda(v, e)?;
         }
-        e
+        Ok(e)
     }
 
     /// Make a pi term.
-    fn mk_pi_(&mut self, ty_var: Expr, body: Expr) -> Expr {
+    fn mk_pi_(&mut self, ty_var: Expr, body: Expr) -> Result<Expr> {
         self.hashcons_(EPi(ty_var, body))
     }
 
     /// Make a pi term by absracting on `v`.
-    pub fn mk_pi(&mut self, v: Var, body: Expr) -> Expr {
+    pub fn mk_pi(&mut self, v: Var, body: Expr) -> Result<Expr> {
         let v_ty = v.ty.clone();
-        let body = self.abs_on_(v, body);
+        let body = self.abs_on_(v, body)?;
         self.mk_pi_(v_ty, body)
     }
 
     /// Bind several variables at once.
-    pub fn mk_pi_l<I>(&mut self, vars: I, body: Expr) -> Expr
+    pub fn mk_pi_l<I>(&mut self, vars: I, body: Expr) -> Result<Expr>
     where
         I: DoubleEndedIterator<Item = Var>,
     {
@@ -1154,17 +1176,17 @@ impl ExprManager {
         // TODO: substitute more efficiently (with a stack, rather than one by one)?
         // right-assoc
         for v in vars.rev() {
-            e = self.mk_pi(v, e);
+            e = self.mk_pi(v, e)?;
         }
-        e
+        Ok(e)
     }
 
     /// Make an arrow `a -> b` term.
     ///
     /// This builds `Π_:a. b`.
-    pub fn mk_arrow(&mut self, ty1: Expr, ty2: Expr) -> Expr {
+    pub fn mk_arrow(&mut self, ty1: Expr, ty2: Expr) -> Result<Expr> {
         // need to shift ty2 by 1 to account for the Π binder.
-        let ty2 = self.shift_(&ty2, 1, 0);
+        let ty2 = self.shift_(&ty2, 1, 0)?;
         self.mk_pi_(ty1, ty2)
     }
 
@@ -1172,7 +1194,7 @@ impl ExprManager {
     ///
     /// panics if some constant with the same name exists, or if
     /// the type is not closed.
-    fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr, String> {
+    fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
         if self.consts.contains_key(&s) {
             return Err(format!("a constant named {:?} already exists", &s));
         }
@@ -1182,7 +1204,7 @@ impl ExprManager {
                 &s, &ty
             );
         }
-        let c = self.hashcons_(EConst(ConstContent { name: s.clone(), ty }));
+        let c = self.hashcons_(EConst(ConstContent { name: s.clone(), ty }))?;
         self.add_const_(c.clone());
         Ok(c)
     }
@@ -1194,14 +1216,14 @@ impl ExprManager {
 
     /// `refl t` is `|- t=t`
     pub fn thm_refl(&mut self, e: Expr) -> Thm {
-        let t = self.mk_eq_app(e.clone(), e.clone());
+        let t = self.mk_eq_app(e.clone(), e.clone()).expect("refl");
         Thm::make_(t, vec![])
     }
 
     /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
     ///
     /// Can fail if the conclusions don't match properly.
-    pub fn thm_trans(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
+    pub fn thm_trans(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
         let (a, b) =
             th1.concl().unfold_eq().ok_or("trans: th1 must be an equation")?;
         let (b2, c) =
@@ -1211,13 +1233,13 @@ impl ExprManager {
         }
 
         let hyps = hyps_merge(th1, th2);
-        let eq_a_c = self.mk_eq_app(a.clone(), c.clone());
+        let eq_a_c = self.mk_eq_app(a.clone(), c.clone())?;
         let th = Thm::make_(eq_a_c, hyps);
         Ok(th)
     }
 
     /// `congr (F1 |- f=g) (F2 |- t=u)` is `F1, F2 |- f t=g u`
-    pub fn thm_congr(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
+    pub fn thm_congr(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
         let (f, g) =
             th1.0.concl.unfold_eq().ok_or_else(|| {
                 format!("congr: {:?} must be an equality", th1)
@@ -1226,9 +1248,9 @@ impl ExprManager {
             th2.0.concl.unfold_eq().ok_or_else(|| {
                 format!("congr: {:?} must be an equality", th2)
             })?;
-        let ft = self.mk_app(f.clone(), t.clone());
-        let gu = self.mk_app(g.clone(), u.clone());
-        let eq = self.mk_eq_app(ft, gu);
+        let ft = self.mk_app(f.clone(), t.clone())?;
+        let gu = self.mk_app(g.clone(), u.clone())?;
+        let eq = self.mk_eq_app(ft, gu)?;
         let hyps = hyps_merge(th1, th2);
         Ok(Thm::make_(eq, hyps))
     }
@@ -1240,7 +1262,7 @@ impl ExprManager {
         &mut self,
         th: &Thm,
         subst: &[(Var, Expr)],
-    ) -> Result<Thm, String> {
+    ) -> Result<Thm> {
         if let Some((v, t)) = subst.iter().find(|(_, t)| !t.is_closed()) {
             return Err(format!(
                     "instantiate: substitution {:?} contains non-closed binding {:?} := {:?}",
@@ -1248,9 +1270,9 @@ impl ExprManager {
         }
 
         let mut hyps = th.0.hyps.clone();
-        let concl = self.subst(&th.0.concl, subst);
+        let concl = self.subst(&th.0.concl, subst)?;
         for t in hyps.iter_mut() {
-            *t = self.subst(t, subst);
+            *t = self.subst(t, subst)?;
         }
         Ok(Thm::make_(concl, hyps))
     }
@@ -1258,18 +1280,21 @@ impl ExprManager {
     /// `abs x (F |- t=u)` is `F |- (λx.t)=(λx.u)`
     ///
     /// Panics if `x` occurs freely in `F`.
-    pub fn thm_abs(&mut self, v: &Var, th: &Thm) -> Result<Thm, String> {
+    pub fn thm_abs(&mut self, v: &Var, th: &Thm) -> Result<Thm> {
         if free_vars_iter(th.0.hyps.iter()).any(|v2| v == v2) {
-            panic!("abs: variable {:?} occurs in hyps of {:?}", v, th);
+            return Err(format!(
+                "abs: variable {:?} occurs in hyps of {:?}",
+                v, th
+            ));
         }
 
         let (t, u) =
             th.0.concl
                 .unfold_eq()
                 .ok_or("abs: thm's conclusion should be an equality")?;
-        let lam_t = self.mk_lambda(v.clone(), t.clone());
-        let lam_u = self.mk_lambda(v.clone(), u.clone());
-        let eq = self.mk_eq_app(lam_t, lam_u);
+        let lam_t = self.mk_lambda(v.clone(), t.clone())?;
+        let lam_u = self.mk_lambda(v.clone(), u.clone())?;
+        let eq = self.mk_eq_app(lam_t, lam_u)?;
         Ok(Thm::make_(eq, th.0.hyps.clone()))
     }
 
@@ -1280,7 +1305,7 @@ impl ExprManager {
     ///
     /// NOTE: this is not strictly necessary, as it's not an axiom in HOL light,
     /// but we include it here anyway.
-    pub fn thm_cut(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
+    pub fn thm_cut(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
         let th1_c = &th1.0.concl;
         if !th2.0.hyps.contains(th1_c) {
             Err("cut: th2's hyps do not contain th1's conclusion")?
@@ -1294,7 +1319,7 @@ impl ExprManager {
 
     /// `mp (F1 |- a) (F2 |- a' ==> b)` is `F1, F2 |- b`
     /// where `a` and `a'` are alpha equivalent.
-    pub fn thm_mp(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
+    pub fn thm_mp(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
         let th2_c = &th2.0.concl;
         let (a, b) = th2_c.unfold_imply().ok_or_else(|| {
             format!("mp: second theorem {:?} must be an implication", th2)
@@ -1312,7 +1337,7 @@ impl ExprManager {
 
     /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
     /// This is the boolean equivalent of transitivity.
-    pub fn thm_bool_eq(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm, String> {
+    pub fn thm_bool_eq(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
         let th2_c = &th2.0.concl;
         let (a, b) = th2_c
             .unfold_eq()
@@ -1338,17 +1363,17 @@ impl ExprManager {
     /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
     /// This is a way of building a boolean `a=b` from proofs of
     /// `a==>b` and `b==>a` (or `a|-b` and [b|-a`).
-    pub fn thm_bool_eq_intro(&mut self, th1: &Thm, th2: &Thm) -> Thm {
+    pub fn thm_bool_eq_intro(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
         let mut hyps = vec![];
         hyps.extend(th1.0.hyps.iter().filter(|x| *x != &th2.0.concl).cloned());
         hyps.extend(th2.0.hyps.iter().filter(|x| *x != &th1.0.concl).cloned());
-        let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone());
-        Thm::make_(eq, hyps)
+        let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
+        Ok(Thm::make_(eq, hyps))
     }
 
     /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
     /// Fails if the term is not a beta-redex.
-    pub fn thm_beta_conv(&mut self, e: &Expr) -> Result<Thm, String> {
+    pub fn thm_beta_conv(&mut self, e: &Expr) -> Result<Thm> {
         let (f, arg) = e.as_app().ok_or_else(|| {
             format!("beta-conv: expect an application, not {:?}", e)
         })?;
@@ -1358,8 +1383,8 @@ impl ExprManager {
         debug_assert_eq!(ty, arg.ty()); // should already be enforced by typing.
 
         let lhs = e.clone();
-        let rhs = self.subst1_(bod, 0, arg);
-        let eq = self.mk_eq_app(lhs, rhs);
+        let rhs = self.subst1_(bod, 0, arg)?;
+        let eq = self.mk_eq_app(lhs, rhs)?;
         Ok(Thm::make_(eq, vec![]))
     }
 
@@ -1367,10 +1392,7 @@ impl ExprManager {
     /// with a closed type,
     /// returns a theorem `|- x=t` where `x` is now a constant, along with
     /// the constant `x`.
-    pub fn thm_new_basic_definition(
-        &mut self,
-        e: Expr,
-    ) -> Result<(Thm, Expr), String> {
+    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Expr)> {
         let (x, rhs) = e
             .unfold_eq()
             .and_then(|(x, rhs)| x.as_var().map(|x| (x, rhs)))
@@ -1381,15 +1403,18 @@ impl ExprManager {
                 )
             })?;
         if !rhs.is_closed() {
-            Err(format!("rhs {:?} should be closed", rhs))?;
+            return Err(format!("rhs {:?} should be closed", rhs));
         }
         // checks that the type of `x` is closed
         if !x.ty.is_closed() {
-            Err(format!("{:?} should have a closed type, not {:?}", x, x.ty))?;
+            return Err(format!(
+                "{:?} should have a closed type, not {:?}",
+                x, x.ty
+            ));
         }
 
         let c = self.mk_new_const(x.name.clone(), x.ty.clone())?;
-        let eqn = self.mk_eq_app(c.clone(), rhs.clone());
+        let eqn = self.mk_eq_app(c.clone(), rhs.clone())?;
         let thm = Thm::make_(eqn, vec![]);
         Ok((thm, c))
     }
@@ -1420,7 +1445,7 @@ impl ExprManager {
         abs: Symbol,
         repr: Symbol,
         thm_inhabited: Thm,
-    ) -> Result<NewTypeDef, String> {
+    ) -> Result<NewTypeDef> {
         if thm_inhabited.hyps().len() > 0 {
             return Err(format!(
                 "new_basic_type_def: theorem must not have hyps, {:?}",
@@ -1450,7 +1475,7 @@ impl ExprManager {
         // construct new type and mapping functions
         let tau = {
             let ttype = self.mk_ty();
-            let ty_tau = self.mk_pi_l(fvars.iter().cloned(), ttype);
+            let ty_tau = self.mk_pi_l(fvars.iter().cloned(), ttype)?;
             self.mk_new_const(name_tau, ty_tau)?
         };
 
@@ -1458,32 +1483,33 @@ impl ExprManager {
         let tau_vars = self.mk_app_iter(tau.clone(), |em, f| {
             for v in fvars.iter() {
                 let v = em.mk_var(v.clone());
-                f(em, v)
+                f(em, v)?
             }
-        });
+            Ok(())
+        })?;
 
         let c_abs = {
-            let ty = self.mk_arrow(ty.clone(), tau_vars.clone());
+            let ty = self.mk_arrow(ty.clone(), tau_vars.clone())?;
             self.mk_new_const(abs, ty)?
         };
         let c_repr = {
-            let ty = self.mk_arrow(tau_vars.clone(), ty.clone());
+            let ty = self.mk_arrow(tau_vars.clone(), ty.clone())?;
             self.mk_new_const(repr, ty)?
         };
 
         let abs_thm = {
             // `|- abs (repr x) = x`
             let x = self.mk_var_str("x", tau_vars.clone());
-            let t = self.mk_app(c_repr.clone(), x);
-            Thm::make_(self.mk_app(c_abs.clone(), t), vec![])
+            let t = self.mk_app(c_repr.clone(), x)?;
+            Thm::make_(self.mk_app(c_abs.clone(), t)?, vec![])
         };
         let repr_thm = {
             // `|- Phi x <=> repr (abs x) = x`
             let x = self.mk_var_str("x", ty.clone());
-            let t1 = self.mk_app(c_abs.clone(), x.clone());
-            let t2 = self.mk_app(c_repr.clone(), t1);
-            let phi_x = self.mk_app(phi.clone(), x);
-            Thm::make_(self.mk_eq_app(phi_x, t2), vec![])
+            let t1 = self.mk_app(c_abs.clone(), x.clone())?;
+            let t2 = self.mk_app(c_repr.clone(), t1)?;
+            let phi_x = self.mk_app(phi.clone(), x)?;
+            Thm::make_(self.mk_eq_app(phi_x, t2)?, vec![])
         };
 
         let c = NewTypeDef { tau, c_repr, c_abs, fvars, abs_thm, repr_thm };

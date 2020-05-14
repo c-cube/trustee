@@ -36,6 +36,7 @@ py_class!(class Expr |py| {
         Ok(e.to_string())
     }
 
+    // application!
     def __call__(&self, arg : Expr) -> PyResult<Expr> {
         let em = self.em(py);
         let mut g_em = em.lock().unwrap();
@@ -43,6 +44,12 @@ py_class!(class Expr |py| {
         drop(g_em);
         Expr::create_instance(py, e, em.clone())
     }
+
+    // TODO: ty()
+    // TODO: arrow(other)
+    // TODO: pi(other)
+    // TODO: var(ty)
+    // TODO: mk_eq(other)
 
     /* FIXME
     def __richcmp__(&self, other : Expr, op : CompareOp) -> PyResult<bool> {
@@ -54,7 +61,7 @@ py_class!(class Expr |py| {
     */
 });
 
-// TODO: theorem
+// TODO: class that wraps theorem + ExprManager
 
 py_class!(class ExprManager |py| {
     data em: Arc<Mutex<k::ExprManager>>;
@@ -68,35 +75,10 @@ py_class!(class ExprManager |py| {
         let ty = em.mk_ty();
         Expr::create_instance(py, ty, self.em(py).clone())
     }
+
+    // TODO: bool
+    // TODO: eq
+    // TODO: imply
+    // TODO: select
+    // TODO: all the theorem entry points
 });
-
-/*
-impl PythonObject for AExprManager {
-    fn as_object(&self) -> &cpython::objects::object::PyObject {
-        todo!()
-    }
-
-    fn into_object(self) -> cpython::objects::object::PyObject {
-        todo!()
-    }
-
-    unsafe fn unchecked_downcast_from(
-        _: cpython::objects::object::PyObject,
-    ) -> Self {
-        todo!()
-    }
-
-    unsafe fn unchecked_downcast_borrow_from(
-        _: &cpython::objects::object::PyObject,
-    ) -> &Self {
-        todo!()
-    }
-}
-
-impl ToPyObject for AExprManager {
-    type ObjectType = AExprManager;
-    fn to_py_object(&self, py: Python) -> Self::ObjectType {
-        self.clone()
-    }
-}
-*/

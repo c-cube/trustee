@@ -259,7 +259,7 @@ impl<'a> VM<'a> {
         self.pop2("abs_term", |vm, x, y| {
             let body = x.as_term()?;
             let v = y.as_var()?;
-            let e = vm.em.mk_lambda(v.clone(), body.clone());
+            let e = vm.em.mk_lambda(v.clone(), body.clone())?;
             vm.push_obj(O::Term(e));
             Ok(())
         })
@@ -281,7 +281,7 @@ impl<'a> VM<'a> {
         self.pop2("app_term", |vm, x, y| {
             let x = x.as_term()?;
             let f = y.as_term()?;
-            let e = vm.em.mk_app(f.clone(), x.clone());
+            let e = vm.em.mk_app(f.clone(), x.clone())?;
             vm.push_obj(O::Term(e));
             Ok(())
         })
@@ -380,7 +380,7 @@ impl<'a> VM<'a> {
                 let ty2 = args.pop().unwrap();
                 let ty1 = args.pop().unwrap();
                 debug_assert!(args.is_empty());
-                Ok(em.mk_arrow(ty1, ty2))
+                em.mk_arrow(ty1, ty2)
             }
         }
 
@@ -490,7 +490,7 @@ impl<'a> VM<'a> {
                     Err(format!("`=` cannot take type {:?}", ty))?
                 }
                 let e = em.mk_eq();
-                Ok(em.mk_app(e, args[0].clone()))
+                em.mk_app(e, args[0].clone())
             }
         }
         #[derive(Debug)]
@@ -508,7 +508,7 @@ impl<'a> VM<'a> {
                     })?
                     .1;
                 let e = em.mk_select();
-                Ok(em.mk_app(e, a.clone()))
+                em.mk_app(e, a.clone())
             }
         }
 
@@ -621,9 +621,10 @@ impl<'a> VM<'a> {
                         let app = em.mk_app_iter(self.c.clone(), |em, f| {
                             for x in ty_vars.iter().cloned() {
                                 let v = em.mk_var(x);
-                                f(em, v)
+                                f(em, v)?
                             }
-                        });
+                            Ok(())
+                        })?;
                         app.ty().clone()
                     }
                 }
@@ -641,17 +642,16 @@ impl<'a> VM<'a> {
                     c_ty_vars, ty, subst
                 );
                 // now apply `c` to the proper type arguments
-                let t = {
-                    em.mk_app_iter(self.c.clone(), |em, f| {
-                        for v in ty_vars.iter() {
-                            let ty = match subst.find_rec(v) {
-                                Some(e) => e.clone(),
-                                None => em.mk_var(v.clone()),
-                            };
-                            f(em, ty)
-                        }
-                    })
-                };
+                let t = em.mk_app_iter(self.c.clone(), |em, f| {
+                    for v in ty_vars.iter() {
+                        let ty = match subst.find_rec(v) {
+                            Some(e) => e.clone(),
+                            None => em.mk_var(v.clone()),
+                        };
+                        f(em, ty)?
+                    }
+                    Ok(())
+                })?;
                 eprintln!("result constant is {:?}", &t);
                 Ok(t)
             }
@@ -672,7 +672,7 @@ impl<'a> VM<'a> {
                 // type of `c` applied to `vars`
                 let e_vars: Vec<_> =
                     ty_vars.iter().cloned().map(|v| vm.em.mk_var(v)).collect();
-                let app = vm.em.mk_app_l(c.clone(), &e_vars);
+                let app = vm.em.mk_app_l(c.clone(), &e_vars)?;
                 let c_ty_vars = app.ty().clone();
                 // now build the constant building closure
                 let c = Rc::new(CustomConst {
@@ -852,7 +852,7 @@ impl<'a> VM<'a> {
         self.pop2("deduct_antisym", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
-            let th = vm.em.thm_bool_eq_intro(th1, th2);
+            let th = vm.em.thm_bool_eq_intro(th1, th2)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
