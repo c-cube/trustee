@@ -854,9 +854,9 @@ impl ExprManager {
                         v_ty.ty()
                     ));
                 };
-                if !e.ty().is_type() {
+                if !e.ty().is_type() && !e.ty().is_kind() {
                     return Err(format!(
-                        "pi: body must have type `type`, not {:?}",
+                        "pi: body must have type `type` or `kind`, not {:?}",
                         e.ty()
                     ));
                 };
