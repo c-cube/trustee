@@ -462,6 +462,11 @@ impl Expr {
         self.db_depth() == 0
     }
 
+    /// Does this contain any free variables?
+    pub fn has_free_vars(&self) -> bool {
+        self.free_vars().next().is_some()
+    }
+
     // helper for building expressions
     fn make_(v: ExprView, ty: Option<Expr>) -> Self {
         let db_depth = compute_db_depth(&v);
@@ -1212,7 +1217,7 @@ impl ExprManager {
         if self.consts.contains_key(&s) {
             return Err(format!("a constant named {:?} already exists", &s));
         }
-        if !ty.is_closed() {
+        if !ty.is_closed() || ty.free_vars().next().is_some() {
             panic!(
                 "cannot create constant named {:?} with non-closed type {:?}",
                 &s, &ty
@@ -1416,11 +1421,11 @@ impl ExprManager {
                     e
                 )
             })?;
-        if !rhs.is_closed() {
+        if !rhs.is_closed() || rhs.has_free_vars() {
             return Err(format!("rhs {:?} should be closed", rhs));
         }
         // checks that the type of `x` is closed
-        if !x.ty.is_closed() {
+        if !x.ty.is_closed() || x.ty.has_free_vars() {
             return Err(format!(
                 "{:?} should have a closed type, not {:?}",
                 x, x.ty
@@ -1472,6 +1477,7 @@ impl ExprManager {
                 thm_inhabited.concl()
             )
         })?;
+        dbg!((phi, x));
         // the concrete type
         let ty = x.ty().clone();
         // check that all free variables are type variables
@@ -1479,12 +1485,18 @@ impl ExprManager {
             thm_inhabited.concl().free_vars().cloned().collect();
         fvars.sort_unstable();
         fvars.dedup();
+
         if let Some(v) = fvars.iter().find(|v| !v.ty.is_type()) {
             return Err(format!(
                 "free variable `{:?}` has type `{:?}`, not `type`",
                 &v, &v.ty
             ));
         }
+        dbg!(&fvars);
+
+        // free vars, as expressions
+        let fvars_exprs: Vec<_> =
+            fvars.iter().map(|v| self.mk_var(v.clone())).collect();
 
         // construct new type and mapping functions
         let tau = {
@@ -1492,38 +1504,42 @@ impl ExprManager {
             let ty_tau = self.mk_pi_l(fvars.iter().cloned(), ttype)?;
             self.mk_new_const(name_tau, ty_tau)?
         };
+        dbg!(&tau);
 
         // `tau` applied to `fvars`
-        let tau_vars = self.mk_app_iter(tau.clone(), |em, f| {
-            for v in fvars.iter() {
-                let v = em.mk_var(v.clone());
-                f(em, v)?
-            }
-            Ok(())
-        })?;
+        let tau_vars = self.mk_app_l(tau.clone(), &fvars_exprs)?;
+        dbg!(&tau_vars);
 
         let c_abs = {
             let ty = self.mk_arrow(ty.clone(), tau_vars.clone())?;
+            let ty = self.mk_pi_l(fvars.iter().cloned(), ty)?;
             self.mk_new_const(abs, ty)?
         };
         let c_repr = {
             let ty = self.mk_arrow(tau_vars.clone(), ty.clone())?;
+            let ty = self.mk_pi_l(fvars.iter().cloned(), ty)?;
             self.mk_new_const(repr, ty)?
         };
+        dbg!(&c_abs, c_abs.ty(), &c_repr, c_repr.ty());
 
         let abs_thm = {
             // `|- abs (repr x) = x`
             let x = self.mk_var_str("x", tau_vars.clone());
-            let t = self.mk_app(c_repr.clone(), x)?;
-            Thm::make_(self.mk_app(c_abs.clone(), t)?, vec![])
+            let repr = self.mk_app_l(c_repr.clone(), &fvars_exprs)?;
+            let t = self.mk_app(repr, x)?;
+            let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
+            dbg!(Thm::make_(self.mk_app(abs, t)?, vec![]))
         };
         let repr_thm = {
             // `|- Phi x <=> repr (abs x) = x`
             let x = self.mk_var_str("x", ty.clone());
-            let t1 = self.mk_app(c_abs.clone(), x.clone())?;
-            let t2 = self.mk_app(c_repr.clone(), t1)?;
-            let phi_x = self.mk_app(phi.clone(), x)?;
-            Thm::make_(self.mk_eq_app(phi_x, t2)?, vec![])
+            let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
+            let t1 = self.mk_app(abs, x.clone())?;
+            let repr = self.mk_app_l(c_repr.clone(), &fvars_exprs)?;
+            let t2 = dbg!(self.mk_app(repr, t1))?;
+            let eq_t2_x = dbg!(self.mk_eq_app(t2, x.clone()))?;
+            let phi_x = dbg!(self.mk_app(phi.clone(), x))?;
+            dbg!(Thm::make_(self.mk_eq_app(phi_x, eq_t2_x)?, vec![]))
         };
 
         let c = NewTypeDef { tau, c_repr, c_abs, fvars, abs_thm, repr_thm };
@@ -1532,17 +1548,17 @@ impl ExprManager {
 }
 
 /// Helper for defining new type.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NewTypeDef {
     /// the new type constructor
-    tau: Expr,
-    fvars: Vec<Var>,
+    pub tau: Expr,
+    pub fvars: Vec<Var>,
     /// Function from the general type to `tau`
-    c_abs: Expr,
+    pub c_abs: Expr,
     /// Function from `tau` back to the general type
-    c_repr: Expr,
+    pub c_repr: Expr,
     /// `abs_thm` is `|- abs (repr x) = x`
-    abs_thm: Thm,
+    pub abs_thm: Thm,
     /// `repr_thm` is `|- Phi x <=> repr (abs x) = x`
-    repr_thm: Thm,
+    pub repr_thm: Thm,
 }
