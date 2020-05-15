@@ -133,6 +133,10 @@ impl Name {
         s
     }
 
+    pub fn to_symbol(&self) -> Symbol {
+        Symbol::from_str(&self.to_string()) // TODO: improve perf?
+    }
+
     pub fn base(&self) -> &str {
         &self.ptr.1
     }
@@ -178,6 +182,81 @@ pub struct VM<'a> {
     dict: fnv::FnvHashMap<usize, Obj>,
     assumptions: Vec<Thm>,
     theorems: Vec<Thm>,
+}
+
+#[derive(Debug)]
+struct CustomConst {
+    n: Name,
+    c: Expr,
+    c_vars: Expr,    // c applied to ty_vars
+    c_ty_vars: Expr, // typeof(c_vars)
+    ty_vars: Vec<Var>,
+}
+
+impl OConst for CustomConst {
+    fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr, String> {
+        use std::borrow::Cow;
+
+        if self.c_ty_vars == ty {
+            // shortcut: already the right type, no unif needed
+            let t = self.c_vars.clone();
+            return Ok(t);
+        }
+
+        let mut c_ty_vars: Expr = self.c_ty_vars.clone();
+        let mut ty_vars = Cow::Borrowed(&self.ty_vars);
+        // rename if needed
+        if let Some(mut data) =
+            utils::need_to_rename_before_unif(&c_ty_vars, &ty)
+        {
+            eprintln!(
+                "need to rename in const {:?}:{:?}, to unify with type {:?}",
+                self.c, self.c_ty_vars, ty
+            );
+            ty_vars = Cow::Owned(
+                self.ty_vars
+                    .iter()
+                    .map(|v| data.rename_var(v))
+                    .collect::<Vec<Var>>(),
+            );
+            // type of `c args`
+            c_ty_vars = {
+                let app = em.mk_app_iter(self.c.clone(), |em, f| {
+                    for x in ty_vars.iter().cloned() {
+                        let v = em.mk_var(x);
+                        f(em, v)?
+                    }
+                    Ok(())
+                })?;
+                app.ty().clone()
+            }
+        }
+        // match type, so we're sure that `ty_vars` all disappear
+        let subst = utils::match_(&c_ty_vars, &ty).ok_or_else(|| {
+            format!(
+                "unification failed\n  between {:?} and {:?}\n  \
+                    when applying constant {:?}",
+                c_ty_vars, ty, self.n
+            )
+        })?;
+        eprintln!(
+            "unified:\n  between {:?} and {:?}\n  yields {:?}",
+            c_ty_vars, ty, subst
+        );
+        // now apply `c` to the proper type arguments
+        let t = em.mk_app_iter(self.c.clone(), |em, f| {
+            for v in ty_vars.iter() {
+                let ty = match subst.find_rec(v) {
+                    Some(e) => e.clone(),
+                    None => em.mk_var(v.clone()),
+                };
+                f(em, ty)?
+            }
+            Ok(())
+        })?;
+        eprintln!("result constant is {:?}", &t);
+        Ok(t)
+    }
 }
 
 impl<'a> VM<'a> {
@@ -581,82 +660,6 @@ impl<'a> VM<'a> {
     }
 
     fn define_const(&mut self) -> Result<(), String> {
-        #[derive(Debug)]
-        struct CustomConst {
-            n: Name,
-            c: Expr,
-            c_vars: Expr,    // c applied to ty_vars
-            c_ty_vars: Expr, // typeof(c_vars)
-            ty_vars: Vec<Var>,
-        }
-        use std::borrow::Cow;
-        impl OConst for CustomConst {
-            fn apply(
-                &self,
-                em: &mut ExprManager,
-                ty: Expr,
-            ) -> Result<Expr, String> {
-                if self.c_ty_vars == ty {
-                    // shortcut: already the right type, no unif needed
-                    let t = self.c_vars.clone();
-                    return Ok(t);
-                }
-
-                let mut c_ty_vars: Expr = self.c_ty_vars.clone();
-                let mut ty_vars = Cow::Borrowed(&self.ty_vars);
-                // rename if needed
-                if let Some(mut data) =
-                    utils::need_to_rename_before_unif(&c_ty_vars, &ty)
-                {
-                    eprintln!("need to rename in const {:?}:{:?}, to unify with type {:?}",
-                        self.c, self.c_ty_vars, ty);
-                    ty_vars = Cow::Owned(
-                        self.ty_vars
-                            .iter()
-                            .map(|v| data.rename_var(v))
-                            .collect::<Vec<Var>>(),
-                    );
-                    // type of `c args`
-                    c_ty_vars = {
-                        let app = em.mk_app_iter(self.c.clone(), |em, f| {
-                            for x in ty_vars.iter().cloned() {
-                                let v = em.mk_var(x);
-                                f(em, v)?
-                            }
-                            Ok(())
-                        })?;
-                        app.ty().clone()
-                    }
-                }
-                // match type, so we're sure that `ty_vars` all disappear
-                let subst =
-                    utils::match_(&c_ty_vars, &ty).ok_or_else(|| {
-                        format!(
-                            "unification failed\n  between {:?} and {:?}\n  \
-                            when applying constant {:?}",
-                            c_ty_vars, ty, self.n
-                        )
-                    })?;
-                eprintln!(
-                    "unified:\n  between {:?} and {:?}\n  yields {:?}",
-                    c_ty_vars, ty, subst
-                );
-                // now apply `c` to the proper type arguments
-                let t = em.mk_app_iter(self.c.clone(), |em, f| {
-                    for v in ty_vars.iter() {
-                        let ty = match subst.find_rec(v) {
-                            Some(e) => e.clone(),
-                            None => em.mk_var(v.clone()),
-                        };
-                        f(em, ty)?
-                    }
-                    Ok(())
-                })?;
-                eprintln!("result constant is {:?}", &t);
-                Ok(t)
-            }
-        }
-
         self.pop2("define const", |vm, x, y| match (&*x, &*y) {
             (O::Term(rhs), O::Name(n)) => {
                 // make a definition `n := t`
@@ -695,9 +698,131 @@ impl<'a> VM<'a> {
         })
     }
 
+    fn define_type_op_(&mut self) -> Result<(), String> {
+        let thm = self.stack.pop().unwrap().as_thm()?.clone();
+        let names: Vec<String> = self
+            .stack
+            .pop()
+            .unwrap()
+            .as_list()?
+            .iter()
+            .map(|e| e.as_name().map(|n| n.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let rep = self.stack.pop().unwrap().as_name()?.clone();
+        let abs = self.stack.pop().unwrap().as_name()?.clone();
+        let ty_name = self.stack.pop().unwrap().as_name()?.clone();
+
+        let def = self.em.thm_new_basic_type_definition(
+            ty_name.to_symbol(),
+            abs.to_symbol(),
+            rep.to_symbol(),
+            thm,
+        )?;
+
+        // compute reordering of variables wrt `names` so we know in what order
+        // to apply parameters expressions
+
+        if def.fvars.len() != names.len() {
+            return Err(format!(
+                "expected {} free variables, got {}",
+                names.len(),
+                def.fvars.len()
+            ));
+        }
+
+        let reorder = names
+            .iter()
+            .map(|n| {
+                def.fvars
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, v)| {
+                        if v.name().name() == n.as_str() {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| {
+                        format!("cannot find variable with name {}", n)
+                    })
+            })
+            .collect::<Result<Vec<usize>, String>>()?;
+
+        // implementation of the type constructor
+
+        #[derive(Debug, Clone)]
+        struct TyOpCustom(Vec<usize>, k::NewTypeDef);
+
+        impl OTypeOp for TyOpCustom {
+            fn apply(
+                &self,
+                em: &mut ExprManager,
+                args: Vec<Expr>,
+            ) -> Result<Expr, String> {
+                if args.len() != self.0.len() {
+                    return Err(format!("bad arity"));
+                }
+                // re-shuffle args
+                let args2: Vec<Expr> =
+                    self.0.iter().map(|i| args[*i].clone()).collect();
+
+                dbg!(em.mk_app_l(self.1.tau.clone(), &args2[..]))
+            }
+        }
+
+        // now push the results. See
+        // http://www.gilith.com/opentheory/article.html#defineTypeOpCommand.
+
+        // push type op
+        self.push_obj(O::TypeOp(
+            ty_name,
+            Rc::new(TyOpCustom(reorder, def.clone())),
+        ));
+
+        let fvars_exprs: Vec<_> =
+            def.fvars.iter().map(|v| self.em.mk_var(v.clone())).collect();
+
+        // push abs
+        {
+            let c_vars = self.em.mk_app_l(def.c_abs.clone(), &fvars_exprs)?;
+            let c_ty_vars = c_vars.ty().clone();
+            let oc = CustomConst {
+                n: abs.clone(),
+                c: def.c_abs.clone(),
+                c_vars,
+                ty_vars: def.fvars.clone(),
+                c_ty_vars,
+            };
+            self.push_obj(O::Const(abs, Rc::new(oc)))
+        }
+
+        // push repr
+        {
+            let c_vars = self.em.mk_app_l(def.c_repr.clone(), &fvars_exprs)?;
+            let c_ty_vars = c_vars.ty().clone();
+            let oc = CustomConst {
+                n: rep.clone(),
+                c: def.c_repr.clone(),
+                c_vars,
+                ty_vars: def.fvars.clone(),
+                c_ty_vars,
+            };
+            self.push_obj(O::Const(rep, Rc::new(oc)))
+        }
+
+        todo!("push theorems");
+
+        Ok(())
+    }
+
     fn define_type_op(&mut self) -> Result<(), String> {
-        eprintln!("current stack: {:#?}", &self.stack);
-        todo!("define type op") // TODO
+        if self.stack.len() < 5 {
+            return Err(format!(
+                "define_type_op: not enough elements in stack"
+            ));
+        }
+        self.define_type_op_().map_err(|s| format!("define_type_op: {}", s))
     }
 
     fn pop(&mut self) -> Result<(), String> {
