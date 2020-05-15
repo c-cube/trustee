@@ -1,8 +1,11 @@
 // see https://github.com/dgrunwald/rust-cpython
 
-#[macro_use]
 use cpython::{
-    py_class, py_module_initializer, PyErr, CompareOp, PyObject, PyResult,
+    exc, // CompareOp, PyObject,
+    py_class,
+    py_module_initializer,
+    PyErr,
+    PyResult,
     Python,
 };
 use std::{sync::Arc, sync::Mutex};
@@ -22,6 +25,10 @@ py_module_initializer!(
     }
 );
 
+fn mk_err(py: Python, s: String) -> PyErr {
+    PyErr::new::<exc::ValueError, _>(py, s)
+}
+
 py_class!(class Expr |py| {
     data expr: k::Expr;
     data em: Arc<Mutex<k::ExprManager>>;
@@ -40,13 +47,29 @@ py_class!(class Expr |py| {
     def __call__(&self, arg : Expr) -> PyResult<Expr> {
         let em = self.em(py);
         let mut g_em = em.lock().unwrap();
-        let e = g_em.mk_app(self.expr(py).clone(), arg.expr(py).clone());
+        let e = g_em.mk_app(self.expr(py).clone(), arg.expr(py).clone())
+            .map_err(|e| mk_err(py, e))?;
         drop(g_em);
         Expr::create_instance(py, e, em.clone())
     }
 
-    // TODO: ty()
-    // TODO: arrow(other)
+    def ty(&self) -> PyResult<Expr> {
+        let e = self.expr(py);
+        match e.ty_opt() {
+            None => Err(PyErr::new::<exc::ValueError,_>(py, "no type")),
+            Some(ty) => Expr::create_instance(py, ty.clone(), self.em(py).clone())
+        }
+    }
+
+    def arrow(&self, u: Expr) -> PyResult<Expr> {
+        let a = self.expr(py);
+        let b = u.expr(py);
+        let em = self.em(py);
+        let atob = em.lock().unwrap().mk_arrow(a.clone(), b.clone())
+            .map_err(|e| mk_err(py, e))?;
+        Expr::create_instance(py, atob, em.clone())
+    }
+
     // TODO: pi(other)
     // TODO: var(ty)
     // TODO: mk_eq(other)
@@ -55,7 +78,7 @@ py_class!(class Expr |py| {
     def __richcmp__(&self, other : Expr, op : CompareOp) -> PyResult<bool> {
         match op {
             CompareOp::Eq => Ok(self.expr(py) == other.expr(py)),
-            _ => Err(PyErr::new::<cpython::exc::NotImplementedError,_>(py, "not implemented"))
+            _ => Err(PyErr::new::<exc::NotImplementedError,_>(py, "not implemented"))
         }
     }
     */
@@ -70,10 +93,23 @@ py_class!(class ExprManager |py| {
         ExprManager::create_instance(py, Arc::new(Mutex::new(k::ExprManager::new())))
     }
 
-    def ty(&self) -> PyResult<Expr> {
+    def type_(&self) -> PyResult<Expr> {
         let em = self.em(py).lock().unwrap();
         let ty = em.mk_ty();
         Expr::create_instance(py, ty, self.em(py).clone())
+    }
+
+    def var(&self, name: &str, ty: Expr) -> PyResult<Expr> {
+        let mut em = self.em(py).lock().unwrap();
+        let v = em.mk_var_str(name, ty.expr(py).clone());
+        Expr::create_instance(py, v, self.em(py).clone())
+    }
+
+    def lambda(&self, name: &str, ty: Expr, body: Expr) -> PyResult<Expr> {
+        let mut em = self.em(py).lock().unwrap();
+        let v = em.mk_lambda(k::Var::from_str(name, ty.expr(py).clone()),
+            body.expr(py).clone()).map_err(|e| mk_err(py, e))?;
+        Expr::create_instance(py, v, self.em(py).clone())
     }
 
     // TODO: bool
