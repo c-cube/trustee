@@ -1,7 +1,21 @@
 //! Kernel of Trust: Terms and Theorems
 
 use crate::fnv;
-use std::{fmt, ops::Deref, sync::Arc, sync::Weak};
+use std::{fmt, ops::Deref};
+
+#[cfg(features = "noarc")]
+pub type Ref<T> = std::rc::Rc<T>;
+#[cfg(features = "noarc")]
+pub type WeakRef<T> = std::rc::Weak<T>;
+#[cfg(features = "noarc")]
+pub type Lock<T> = std::cell::RefCell<T>;
+
+#[cfg(not(features = "noarc"))]
+pub type Ref<T> = std::sync::Arc<T>;
+#[cfg(not(features = "noarc"))]
+pub type WeakRef<T> = std::sync::Weak<T>;
+#[cfg(not(features = "noarc"))]
+pub type Lock<T> = std::sync::Mutex<T>;
 
 // TODO: use a proper enum for errors
 /// Result type.
@@ -23,13 +37,13 @@ use BuiltinSymbol as BS;
 #[derive(Debug, Clone, Ord, PartialOrd, Hash, Eq, PartialEq)]
 pub enum Symbol {
     Builtin(BuiltinSymbol),
-    Named(Arc<str>),
+    Named(Ref<str>),
 }
 
 impl Symbol {
     /// New symbol from this string.
     pub fn from_str(s: &str) -> Self {
-        let a = Arc::from(s);
+        let a = Ref::from(s);
         Symbol::Named(a)
     }
 
@@ -53,11 +67,11 @@ pub type DbIndex = u32;
 
 /// An expression.
 #[derive(Clone)]
-pub struct Expr(Arc<ExprImpl>);
+pub struct Expr(Ref<ExprImpl>);
 
 /// A weak reference to an expression.
 #[derive(Clone)]
-struct WExpr(Weak<ExprImpl>);
+struct WExpr(WeakRef<ExprImpl>);
 
 /// Types and Terms are the same, but this is helpful for documentation.
 pub type Type = Expr;
@@ -324,7 +338,7 @@ impl Expr {
     /// Obtain a weak reference to this expression.
     #[inline]
     fn weak(&self) -> WExpr {
-        WExpr(Arc::downgrade(&self.0))
+        WExpr(Ref::downgrade(&self.0))
     }
 
     /// Safe version of `ty`, that works even for `Kind`.
@@ -451,7 +465,7 @@ impl Expr {
     // helper for building expressions
     fn make_(v: ExprView, ty: Option<Expr>) -> Self {
         let db_depth = compute_db_depth(&v);
-        Expr(Arc::new(ExprImpl { view: v, ty, db_depth }))
+        Expr(Ref::new(ExprImpl { view: v, ty, db_depth }))
     }
 
     // pretty print
@@ -538,7 +552,7 @@ impl fmt::Debug for Var {
 
 /// A theorem.
 #[derive(Clone)]
-pub struct Thm(Arc<ThmImpl>);
+pub struct Thm(Ref<ThmImpl>);
 
 #[derive(Clone)]
 struct ThmImpl {
@@ -567,7 +581,7 @@ impl Thm {
             hyps.dedup();
             hyps.shrink_to_fit();
         }
-        Thm(Arc::new(ThmImpl { concl, hyps }))
+        Thm(Ref::new(ThmImpl { concl, hyps }))
     }
 
     /// Conclusion of the theorem
@@ -686,7 +700,7 @@ impl ExprManager {
     fn hashcons_(&mut self, ev: ExprView) -> Result<Expr> {
         let tbl = &mut self.tbl; // lock tbl
         match tbl.get(&ev) {
-            Some(v) => match Weak::upgrade(&v.0) {
+            Some(v) => match WeakRef::upgrade(&v.0) {
                 Some(t) => return Ok(Expr(t)), // still alive!
                 None => (),
             },
@@ -1032,7 +1046,7 @@ impl ExprManager {
             // This is thread safe as the only way this is 1 is if it's already
             // not referenced anywhere, and we don't provide any way to produce
             // a weak ref.
-            let n = Weak::strong_count(&v.0);
+            let n = WeakRef::strong_count(&v.0);
             n > 0
         })
     }
