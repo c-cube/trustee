@@ -1,0 +1,2054 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta content="text/html; charset=UTF-8" http-equiv="Content-Type" />
+<style type="text/css">
+body { background-color: white; color: black; font-family: sans-serif; margin: 8px }
+div#main { margin: 2px; border: 1px dotted black; padding: 12px }
+div#main dl { padding-top: 10px; padding-bottom: 10px }
+div#main dl dt { margin-top: 10px; border-top: dashed 1px; padding-top: 10px; }
+div#main dl dd table { padding-top: 5px; padding-bottom: 5px }
+div#main dl dd th { vertical-align: top; text-align: left }
+div#main dl dd td { vertical-align: top; text-align: left }
+div#main .new { background-color: #ffff00; }
+div#main .changed { background-color: #ffc0e0; }
+div#main span.regexp-def { font-style: italic; font-weight: bold; color: #008000; font-size: smaller }
+div#footer { margin: 2px }
+div#footer p { margin: 0; font-style: italic; font-size: smaller }
+div#footer p a { text-decoration: none }
+</style>
+<title>OpenTheory Article File Format</title>
+</head>
+
+<body>
+
+<div id="main">
+
+<h1>OpenTheory Article File Format</h1>
+
+<h2>Overview</h2>
+
+<p>An
+
+<a href="http://www.gilith.com/opentheory">OpenTheory</a>
+
+<i>article</i> file encodes a
+
+<a href="http://en.wikipedia.org/wiki/Higher_order_logic">higher order logic</a>
+
+theory.
+
+Articles take the form of text files using the
+
+<a href="http://en.wikipedia.org/wiki/UTF-8">UTF-8</a>
+
+encoding, and contain commands which are processed by a stack-based
+virtual machine. The result of reading an article is an import
+set <i>&Gamma;</i> of assumptions and an export set <i>&Delta;</i> of
+theorems. The theory <i>&Gamma;</i>&nbsp;&#8883;&nbsp;<i>&Delta;</i>
+encoded by the article consists of a proof that the theorems
+in <i>&Delta;</i> logically derive from the assumptions in
+<i>&Gamma;</i>.</p>
+
+<h2>Types</h2>
+
+<p>The primitive types processed by the virtual machine are:</p>
+
+<dl>
+<dt><kbd>int</kbd></dt>
+
+<dd>Integers, such as <i>0</i>, <i>42</i> and <i>-5</i>.</dd>
+
+<dt><kbd>string</kbd></dt>
+
+<dd>Strings, such as <i>"foo"</i> and <i>""</i>.</dd>
+
+<dt><kbd>name</kbd></dt>
+
+<dd>Names in a hierarchical namespace, such as <i>bool</i>
+or <i>Number.Natural.prime</i>. Names are represented by the
+type <kbd>string list * string</kbd>, where the namespace is
+represented by the <kbd>string list</kbd> component and the local name
+is represented by the <kbd>string</kbd> component. For
+example, <i>bool</i> is represented by <i>([],"bool")</i>,
+and <i>Number.Natural.prime</i> is represented
+by <i>(["Number","Natural"],"prime")</i>. The namespace represented by
+the nil <kbd>string list</kbd> is called the <i>global</i>
+namespace.</dd>
+
+<dt><kbd>typeOp</kbd></dt>
+
+<dd>Higher order logic type operators, such as <i>bool</i> and <i>list</i>. The primitive Boolean type operator <i>bool</i> has name <i>([],"bool")</i> (and arity 0), and the primitive function space type operator <i>&rarr;</i> has name <i>([],"-&gt;")</i> (and arity 2). Type operators may be either <i>external</i> to the article or <i>defined</i> in the article. Two type operators are equal iff (i) they have the same name, and (ii) either they are both external or they are both defined with the same definition.</dd>
+
+<dt><kbd>type</kbd></dt>
+
+<dd>Higher order logic types, such as <i>&alpha;</i>
+and <i>bool&nbsp;list</i>.</dd>
+
+<dt><kbd>const</kbd></dt>
+
+<dd>Higher order logic constants, such as <i>T</i> and <i>=</i>. The primitive equality constant has name <i>([],"=")</i> (and principal type <i>&alpha;&nbsp;&rarr;&nbsp;&alpha;&nbsp;&rarr;&nbsp;bool</i>). Constants may be either <i>external</i> to the article or <i>defined</i> in the article. Two constants are equal iff (i) they have the same name, and (ii) either they are both external or they are both defined with the same definition.</dd>
+
+<dt><kbd>var</kbd></dt>
+
+<dd>Higher order logic term variables, such as <i>x</i>. Variables are
+identified by name and type, so two variables such as <i>x : bool</i>
+and <i>x : &alpha;</i> with the same name and different types are
+treated as distinct.</dd>
+
+<dt><kbd>term</kbd></dt>
+
+<dd>Higher order logic terms, such as <i>13</i> and <i>&lambda;x.&nbsp;x</i>. Terms always contain a type (though it is often omitted for clarity), so these examples might be more fully written as <i>13 : Number.Natural.natural</i> and
+<i>(&lambda;(x : &alpha;).&nbsp;(x : &alpha;)) : &alpha;&nbsp;&rarr;&nbsp;&alpha;</i>. Terms are <i>&alpha;-equivalent</i> if they are equal up to a consistent renaming of bound variables, so <i>&lambda;x y. x + y</i> is <i>&alpha;-equivalent</i> to <i>&lambda;y x. y + x</i> but not to <i>&lambda;y x. x + y</i>.</dd>
+
+<dt><kbd>thm</kbd></dt>
+
+<dd>Higher order logic theorems, such as &#x22A6;&nbsp;<i>x = x</i>
+and {&nbsp;<i>x = y, y = T</i>&nbsp;}&nbsp;&#x22A6;&nbsp;<i>x</i>. Theorems
+consist of a hypothesis <kbd>term set</kbd> and conclusion
+<kbd>term</kbd>, both of which are interpreted modulo
+&alpha;-equivalence.</dd>
+
+<dt></dt>
+
+</dl>
+
+<p>When reading an article file, the virtual machine processes values
+of type <kbd>object</kbd>, which has the following ML-like
+definition:</p>
+
+<table cellpadding="0" cellspacing="0">
+
+<tr>
+<td colspan="6"><kbd>datatype object =</kbd></td>
+</tr>
+
+<tr>
+<td>&nbsp; &nbsp;</td>
+<td></td>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Num of int</kbd></td>
+<td>&nbsp; &nbsp; &nbsp;</td>
+<td>(* An integer *)</td>
+</tr>
+
+<tr>
+<td></td>
+<td><kbd>|</kbd></td>
+<td></td>
+<td><kbd>Name of name</kbd></td>
+<td></td>
+<td>(* A name in a hierarchical namespace *)</td>
+</tr>
+
+<tr>
+<td></td>
+<td><kbd>|</kbd></td>
+<td></td>
+<td><kbd>List of object list</kbd></td>
+<td></td>
+<td>(* A list (or tuple) of objects *)</td>
+</tr>
+
+<tr>
+<td></td>
+<td><kbd>|</kbd></td>
+<td></td>
+<td><kbd>TypeOp of typeOp</kbd></td>
+<td></td>
+<td>(* A higher order logic type operator *)</td>
+</tr>
+
+<tr>
+<td></td>
+<td><kbd>|</kbd></td>
+<td></td>
+<td><kbd>Type of type</kbd></td>
+<td></td>
+<td>(* A higher order logic type *)</td>
+</tr>
+
+<tr>
+<td></td>
+<td><kbd>|</kbd></td>
+<td></td>
+<td><kbd>Const of const</kbd></td>
+<td></td>
+<td>(* A higher order logic constant *)</td>
+</tr>
+
+<tr>
+<td></td>
+<td><kbd>|</kbd></td>
+<td></td>
+<td><kbd>Var of var</kbd></td>
+<td></td>
+<td>(* A higher order logic term variable *)</td>
+</tr>
+
+<tr>
+<td></td>
+<td><kbd>|</kbd></td>
+<td></td>
+<td><kbd>Term of term</kbd></td>
+<td></td>
+<td>(* A higher order logic term *)</td>
+</tr>
+
+<tr>
+<td></td>
+<td><kbd>|</kbd></td>
+<td></td>
+<td><kbd>Thm of thm</kbd></td>
+<td></td>
+<td>(* A higher order logic theorem *)</td>
+</tr>
+
+</table>
+
+<p><strong>Note:</strong> Two <kbd>Thm</kbd> objects are
+interchangeable if the theorems they contain are
+&alpha;-equivalent.</p>
+
+<h2>Virtual Machine</h2>
+
+<p>The virtual machine that reads in an article file is equipped with
+the following state:</p>
+
+<ul>
+
+<li>A <i>stack</i> containing values of type <kbd>object</kbd>.</li>
+
+<li>A <i>dictionary</i> mapping keys of type <kbd>int</kbd> to
+values of type <kbd>object</kbd>.</li>
+
+<li>A set of <i>assumptions</i> of type <kbd>thm set</kbd>.</li>
+
+<li>A set of <i>theorems</i> of type <kbd>thm set</kbd>.</li>
+
+</ul>
+
+<p>Initially the stack, dictionary, assumptions and theorems are all
+empty.</p>
+
+<p>The virtual machine reads the article file line by line. Every line
+in an article file is either a comment line or a command line.</p>
+
+<ul>
+
+<li>A comment line has <kbd>#</kbd> as its first character. Comment
+lines are discarded by the virtual machine.</li>
+
+<li>A command line encodes exactly one command of the form below, and
+is immediately executed. Some commands can only be successfully
+executed in states that satisfy certain constraints. Before executing
+a command the virtual machine will check that the state satisfies the
+required constraints, and if not will report an error and terminate.
+As a result of executing a command, the stack, dictionary, assumptions
+or theorems may be altered. After a command has been executed it is
+discarded.</li>
+
+</ul>
+
+<p>When the virtual machine has finished processing all the lines in the article file, the assumptions and theorems are the result of reading the article (the stack and dictionary are discarded). Successfully reading an article proves that the theorems &Delta; derive from the assumptions &Gamma; in higher order logic, which we write as the theory <i>&Gamma;</i>&nbsp;&#8883;&nbsp;<i>&Delta;</i>.</p>
+
+<p><strong>Constraint:</strong> The set of theorems &Delta; must not reference two different type operators that have the same name, and similarly must not reference two different constants that have the same name. Allowing this would prevent articles that depend on &Delta; from unambiguously referring to these symbols using <kbd>const</kbd> or <kbd>typeOp</kbd> commands. The same constraint also holds for the set of assumptions &Gamma;, but this almost never causes a problem because assumptions generally contain only external symbols.</p>
+
+<h2><a name="commands" />Commands</h2>
+
+<p>Here is the complete list of commands interpreted by the virtual
+machine:</p>
+
+<ol>
+
+<li><a href="#numCommand"><i>i</i></a> &mdash; a decimal
+integer</li>
+
+<li><a href="#nameCommand"><i>"s"</i></a> &mdash; a quoted
+string</li>
+
+<li><a href="#absTermCommand">absTerm</a></li>
+
+<li><a href="#absThmCommand">absThm</a></li>
+
+<li><a href="#appTermCommand">appTerm</a></li>
+
+<li><a href="#appThmCommand">appThm</a></li>
+
+<li><a href="#assumeCommand">assume</a></li>
+
+<li><a href="#axiomCommand">axiom</a></li>
+
+<li><a href="#betaConvCommand">betaConv</a></li>
+
+<li><a href="#consCommand">cons</a></li>
+
+<li><a href="#constCommand">const</a></li>
+
+<li><a href="#constTermCommand">constTerm</a></li>
+
+<li><a href="#deductAntisymCommand">deductAntisym</a></li>
+
+<li><a href="#defCommand">def</a></li>
+
+<li><a href="#defineConstCommand">defineConst</a></li>
+
+<li><a href="#defineConstListCommand">defineConstList</a> <small>[new in version 6]</small></li>
+
+<li><a href="#defineTypeOpCommand">defineTypeOp</a> <small>[changed in version 6]</small></li>
+
+<li><a href="#eqMpCommand">eqMp</a></li>
+
+<li><a href="#hdTlCommand">hdTl</a> <small>[new in version 6]</small></li>
+
+<li><a href="#nilCommand">nil</a></li>
+
+<li><a href="#opTypeCommand">opType</a></li>
+
+<li><a href="#popCommand">pop</a></li>
+
+<li><a href="#pragmaCommand">pragma</a> <small>[new in version 6]</small></li>
+
+<li><a href="#proveHypCommand">proveHyp</a> <small>[new in version 6]</small></li>
+
+<li><a href="#refCommand">ref</a></li>
+
+<li><a href="#reflCommand">refl</a></li>
+
+<li><a href="#removeCommand">remove</a></li>
+
+<li><a href="#substCommand">subst</a></li>
+
+<li><a href="#symCommand">sym</a> <small>[new in version 6]</small></li>
+
+<li><a href="#thmCommand">thm</a></li>
+
+<li><a href="#transCommand">trans</a> <small>[new in version 6]</small></li>
+
+<li><a href="#typeOpCommand">typeOp</a></li>
+
+<li><a href="#varCommand">var</a></li>
+
+<li><a href="#varTermCommand">varTerm</a></li>
+
+<li><a href="#varTypeCommand">varType</a></li>
+
+<li><a href="#versionCommand">version</a> <small>[new in version 6]</small></li>
+
+</ol>
+
+<p>The remainder of the section describes the precise effects of each
+command on the virtual machine state.</p>
+
+<dl>
+
+<dt><a name="numCommand" /><i>i</i> &mdash; a decimal integer</dt>
+
+<dd>A number command is a string that matches the following regular
+expression:
+
+<blockquote>
+<p><kbd>0|[-]?[1-9][0-9]*</kbd></p>
+</blockquote>
+
+Treat the command string as an integer represented in decimal, and
+convert to the integer <i>i</i>. Push the
+object <kbd>Num&nbsp;</kbd><i>i</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Num&nbsp;</kbd><i>i</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="nameCommand" /><i>"s"</i> &mdash; a quoted string</dt>
+
+<dd>A name command is a string that matches the regular expression <span class="regexp-def">NAME</span>, which is defined using the following grammar:
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<td>&nbsp;&nbsp;&nbsp;&nbsp;<span class="regexp-def">NAME</span></td>
+<td>&nbsp;&nbsp;::=&nbsp;&nbsp;</td>
+<td><kbd>[&quot;]</kbd> <span class="regexp-def">NAMESPACE</span> <span class="regexp-def">COMPONENT</span> <kbd>[&quot;]</kbd></td>
+</tr>
+<tr>
+<td>&nbsp;&nbsp;&nbsp;&nbsp;<span class="regexp-def">NAMESPACE</span></td>
+<td>&nbsp;&nbsp;::=&nbsp;&nbsp;</td>
+<td>(<span class="regexp-def">COMPONENT</span> <kbd>[.]</kbd>)*</td>
+</tr>
+<tr>
+<td>&nbsp;&nbsp;&nbsp;&nbsp;<span class="regexp-def">COMPONENT</span></td>
+<td>&nbsp;&nbsp;::=&nbsp;&nbsp;</td>
+<td>(<kbd>[^.&quot;\]</kbd> | <kbd>[\][.&quot;\]</kbd>)*</td>
+</tr>
+</table>
+
+A string matching the regular expression <span class="regexp-def">COMPONENT</span> is processed to a <kbd>string</kbd> value by converting all occurrences of <kbd>\</kbd><i>c</i> to <i>c</i>. A string matching the regular expression <span class="regexp-def">NAMESPACE</span> is processed to a <kbd>string list</kbd> value by processing its constituent <span class="regexp-def">COMPONENT</span> strings in order. A string matching the regular expression <span class="regexp-def">NAME</span> is processed to a <kbd>string list * string</kbd> value by discarding its outer double quotes and processing its constituent <span class="regexp-def">NAMESPACE</span> and <span class="regexp-def">COMPONENT</span> strings. A name command is executed by processing the <span class="regexp-def">NAME</span> to <i>(ns,s)</i>, and pushing the object <kbd>Name&nbsp;(</kbd><i>ns</i><kbd>,</kbd><i>s</i><kbd>)</kbd> onto the stack.
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Name&nbsp;(</kbd><i>ns</i><kbd>,</kbd><i>s</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="absTermCommand" /><kbd>absTerm</kbd></dt>
+
+<dd>Pop a term <i>b</i>; pop a variable <i>v</i>; push the
+lambda abstraction term <i>&lambda;v.&nbsp;b</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Term&nbsp;</kbd><i>b</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Var&nbsp;</kbd><i>v</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Term&nbsp;(</kbd><i>&lambda;v.&nbsp;b</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Note:</strong> If the variable <i>v</i> has type <i>&sigma;</i> and the term <i>b</i> has type <i>&tau;</i>, then the resulting term <i>&lambda;v.&nbsp;b</i> has type <i>&sigma;&nbsp;&rarr;&nbsp;&tau;</i>.</dd>
+
+<dt><a name="absThmCommand" /><kbd>absThm</kbd></dt>
+
+<dd>Pop a theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>t = u</i>; pop
+a variable <i>v</i>; push the
+theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>(&lambda;v.&nbsp;t) =
+(&lambda;v.&nbsp;u)</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>t = u</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Var&nbsp;</kbd><i>v</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>(&lambda;v.&nbsp;t) = (&lambda;v.&nbsp;u)</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The variable <i>v</i> must not be free
+in <i>&Gamma;</i>.</dd>
+
+<dt><a name="appTermCommand" /><kbd>appTerm</kbd></dt>
+
+<dd>Pop a term <i>x</i>; pop a term <i>f</i>; push the function
+application term <i>f x</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Term&nbsp;</kbd><i>x</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Term&nbsp;</kbd><i>f</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Term&nbsp;(</kbd><i>f x</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The term <i>f</i> must have a type of the
+form <i>&sigma;&nbsp;&rarr;&nbsp;&tau;</i>, and the term <i>x</i> must
+have type <i>&sigma;</i> (the resulting term <i>f&nbsp;x</i> will have type <i>&tau;</i>).</dd>
+
+<dt><a name="appThmCommand" /><kbd>appThm</kbd></dt>
+
+<dd>Pop a theorem <i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>x = y</i>; pop a
+theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>f = g</i>; push the
+theorem <i>&Gamma;</i>&nbsp;&cup;&nbsp;<i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>f x = g y</i> onto
+the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>x = y</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>f = g</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&cup;&nbsp;<i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>f x = g y</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The term <i>f</i> must have a type of the
+form <i>&sigma;&nbsp;&rarr;&nbsp;&tau;</i>, and the term <i>x</i> must
+have type <i>&sigma;</i>.</dd>
+
+<dt><a name="assumeCommand" /><kbd>assume</kbd></dt>
+
+<dd>Pop a term <i>&phi;</i>; push the
+theorem {&nbsp;<i>&phi;</i>&nbsp;}&nbsp;&#x22A6;&nbsp;<i>&phi;</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Term&nbsp;</kbd><i>&phi;</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd>{&nbsp;<i>&phi;</i>&nbsp;}&nbsp;&#x22A6;&nbsp;<i>&phi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The term <i>&phi;</i> must have
+type <i>bool</i>.</dd>
+
+<dt><a name="axiomCommand" /><kbd>axiom</kbd></dt>
+
+<dd>Pop a term <i>&phi;</i>; pop a list of terms <i>&Gamma;</i>;
+push the theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&phi;</i> onto the
+stack and add it to the article assumptions.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Term&nbsp;</kbd><i>&phi;</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: List [Term&nbsp;</kbd><i>t<sub>1</sub></i><kbd>, ..., Term&nbsp;</kbd><i>t<sub>n</sub></i><kbd>]</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd>{&nbsp;<i>t<sub>1</sub>, ..., t<sub>n</sub></i>&nbsp;}&nbsp;&#x22A6;&nbsp;<i>&phi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<th>Assumptions:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>assumptions</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>assumptions</kbd>&nbsp;&cup;&nbsp;{&nbsp;{&nbsp;<i>t<sub>1</sub>, ..., t<sub>n</sub></i>&nbsp;}&nbsp;&#x22A6;&nbsp;<i>&phi;</i>&nbsp;}</td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The terms <i>t<sub>1</sub>, ...,
+t<sub>n</sub></i> and <i>&phi;</i> must have type <i>bool</i>.<br />
+<strong>Note:</strong> This command can be thought of as making an external reference to a theorem. That is, if the article is being read in an environment <i>&Delta;</i> containing a theorem <i>th</i> that is &alpha;-equivalent to {&nbsp;<i>t<sub>1</sub>, ..., t<sub>n</sub></i>&nbsp;}&nbsp;&#x22A6;&nbsp;<i>&phi;</i>, then this command extracts the theorem <i>th</i> from the environment, pushes it onto the stack and adds it to the set of assumptions.</dd>
+
+<dt><a name="betaConvCommand" /><kbd>betaConv</kbd></dt>
+
+<dd>Pop a term <i>(&lambda;v.&nbsp;t) u</i>; push the
+theorem &#x22A6;&nbsp;<i>(&lambda;v.&nbsp;t) u = t[u/v]</i> onto
+the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Term&nbsp;(</kbd><i>(&lambda;v.&nbsp;t) u</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd>&#x22A6;&nbsp;<i>(&lambda;v.&nbsp;t) u = t[u/v]</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="consCommand" /><kbd>cons</kbd></dt>
+
+<dd>Pop a list <i>t</i>; pop an object <i>h</i>; push the
+list <i>h :: t</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>List&nbsp;</kbd><i>t</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: </kbd><i>h</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>List&nbsp;(</kbd><i>h :: t</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="constCommand" /><kbd>const</kbd></dt>
+
+<dd>Pop a name <i>n</i>; push an external constant <i>c</i> with name <i>n</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Name&nbsp;</kbd><i>n</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Const&nbsp;</kbd><i>c</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Note:</strong> This command makes an external reference to a constant. That is, if the article is being read in an environment <i>&Delta;</i> containing a constant <i>c</i> with name <i>n</i>, then this command extracts the constant <i>c</i> from the environment and pushes it onto the stack.</dd>
+
+<dt><a name="constTermCommand" /><kbd>constTerm</kbd></dt>
+
+<dd>Pop a type <i>ty</i>; pop a constant <i>c</i>; push a constant
+term <i>t</i> with constant <i>c</i> and type <i>ty</i>.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Type&nbsp;</kbd><i>ty</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Const&nbsp;</kbd><i>c</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Term&nbsp;</kbd><i>t</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="deductAntisymCommand" /><kbd>deductAntisym</kbd></dt>
+
+<dd>Pop a theorem <i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>&psi;</i>; pop a
+theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&phi;</i>; push the
+theorem (<i>&Gamma;</i>&nbsp;-&nbsp;{&nbsp;<i>&psi;</i>&nbsp;})&nbsp;&cup;&nbsp;(<i>&Delta;</i>&nbsp;-&nbsp;{&nbsp;<i>&phi;</i>&nbsp;})&nbsp;&#x22A6;&nbsp;<i>&phi; = &psi;</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>&psi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&phi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd>(<i>&Gamma;</i>&nbsp;-&nbsp;{&nbsp;<i>&psi;</i>&nbsp;})&nbsp;&cup;&nbsp;(<i>&Delta;</i>&nbsp;-&nbsp;{&nbsp;<i>&phi;</i>&nbsp;})&nbsp;&#x22A6;&nbsp;<i>&phi; = &psi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Note:</strong> This command does not fail if <i>&psi;</i> is not in the hypothesis set <i>&Gamma;</i> (in this case <i>&Gamma;</i>&nbsp;-&nbsp;{&nbsp;<i>&psi;</i>&nbsp;} = <i>&Gamma;</i>).<br />
+<strong>Note:</strong> This command does not fail if <i>&phi;</i> is not in the hypothesis set <i>&Delta;</i> (in this case <i>&Delta;</i>&nbsp;-&nbsp;{&nbsp;<i>&phi;</i>&nbsp;} = <i>&Delta;</i>).</dd>
+
+<dt><a name="defCommand" /><kbd>def</kbd></dt>
+
+<dd>Pop a number <i>k</i>; peek an object <i>x</i> on the stack;
+update the dictionary so that key <i>k</i> maps to
+object <i>x</i>.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Num&nbsp;</kbd><i>k</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>::&nbsp;</kbd><i>x</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><i>x</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<th>Dictionary:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>dict</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>dict[</kbd><i>k &rarr; x</i><kbd>]</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="defineConstCommand" /><kbd>defineConst</kbd></dt>
+
+<dd>Pop a term <i>t</i>; pop a name <i>n</i>; push a defined constant <i>c</i> with name <i>n</i>; push the theorem &#x22A6;&nbsp;<i>c = t</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Term&nbsp;</kbd><i>t</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Name&nbsp;</kbd><i>n</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd>&#x22A6;&nbsp;<i>c = t</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Const&nbsp;</kbd><i>c</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The term <i>t</i> must not have any free term variables.<br />
+<strong>Constraint:</strong> Every type variable that appears in the type of a subterm of <i>t</i> must also appear in the type of <i>t</i>.<br />
+<strong>Note:</strong> If the type of <i>t</i> is <i>&tau;</i>, then the principal type of the defined constant <i>c</i> is <i>&tau;</i>.</dd>
+
+<dt><a name="defineConstListCommand" /><kbd>defineConstList</kbd> <small>[new in version 6]</small></dt>
+
+<dd>Pop a theorem {&nbsp;<i>v<sub>1</sub> = t<sub>1</sub></i>, ..., <i>v<sub>k</sub> = t<sub>k</sub></i>&nbsp;}&nbsp;&#x22A6;&nbsp;<i>&phi;</i>; pop a list of name/variable pairs (<i>n<sub>i</sub></i>,<i>v<sub>i</sub></i>); push a list of defined constants <i>c<sub>i</sub></i> with names <i>n<sub>i</sub></i>; push the theorem &#x22A6;&nbsp;<i>&phi;</i>[<i>c<sub>1</sub>/v<sub>1</sub></i>, ..., <i>c<sub>k</sub>/v<sub>k</sub></i>] onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Thm&nbsp;(</kbd>{&nbsp;<i>v<sub>1</sub> = t<sub>1</sub></i>, ..., <i>v<sub>k</sub> = t<sub>k</sub></i>&nbsp;}&nbsp;&#x22A6;&nbsp;<i>&phi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: List [List [Name&nbsp;</kbd><i>n<sub>1</sub></i><kbd>, Var&nbsp;</kbd><i>v<sub>1</sub></i><kbd>], ..., List [Name&nbsp;</kbd><i>n<sub>k</sub></i><kbd>, Var&nbsp;</kbd><i>v<sub>k</sub></i><kbd>]]</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd>&#x22A6;&nbsp;<i>&phi;</i>[<i>c<sub>1</sub>/v<sub>1</sub></i>, ..., <i>c<sub>k</sub>/v<sub>k</sub></i>]<kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: List [Const&nbsp;</kbd><i>c<sub>1</sub></i><kbd>, ..., Const&nbsp;</kbd><i>c<sub>k</sub></i><kbd>]</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The terms <i>v<sub>i</sub></i> must be pairwise distinct variables.<br />
+<strong>Constraint:</strong> The terms <i>t<sub>i</sub></i> must have no free variables.<br />
+<strong>Constraint:</strong> The free variables of <i>&phi;</i> must be a subset of {<i>v<sub>1</sub></i>, ..., <i>v<sub>k</sub></i>}.<br />
+<strong>Constraint:</strong> For every term <i>t<sub>i</sub></i>, every type variable that appears in the
+type of a subterm of <i>t<sub>i</sub></i> must also appear in the type
+of <i>t<sub>i</sub></i>.<br />
+<strong>Note:</strong> If the type of <i>t<sub>i</sub></i> is <i>&tau;<sub>i</sub></i>, then the principal type of the defined constant <i>c<sub>i</sub></i> is <i>&tau;<sub>i</sub></i>.</dd>
+
+<dt><a name="defineTypeOpCommand" /><kbd>defineTypeOp</kbd> <small>[changed in version 6]</small></dt>
+
+<dd>Pop a theorem &#x22A6;&nbsp;<i>&phi; t</i>; pop
+a list of names <i>A</i>; pop a name <i>rep</i>; pop a
+name <i>abs</i>; pop a name <i>n</i>; push a defined type
+operator <i>op</i> with name <i>n</i>; push a defined constant <i>abs</i>
+with name <i>abs</i>; push a defined constant
+<i>rep</i> with name <i>rep</i>; push the theorem &#x22A6;&nbsp;<i>(&lambda;a.&nbsp;abs&nbsp;(rep&nbsp;a)) = &lambda;a.&nbsp;a</i>; push the theorem &#x22A6;&nbsp;<i>(&lambda;r.&nbsp;rep&nbsp;(abs&nbsp;r)&nbsp;=&nbsp;r)&nbsp;=&nbsp;&lambda;r.&nbsp;&phi;&nbsp;r</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Thm&nbsp;(</kbd>&#x22A6;&nbsp;<i>&phi; t</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: List [Name&nbsp;</kbd><i>&alpha;<sub>1</sub></i><kbd>, ..., Name&nbsp;</kbd><i>&alpha;<sub>k</sub></i><kbd>]</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Name&nbsp;</kbd><i>rep</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Name&nbsp;</kbd><i>abs</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Name&nbsp;</kbd><i>n</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd>&#x22A6;&nbsp;<i>(&lambda;r.&nbsp;rep&nbsp;(abs&nbsp;r)&nbsp;=&nbsp;r)&nbsp;=&nbsp;&lambda;r.&nbsp;&phi;&nbsp;r</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Thm&nbsp;(</kbd>&#x22A6;&nbsp;<i>(&lambda;a.&nbsp;abs&nbsp;(rep&nbsp;a)) = &lambda;a.&nbsp;a</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Const&nbsp;</kbd><i>rep</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Const&nbsp;</kbd><i>abs</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: TypeOp&nbsp;</kbd><i>op</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The predicate <i>&phi;</i> must not
+contain any free term variables.<br />
+<strong>Constraint:</strong> <i>A</i> must list all the type variables
+in <i>&phi;</i> precisely once.<br />
+<strong>Note:</strong> The arity of the defined type operator <i>op</i> is <i>k</i>.<br />
+<strong>Note:</strong> If the type of <i>t</i> is <i>&tau;</i>, then the principal type of the defined constant <i>abs</i> is <i>&tau; &rarr; (&alpha;<sub>1</sub>,...,&alpha;<sub>k</sub>) op</i> and the principal type of the defined constant <i>rep</i> is <i>(&alpha;<sub>1</sub>,...,&alpha;<sub>k</sub>) op &rarr; &tau;</i>.</dd>
+
+<dt><a name="eqMpCommand" /><kbd>eqMp</kbd></dt>
+
+<dd>Pop a theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&phi;</i>;
+pop a theorem <i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>&phi;' = &psi;</i>; push the
+theorem <i>&Gamma;</i>&nbsp;&cup;&nbsp;<i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>&psi;</i> onto
+the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&phi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Thm&nbsp;(</kbd><i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>&phi;' = &psi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&cup;&nbsp;<i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>&psi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The terms <i>&phi;</i> and <i>&phi;'</i>
+must be <i>&alpha;</i>-equivalent.</dd>
+
+<dt><a name="hdTlCommand" /><kbd>hdTl</kbd> <small>[new in version 6]</small></dt>
+
+<dd >Pop a list <i>h :: t</i>; push the object <i>h</i>; push the list <i>t</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td></td>
+<td><kbd>List&nbsp;(</kbd><i>h :: t</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>List&nbsp;</kbd><i>t</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: </kbd><i>h</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="nilCommand" /><kbd>nil</kbd></dt>
+
+<dd>Push the empty list <kbd>[]</kbd> onto the stack.
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>List&nbsp;[]</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="opTypeCommand" /><kbd>opType</kbd></dt>
+
+<dd>Pop a list of types <i>tys</i>; pop a type operator <i>op</i>;
+push a type with type operator <i>op</i> and arguments <i>tys</i>.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>List [Type&nbsp;</kbd><i>ty<sub>1</sub></i><kbd>, ..., Type&nbsp;</kbd><i>ty<sub>n</sub></i><kbd>]</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: TypeOp&nbsp;</kbd><i>op</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Type&nbsp;(</kbd><i>(ty<sub>1</sub>, ..., ty<sub>n</sub>) op</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="popCommand" /><kbd>pop</kbd></dt>
+
+<dd>Pop an object from the top of the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><i>x</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="pragmaCommand" /><kbd>pragma</kbd> <small>[new in version 6]</small></dt>
+
+<dd>Pop an object from the top of the stack, and
+perform a reader-dependent operation.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><i>x</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>stack</kbd></td>
+</tr>
+</table>
+
+<strong>Note:</strong> The only pragma currently supported by the
+
+<a href="http://www.gilith.com/software/opentheory/">opentheory tool</a>
+
+is as follows: if the object <i>x</i> is the name <i>debug</i>, the reader prints debugging information about the state of the stack and dictionary.</dd>
+
+<dt><a name="proveHypCommand" /><kbd>proveHyp</kbd> <small>[new in version 6]</small></dt>
+
+<dd>Pop a theorem <i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>&psi;</i>; pop a
+theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&phi;</i>; push the
+theorem <i>&Gamma;</i>&nbsp;&cup;&nbsp;(<i>&Delta;</i>&nbsp;-&nbsp;{&nbsp;<i>&phi;</i>&nbsp;})&nbsp;&#x22A6;&nbsp;<i>&psi;</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>&psi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&phi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&cup;&nbsp;(<i>&Delta;</i>&nbsp;-&nbsp;{&nbsp;<i>&phi;</i>&nbsp;})&nbsp;&#x22A6;&nbsp;<i>&psi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Note:</strong> This command does not fail if <i>&phi;</i> is not in the hypothesis set <i>&Delta;</i> (in this case <i>&Gamma;</i>&nbsp;&cup;&nbsp;(<i>&Delta;</i>&nbsp;-&nbsp;{&nbsp;<i>&phi;</i>&nbsp;}) = <i>&Gamma;</i>&nbsp;&cup;&nbsp;<i>&Delta;</i>).</dd>
+
+<dt><a name="refCommand" /><kbd>ref</kbd></dt>
+
+<dd>Pop a number <i>k</i> from the stack; look up key <i>k</i> in
+the dictionary to get an object <i>x</i>; push the object <i>x</i>
+onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Num&nbsp;</kbd><i>k</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>dict[</kbd><i>k</i><kbd>]</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The number <i>k</i> must be in the domain
+of the dictionary.<br />
+<strong>Note:</strong> This command reads the dictionary, but
+does not change it.</dd>
+
+<dt><a name="reflCommand" /><kbd>refl</kbd></dt>
+
+<dd>Pop a term <i>t</i>; push the theorem &#x22A6;&nbsp;<i>t =
+t</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Term&nbsp;</kbd><i>t</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd>&#x22A6;&nbsp;<i>t = t</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="removeCommand" /><kbd>remove</kbd></dt>
+
+<dd>Pop a number <i>k</i> from the stack; look up key <i>k</i> in
+the dictionary to get an object <i>x</i>; push the object <i>x</i>
+onto the stack; delete the entry for key <i>k</i> from the
+dictionary.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Num&nbsp;</kbd><i>k</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>dict[</kbd><i>k</i><kbd>]</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<th>Dictionary:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>dict</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>dict[</kbd><i>entry k deleted</i><kbd>]</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The number <i>k</i> must be in the domain
+of the dictionary.<br />
+<strong>Note:</strong> This command is exactly the same as
+the <kbd>ref</kbd> command, except that it also deletes the entry from
+the dictionary.</dd>
+
+<dt><a name="substCommand" /><kbd>subst</kbd></dt>
+
+<dd>Pop a theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&phi;</i>; pop a
+substitution <i>&sigma;</i>; push the
+theorem <i>&Gamma;[&sigma;]</i>&nbsp;&#x22A6;&nbsp;<i>&phi;[&sigma;]</i>
+onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Thm&nbsp;</kbd><i>&theta;</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: List&nbsp;[List&nbsp;[List&nbsp;[Name&nbsp;</kbd><i>&alpha;<sub>1</sub></i><kbd>, Type&nbsp;</kbd><i>ty<sub>1</sub></i><kbd>], ..., List&nbsp;[Name&nbsp;</kbd><i>&alpha;<sub>m</sub></i><kbd>, Type&nbsp;</kbd><i>ty<sub>m</sub></i><kbd>]],</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;List&nbsp;[List&nbsp;[Var&nbsp;</kbd><i>v<sub>1</sub></i><kbd>, Term&nbsp;</kbd><i>t<sub>1</sub></i><kbd>], ..., List&nbsp;[Var&nbsp;</kbd><i>v<sub>n</sub></i><kbd>, Term&nbsp;</kbd><i>t<sub>n</sub></i><kbd>]]]</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd><i>(&theta;[ty<sub>1</sub>/&alpha;<sub>1</sub>, ..., ty<sub>m</sub>/&alpha;<sub>m</sub>])[t<sub>1</sub>/v<sub>1</sub>, ..., t<sub>n</sub>/v<sub>n</sub>]</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The names <i>&alpha;<sub>i</sub></i> must
+be in the global namespace (i.e., be of the
+form <i>([],s<sub>i</sub>)</i>).<br />
+<strong>Note:</strong> Both the hypothesis set and conclusion of the
+theorem is instantiated by this rule.<br />
+<strong>Note:</strong> The type variables are instantiated first,
+followed by the term variables.<br />
+<strong>Note:</strong> Bound variables will be renamed if necessary to
+prevent distinct variables becoming identical after the
+instantiation.</dd>
+
+<dt><a name="symCommand" /><kbd>sym</kbd> <small>[new in version 6]</small></dt>
+
+<dd>Pop a theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>t = u</i>; push the theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>u = t</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>t = u</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>u = t</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="thmCommand" /><kbd>thm</kbd></dt>
+
+<dd>Pop a term <i>&phi;</i>; pop a list of terms [<i>t<sub>1</sub>,&nbsp;...,&nbsp;t<sub>n</sub></i>];
+pop a theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&psi;</i> from the
+stack; <i>&alpha;</i>-convert the
+theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&psi;</i>
+to {&nbsp;<i>t<sub>1</sub>,&nbsp;...,&nbsp;t<sub>n</sub></i>&nbsp;}&nbsp;&#x22A6;&nbsp;<i>&phi;</i> and add it to the article
+theorems.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Term&nbsp;</kbd><i>&phi;</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: List [Term&nbsp;</kbd><i>t<sub>1</sub></i><kbd>, ..., Term&nbsp;</kbd><i>t<sub>n</sub></i><kbd>]</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>&psi;</i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>stack</kbd></td>
+</tr>
+<tr>
+<th>Theorems:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>theorems</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>theorems</kbd>&nbsp;&cup;&nbsp;{&nbsp;{&nbsp;<i>t<sub>1</sub>,&nbsp;...,&nbsp;t<sub>n</sub></i>&nbsp;}&nbsp;&#x22A6;&nbsp;<i>&phi;</i>&nbsp;}</td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The terms <i>&phi;</i> and <i>&psi;</i>
+must be <i>&alpha;</i>-equivalent.<br />
+<strong>Constraint:</strong> The term set <i>&Gamma;</i> must
+be <i>&alpha;</i>-equivalent to a subset of {&nbsp;<i>t<sub>1</sub>,&nbsp;...,&nbsp;t<sub>n</sub></i>&nbsp;}. <br />
+<strong>Constraint:</strong> The list of terms
+[<i>t<sub>1</sub>,&nbsp;...,&nbsp;t<sub>n</sub></i>] must be distinct
+with respect to <i>&alpha;</i>-equivalence.</dd>
+
+<dt><a name="transCommand" /><kbd>trans</kbd> <small>[new in version 6]</small></dt>
+
+<dd>Pop a theorem <i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>t<sub>2</sub>' = t<sub>3</sub></i>; pop a
+theorem <i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>t<sub>1</sub> = t<sub>2</sub></i>; push the
+theorem (<i>&Gamma;</i>&nbsp;&cup;&nbsp;<i>&Delta;</i>)&nbsp;&#x22A6;&nbsp;<i>t<sub>1</sub> = t<sub>3</sub></i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Thm&nbsp;(</kbd><i>&Delta;</i>&nbsp;&#x22A6;&nbsp;<i>t<sub>2</sub>' = t<sub>3</sub></i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Thm&nbsp;(</kbd><i>&Gamma;</i>&nbsp;&#x22A6;&nbsp;<i>t<sub>1</sub> = t<sub>2</sub></i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Thm&nbsp;(</kbd>(<i>&Gamma;</i>&nbsp;&cup;&nbsp;<i>&Delta;</i>)&nbsp;&#x22A6;&nbsp;<i>t<sub>1</sub> = t<sub>3</sub></i><kbd>)</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The terms <i>t<sub>2</sub></i> and
+<i>t<sub>2</sub>'</i> must be <i>&alpha;</i>-equivalent.</dd>
+
+<dt><a name="typeOpCommand" /><kbd>typeOp</kbd></dt>
+
+<dd>Pop a name <i>n</i>; push an external type operator <i>op</i> with
+name <i>n</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Name&nbsp;</kbd><i>n</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>TypeOp&nbsp;</kbd><i>op</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Note:</strong> This command makes an external reference to a type operator. That is, if the article is being read in an environment <i>&Delta;</i> containing a type operator <i>op</i> with name <i>n</i>, then this command extracts the type operator <i>op</i> from the environment and pushes it onto the stack.</dd>
+
+<dt><a name="varCommand" /><kbd>var</kbd></dt>
+
+<dd>Pop a type <i>ty</i>; pop a name <i>n</i>; push a term variable
+<i>v</i> with name <i>n</i> and type <i>ty</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Type&nbsp;</kbd><i>ty</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: Name&nbsp;</kbd><i>n</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Var&nbsp;</kbd><i>v</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The name <i>n</i> must be in the global
+namespace (i.e., be of the form <i>([],s)</i>).</dd>
+
+<dt><a name="varTermCommand" /><kbd>varTerm</kbd></dt>
+
+<dd>Pop a term variable <i>v</i>; push a variable term <i>t</i>
+with variable <i>v</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Var&nbsp;</kbd><i>v</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Term&nbsp;</kbd><i>t</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+</dd>
+
+<dt><a name="varTypeCommand" /><kbd>varType</kbd></dt>
+
+<dd>Pop a name <i>n</i>; push a type variable <i>ty</i> with name
+<i>n</i> onto the stack.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Name&nbsp;</kbd><i>n</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>Type&nbsp;</kbd><i>ty</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The name <i>n</i> must be in the global
+namespace (i.e., be of the form <i>([],s)</i>).<br />
+<strong>Note:</strong> The OpenTheory standard theory library adopts
+the HOL Light convention of naming type variables with capital
+letters, and theorem provers are expected to map them to native
+conventions as part of processing articles. For example, in HOL4 it
+would be natural to map an OpenTheory type variable with name
+<i>A</i> to a native HOL4 type variable with name <i>'a</i>.</dd>
+
+<dt><a name="versionCommand" /><kbd>version</kbd> <small>[new in version 6]</small></dt>
+
+<dd>Pop a number <i>k</i> from the stack, and interpret the rest of
+the article using the OpenTheory standard article file format
+version <i>k</i>.
+
+<table cellspacing="0" cellpadding="0">
+<tr>
+<th>Stack:</th>
+<td>&nbsp; &nbsp;</td>
+<th>Before:</th>
+<td>&nbsp; &nbsp;</td>
+<td><kbd>Num&nbsp;</kbd><i>k</i></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td><kbd>:: stack</kbd></td>
+</tr>
+<tr>
+<td></td>
+<td></td>
+<th>After:</th>
+<td></td>
+<td><kbd>stack</kbd></td>
+</tr>
+</table>
+
+<strong>Constraint:</strong> The version command may only occur as the
+very first command in an article file.<br />
+<strong>Note:</strong> If there is no version command in an article
+file, the version is assumed to be 5.</dd>
+
+<dt></dt>
+
+</dl>
+
+</div>
+
+<div id="footer"><p><a href="http://www.gilith.com/opentheory">OpenTheory</a>
+
+standard
+
+<a href="http://www.gilith.com/opentheory/article.html">article file format</a>
+
+version 6 published on 20 November 2014.</p>
+
+<p>This
+
+<a href="http://www.gilith.com/opentheory/article-5-6.html">replaces</a>
+
+the standard article file format
+
+<a href="http://www.gilith.com/opentheory/article-5.html">version 5</a>
+
+published on 9 August 2010.</p></div>
+
+</body>
+</html>
