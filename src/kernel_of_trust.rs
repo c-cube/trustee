@@ -1,7 +1,7 @@
 //! Kernel of Trust: Terms and Theorems
 
 use crate::fnv;
-use std::{fmt, ops::Deref};
+use std::{fmt, ops::Deref, sync::atomic};
 
 #[cfg(features = "noarc")]
 pub type Ref<T> = std::rc::Rc<T>;
@@ -106,6 +106,8 @@ struct ExprImpl {
     view: ExprView,
     /// Number of DB indices missing. 0 means the term is closed.
     db_depth: DbIndex,
+    /// Unique ID of the expr manager responsible for creating this expr.
+    em_uid: u32,
     /// Type of the expression. Always present except for `Kind`.
     ty: Option<Expr>,
 }
@@ -468,9 +470,9 @@ impl Expr {
     }
 
     // helper for building expressions
-    fn make_(v: ExprView, ty: Option<Expr>) -> Self {
+    fn make_(v: ExprView, em_uid: u32, ty: Option<Expr>) -> Self {
         let db_depth = compute_db_depth(&v);
-        Expr(Ref::new(ExprImpl { view: v, ty, db_depth }))
+        Expr(Ref::new(ExprImpl { view: v, em_uid, ty, db_depth }))
     }
 
     // pretty print
@@ -565,6 +567,8 @@ struct ThmImpl {
     concl: Expr,
     /// Hypothesis of the theorem.
     hyps: Vec<Expr>,
+    /// Unique ID of the `ExprManager`
+    em_uid: u32,
 }
 
 /// Free variables of a set of terms
@@ -580,13 +584,13 @@ where
 }
 
 impl Thm {
-    fn make_(concl: Expr, mut hyps: Vec<Expr>) -> Self {
+    fn make_(concl: Expr, em_uid: u32, mut hyps: Vec<Expr>) -> Self {
         if hyps.len() >= 2 {
             hyps.sort_unstable();
             hyps.dedup();
             hyps.shrink_to_fit();
         }
-        Thm(Ref::new(ThmImpl { concl, hyps }))
+        Thm(Ref::new(ThmImpl { concl, em_uid, hyps }))
     }
 
     /// Conclusion of the theorem
@@ -632,6 +636,7 @@ pub struct ExprManager {
     select: Option<Expr>,
     next_cleanup: usize,
     axioms: Vec<Thm>,
+    uid: u32, // Unique to this EM
 }
 
 impl fmt::Debug for ExprManager {
@@ -665,10 +670,18 @@ fn hyps_merge(th1: &Thm, th2: &Thm) -> Vec<Expr> {
 /// A substitution.
 pub type Subst = Vec<(Var, Expr)>;
 
+// used to allocate unique ExprManager IDs
+static EM_ID: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+
 impl ExprManager {
     /// Create a new term manager with given initial capacity.
     pub fn with_capacity(n: usize) -> Self {
         let tbl = fnv::new_table_with_cap(n);
+        // allocate new uid
+        let uid = EM_ID.fetch_add(1, atomic::Ordering::SeqCst);
+        if uid > std::u32::MAX as usize {
+            panic!("allocated more than u32::MAX ExprManager, cannot allocate more");
+        }
         let mut em = ExprManager {
             tbl,
             builtins: None,
@@ -678,6 +691,7 @@ impl ExprManager {
             select: None,
             next_cleanup: CLEANUP_PERIOD,
             axioms: vec![],
+            uid: uid as u32,
         };
         // insert initial builtins
         let kind = em.hashcons_builtin_(EKind, None);
@@ -727,7 +741,7 @@ impl ExprManager {
         // need to insert the term, so first we need to compute its type.
         let ty = self.compute_ty_(&ev)?;
         let key = ev.clone();
-        let e = Expr::make_(ev, ty);
+        let e = Expr::make_(ev, self.uid, ty);
         //#[rustfmt::skip]
         //eprintln!("insert.expr.hashcons {:?} at {:?}", &e, e.0.as_ref() as *const _);
         //eprintln!("ev mem: {}", self.tbl.contains_key(&ev2));
@@ -755,9 +769,19 @@ impl ExprManager {
     fn hashcons_builtin_(&mut self, ev: ExprView, ty: Option<Expr>) -> Expr {
         let tbl = &mut self.tbl;
         debug_assert!(!tbl.contains_key(&ev));
-        let e = Expr::make_(ev, ty);
+        let e = Expr::make_(ev, self.uid, ty);
         tbl.insert(e.view().clone(), e.weak());
         e
+    }
+
+    #[inline]
+    fn check_uid_(&self, e: &Expr) {
+        assert!(self.uid == e.0.em_uid); // term should belong to this EM
+    }
+
+    #[inline]
+    fn check_thm_uid_(&self, th: &Thm) {
+        assert!(self.uid == th.0.em_uid); // theorem should belong to this EM
     }
 
     /// Get the `=` constant
@@ -783,6 +807,8 @@ impl ExprManager {
     ///
     /// Panics if `a` and `b` do not have the same type.
     pub fn mk_eq_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
+        self.check_uid_(&a);
+        self.check_uid_(&b);
         if a.ty() != b.ty() {
             return Err(format!(
                 "mk_eq: {:?} and {:?} have incompatible types",
@@ -989,6 +1015,7 @@ impl ExprManager {
     /// For each pair `(x,u)` in `subst`, replace instances of the free
     /// variable `x` by `u` in `t`.
     pub fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr> {
+        self.check_uid_(&t);
         struct Replace<'a> {
             // cache, relative to depth
             em: &'a mut ExprManager,
@@ -1031,6 +1058,11 @@ impl ExprManager {
                 Ok(r)
             }
         }
+
+        subst.iter().for_each(|(v, t)| {
+            self.check_uid_(&v.ty);
+            self.check_uid_(t)
+        });
 
         debug_assert!(subst.iter().all(|(v, t)| &v.ty == t.ty())); // type preservation
         let mut replace = Replace { em: self, subst };
@@ -1075,6 +1107,8 @@ impl ExprManager {
 
     /// Apply `a` to `b`.
     pub fn mk_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
+        self.check_uid_(&a);
+        self.check_uid_(&b);
         self.hashcons_(EApp(a, b))
     }
 
@@ -1111,11 +1145,13 @@ impl ExprManager {
 
     /// Make a free variable.
     pub fn mk_var(&mut self, v: Var) -> Expr {
+        self.check_uid_(&v.ty);
         self.hashcons_(EVar(v)).expect("mk_var can't fail")
     }
 
     /// Make a free variable.
     pub fn mk_var_str(&mut self, name: &str, ty_var: Type) -> Expr {
+        self.check_uid_(&ty_var);
         self.mk_var(Var::from_str(name, ty_var))
     }
 
@@ -1127,17 +1163,22 @@ impl ExprManager {
 
     /// Make a bound variable with given type and index.
     pub fn mk_bound_var(&mut self, idx: DbIndex, ty_var: Type) -> Expr {
+        self.check_uid_(&ty_var);
         self.hashcons_(EBoundVar(BoundVarContent { idx, ty: ty_var }))
             .expect("mk_bound_var cannot fail")
     }
 
     /// Make a lambda term.
     fn mk_lambda_(&mut self, ty_var: Type, body: Expr) -> Result<Expr> {
+        self.check_uid_(&ty_var);
+        self.check_uid_(&body);
         self.hashcons_(ELambda(ty_var, body))
     }
 
     /// Substitute `v` with db0 in `body`.
     fn abs_on_(&mut self, v: Var, body: Expr) -> Result<Expr> {
+        self.check_uid_(&v.ty);
+        self.check_uid_(&body);
         let v_ty = &v.ty;
         if !v_ty.is_closed() {
             return Err(format!(
@@ -1155,6 +1196,8 @@ impl ExprManager {
 
     /// Make a lambda term by abstracting on `v`.
     pub fn mk_lambda(&mut self, v: Var, body: Expr) -> Result<Expr> {
+        self.check_uid_(&v.ty);
+        self.check_uid_(&body);
         let v_ty = v.ty.clone();
         let body = self.abs_on_(v, body)?;
         self.mk_lambda_(v_ty, body)
@@ -1181,6 +1224,8 @@ impl ExprManager {
 
     /// Make a pi term by absracting on `v`.
     pub fn mk_pi(&mut self, v: Var, body: Expr) -> Result<Expr> {
+        self.check_uid_(&v.ty);
+        self.check_uid_(&body);
         let v_ty = v.ty.clone();
         let body = self.abs_on_(v, body)?;
         self.mk_pi_(v_ty, body)
@@ -1205,6 +1250,8 @@ impl ExprManager {
     /// This builds `Π_:a. b`.
     pub fn mk_arrow(&mut self, ty1: Expr, ty2: Expr) -> Result<Expr> {
         // need to shift ty2 by 1 to account for the Π binder.
+        self.check_uid_(&ty1);
+        self.check_uid_(&ty2);
         let ty2 = self.shift_(&ty2, 1, 0)?;
         self.mk_pi_(ty1, ty2)
     }
@@ -1213,7 +1260,9 @@ impl ExprManager {
     ///
     /// panics if some constant with the same name exists, or if
     /// the type is not closed.
-    fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
+    /// This constant has no axiom associated to it, it is entirely opaque.
+    pub fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
+        self.check_uid_(&ty);
         if self.consts.contains_key(&s) {
             return Err(format!("a constant named {:?} already exists", &s));
         }
@@ -1230,19 +1279,23 @@ impl ExprManager {
 
     /// `assume F` is `F |- F`
     pub fn thm_assume(&mut self, e: &Expr) -> Thm {
-        Thm::make_(e.clone(), vec![e.clone()])
+        self.check_uid_(&e);
+        Thm::make_(e.clone(), self.uid, vec![e.clone()])
     }
 
     /// `refl t` is `|- t=t`
     pub fn thm_refl(&mut self, e: Expr) -> Thm {
+        self.check_uid_(&e);
         let t = self.mk_eq_app(e.clone(), e.clone()).expect("refl");
-        Thm::make_(t, vec![])
+        Thm::make_(t, self.uid, vec![])
     }
 
     /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
     ///
     /// Can fail if the conclusions don't match properly.
     pub fn thm_trans(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
+        self.check_thm_uid_(th1);
+        self.check_thm_uid_(th2);
         let (a, b) =
             th1.concl().unfold_eq().ok_or("trans: th1 must be an equation")?;
         let (b2, c) =
@@ -1253,12 +1306,14 @@ impl ExprManager {
 
         let hyps = hyps_merge(th1, th2);
         let eq_a_c = self.mk_eq_app(a.clone(), c.clone())?;
-        let th = Thm::make_(eq_a_c, hyps);
+        let th = Thm::make_(eq_a_c, self.uid, hyps);
         Ok(th)
     }
 
     /// `congr (F1 |- f=g) (F2 |- t=u)` is `F1, F2 |- f t=g u`
     pub fn thm_congr(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
+        self.check_thm_uid_(th1);
+        self.check_thm_uid_(th2);
         let (f, g) =
             th1.0.concl.unfold_eq().ok_or_else(|| {
                 format!("congr: {:?} must be an equality", th1)
@@ -1271,7 +1326,7 @@ impl ExprManager {
         let gu = self.mk_app(g.clone(), u.clone())?;
         let eq = self.mk_eq_app(ft, gu)?;
         let hyps = hyps_merge(th1, th2);
-        Ok(Thm::make_(eq, hyps))
+        Ok(Thm::make_(eq, self.uid, hyps))
     }
 
     /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
@@ -1282,6 +1337,7 @@ impl ExprManager {
         th: &Thm,
         subst: &[(Var, Expr)],
     ) -> Result<Thm> {
+        self.check_thm_uid_(th);
         if let Some((v, t)) = subst.iter().find(|(_, t)| !t.is_closed()) {
             return Err(format!(
                     "instantiate: substitution {:?} contains non-closed binding {:?} := {:?}",
@@ -1293,13 +1349,15 @@ impl ExprManager {
         for t in hyps.iter_mut() {
             *t = self.subst(t, subst)?;
         }
-        Ok(Thm::make_(concl, hyps))
+        Ok(Thm::make_(concl, self.uid, hyps))
     }
 
     /// `abs x (F |- t=u)` is `F |- (λx.t)=(λx.u)`
     ///
     /// Panics if `x` occurs freely in `F`.
     pub fn thm_abs(&mut self, v: &Var, th: &Thm) -> Result<Thm> {
+        self.check_uid_(&v.ty);
+        self.check_thm_uid_(th);
         if free_vars_iter(th.0.hyps.iter()).any(|v2| v == v2) {
             return Err(format!(
                 "abs: variable {:?} occurs in hyps of {:?}",
@@ -1314,7 +1372,7 @@ impl ExprManager {
         let lam_t = self.mk_lambda(v.clone(), t.clone())?;
         let lam_u = self.mk_lambda(v.clone(), u.clone())?;
         let eq = self.mk_eq_app(lam_t, lam_u)?;
-        Ok(Thm::make_(eq, th.0.hyps.clone()))
+        Ok(Thm::make_(eq, self.uid, th.0.hyps.clone()))
     }
 
     /// `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`
@@ -1325,6 +1383,8 @@ impl ExprManager {
     /// NOTE: this is not strictly necessary, as it's not an axiom in HOL light,
     /// but we include it here anyway.
     pub fn thm_cut(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
+        self.check_thm_uid_(th1);
+        self.check_thm_uid_(th2);
         let th1_c = &th1.0.concl;
         if !th2.0.hyps.contains(th1_c) {
             Err("cut: th2's hyps do not contain th1's conclusion")?
@@ -1333,12 +1393,14 @@ impl ExprManager {
         let mut hyps = th2.0.hyps.clone();
         hyps.retain(|u| u != th1_c);
         hyps.extend_from_slice(&th1.0.hyps[..]);
-        Ok(Thm::make_(concl, hyps))
+        Ok(Thm::make_(concl, self.uid, hyps))
     }
 
     /// `mp (F1 |- a) (F2 |- a' ==> b)` is `F1, F2 |- b`
     /// where `a` and `a'` are alpha equivalent.
     pub fn thm_mp(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
+        self.check_thm_uid_(th1);
+        self.check_thm_uid_(th2);
         let th2_c = &th2.0.concl;
         let (a, b) = th2_c.unfold_imply().ok_or_else(|| {
             format!("mp: second theorem {:?} must be an implication", th2)
@@ -1351,12 +1413,14 @@ impl ExprManager {
             return Err(msg);
         }
         let hyps = hyps_merge(th1, th2);
-        Ok(Thm::make_(b.clone(), hyps))
+        Ok(Thm::make_(b.clone(), self.uid, hyps))
     }
 
     /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
     /// This is the boolean equivalent of transitivity.
     pub fn thm_bool_eq(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
+        self.check_thm_uid_(th1);
+        self.check_thm_uid_(th2);
         let th2_c = &th2.0.concl;
         let (a, b) = th2_c
             .unfold_eq()
@@ -1376,23 +1440,26 @@ impl ExprManager {
         }
 
         let hyps = hyps_merge(th1, th2);
-        Ok(Thm::make_(b.clone(), hyps))
+        Ok(Thm::make_(b.clone(), self.uid, hyps))
     }
 
     /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
     /// This is a way of building a boolean `a=b` from proofs of
     /// `a==>b` and `b==>a` (or `a|-b` and [b|-a`).
     pub fn thm_bool_eq_intro(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
+        self.check_thm_uid_(th1);
+        self.check_thm_uid_(th2);
         let mut hyps = vec![];
         hyps.extend(th1.0.hyps.iter().filter(|x| *x != &th2.0.concl).cloned());
         hyps.extend(th2.0.hyps.iter().filter(|x| *x != &th1.0.concl).cloned());
         let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
-        Ok(Thm::make_(eq, hyps))
+        Ok(Thm::make_(eq, self.uid, hyps))
     }
 
     /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
     /// Fails if the term is not a beta-redex.
     pub fn thm_beta_conv(&mut self, e: &Expr) -> Result<Thm> {
+        self.check_uid_(e);
         let (f, arg) = e.as_app().ok_or_else(|| {
             format!("beta-conv: expect an application, not {:?}", e)
         })?;
@@ -1404,7 +1471,7 @@ impl ExprManager {
         let lhs = e.clone();
         let rhs = self.subst1_(bod, 0, arg)?;
         let eq = self.mk_eq_app(lhs, rhs)?;
-        Ok(Thm::make_(eq, vec![]))
+        Ok(Thm::make_(eq, self.uid, vec![]))
     }
 
     /// `new_basic_definition (x=t)` where `x` is a variable and `t` a term
@@ -1412,6 +1479,7 @@ impl ExprManager {
     /// returns a theorem `|- x=t` where `x` is now a constant, along with
     /// the constant `x`.
     pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Expr)> {
+        self.check_uid_(&e);
         let (x, rhs) = e
             .unfold_eq()
             .and_then(|(x, rhs)| x.as_var().map(|x| (x, rhs)))
@@ -1434,14 +1502,17 @@ impl ExprManager {
 
         let c = self.mk_new_const(x.name.clone(), x.ty.clone())?;
         let eqn = self.mk_eq_app(c.clone(), rhs.clone())?;
-        let thm = Thm::make_(eqn, vec![]);
+        let thm = Thm::make_(eqn, self.uid, vec![]);
         Ok((thm, c))
     }
 
     /// Create a new axiom `assumptions |- concl`.
     /// **use with caution**
     pub fn thm_axiom(&mut self, hyps: Vec<Expr>, concl: Expr) -> Thm {
-        let thm = Thm::make_(concl, hyps);
+        self.check_uid_(&concl);
+        hyps.iter().for_each(|e| self.check_uid_(e));
+
+        let thm = Thm::make_(concl, self.uid, hyps);
         self.axioms.push(thm.clone());
         thm
     }
@@ -1465,6 +1536,7 @@ impl ExprManager {
         repr: Symbol,
         thm_inhabited: Thm,
     ) -> Result<NewTypeDef> {
+        self.check_thm_uid_(&thm_inhabited);
         if thm_inhabited.hyps().len() > 0 {
             return Err(format!(
                 "new_basic_type_def: theorem must not have hyps, {:?}",
@@ -1528,7 +1600,7 @@ impl ExprManager {
             let repr = self.mk_app_l(c_repr.clone(), &fvars_exprs)?;
             let t = self.mk_app(repr, x)?;
             let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
-            dbg!(Thm::make_(self.mk_app(abs, t)?, vec![]))
+            dbg!(Thm::make_(self.mk_app(abs, t)?, self.uid, vec![]))
         };
         let repr_thm = {
             // `|- Phi x <=> repr (abs x) = x`
@@ -1539,7 +1611,7 @@ impl ExprManager {
             let t2 = dbg!(self.mk_app(repr, t1))?;
             let eq_t2_x = dbg!(self.mk_eq_app(t2, x.clone()))?;
             let phi_x = dbg!(self.mk_app(phi.clone(), x))?;
-            dbg!(Thm::make_(self.mk_eq_app(phi_x, eq_t2_x)?, vec![]))
+            dbg!(Thm::make_(self.mk_eq_app(phi_x, eq_t2_x)?, self.uid, vec![]))
         };
 
         let c = NewTypeDef { tau, c_repr, c_abs, fvars, abs_thm, repr_thm };
