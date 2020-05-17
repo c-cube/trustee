@@ -811,7 +811,21 @@ impl<'a> VM<'a> {
             self.push_obj(O::Const(rep, Rc::new(oc)))
         }
 
-        todo!("push theorems");
+        // push abs thm
+        {
+            let abs_thm = &def.abs_thm;
+            let abs_thm2 = utils::thm_sym(&mut self.em, abs_thm)?;
+            let th = self.em.thm_abs(&def.abs_x, &abs_thm2)?;
+            self.push_obj(O::Thm(th));
+        }
+
+        // push repr thm
+        {
+            let repr_thm = &def.repr_thm;
+            let repr_thm2 = utils::thm_sym(&mut self.em, repr_thm)?;
+            let th = self.em.thm_abs(&def.abs_x, &repr_thm2)?;
+            self.push_obj(O::Thm(th));
+        }
 
         Ok(())
     }

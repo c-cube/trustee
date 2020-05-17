@@ -1543,15 +1543,16 @@ impl ExprManager {
                 thm_inhabited
             ));
         }
-        let (phi, x) = thm_inhabited.concl().as_app().ok_or_else(|| {
-            format!(
-                "conclusion of theorem must be `(Phi x)`, not `{:?}`",
-                thm_inhabited.concl()
-            )
-        })?;
-        dbg!((phi, x));
+        let (phi, witness) =
+            thm_inhabited.concl().as_app().ok_or_else(|| {
+                format!(
+                    "conclusion of theorem must be `(Phi x)`, not `{:?}`",
+                    thm_inhabited.concl()
+                )
+            })?;
+        dbg!((phi, witness));
         // the concrete type
-        let ty = x.ty().clone();
+        let ty = witness.ty().clone();
         // check that all free variables are type variables
         let mut fvars: Vec<Var> =
             thm_inhabited.concl().free_vars().cloned().collect();
@@ -1594,27 +1595,38 @@ impl ExprManager {
         };
         dbg!(&c_abs, c_abs.ty(), &c_repr, c_repr.ty());
 
+        let abs_x = self.mk_var_str("x", tau_vars.clone());
         let abs_thm = {
             // `|- abs (repr x) = x`
-            let x = self.mk_var_str("x", tau_vars.clone());
             let repr = self.mk_app_l(c_repr.clone(), &fvars_exprs)?;
-            let t = self.mk_app(repr, x)?;
+            let t = self.mk_app(repr, abs_x.clone())?;
             let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
-            dbg!(Thm::make_(self.mk_app(abs, t)?, self.uid, vec![]))
+            let abs_t = self.mk_app(abs, t)?;
+            let eqn = self.mk_eq_app(abs_t.clone(), abs_x.clone())?;
+            dbg!(Thm::make_(eqn, self.uid, vec![]))
         };
+        let repr_x = self.mk_var_str("x", ty.clone());
         let repr_thm = {
             // `|- Phi x <=> repr (abs x) = x`
-            let x = self.mk_var_str("x", ty.clone());
             let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
-            let t1 = self.mk_app(abs, x.clone())?;
+            let t1 = self.mk_app(abs, repr_x.clone())?;
             let repr = self.mk_app_l(c_repr.clone(), &fvars_exprs)?;
             let t2 = dbg!(self.mk_app(repr, t1))?;
-            let eq_t2_x = dbg!(self.mk_eq_app(t2, x.clone()))?;
-            let phi_x = dbg!(self.mk_app(phi.clone(), x))?;
+            let eq_t2_x = dbg!(self.mk_eq_app(t2, repr_x.clone()))?;
+            let phi_x = dbg!(self.mk_app(phi.clone(), repr_x.clone()))?;
             dbg!(Thm::make_(self.mk_eq_app(phi_x, eq_t2_x)?, self.uid, vec![]))
         };
 
-        let c = NewTypeDef { tau, c_repr, c_abs, fvars, abs_thm, repr_thm };
+        let c = NewTypeDef {
+            tau,
+            c_repr,
+            c_abs,
+            fvars,
+            repr_x: repr_x.as_var().unwrap().clone(),
+            abs_thm,
+            abs_x: abs_x.as_var().unwrap().clone(),
+            repr_thm,
+        };
         Ok(c)
     }
 }
@@ -1631,6 +1643,8 @@ pub struct NewTypeDef {
     pub c_repr: Expr,
     /// `abs_thm` is `|- abs (repr x) = x`
     pub abs_thm: Thm,
+    pub abs_x: Var,
     /// `repr_thm` is `|- Phi x <=> repr (abs x) = x`
     pub repr_thm: Thm,
+    pub repr_x: Var,
 }
