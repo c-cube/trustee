@@ -63,8 +63,8 @@ impl RenamingData {
                     if !self.v2.contains(&new_v) {
                         break new_v;
                     }
-                    self.var_count += 1
                 };
+                self.var_count += 1;
                 self.renaming.insert(v.clone(), v2.clone());
                 v2
             }
