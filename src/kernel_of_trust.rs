@@ -1066,7 +1066,7 @@ impl ExprManager {
 
         debug_assert!(subst.iter().all(|(v, t)| &v.ty == t.ty())); // type preservation
         let mut replace = Replace { em: self, subst };
-        eprintln!("### start replace `{:?}`, subst {:?}", t, subst);
+        eprintln!("### start replace\n  `{:?}`,\n  subst {:?}", t, subst);
         replace.replace(t, 0)
     }
 
@@ -1327,6 +1327,23 @@ impl ExprManager {
         let eq = self.mk_eq_app(ft, gu)?;
         let hyps = hyps_merge(th1, th2);
         Ok(Thm::make_(eq, self.uid, hyps))
+    }
+
+    /// `congr (F1 |- f=g) ty` is `F1 |- f ty=g ty`
+    pub fn thm_congr_ty(&mut self, th: &Thm, ty: &Expr) -> Result<Thm> {
+        self.check_thm_uid_(th);
+        self.check_uid_(ty);
+        let (f, g) =
+            th.0.concl.unfold_eq().ok_or_else(|| {
+                format!("congr_ty: {:?} must be an equality", th)
+            })?;
+        if ty.view() == &EKind || !ty.ty().is_type() {
+            return Err(format!("congr_ty: {:?} must be a type", ty));
+        }
+        let ft = self.mk_app(f.clone(), ty.clone())?;
+        let gu = self.mk_app(g.clone(), ty.clone())?;
+        let eq = self.mk_eq_app(ft, gu)?;
+        Ok(Thm::make_(eq, self.uid, th.0.hyps.clone()))
     }
 
     /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
