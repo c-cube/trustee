@@ -685,10 +685,28 @@ impl<'a> VM<'a> {
                     c_ty_vars,
                     n: n.clone(),
                 });
+
+                // apply `thm` to the type variables
+                let thm_a = {
+                    let mut thm = thm.clone();
+                    for v in e_vars.iter() {
+                        thm = vm.em.thm_congr_ty(&thm, &v)?;
+                        // now replace `(λa:type. …) v` with its beta reduced version
+                        let thm_rhs = thm
+                            .concl()
+                            .unfold_eq()
+                            .ok_or("rhs must be an equality")?
+                            .1;
+                        let thm_beta = vm.em.thm_beta_conv(thm_rhs)?;
+                        thm = vm.em.thm_trans(&thm, &thm_beta)?;
+                    }
+                    thm
+                };
+
                 // define and push
                 vm.defs.insert(n.clone(), c.clone());
                 vm.push_obj(O::Const(n.clone(), c));
-                vm.push_obj(O::Thm(thm));
+                vm.push_obj(O::Thm(thm_a));
                 Ok(())
             }
             _ => Err(format!(
