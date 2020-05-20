@@ -178,6 +178,7 @@ pub struct VM<'a> {
     ty_vars: fnv::FnvHashMap<String, Var>,
     vars: fnv::FnvHashMap<String, (Var, Var)>, // "x" -> (x, α)
     defs: fnv::FnvHashMap<Name, Rc<dyn OConst>>,
+    ty_defs: fnv::FnvHashMap<Name, Rc<dyn OTypeOp>>,
     stack: Vec<Obj>,
     dict: fnv::FnvHashMap<usize, Obj>,
     assumptions: Vec<Thm>,
@@ -267,6 +268,7 @@ impl<'a> VM<'a> {
             ty_vars: fnv::new_table_with_cap(32),
             vars: fnv::new_table_with_cap(32),
             defs: fnv::new_table_with_cap(32),
+            ty_defs: fnv::new_table_with_cap(8),
             stack: vec![],
             dict: fnv::new_table_with_cap(32),
             assumptions: vec![],
@@ -463,16 +465,27 @@ impl<'a> VM<'a> {
             }
         }
 
-        self.pop1("type op", |vm, o| match &*o {
-            O::Name(n) if n.len_pre() == 0 && n.base() == "bool" => {
-                Ok(vm.push_obj(O::TypeOp(n.clone(), Rc::new(TyOpBool))))
-            }
-            O::Name(n) if n.len_pre() == 0 && n.base() == "->" => {
-                Ok(vm.push_obj(O::TypeOp(n.clone(), Rc::new(TyOpArrow))))
-            }
-            _ => Err(format!("unknown operator {:?}", o)),
+        self.pop1("type op", |vm, o| {
+            let n = o.as_name().map_err(|n| n.to_string())?;
+            let oc = if n.len_pre() == 0 && n.base() == "bool" {
+                Rc::new(TyOpBool)
+            } else if n.len_pre() == 0 && n.base() == "->" {
+                Rc::new(TyOpArrow)
+            } else {
+                // lookup in definitions
+                if let Some(d) = vm.ty_defs.get(n) {
+                    d.clone()
+                } else {
+                    return Err(format!(
+                        "type_op: undefined type operator {:?}",
+                        n
+                    ));
+                }
+            };
+            Ok(vm.push_obj(O::TypeOp(n.clone(), oc.clone())))
         })
     }
+
     fn def(&mut self) -> Result<(), String> {
         self.pop2("def", |vm, k, x| match &*k {
             O::Int(i) => {
@@ -483,6 +496,7 @@ impl<'a> VM<'a> {
             _ => Err(format!("def: expected int, got {:?}", k)),
         })
     }
+
     fn cons(&mut self) -> Result<(), String> {
         let a =
             self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
@@ -729,6 +743,12 @@ impl<'a> VM<'a> {
         let rep = self.stack.pop().unwrap().as_name()?.clone();
         let abs = self.stack.pop().unwrap().as_name()?.clone();
         let ty_name = self.stack.pop().unwrap().as_name()?.clone();
+        if self.ty_defs.contains_key(&ty_name) {
+            return Err(format!(
+                "type operator {:?} already defined",
+                &ty_name
+            ));
+        }
 
         let def = self.em.thm_new_basic_type_definition(
             ty_name.to_symbol(),
@@ -792,11 +812,10 @@ impl<'a> VM<'a> {
         // now push the results. See
         // http://www.gilith.com/opentheory/article.html#defineTypeOpCommand.
 
-        // push type op
-        self.push_obj(O::TypeOp(
-            ty_name,
-            Rc::new(TyOpCustom(reorder, def.clone())),
-        ));
+        // define and push type op
+        let ty_op = Rc::new(TyOpCustom(reorder, def.clone()));
+        self.ty_defs.insert(ty_name.clone(), ty_op.clone());
+        self.push_obj(O::TypeOp(ty_name, ty_op));
 
         let fvars_exprs: Vec<_> =
             def.fvars.iter().map(|v| self.em.mk_var(v.clone())).collect();
@@ -832,8 +851,7 @@ impl<'a> VM<'a> {
         // push abs thm
         {
             let abs_thm = &def.abs_thm;
-            let abs_thm2 = utils::thm_sym(&mut self.em, abs_thm)?;
-            let th = self.em.thm_abs(&def.abs_x, &abs_thm2)?;
+            let th = self.em.thm_abs(&def.abs_x, &abs_thm)?;
             self.push_obj(O::Thm(th));
         }
 
@@ -841,7 +859,7 @@ impl<'a> VM<'a> {
         {
             let repr_thm = &def.repr_thm;
             let repr_thm2 = utils::thm_sym(&mut self.em, repr_thm)?;
-            let th = self.em.thm_abs(&def.abs_x, &repr_thm2)?;
+            let th = self.em.thm_abs(&def.repr_x, &repr_thm2)?;
             self.push_obj(O::Thm(th));
         }
 
