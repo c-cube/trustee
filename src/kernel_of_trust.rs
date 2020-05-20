@@ -497,11 +497,7 @@ impl Expr {
                 write!(out, ")")
             }
             ELambda(ty_x, body) => {
-                if ty_x.is_type() {
-                    write!(out, "(Λx{} : ", k)?;
-                } else {
-                    write!(out, "(λx{} : ", k)?;
-                }
+                write!(out, "(λx{} : ", k)?;
                 ty_x.pp_(k, out)?;
                 write!(out, ". ")?;
                 body.pp_(k + 1, out)?;
@@ -1066,7 +1062,7 @@ impl ExprManager {
 
         debug_assert!(subst.iter().all(|(v, t)| &v.ty == t.ty())); // type preservation
         let mut replace = Replace { em: self, subst };
-        eprintln!("### start replace\n  `{:?}`,\n  subst {:?}", t, subst);
+        //eprintln!("### start replace\n  `{:?}`,\n  subst {:?}", t, subst);
         replace.replace(t, 0)
     }
 
