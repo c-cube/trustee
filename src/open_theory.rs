@@ -683,14 +683,14 @@ impl<'a> VM<'a> {
                     rhs.clone(),
                 )?;
                 eprintln!(
-                    "define const {:?} with thm {:?} and vars {:?}",
+                    "define const {:?}\n  with thm {:#?}\n  and vars {:?}",
                     n, thm, ty_vars
                 );
                 // type of `c` applied to `vars`
                 let e_vars: Vec<_> =
                     ty_vars.iter().cloned().map(|v| vm.em.mk_var(v)).collect();
-                let app = vm.em.mk_app_l(c.clone(), &e_vars)?;
-                let c_ty_vars = app.ty().clone();
+                let app = dbg!(vm.em.mk_app_l(c.clone(), &e_vars)?);
+                let c_ty_vars = dbg!(app.ty().clone());
                 // now build the constant building closure
                 let c = Rc::new(CustomConst {
                     c: c.clone(),
@@ -701,7 +701,7 @@ impl<'a> VM<'a> {
                 });
 
                 // apply `thm` to the type variables
-                let thm_a = {
+                let thm_a = dbg!({
                     let mut thm = thm.clone();
                     for v in e_vars.iter() {
                         thm = vm.em.thm_congr_ty(&thm, &v)?;
@@ -715,7 +715,7 @@ impl<'a> VM<'a> {
                         thm = vm.em.thm_trans(&thm, &thm_beta)?;
                     }
                     thm
-                };
+                });
 
                 // define and push
                 vm.defs.insert(n.clone(), c.clone());
