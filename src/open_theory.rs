@@ -161,6 +161,10 @@ impl Name {
     }
 }
 
+/// Used for looking up theorems.
+#[derive(Debug, Eq, PartialEq, Hash)]
+struct ThmKey(Expr, Vec<Expr>);
+
 /// An article obtained by interpreting a theory file.
 #[derive(Debug)]
 pub struct Article {
@@ -182,7 +186,7 @@ pub struct VM<'a> {
     stack: Vec<Obj>,
     dict: fnv::FnvHashMap<usize, Obj>,
     assumptions: Vec<Thm>,
-    theorems: Vec<Thm>,
+    theorems: fnv::FnvHashMap<ThmKey, Thm>,
 }
 
 #[derive(Debug)]
@@ -272,13 +276,14 @@ impl<'a> VM<'a> {
             stack: vec![],
             dict: fnv::new_table_with_cap(32),
             assumptions: vec![],
-            theorems: vec![],
+            theorems: fnv::new_table_with_cap(32),
         }
     }
 
     /// Turn into an article.
     pub fn into_article(self) -> Article {
         let VM { defs, assumptions, theorems, .. } = self;
+        let theorems: Vec<_> = theorems.into_iter().map(|x| x.1).collect();
         Article { defs, assumptions, theorems }
     }
 
@@ -286,7 +291,7 @@ impl<'a> VM<'a> {
         Article {
             defs: self.defs.clone(),
             assumptions: self.assumptions.clone(),
-            theorems: self.theorems.clone(),
+            theorems: self.theorems.iter().map(|x| x.1).cloned().collect(),
         }
     }
 
@@ -403,10 +408,18 @@ impl<'a> VM<'a> {
                     Ok(t.clone())
                 })
                 .collect::<Result<_, String>>()?;
-            // TODO: first, look for this in the vm.theorem, and reuse
-            let ax = vm.em.thm_axiom(hyps, concl.clone());
-            eprintln!("## add axiom {:?}", ax);
-            vm.assumptions.push(ax.clone());
+            let th_key = ThmKey(concl.clone(), hyps);
+            // see if there already is a theorem matching this "axiom"
+            let ax = match vm.theorems.get(&th_key) {
+                Some(th) => th.clone(),
+                None => {
+                    let ThmKey(concl, hyps) = th_key; // consume key
+                    let ax = vm.em.thm_axiom(hyps, concl);
+                    eprintln!("## add axiom {:?}", ax);
+                    vm.assumptions.push(ax.clone());
+                    ax
+                }
+            };
             vm.push_obj(O::Thm(ax));
             Ok(())
         })
@@ -431,17 +444,17 @@ impl<'a> VM<'a> {
     fn type_op(&mut self) -> Result<(), String> {
         // builder for bool
         #[derive(Debug, Clone)]
-        struct TyOpBool;
-        impl OTypeOp for TyOpBool {
+        struct TyOpConst(Expr);
+        impl OTypeOp for TyOpConst {
             fn apply(
                 &self,
-                em: &mut ExprManager,
+                _em: &mut ExprManager,
                 args: Vec<Expr>,
             ) -> Result<Expr, String> {
                 if args.len() != 0 {
-                    Err(format!("bool takes no arguments"))
+                    Err(format!("{:?} takes no arguments", self.0))
                 } else {
-                    Ok(em.mk_bool())
+                    Ok(self.0.clone())
                 }
             }
         };
@@ -468,7 +481,9 @@ impl<'a> VM<'a> {
         self.pop1("type op", |vm, o| {
             let n = o.as_name().map_err(|n| n.to_string())?;
             let oc = if n.len_pre() == 0 && n.base() == "bool" {
-                Rc::new(TyOpBool)
+                Rc::new(TyOpConst(vm.em.mk_bool()))
+            } else if n.len_pre() == 0 && n.base() == "ind" {
+                Rc::new(TyOpConst(vm.em.mk_ind()))
             } else if n.len_pre() == 0 && n.base() == "->" {
                 Rc::new(TyOpArrow)
             } else {
@@ -820,7 +835,7 @@ impl<'a> VM<'a> {
         let fvars_exprs: Vec<_> =
             def.fvars.iter().map(|v| self.em.mk_var(v.clone())).collect();
 
-        // push abs
+        // define and push abs
         {
             let c_vars = self.em.mk_app_l(def.c_abs.clone(), &fvars_exprs)?;
             let c_ty_vars = c_vars.ty().clone();
@@ -831,10 +846,12 @@ impl<'a> VM<'a> {
                 ty_vars: def.fvars.clone(),
                 c_ty_vars,
             };
-            self.push_obj(O::Const(abs, Rc::new(oc)))
+            let def = Rc::new(oc);
+            self.defs.insert(abs.clone(), def.clone());
+            self.push_obj(O::Const(abs, def))
         }
 
-        // push repr
+        // define and push repr
         {
             let c_vars = self.em.mk_app_l(def.c_repr.clone(), &fvars_exprs)?;
             let c_ty_vars = c_vars.ty().clone();
@@ -845,7 +862,9 @@ impl<'a> VM<'a> {
                 ty_vars: def.fvars.clone(),
                 c_ty_vars,
             };
-            self.push_obj(O::Const(rep, Rc::new(oc)))
+            let def = Rc::new(oc);
+            self.defs.insert(rep.clone(), def.clone());
+            self.push_obj(O::Const(rep, def))
         }
 
         // push abs thm
@@ -912,9 +931,10 @@ impl<'a> VM<'a> {
                     ));
                 }
             })?;
-            // TODO?: alpha rename with [terms] and [phi]
+            // TODO?: alpha rename with [terms] and [phi]? does it make any sense?
             eprintln!("## add theorem {:?} phi={:?}", thm, _phi);
-            vm.theorems.push(thm.clone());
+            let k = ThmKey(thm.concl().clone(), thm.hyps_vec().clone());
+            vm.theorems.insert(k, thm.clone());
             Ok(())
         })
         .map_err(|e| format!("OT: failure in thm:\n  {}", e))
