@@ -30,6 +30,8 @@ pub enum BuiltinSymbol {
     Imply,
     Select,
     Bool,
+    /// An arbitrary type that is used in the axiom of infinity
+    Ind,
 }
 use BuiltinSymbol as BS;
 
@@ -54,6 +56,7 @@ impl Symbol {
                 BS::Imply => "==>",
                 BS::Select => "select",
                 BS::Bool => "Bool",
+                BS::Ind => "ind",
             },
             Symbol::Named(s) => &*s,
         }
@@ -600,6 +603,11 @@ impl Thm {
     pub fn hyps(&self) -> &[Expr] {
         self.0.hyps.as_slice()
     }
+
+    #[inline]
+    pub fn hyps_vec(&self) -> &Vec<Expr> {
+        &self.0.hyps
+    }
 }
 
 impl fmt::Debug for Thm {
@@ -649,6 +657,7 @@ struct ExprBuiltins {
     kind: Expr,
     ty: Expr,
     bool: Expr,
+    ind: Expr,
 }
 
 fn hyps_merge(th1: &Thm, th2: &Thm) -> Vec<Expr> {
@@ -702,7 +711,15 @@ impl ExprManager {
             )
         };
         em.add_const_(bool.clone());
-        let builtins = ExprBuiltins { bool, kind, ty };
+        let ind = {
+            let name = Symbol::Builtin(BS::Ind);
+            em.hashcons_builtin_(
+                EConst(ConstContent { name, ty: ty.clone() }),
+                Some(ty.clone()),
+            )
+        };
+        em.add_const_(ind.clone());
+        let builtins = ExprBuiltins { bool, kind, ty, ind };
         em.builtins = Some(builtins);
         em
     }
@@ -1099,6 +1116,11 @@ impl ExprManager {
     /// The type of booleans.
     pub fn mk_bool(&self) -> Expr {
         self.builtins_().bool.clone()
+    }
+
+    /// The witness type for the axiom of infinity.
+    pub fn mk_ind(&self) -> Expr {
+        self.builtins_().ind.clone()
     }
 
     /// Apply `a` to `b`.
