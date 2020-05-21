@@ -527,7 +527,7 @@ impl Expr {
                     write!(out, "(λx{} : ", k)?;
                     ty_x.pp_(k, out, full)?;
                 } else {
-                    write!(out, "(λx")?;
+                    write!(out, "(λx{}", k)?;
                 }
                 write!(out, ". ")?;
                 body.pp_(k + 1, out, full)?;
