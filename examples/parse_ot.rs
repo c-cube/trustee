@@ -1,23 +1,37 @@
+#[macro_use]
+extern crate log;
 use std::{env::args, fs::File, io::BufReader};
 use trustee::*;
 
+struct LogCB;
+
+impl open_theory::Callbacks for LogCB {
+    fn debug<F>(&mut self, f: F)
+    where
+        F: Fn() -> String,
+    {
+        debug!("{}", f());
+    }
+}
+
 fn parse_all() -> Result<(), String> {
     let mut em = ExprManager::new();
-    let mut vm = open_theory::VM::new(&mut em);
+    let mut vm = open_theory::VM::new_with(&mut em, LogCB);
     for f in args().skip(1) {
-        eprintln!("# parsing file {:?}", f);
+        info!("# parsing file {:?}", f);
         let file = File::open(f).map_err(|e| format!("{:?}", e))?;
         let mut read = BufReader::new(file);
         vm.parse_str(&mut read)?;
     }
-    println!("done parsing!");
+    info!("done parsing!");
     let article = vm.into_article();
-    println!("article: {:#?}", &article);
-    println!("success!");
+    info!("article: {}", &article);
+    info!("success!");
 
     Ok(())
 }
 fn main() {
+    env_logger::init();
     match parse_all() {
         Ok(()) => (),
         Err(s) => {

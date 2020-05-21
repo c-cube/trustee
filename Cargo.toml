@@ -8,6 +8,10 @@ edition = "2018"
 
 [dependencies]
 
+[dev-dependencies]
+log = "*"
+env_logger = { version= "*", default-features=false }
+
 [[example]]
 
 name = "parse_ot"
