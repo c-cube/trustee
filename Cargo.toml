@@ -10,7 +10,7 @@ edition = "2018"
 
 [dev-dependencies]
 log = "*"
-env_logger = { version= "*", default-features=false }
+env_logger = { version= "*", default-features=false, features=["termcolor", "atty"] }
 
 [[example]]
 
