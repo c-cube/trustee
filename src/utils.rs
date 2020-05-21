@@ -16,7 +16,7 @@ pub fn thm_new_poly_definition(
     rhs: Expr,
 ) -> Result<(Thm, Expr, Vec<Var>), String> {
     let mut vars_ty_rhs: Vec<Var> = rhs.ty().free_vars().cloned().collect();
-    eprintln!("vars_of_ty({:?}) = {:?}", &rhs, &vars_ty_rhs);
+    //eprintln!("vars_of_ty({:?}) = {:?}", &rhs, &vars_ty_rhs);
     vars_ty_rhs.sort_unstable();
     vars_ty_rhs.dedup();
 

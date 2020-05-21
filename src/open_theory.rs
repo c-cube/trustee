@@ -173,12 +173,42 @@ pub struct Article {
     theorems: Vec<Thm>,
 }
 
+impl fmt::Display for Article {
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        write!(out, "Article {{\n")?;
+        for n in self.defs.iter().map(|x| x.0) {
+            write!(out, "  def {:?}\n", n)?;
+        }
+        for th in &self.assumptions {
+            write!(out, "  axiom {}\n", th)?;
+        }
+        for th in &self.theorems {
+            write!(out, "  prove {}\n", th)?;
+        }
+        write!(out, "}}")
+    }
+}
+
+/// Callbacks that an OpenTheory VM is parametrized with.
+pub trait Callbacks {
+    /// Print debug messages.
+    fn debug<F>(&mut self, _f: F)
+    where
+        F: Fn() -> String,
+    {
+    }
+}
+
+/// Trivial implementation for callbacks.
+impl Callbacks for () {}
+
 /// Virtual machine.
 ///
 /// This is used to parse and interpret an OpenTheory file.
 #[derive(Debug)]
-pub struct VM<'a> {
+pub struct VM<'a, CB: Callbacks> {
     em: &'a mut ExprManager,
+    cb: CB,
     ty_vars: fnv::FnvHashMap<String, Var>,
     vars: fnv::FnvHashMap<String, (Var, Var)>, // "x" -> (x, α)
     defs: fnv::FnvHashMap<Name, Rc<dyn OConst>>,
@@ -214,10 +244,10 @@ impl OConst for CustomConst {
         if let Some(mut data) =
             utils::need_to_rename_before_unif(&c_ty_vars, &ty)
         {
-            eprintln!(
-                "need to rename in const {:?}:{:?}, to unify with type {:?}",
-                self.c, self.c_ty_vars, ty
-            );
+            //eprintln!(
+            //    "need to rename in const {:?}:{:?}, to unify with type {:?}",
+            //    self.c, self.c_ty_vars, ty
+            //);
             ty_vars = Cow::Owned(
                 self.ty_vars
                     .iter()
@@ -244,10 +274,10 @@ impl OConst for CustomConst {
                 c_ty_vars, ty, self.n
             )
         })?;
-        eprintln!(
-            "unified:\n  between {:?} and {:?}\n  yields {:?}",
-            c_ty_vars, ty, subst
-        );
+        //eprintln!(
+        //    "unified:\n  between {:?} and {:?}\n  yields {:?}",
+        //    c_ty_vars, ty, subst
+        //);
         // now apply `c` to the proper type arguments
         let t = em.mk_app_iter(self.c.clone(), |em, f| {
             for v in ty_vars.iter() {
@@ -259,16 +289,17 @@ impl OConst for CustomConst {
             }
             Ok(())
         })?;
-        eprintln!("result constant is {:?}", &t);
+        //eprintln!("result constant is {:?}", &t);
         Ok(t)
     }
 }
 
-impl<'a> VM<'a> {
+impl<'a, CB: Callbacks> VM<'a, CB> {
     /// Create a new VM using the given expression manager.
-    pub fn new(em: &'a mut ExprManager) -> Self {
+    pub fn new_with(em: &'a mut ExprManager, cb: CB) -> Self {
         VM {
             em,
+            cb,
             ty_vars: fnv::new_table_with_cap(32),
             vars: fnv::new_table_with_cap(32),
             defs: fnv::new_table_with_cap(32),
@@ -297,7 +328,7 @@ impl<'a> VM<'a> {
 
     #[inline]
     fn push(&mut self, o: Obj) {
-        eprintln!("vm.push {:?}", &o);
+        self.cb.debug(|| format!("vm.push {:?}", &o));
         self.stack.push(o)
     }
 
@@ -310,7 +341,7 @@ impl<'a> VM<'a> {
         F: Fn(&mut Self, Obj) -> Result<A, String>,
     {
         if self.stack.len() < 1 {
-            Err(format!("OT.pop1.{}: empty stack in {:?}", what, self))?
+            Err(format!("OT.pop1.{}: empty stack", what))?
         }
         let x = self.stack.pop().unwrap();
         f(self, x)
@@ -321,7 +352,7 @@ impl<'a> VM<'a> {
         F: Fn(&mut Self, Obj, Obj) -> Result<A, String>,
     {
         if self.stack.len() < 2 {
-            Err(format!("OT.pop2.{}: empty stack in {:?}", what, self))?
+            Err(format!("OT.pop2.{}: empty stack", what))?
         }
         let x = self.stack.pop().unwrap();
         let y = self.stack.pop().unwrap();
@@ -333,7 +364,7 @@ impl<'a> VM<'a> {
         F: Fn(&mut Self, Obj, Obj, Obj) -> Result<A, String>,
     {
         if self.stack.len() < 3 {
-            Err(format!("OT.pop3.{}: empty stack in {:#?}", what, self))?
+            Err(format!("OT.pop3.{}: empty stack", what))?
         }
         let x = self.stack.pop().unwrap();
         let y = self.stack.pop().unwrap();
@@ -415,7 +446,7 @@ impl<'a> VM<'a> {
                 None => {
                     let ThmKey(concl, hyps) = th_key; // consume key
                     let ax = vm.em.thm_axiom(hyps, concl);
-                    eprintln!("## add axiom {:?}", ax);
+                    vm.cb.debug(|| format!("## add axiom {:?}", ax));
                     vm.assumptions.push(ax.clone());
                     ax
                 }
@@ -697,15 +728,17 @@ impl<'a> VM<'a> {
                     &n.to_string(),
                     rhs.clone(),
                 )?;
-                eprintln!(
-                    "define const {:?}\n  with thm {:#?}\n  and vars {:?}",
-                    n, thm, ty_vars
-                );
+                vm.cb.debug(|| {
+                    format!(
+                        "define const {:?}\n  with thm {:#?}\n  and vars {:?}",
+                        n, thm, ty_vars
+                    )
+                });
                 // type of `c` applied to `vars`
                 let e_vars: Vec<_> =
                     ty_vars.iter().cloned().map(|v| vm.em.mk_var(v)).collect();
-                let app = dbg!(vm.em.mk_app_l(c.clone(), &e_vars)?);
-                let c_ty_vars = dbg!(app.ty().clone());
+                let app = vm.em.mk_app_l(c.clone(), &e_vars)?;
+                let c_ty_vars = app.ty().clone();
                 // now build the constant building closure
                 let c = Rc::new(CustomConst {
                     c: c.clone(),
@@ -716,7 +749,7 @@ impl<'a> VM<'a> {
                 });
 
                 // apply `thm` to the type variables
-                let thm_a = dbg!({
+                let thm_a = {
                     let mut thm = thm.clone();
                     for v in e_vars.iter() {
                         thm = vm.em.thm_congr_ty(&thm, &v)?;
@@ -730,7 +763,7 @@ impl<'a> VM<'a> {
                         thm = vm.em.thm_trans(&thm, &thm_beta)?;
                     }
                     thm
-                });
+                };
 
                 // define and push
                 vm.defs.insert(n.clone(), c.clone());
@@ -820,7 +853,7 @@ impl<'a> VM<'a> {
                 let args2: Vec<Expr> =
                     self.0.iter().map(|i| args[*i].clone()).collect();
 
-                dbg!(em.mk_app_l(self.1.tau.clone(), &args2[..]))
+                em.mk_app_l(self.1.tau.clone(), &args2[..])
             }
         }
 
@@ -932,7 +965,7 @@ impl<'a> VM<'a> {
                 }
             })?;
             // TODO?: alpha rename with [terms] and [phi]? does it make any sense?
-            eprintln!("## add theorem {:?} phi={:?}", thm, _phi);
+            vm.cb.debug(|| format!("## add theorem {:?} phi={:?}", thm, _phi));
             let k = ThmKey(thm.concl().clone(), thm.hyps_vec().clone());
             vm.theorems.insert(k, thm.clone());
             Ok(())
@@ -961,10 +994,12 @@ impl<'a> VM<'a> {
                 Ok(())
             })?;
             let th1 = vm.em.thm_instantiate(thm, &subst[..])?;
-            eprintln!(
+            vm.cb.debug(|| {
+                format!(
                 "instantiated\n  {:#?}\n  into {:#?}\n  with type subst {:#?}",
                 thm, th1, subst
-            );
+            )
+            });
             // then instantiate terms
             subst.clear();
             l[1].as_list()?.iter().try_for_each(|x| {
@@ -979,10 +1014,12 @@ impl<'a> VM<'a> {
                 Ok(())
             })?;
             let th2 = vm.em.thm_instantiate(&th1, &subst[..])?;
-            eprintln!(
-                "instantiated\n  {:#?}\n  into {:#?}\n  with subst {:#?}",
-                th1, th2, subst
-            );
+            vm.cb.debug(|| {
+                format!(
+                    "instantiated\n  {:#?}\n  into {:#?}\n  with subst {:#?}",
+                    th1, th2, subst
+                )
+            });
             vm.push_obj(O::Thm(th2));
             Ok(())
         })
@@ -1077,7 +1114,7 @@ impl<'a> VM<'a> {
         for line in buf.lines() {
             let line = line.map_err(|e| format!("error {:?}", e))?;
             let line = line.trim();
-            eprintln!("// parse line {}", line);
+            self.cb.debug(|| format!("// parse line {}", line));
             if line.starts_with("#") {
                 continue;
             } else if line.starts_with("\"") {
@@ -1126,5 +1163,12 @@ impl<'a> VM<'a> {
         }
 
         Ok(())
+    }
+}
+
+impl<'a> VM<'a, ()> {
+    /// Trivial constructor.
+    pub fn new(em: &'a mut ExprManager) -> Self {
+        VM::new_with(em, ())
     }
 }

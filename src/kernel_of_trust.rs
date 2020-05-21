@@ -328,6 +328,17 @@ impl Expr {
         }
     }
 
+    /// Is this the representation of `=`?
+    pub fn is_eq(&self) -> bool {
+        match self.0.view {
+            EConst(ConstContent {
+                name: Symbol::Builtin(BuiltinSymbol::Eq),
+                ..
+            }) => true,
+            _ => false,
+        }
+    }
+
     /// Type of the expression. Panics if `self.is_kind()`.
     #[inline]
     pub fn ty(&self) -> &Expr {
@@ -479,7 +490,12 @@ impl Expr {
     }
 
     // pretty print
-    fn pp_(&self, k: DbIndex, out: &mut fmt::Formatter) -> fmt::Result {
+    fn pp_(
+        &self,
+        k: DbIndex,
+        out: &mut fmt::Formatter,
+        full: bool,
+    ) -> fmt::Result {
         match self.view() {
             EKind => write!(out, "kind"),
             EType => write!(out, "type"),
@@ -492,39 +508,52 @@ impl Expr {
             EApp(..) => {
                 let (f, args) = self.unfold_app();
                 write!(out, "(")?;
-                f.pp_(k, out)?;
-                for x in args {
-                    write!(out, " ")?;
-                    x.pp_(k, out)?;
+                if !full && f.is_eq() && args.len() == 3 {
+                    // special: `a=b`, skip type arg
+                    args[1].pp_(k, out, full)?;
+                    write!(out, " = ")?;
+                    args[2].pp_(k, out, full)?;
+                } else {
+                    f.pp_(k, out, full)?;
+                    for x in args {
+                        write!(out, " ")?;
+                        x.pp_(k, out, full)?;
+                    }
                 }
                 write!(out, ")")
             }
             ELambda(ty_x, body) => {
-                write!(out, "(λx{} : ", k)?;
-                ty_x.pp_(k, out)?;
+                if full {
+                    write!(out, "(λx{} : ", k)?;
+                    ty_x.pp_(k, out, full)?;
+                } else {
+                    write!(out, "(λx")?;
+                }
                 write!(out, ". ")?;
-                body.pp_(k + 1, out)?;
+                body.pp_(k + 1, out, full)?;
                 write!(out, ")")
             }
             // TODO: disable
             EPi(x, body) if false && !x.is_type() && body.is_closed() => {
                 // TODO: precedence to know whether to print "()"
                 write!(out, "(")?;
-                x.pp_(k, out)?;
-                write!(out, ":")?;
-                x.ty().pp_(k, out)?;
+                x.pp_(k, out, full)?;
+                if full {
+                    write!(out, ":")?;
+                    x.ty().pp_(k, out, full)?;
+                }
                 write!(out, " -> ")?;
-                body.pp_(k + 1, out)?;
+                body.pp_(k + 1, out, full)?;
                 write!(out, ")")
             }
             EPi(x, body) => {
                 write!(out, "(Πx{}", k)?;
-                if !x.is_type() {
+                if full && !x.is_type() {
                     write!(out, " : ")?;
-                    x.pp_(k, out)?;
+                    x.pp_(k, out, full)?;
                 }
                 write!(out, ". ")?;
-                body.pp_(k + 1, out)?;
+                body.pp_(k + 1, out, full)?;
                 write!(out, ")")
             }
         }?;
@@ -534,14 +563,21 @@ impl Expr {
 
     /// Basic printer.
     pub fn to_string(&self) -> String {
-        format!("{:?}", self)
+        format!("{}", self)
     }
 }
 
 impl fmt::Debug for Expr {
     // printer
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        self.pp_(0, out)
+        self.pp_(0, out, true)
+    }
+}
+
+impl fmt::Display for Expr {
+    // printer
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        self.pp_(0, out, false)
     }
 }
 
@@ -610,6 +646,19 @@ impl Thm {
     }
 }
 
+impl fmt::Display for Thm {
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        if self.hyps().len() == 0 {
+            write!(out, "|- {}", self.concl())
+        } else {
+            for h in self.hyps() {
+                write!(out, "    {}\n", h)?;
+            }
+            write!(out, " |- {}", self.concl())
+        }
+    }
+}
+
 impl fmt::Debug for Thm {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
         if self.hyps().len() == 0 {
@@ -650,7 +699,7 @@ impl fmt::Debug for ExprManager {
 }
 
 // period between 2 cleanups
-const CLEANUP_PERIOD: usize = 500;
+const CLEANUP_PERIOD: usize = 5000;
 
 /// A set of builtin symbols.
 struct ExprBuiltins {
@@ -745,7 +794,7 @@ impl ExprManager {
         // TODO: maybe if last cleanups were ineffective, increase n,
         // otherwise decrease n (down to some min value)
         if self.next_cleanup == 0 {
-            eprintln!("expr.hashcons: cleanup"); // TODO: comment, or use callback in expr manager
+            // eprintln!("expr.hashcons: cleanup");
             self.cleanup();
         } else {
             self.next_cleanup -= 1;
@@ -1585,7 +1634,6 @@ impl ExprManager {
                     thm_inhabited.concl()
                 )
             })?;
-        dbg!((phi, witness));
         // the concrete type
         let ty = witness.ty().clone();
         // check that all free variables are type variables
@@ -1600,7 +1648,6 @@ impl ExprManager {
                 &v, &v.ty
             ));
         }
-        dbg!(&fvars);
 
         // free vars, as expressions
         let fvars_exprs: Vec<_> =
@@ -1612,11 +1659,9 @@ impl ExprManager {
             let ty_tau = self.mk_pi_l(fvars.iter().cloned(), ttype)?;
             self.mk_new_const(name_tau, ty_tau)?
         };
-        dbg!(&tau);
 
         // `tau` applied to `fvars`
         let tau_vars = self.mk_app_l(tau.clone(), &fvars_exprs)?;
-        dbg!(&tau_vars);
 
         let c_abs = {
             let ty = self.mk_arrow(ty.clone(), tau_vars.clone())?;
@@ -1628,7 +1673,6 @@ impl ExprManager {
             let ty = self.mk_pi_l(fvars.iter().cloned(), ty)?;
             self.mk_new_const(repr, ty)?
         };
-        dbg!(&c_abs, c_abs.ty(), &c_repr, c_repr.ty());
 
         let abs_x = self.mk_var_str("x", tau_vars.clone());
         let abs_thm = {
@@ -1638,7 +1682,7 @@ impl ExprManager {
             let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
             let abs_t = self.mk_app(abs, t)?;
             let eqn = self.mk_eq_app(abs_t.clone(), abs_x.clone())?;
-            dbg!(Thm::make_(eqn, self.uid, vec![]))
+            Thm::make_(eqn, self.uid, vec![])
         };
         let repr_x = self.mk_var_str("x", ty.clone());
         let repr_thm = {
@@ -1646,10 +1690,10 @@ impl ExprManager {
             let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
             let t1 = self.mk_app(abs, repr_x.clone())?;
             let repr = self.mk_app_l(c_repr.clone(), &fvars_exprs)?;
-            let t2 = dbg!(self.mk_app(repr, t1))?;
-            let eq_t2_x = dbg!(self.mk_eq_app(t2, repr_x.clone()))?;
-            let phi_x = dbg!(self.mk_app(phi.clone(), repr_x.clone()))?;
-            dbg!(Thm::make_(self.mk_eq_app(phi_x, eq_t2_x)?, self.uid, vec![]))
+            let t2 = self.mk_app(repr, t1)?;
+            let eq_t2_x = self.mk_eq_app(t2, repr_x.clone())?;
+            let phi_x = self.mk_app(phi.clone(), repr_x.clone())?;
+            Thm::make_(self.mk_eq_app(phi_x, eq_t2_x)?, self.uid, vec![])
         };
 
         let c = NewTypeDef {
