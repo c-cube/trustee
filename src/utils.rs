@@ -2,6 +2,21 @@
 
 use crate::*;
 
+/// Result of the definition of a new polymorphic constant.
+#[derive(Debug, Clone)]
+pub struct NewPolyDef {
+    /// Constant being defined
+    pub c: Expr,
+    /// Theorem defining `c` (as `c = …`)
+    pub thm: Thm,
+    /// Type variables, in the order they are abstracted on
+    pub ty_vars: Vec<Var>,
+    /// `c` applied to `ty_vars`
+    pub c_applied: Expr,
+    /// `thm_c` applied to `ty_vars`
+    pub thm_applied: Thm,
+}
+
 /// Make a definition from a polymorphic term, by closing it first.
 ///
 /// `ExprManager::thm_new_basic_definition` requires the term to be closed,
@@ -14,7 +29,7 @@ pub fn thm_new_poly_definition(
     em: &mut ExprManager,
     c: &str,
     rhs: Expr,
-) -> Result<(Thm, Expr, Vec<Var>)> {
+) -> Result<NewPolyDef> {
     let mut vars_ty_rhs: Vec<Var> = rhs.ty().free_vars().cloned().collect();
     //eprintln!("vars_of_ty({:?}) = {:?}", &rhs, &vars_ty_rhs);
     vars_ty_rhs.sort_unstable();
@@ -35,7 +50,31 @@ pub fn thm_new_poly_definition(
         em.mk_eq_app(v, rhs_closed)?
     };
     let (thm, c) = em.thm_new_basic_definition(eqn)?;
-    Ok((thm, c, vars_ty_rhs))
+
+    // type variables as expressions
+    let e_vars: Vec<_> =
+        vars_ty_rhs.iter().cloned().map(|v| em.mk_var(v)).collect();
+
+    let c_applied = em.mk_app_l(c.clone(), &e_vars)?;
+
+    // apply `thm` to the type variables
+    let thm_applied = {
+        let mut thm = thm.clone();
+        for v in e_vars.iter() {
+            thm = em.thm_congr_ty(&thm, &v)?;
+            // now replace `(λa:type. …) v` with its beta reduced version
+            let thm_rhs = thm
+                .concl()
+                .unfold_eq()
+                .ok_or_else(|| Error::new("rhs must be an equality"))?
+                .1;
+            let thm_beta = em.thm_beta_conv(thm_rhs)?;
+            thm = em.thm_trans(&thm, &thm_beta)?;
+        }
+        thm
+    };
+
+    Ok(NewPolyDef { thm, c, ty_vars: vars_ty_rhs, thm_applied, c_applied })
 }
 
 /// Data used to rename variables, if needed, prior to implementation.

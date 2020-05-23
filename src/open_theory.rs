@@ -62,6 +62,10 @@ impl std::ops::Deref for Obj {
 }
 
 impl Obj {
+    fn new(o: ObjImpl) -> Self {
+        Self(Rc::new(o))
+    }
+
     fn get(&self) -> &O {
         &*self.0
     }
@@ -579,6 +583,19 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         })
     }
 
+    fn hd_tl(&mut self) -> Result<()> {
+        self.pop1("hdTl", |vm, l| {
+            let l = l.as_list()?;
+            if l.len() == 0 {
+                return Err(Error::new("hdTl: empty list"));
+            }
+            vm.push(l[0].clone());
+            let rest = l.iter().skip(1).cloned().collect();
+            vm.push_obj(O::List(rest));
+            Ok(())
+        })
+    }
+
     fn cons(&mut self) -> Result<()> {
         let a =
             self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
@@ -752,7 +769,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("define const", |vm, x, y| match (&*x, &*y) {
             (O::Term(rhs), O::Name(n)) => {
                 // make a definition `n := t`
-                let (thm, c, ty_vars) = utils::thm_new_poly_definition(
+                let def = utils::thm_new_poly_definition(
                     &mut vm.em,
                     &n.to_string(),
                     rhs.clone(),
@@ -760,46 +777,23 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 vm.cb.debug(|| {
                     format!(
                         "define const {:?}\n  with thm {:#?}\n  and vars {:?}",
-                        n, thm, ty_vars,
+                        n, &def.thm, &def.ty_vars,
                     )
                 });
-                // type of `c` applied to `vars`
-                let e_vars: Vec<_> =
-                    ty_vars.iter().cloned().map(|v| vm.em.mk_var(v)).collect();
-                let app = vm.em.mk_app_l(c.clone(), &e_vars)?;
-                let c_ty_vars = app.ty().clone();
+                let c_ty_vars = def.c_applied.ty().clone();
                 // now build the constant building closure
                 let c = Rc::new(CustomConst {
-                    c: c.clone(),
-                    c_vars: app,
-                    ty_vars,
+                    c: def.c.clone(),
+                    c_vars: def.c_applied.clone(),
+                    ty_vars: def.ty_vars,
                     c_ty_vars,
                     n: n.clone(),
                 });
 
-                // apply `thm` to the type variables
-                let thm_a = {
-                    let mut thm = thm.clone();
-                    for v in e_vars.iter() {
-                        thm = vm.em.thm_congr_ty(&thm, &v)?;
-                        // now replace `(λa:type. …) v` with its beta reduced version
-                        let thm_rhs = thm
-                            .concl()
-                            .unfold_eq()
-                            .ok_or_else(|| {
-                                Error::new("rhs must be an equality")
-                            })?
-                            .1;
-                        let thm_beta = vm.em.thm_beta_conv(thm_rhs)?;
-                        thm = vm.em.thm_trans(&thm, &thm_beta)?;
-                    }
-                    thm
-                };
-
                 // define and push
                 vm.defs.insert(n.clone(), c.clone());
                 vm.push_obj(O::Const(n.clone(), c));
-                vm.push_obj(O::Thm(thm_a));
+                vm.push_obj(O::Thm(def.thm_applied));
                 Ok(())
             }
             _ => Err(Error::new("define const: expected <term,name>")),
@@ -807,7 +801,91 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     }
 
     fn define_const_list(&mut self) -> Result<()> {
-        todo!("implement defineConstList") // FIXME
+        self.pop2("define const list", |vm, x, y| {
+            let mut thm = x.as_thm()?.clone();
+            let renaming = y
+                .as_list()?
+                .iter()
+                .map(|x| match &**x {
+                    O::List(vec) if vec.len() == 2 => {
+                        let n = vec[0].as_name()?;
+                        let v = vec[1].as_var()?;
+                        Ok((n, v))
+                    }
+                    _ => Err(Error::new(
+                        "in define_const_list: expected pair (name,var)",
+                    )),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            // find subst
+            let subst = thm.hyps().iter().map(|e| {
+                let (v, rhs) = e.unfold_eq()
+                    .ok_or_else(|| Error::new("theorem ypothesis must be equations"))?;
+                let v = v.as_var()
+                    .ok_or_else(|| Error::new("in theorem hypothesis, equations must have a variable as LHS"))?;
+                Ok((v.clone(), rhs.clone()))
+            }).collect::<Result<Vec<(Var,Expr)>>>()?;
+
+            vm.cb.debug(|| {
+                format!(
+                    "define const list thm={:#?}, renaming={:#?}, subst={:#?}",
+                    &thm, &renaming, &subst
+                )
+            });
+
+            #[derive(Debug)]
+            struct LocalConst {
+                v: Var,
+                n: Name,
+                c_applied: Expr,
+                thm_applied: Thm,
+                cst: Rc<CustomConst>,
+            };
+
+            // define each constant
+            let c_l = renaming.into_iter().map(|(n, v)| {
+                let rhs = subst.iter().find(|(ref v2,_)| v==v2).ok_or_else(||
+                    Error::new_string(format!("define_const_list: no binding for variable {:?}", &v)))?.1.clone();
+                let def = utils::thm_new_poly_definition(vm.em, &n.to_string(), rhs)?;
+                // now build the constant building closure
+                let c_ty_vars = def.c_applied.ty().clone();
+                let c = Rc::new(CustomConst {
+                    c: def.c.clone(),
+                    c_vars: def.c_applied.clone(),
+                    ty_vars: def.ty_vars,
+                    c_ty_vars,
+                    n: n.clone(),
+                });
+
+                // define and push
+                vm.defs.insert(n.clone(), c.clone());
+                Ok(LocalConst{c_applied: def.c_applied, v:v.clone(), n: n.clone(),
+                thm_applied: def.thm_applied, cst: c})
+            }).collect::<Result<Vec<LocalConst>>>()?;
+
+            // instantiate `thm` with `v_i := c_i`
+            thm = {
+                let subst: Vec<_> = c_l.iter()
+                    .map(|ldef| (ldef.v.clone(),ldef.c_applied.clone())).collect();
+                vm.em.thm_instantiate(&thm, &subst)?
+            };
+
+            // resolve instantiated theorem with each constant definition thm
+            // to remove the hypotheses
+            for ldef in &c_l {
+                thm = vm.em.thm_cut(&ldef.thm_applied, &thm)?;
+            }
+
+            // push list of constants
+            {
+                let l = c_l.into_iter()
+                    .map(|ldef| Obj::new(O::Const(ldef.n, ldef.cst))).collect();
+                vm.push_obj(O::List(l))
+            }
+
+            vm.push_obj(O::Thm(thm));
+            Ok(())
+        })
     }
 
     fn define_type_op_(&mut self) -> Result<()> {
@@ -1187,6 +1265,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                     "nil" => self.nil()?,
                     "typeOp" => self.type_op()?,
                     "def" => self.def()?,
+                    "hdTl" => self.hd_tl()?,
                     "cons" => self.cons()?,
                     "ref" => self.ref_()?,
                     "varType" => self.var_type()?,
