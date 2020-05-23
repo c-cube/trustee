@@ -806,6 +806,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         })
     }
 
+    fn define_const_list(&mut self) -> Result<()> {
+        todo!("implement defineConstList") // FIXME
+    }
+
     fn define_type_op_(&mut self) -> Result<()> {
         let thm = self.stack.pop().unwrap().as_thm()?.clone();
         let names: Vec<String> = self
@@ -1192,6 +1196,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                     "var" => self.var()?,
                     "varTerm" => self.var_term()?,
                     "defineConst" => self.define_const()?,
+                    "defineConstList" => self.define_const_list()?,
                     "pop" => self.pop()?,
                     "remove" => self.remove()?,
                     "thm" => self.thm()?,
