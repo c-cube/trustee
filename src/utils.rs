@@ -14,16 +14,16 @@ pub fn thm_new_poly_definition(
     em: &mut ExprManager,
     c: &str,
     rhs: Expr,
-) -> Result<(Thm, Expr, Vec<Var>), String> {
+) -> Result<(Thm, Expr, Vec<Var>)> {
     let mut vars_ty_rhs: Vec<Var> = rhs.ty().free_vars().cloned().collect();
     //eprintln!("vars_of_ty({:?}) = {:?}", &rhs, &vars_ty_rhs);
     vars_ty_rhs.sort_unstable();
     vars_ty_rhs.dedup();
 
     if vars_ty_rhs.iter().any(|v| !v.ty.is_type()) {
-        return Err(format!("thm_new_poly_definition: cannot make a polymorphic \
+        return Err(Error::new_string(format!("thm_new_poly_definition: cannot make a polymorphic \
         definition for {}\nusing rhs = {:?}\nrhs contains non-type free variables",
-        c, rhs));
+        c, rhs)));
     }
 
     let ty_closed =
@@ -283,7 +283,7 @@ pub fn match_<'a>(e1: &'a Expr, e2: &'a Expr) -> Option<UnifySubst<'a>> {
 /// Prove symmetry of equality.
 ///
 /// Goes from `A |- t=u` to `A |- u=t`.
-pub fn thm_sym(em: &mut ExprManager, th: &Thm) -> Result<Thm, String> {
+pub fn thm_sym(em: &mut ExprManager, th: &Thm) -> Result<Thm> {
     // start with `F |- t=u`.
     // now by left-congruence with `refl(=)`, `F |- ((=) t) = ((=) u)`.
     // by right-congruence with `refl(t)`, `F |- (((=) t) t) = (((=) u) t)`.
@@ -292,7 +292,7 @@ pub fn thm_sym(em: &mut ExprManager, th: &Thm) -> Result<Thm, String> {
     let (t, u) = th
         .concl()
         .unfold_eq()
-        .ok_or_else(|| format!("sym: expect an equation in {:?}", th))?;
+        .ok_or_else(|| Error::new("sym: expect an equation"))?;
     let refl_t = em.thm_refl(t.clone());
     let th_tequ_eq_ueqt = {
         let eq = em.mk_eq();

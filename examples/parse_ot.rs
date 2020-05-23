@@ -14,12 +14,13 @@ impl open_theory::Callbacks for LogCB {
     }
 }
 
-fn parse_all() -> Result<(), String> {
+fn parse_all() -> trustee::Result<()> {
     let mut em = ExprManager::new();
     let mut vm = open_theory::VM::new_with(&mut em, LogCB);
     for f in args().skip(1) {
         info!("# parsing file {:?}", f);
-        let file = File::open(f).map_err(|e| format!("{:?}", e))?;
+        let file =
+            File::open(f).map_err(|e| Error::new_string(format!("{:?}", e)))?;
         let mut read = BufReader::new(file);
         vm.parse_str(&mut read)?;
     }

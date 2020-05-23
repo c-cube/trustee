@@ -17,9 +17,57 @@ pub type WeakRef<T> = std::sync::Weak<T>;
 #[cfg(not(features = "noarc"))]
 pub type Lock<T> = std::sync::Mutex<T>;
 
-// TODO: use a proper enum for errors
+/// Errors that can be returned from the Kernel.
+#[derive(Debug)]
+pub struct Error {
+    pub msg: ErrorMsg,
+    pub source: Option<Box<Error>>,
+}
+
+/// An error message.
+#[derive(Debug)]
+pub enum ErrorMsg {
+    EStatic(&'static str),
+    EDyn(String),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        match &self.msg {
+            ErrorMsg::EStatic(msg) => write!(out, "{}", msg),
+            ErrorMsg::EDyn(s) => write!(out, "{}", &s),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.source {
+            None => None,
+            Some(p) => Some(&*p),
+        }
+    }
+}
+
+impl Error {
+    /// Build a new error.
+    pub fn new(msg: &'static str) -> Self {
+        Error { msg: ErrorMsg::EStatic(msg), source: None }
+    }
+
+    pub fn new_string(msg: String) -> Self {
+        Error { msg: ErrorMsg::EDyn(msg), source: None }
+    }
+
+    /// Change the source of this error.
+    pub fn set_source(mut self, src: Self) -> Self {
+        self.source = Some(Box::new(src));
+        self
+    }
+}
+
 /// Result type.
-pub type Result<T> = std::result::Result<T, String>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 ///! # Symbols.
 
@@ -872,10 +920,7 @@ impl ExprManager {
         self.check_uid_(&a);
         self.check_uid_(&b);
         if a.ty() != b.ty() {
-            return Err(format!(
-                "mk_eq: {:?} and {:?} have incompatible types",
-                &a, &b
-            ));
+            return Err(Error::new("mk_eq: incompatible_types"));
         }
         let eq = self.mk_eq();
         self.mk_app_l(eq, &[a.ty().clone(), a, b])
@@ -940,17 +985,13 @@ impl ExprManager {
             }
             EPi(v_ty, e) => {
                 if !v_ty.is_type() && !v_ty.ty().is_type() {
-                    return Err(format!(
-                        "pi: variable must be a type or be of type `type`, \
-                        not `{:?}` : `{:?}`",
-                        v_ty,
-                        v_ty.ty()
+                    return Err(Error::new(
+                        "pi: variable must be a type or be of type `type`",
                     ));
                 };
                 if !e.ty().is_type() && !e.ty().is_kind() {
-                    return Err(format!(
-                        "pi: body must have type `type` or `kind`, not {:?}",
-                        e.ty()
+                    return Err(Error::new(
+                        "pi: body must have type `type` or `kind`",
                     ));
                 };
                 Some(self.builtins_().ty.clone())
@@ -959,17 +1000,7 @@ impl ExprManager {
                 EPi(ty_var_f, ref ty_body_f) => {
                     // rule: `f: Πx:tya. b`, `arg: tya` ==> `f arg : b[arg/x]`
                     if ty_var_f != arg.ty() {
-                        return Err(format!(
-                            "apply: incompatible types: \
-                                function `{:?}` has type `{:?}`, \
-                                expecting arg of type {:?}, \
-                                argument `{:?}` has type `{:?}`",
-                            f,
-                            f.ty(),
-                            ty_var_f,
-                            arg,
-                            arg.ty()
-                        ));
+                        return Err(Error::new("apply: incompatible types"));
                     }
                     Some(self.subst1_(ty_body_f, 0, arg)?)
                 }
@@ -1248,10 +1279,7 @@ impl ExprManager {
         self.check_uid_(&body);
         let v_ty = &v.ty;
         if !v_ty.is_closed() {
-            return Err(format!(
-                "mk_abs: var {:?} has non-closed type {:?}",
-                &v, v_ty
-            ));
+            return Err(Error::new("mk_abs: var has non-closed type"));
         }
         let v_ty = v_ty.clone();
         // replace `v` with `db0` in `body`. This should also take
@@ -1331,13 +1359,12 @@ impl ExprManager {
     pub fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
         self.check_uid_(&ty);
         if self.consts.contains_key(&s) {
-            return Err(format!("a constant named {:?} already exists", &s));
+            return Err(Error::new("a constant with this name already exists"));
         }
         if !ty.is_closed() || ty.free_vars().next().is_some() {
-            panic!(
-                "cannot create constant named {:?} with non-closed type {:?}",
-                &s, &ty
-            );
+            return Err(Error::new(
+                "cannot create constant with non-closed type",
+            ));
         }
         let c = self.hashcons_(EConst(ConstContent { name: s.clone(), ty }))?;
         self.add_const_(c.clone());
@@ -1363,12 +1390,18 @@ impl ExprManager {
     pub fn thm_trans(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
         self.check_thm_uid_(th1);
         self.check_thm_uid_(th2);
-        let (a, b) =
-            th1.concl().unfold_eq().ok_or("trans: th1 must be an equation")?;
-        let (b2, c) =
-            th2.concl().unfold_eq().ok_or("trans: th2 must be an equation")?;
+        let (a, b) = th1
+            .concl()
+            .unfold_eq()
+            .ok_or_else(|| Error::new("trans: th1 must be an equation"))?;
+        let (b2, c) = th2
+            .concl()
+            .unfold_eq()
+            .ok_or_else(|| Error::new("trans: th2 must be an equation"))?;
         if b != b2 {
-            Err("trans: th1 and th2's conclusions do not align")?;
+            return Err(Error::new(
+                "trans: th1 and th2's conclusions do not align",
+            ));
         }
 
         let hyps = hyps_merge(th1, th2);
@@ -1381,14 +1414,12 @@ impl ExprManager {
     pub fn thm_congr(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
         self.check_thm_uid_(th1);
         self.check_thm_uid_(th2);
-        let (f, g) =
-            th1.0.concl.unfold_eq().ok_or_else(|| {
-                format!("congr: {:?} must be an equality", th1)
-            })?;
-        let (t, u) =
-            th2.0.concl.unfold_eq().ok_or_else(|| {
-                format!("congr: {:?} must be an equality", th2)
-            })?;
+        let (f, g) = th1.0.concl.unfold_eq().ok_or_else(|| {
+            Error::new("congr: th1.concl must be an equality")
+        })?;
+        let (t, u) = th2.0.concl.unfold_eq().ok_or_else(|| {
+            Error::new("congr: th2.concl must be an equality")
+        })?;
         let ft = self.mk_app(f.clone(), t.clone())?;
         let gu = self.mk_app(g.clone(), u.clone())?;
         let eq = self.mk_eq_app(ft, gu)?;
@@ -1400,12 +1431,11 @@ impl ExprManager {
     pub fn thm_congr_ty(&mut self, th: &Thm, ty: &Expr) -> Result<Thm> {
         self.check_thm_uid_(th);
         self.check_uid_(ty);
-        let (f, g) =
-            th.0.concl.unfold_eq().ok_or_else(|| {
-                format!("congr_ty: {:?} must be an equality", th)
-            })?;
+        let (f, g) = th.0.concl.unfold_eq().ok_or_else(|| {
+            Error::new("congr_ty: th.concl must be an equality")
+        })?;
         if ty.view() == &EKind || !ty.ty().is_type() {
-            return Err(format!("congr_ty: {:?} must be a type", ty));
+            return Err(Error::new("congr_ty: argument must be a type"));
         }
         let ft = self.mk_app(f.clone(), ty.clone())?;
         let gu = self.mk_app(g.clone(), ty.clone())?;
@@ -1422,10 +1452,10 @@ impl ExprManager {
         subst: &[(Var, Expr)],
     ) -> Result<Thm> {
         self.check_thm_uid_(th);
-        if let Some((v, t)) = subst.iter().find(|(_, t)| !t.is_closed()) {
-            return Err(format!(
-                    "instantiate: substitution {:?} contains non-closed binding {:?} := {:?}",
-                    subst, v, t));
+        if subst.iter().any(|(_, t)| !t.is_closed()) {
+            return Err(Error::new(
+                "instantiate: substitution contains non-closed binding",
+            ));
         }
 
         let mut hyps = th.0.hyps.clone();
@@ -1443,16 +1473,14 @@ impl ExprManager {
         self.check_uid_(&v.ty);
         self.check_thm_uid_(th);
         if free_vars_iter(th.0.hyps.iter()).any(|v2| v == v2) {
-            return Err(format!(
-                "abs: variable {:?} occurs in hyps of {:?}",
-                v, th
+            return Err(Error::new(
+                "abs: variable occurs in one of the hypothesis",
             ));
         }
 
-        let (t, u) =
-            th.0.concl
-                .unfold_eq()
-                .ok_or("abs: thm's conclusion should be an equality")?;
+        let (t, u) = th.0.concl.unfold_eq().ok_or_else(|| {
+            Error::new("abs: thm conclusion should be an equality")
+        })?;
         let lam_t = self.mk_lambda(v.clone(), t.clone())?;
         let lam_u = self.mk_lambda(v.clone(), u.clone())?;
         let eq = self.mk_eq_app(lam_t, lam_u)?;
@@ -1471,7 +1499,9 @@ impl ExprManager {
         self.check_thm_uid_(th2);
         let th1_c = &th1.0.concl;
         if !th2.0.hyps.contains(th1_c) {
-            Err("cut: th2's hyps do not contain th1's conclusion")?
+            return Err(Error::new(
+                "cut: th2's hyps do not contain th1's conclusion",
+            ));
         }
         let concl = th2.0.concl.clone();
         let mut hyps = th2.0.hyps.clone();
@@ -1487,14 +1517,12 @@ impl ExprManager {
         self.check_thm_uid_(th2);
         let th2_c = &th2.0.concl;
         let (a, b) = th2_c.unfold_imply().ok_or_else(|| {
-            format!("mp: second theorem {:?} must be an implication", th2)
+            Error::new("mp: second theorem must be an implication")
         })?;
         if &th1.0.concl != a {
-            let msg = format!(
-                "mp: conclusion of {:?} does not match LHS of implication of {:?}",
-                th1, th2
-            );
-            return Err(msg);
+            return Err(Error::new(
+                "mp: conclusion of th1 does not match LHS of implication of th2",
+            ));
         }
         let hyps = hyps_merge(th1, th2);
         Ok(Thm::make_(b.clone(), self.uid, hyps))
@@ -1511,15 +1539,13 @@ impl ExprManager {
             .filter(|(a, _)| a.ty() == &self.builtins_().bool)
             .ok_or_else(|| {
                 //Some((a, b)) if a.ty() == &self.builtins_().bool => (a, b),
-                format!(
-                    "bool-eq: {:?} should have a boleean equallity as conclusion",
-                    th2
+                Error::new(
+                    "bool-eq: th2 should have a boleean equality as conclusion",
                 )
             })?;
         if a != &th1.0.concl {
-            return Err(format!(
-                "bool-eq: the conclusion of {:?} is not compatible with {:?}",
-                th1, th2
+            return Err(Error::new(
+                "bool-eq: the conclusion of th1 is not compatible with th2",
             ));
         }
 
@@ -1544,11 +1570,11 @@ impl ExprManager {
     /// Fails if the term is not a beta-redex.
     pub fn thm_beta_conv(&mut self, e: &Expr) -> Result<Thm> {
         self.check_uid_(e);
-        let (f, arg) = e.as_app().ok_or_else(|| {
-            format!("beta-conv: expect an application, not {:?}", e)
-        })?;
+        let (f, arg) = e
+            .as_app()
+            .ok_or_else(|| Error::new("beta-conv: expect an application"))?;
         let (ty, bod) = f.as_lambda().ok_or_else(|| {
-            format!("beta-conv: expect a lambda, not {:?}", f)
+            Error::new("beta-conv: expect a lambda in the application")
         })?;
         debug_assert_eq!(ty, arg.ty()); // should already be enforced by typing.
 
@@ -1568,19 +1594,17 @@ impl ExprManager {
             .unfold_eq()
             .and_then(|(x, rhs)| x.as_var().map(|x| (x, rhs)))
             .ok_or_else(|| {
-                format!(
-                    "new definition: {:?} should be an equation `x = rhs` with rhs closed",
-                    e
+                Error::new(
+                    "new definition: expr should be an equation `x = rhs` with rhs closed",
                 )
             })?;
         if !rhs.is_closed() || rhs.has_free_vars() {
-            return Err(format!("rhs {:?} should be closed", rhs));
+            return Err(Error::new("RHS of equation should be closed"));
         }
         // checks that the type of `x` is closed
         if !x.ty.is_closed() || x.ty.has_free_vars() {
-            return Err(format!(
-                "{:?} should have a closed type, not {:?}",
-                x, x.ty
+            return Err(Error::new(
+                "LHS of equation should have a closed type",
             ));
         }
 
@@ -1622,17 +1646,13 @@ impl ExprManager {
     ) -> Result<NewTypeDef> {
         self.check_thm_uid_(&thm_inhabited);
         if thm_inhabited.hyps().len() > 0 {
-            return Err(format!(
-                "new_basic_type_def: theorem must not have hyps, {:?}",
-                thm_inhabited
+            return Err(Error::new(
+                "new_basic_type_def: theorem must not have hypotheses",
             ));
         }
         let (phi, witness) =
             thm_inhabited.concl().as_app().ok_or_else(|| {
-                format!(
-                    "conclusion of theorem must be `(Phi x)`, not `{:?}`",
-                    thm_inhabited.concl()
-                )
+                Error::new("conclusion of theorem must be `(Phi x)`")
             })?;
         // the concrete type
         let ty = witness.ty().clone();
@@ -1642,10 +1662,10 @@ impl ExprManager {
         fvars.sort_unstable();
         fvars.dedup();
 
-        if let Some(v) = fvars.iter().find(|v| !v.ty.is_type()) {
-            return Err(format!(
-                "free variable `{:?}` has type `{:?}`, not `type`",
-                &v, &v.ty
+        if fvars.iter().any(|v| !v.ty.is_type()) {
+            return Err(Error::new(
+                "new_basic_type_def: definition contains \
+                a free variable that does not have type `type`",
             ));
         }
 

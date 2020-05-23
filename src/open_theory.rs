@@ -31,11 +31,7 @@ use ObjImpl as O;
 
 /// A type operator, i.e. a type builder.
 trait OTypeOp: fmt::Debug {
-    fn apply(
-        &self,
-        em: &mut k::ExprManager,
-        args: Vec<Expr>,
-    ) -> Result<Expr, String>;
+    fn apply(&self, em: &mut k::ExprManager, args: Vec<Expr>) -> Result<Expr>;
 }
 
 impl fmt::Debug for Obj {
@@ -54,7 +50,7 @@ impl fmt::Debug for OTypeOp {
 
 /// A constant, parametrized by its type.
 trait OConst: fmt::Debug {
-    fn apply(&self, em: &mut k::ExprManager, e: Expr) -> Result<Expr, String>;
+    fn apply(&self, em: &mut k::ExprManager, e: Expr) -> Result<Expr>;
 }
 
 impl std::ops::Deref for Obj {
@@ -68,45 +64,46 @@ impl Obj {
     fn get(&self) -> &O {
         &*self.0
     }
-    fn as_list(&self) -> Result<&Vec<Obj>, String> {
+
+    fn as_list(&self) -> Result<&Vec<Obj>> {
         match self.get() {
             O::List(l) => Ok(l),
-            _ => Err(format!("expected list, got {:?}", self)),
+            _ => Err(Error::new("expected list")),
         }
     }
 
-    fn as_var(&self) -> Result<&Var, String> {
+    fn as_var(&self) -> Result<&Var> {
         match self.get() {
             O::Var(v) => Ok(v),
-            _ => Err(format!("expected var, got {:?}", self)),
+            _ => Err(Error::new("expected var")),
         }
     }
 
-    fn as_term(&self) -> Result<&Expr, String> {
+    fn as_term(&self) -> Result<&Expr> {
         match self.get() {
             O::Term(t) => Ok(t),
-            _ => Err(format!("expected expr, got {:?}", self)),
+            _ => Err(Error::new("expected expr")),
         }
     }
 
-    fn as_name(&self) -> Result<&Name, String> {
+    fn as_name(&self) -> Result<&Name> {
         match self.get() {
             O::Name(n) => Ok(n),
-            _ => Err(format!("expected name, got {:?}", self)),
+            _ => Err(Error::new("expected name")),
         }
     }
 
-    fn as_type(&self) -> Result<&Expr, String> {
+    fn as_type(&self) -> Result<&Expr> {
         match self.get() {
             O::Type(t) => Ok(t),
-            _ => Err(format!("expected type, got {:?}", self)),
+            _ => Err(Error::new("expected type")),
         }
     }
 
-    fn as_thm(&self) -> Result<&Thm, String> {
+    fn as_thm(&self) -> Result<&Thm> {
         match self.get() {
             O::Thm(th) => Ok(th),
-            _ => Err(format!("expected theorem, got {:?}", self)),
+            _ => Err(Error::new("expected theorem")),
         }
     }
 }
@@ -229,7 +226,7 @@ struct CustomConst {
 }
 
 impl OConst for CustomConst {
-    fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr, String> {
+    fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr> {
         use std::borrow::Cow;
 
         if self.c_ty_vars == ty {
@@ -268,11 +265,11 @@ impl OConst for CustomConst {
         }
         // match type, so we're sure that `ty_vars` all disappear
         let subst = utils::match_(&c_ty_vars, &ty).ok_or_else(|| {
-            format!(
+            Error::new_string(format!(
                 "unification failed\n  between {:?} and {:?}\n  \
                     when applying constant {:?}",
-                c_ty_vars, ty, self.n
-            )
+                c_ty_vars, ty, self.n,
+            ))
         })?;
         //eprintln!(
         //    "unified:\n  between {:?} and {:?}\n  yields {:?}",
@@ -336,35 +333,44 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.push(Obj(Rc::new(o)))
     }
 
-    fn pop1<F, A>(&mut self, what: &str, f: F) -> Result<A, String>
+    fn pop1<F, A>(&mut self, what: &str, f: F) -> Result<A>
     where
-        F: Fn(&mut Self, Obj) -> Result<A, String>,
+        F: Fn(&mut Self, Obj) -> Result<A>,
     {
         if self.stack.len() < 1 {
-            Err(format!("OT.pop1.{}: empty stack", what))?
+            return Err(Error::new_string(format!(
+                "OT.pop1.{}: empty stack",
+                what
+            )));
         }
         let x = self.stack.pop().unwrap();
         f(self, x)
     }
 
-    fn pop2<F, A>(&mut self, what: &str, f: F) -> Result<A, String>
+    fn pop2<F, A>(&mut self, what: &str, f: F) -> Result<A>
     where
-        F: Fn(&mut Self, Obj, Obj) -> Result<A, String>,
+        F: Fn(&mut Self, Obj, Obj) -> Result<A>,
     {
         if self.stack.len() < 2 {
-            Err(format!("OT.pop2.{}: empty stack", what))?
+            return Err(Error::new_string(format!(
+                "OT.pop2.{}: empty stack",
+                what
+            )));
         }
         let x = self.stack.pop().unwrap();
         let y = self.stack.pop().unwrap();
         f(self, x, y)
     }
 
-    fn pop3<F, A>(&mut self, what: &str, f: F) -> Result<A, String>
+    fn pop3<F, A>(&mut self, what: &str, f: F) -> Result<A>
     where
-        F: Fn(&mut Self, Obj, Obj, Obj) -> Result<A, String>,
+        F: Fn(&mut Self, Obj, Obj, Obj) -> Result<A>,
     {
         if self.stack.len() < 3 {
-            Err(format!("OT.pop3.{}: empty stack", what))?
+            return Err(Error::new_string(format!(
+                "OT.pop3.{}: empty stack",
+                what
+            )));
         }
         let x = self.stack.pop().unwrap();
         let y = self.stack.pop().unwrap();
@@ -372,7 +378,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         f(self, x, y, z)
     }
 
-    fn abs_term(&mut self) -> Result<(), String> {
+    fn abs_term(&mut self) -> Result<()> {
         self.pop2("abs_term", |vm, x, y| {
             let body = x.as_term()?;
             let v = y.as_var()?;
@@ -380,10 +386,12 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Term(e));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in abs_term(<term,var>):\n {}", e))
+        .map_err(|e| {
+            e.set_source(Error::new("OT: failure in abs_term(<term,var>)"))
+        })
     }
 
-    fn abs_thm(&mut self) -> Result<(), String> {
+    fn abs_thm(&mut self) -> Result<()> {
         self.pop2("abs_thm", |vm, x, y| {
             let th = x.as_thm()?;
             let v = y.as_var()?;
@@ -391,10 +399,12 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in abs_thm(<thm,var>):\n {}", e))
+        .map_err(|e| {
+            e.set_source(Error::new("OT: failure in abs_thm(<thm,var>)"))
+        })
     }
 
-    fn app_term(&mut self) -> Result<(), String> {
+    fn app_term(&mut self) -> Result<()> {
         self.pop2("app_term", |vm, x, y| {
             let x = x.as_term()?;
             let f = y.as_term()?;
@@ -402,10 +412,12 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Term(e));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in app_term(<term,term>):\n {}", e))
+        .map_err(|e| {
+            e.set_source(Error::new("OT: failure in app_term(<term,term>)"))
+        })
     }
 
-    fn app_thm(&mut self) -> Result<(), String> {
+    fn app_thm(&mut self) -> Result<()> {
         self.pop2("app_thm", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
@@ -413,32 +425,37 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in app_thm(<thm,thm>):\n {}", e))
+        .map_err(|e| {
+            e.set_source(Error::new("OT: failure in app_thm(<thm,thm>)"))
+        })
     }
 
-    fn assume(&mut self) -> Result<(), String> {
+    fn assume(&mut self) -> Result<()> {
         self.pop1("assume", |vm, x| {
             let t = x.as_term()?;
             let th = vm.em.thm_assume(&t);
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in assume(<term>): {}", e))
+        .map_err(|e| e.set_source(Error::new("OT: failure in assume(<term>)")))
     }
 
-    fn axiom(&mut self) -> Result<(), String> {
+    fn axiom(&mut self) -> Result<()> {
         self.pop2("axiom", |vm, x, y| {
             let concl = x.as_term()?;
             let hyps: Vec<Expr> = y
                 .as_list()?
                 .iter()
                 .map(|x| {
-                    let t = x.as_term().map_err(|_| {
-                        format!("axiom: hyps contain non-term {:?}", x)
+                    let t = x.as_term().map_err(|e| {
+                        e.set_source(Error::new_string(format!(
+                            "axiom: hyps contain non-term {:?}",
+                            x
+                        )))
                     })?;
                     Ok(t.clone())
                 })
-                .collect::<Result<_, String>>()?;
+                .collect::<Result<_>>()?;
             let th_key = ThmKey(concl.clone(), hyps);
             // see if there already is a theorem matching this "axiom"
             let ax = match vm.theorems.get(&th_key) {
@@ -454,25 +471,27 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(ax));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in axiom(<term,list>):\n {}", e))
-    }
-
-    fn version(&mut self) -> Result<(), String> {
-        self.pop1("version", |_vm, o| match *o {
-            O::Int(6) => Ok(()),
-            _ => Err(format!(
-                "OpenTheory: unsupported version -> Result<(), String> {:?}",
-                o
-            )),
+        .map_err(|e| {
+            e.set_source(Error::new("OT: failure in axiom(<term,list>)"))
         })
     }
 
-    fn nil(&mut self) -> Result<(), String> {
+    fn version(&mut self) -> Result<()> {
+        self.pop1("version", |_vm, o| match *o {
+            O::Int(6) => Ok(()),
+            _ => Err(Error::new_string(format!(
+                "OpenTheory: unsupported version {:?}",
+                o,
+            ))),
+        })
+    }
+
+    fn nil(&mut self) -> Result<()> {
         self.push_obj(O::List(vec![]));
         Ok(())
     }
 
-    fn type_op(&mut self) -> Result<(), String> {
+    fn type_op(&mut self) -> Result<()> {
         // builder for bool
         #[derive(Debug, Clone)]
         struct TyOpConst(Expr);
@@ -481,9 +500,12 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 &self,
                 _em: &mut ExprManager,
                 args: Vec<Expr>,
-            ) -> Result<Expr, String> {
+            ) -> Result<Expr> {
                 if args.len() != 0 {
-                    Err(format!("{:?} takes no arguments", self.0))
+                    Err(Error::new_string(format!(
+                        "{:?} takes no arguments",
+                        self.0
+                    )))
                 } else {
                     Ok(self.0.clone())
                 }
@@ -498,9 +520,9 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 &self,
                 em: &mut ExprManager,
                 mut args: Vec<Expr>,
-            ) -> Result<Expr, String> {
+            ) -> Result<Expr> {
                 if args.len() != 2 {
-                    return Err(format!("-> takes 2 arguments"));
+                    return Err(Error::new("-> takes 2 arguments"));
                 };
                 let ty2 = args.pop().unwrap();
                 let ty1 = args.pop().unwrap();
@@ -510,7 +532,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         }
 
         self.pop1("type op", |vm, o| {
-            let n = o.as_name().map_err(|n| n.to_string())?;
+            let n = o.as_name()?;
             let oc = if n.len_pre() == 0 && n.base() == "bool" {
                 Rc::new(TyOpConst(vm.em.mk_bool()))
             } else if n.len_pre() == 0 && n.base() == "ind" {
@@ -522,44 +544,41 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 if let Some(d) = vm.ty_defs.get(n) {
                     d.clone()
                 } else {
-                    return Err(format!(
+                    return Err(Error::new_string(format!(
                         "type_op: undefined type operator {:?}",
-                        n
-                    ));
+                        n,
+                    )));
                 }
             };
             Ok(vm.push_obj(O::TypeOp(n.clone(), oc.clone())))
         })
     }
 
-    fn def(&mut self) -> Result<(), String> {
+    fn def(&mut self) -> Result<()> {
         self.pop2("def", |vm, k, x| match &*k {
             O::Int(i) => {
                 vm.dict.insert(*i, x.clone());
                 vm.push(x); // push x back
                 Ok(())
             }
-            _ => Err(format!("def: expected int, got {:?}", k)),
+            _ => Err(Error::new("def: expected int")),
         })
     }
 
-    fn cons(&mut self) -> Result<(), String> {
+    fn cons(&mut self) -> Result<()> {
         let a =
             self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
                 O::List(ref mut v) => {
                     v.insert(0, b);
                     Ok(a)
                 }
-                _ => Err(format!(
-                    "expected a as second arg list, got {:?}, {:?}",
-                    a, b
-                )),
+                _ => Err(Error::new("expected a list as second arg")),
             })?;
         self.push(a);
         Ok(())
     }
 
-    fn ref_(&mut self) -> Result<(), String> {
+    fn ref_(&mut self) -> Result<()> {
         self.pop1("ref", |vm, o| match &*o {
             O::Int(n) => {
                 if let Some(x) = vm.dict.get(n) {
@@ -567,18 +586,21 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                     vm.push(x); // lookup and push
                     Ok(())
                 } else {
-                    Err(format!("ref: int {} not defined in dictionary", n))
+                    Err(Error::new_string(format!(
+                        "ref: int {} not defined in dictionary",
+                        n
+                    )))
                 }
             }
-            _ => Err(format!("ref: expected int, got {:?}", o)),
+            _ => Err(Error::new("ref: expected int")),
         })
     }
 
-    fn var_type(&mut self) -> Result<(), String> {
+    fn var_type(&mut self) -> Result<()> {
         self.pop1("var_type", |vm, o| match &*o {
             O::Name(n) => {
                 if n.len_pre() != 0 {
-                    Err("var_type: need unqualified name")?
+                    return Err(Error::new("var_type: need unqualified name"));
                 }
                 // make a type variable
                 let ty = vm.em.mk_ty();
@@ -586,21 +608,18 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 vm.push_obj(O::Type(v));
                 Ok(())
             }
-            _ => Err(format!("var_type: expected name, got {:?}", o)),
+            _ => Err(Error::new("var_type: expected name")),
         })
     }
 
-    fn op_type(&mut self) -> Result<(), String> {
+    fn op_type(&mut self) -> Result<()> {
         self.pop2("op type", |vm, o1, o2| match (&*o1, &*o2) {
             (O::List(l), O::TypeOp(_, f)) => {
-                let args: Result<Vec<Expr>, String> = l
+                let args: Result<Vec<Expr>> = l
                     .iter()
                     .map(|x| match &**x {
                         O::Type(a) => Ok(a.clone()),
-                        _ => Err(format!(
-                            "in op type: expected type, got {:?}",
-                            x
-                        )),
+                        _ => Err(Error::new("in op type: expected type")),
                     })
                     .collect();
                 let args = args?;
@@ -608,25 +627,21 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 vm.push_obj(O::Type(r));
                 Ok(())
             }
-            _ => Err(format!(
-                "op_type: expected <list,typeop>, got {:?}, {:?}",
-                o1, o2
-            )),
+            _ => Err(Error::new("op_type: expected <list,typeop>")),
         })
     }
 
-    fn const_(&mut self) -> Result<(), String> {
+    fn const_(&mut self) -> Result<()> {
         #[derive(Debug)]
         struct ConstEq;
         impl OConst for ConstEq {
-            fn apply(
-                &self,
-                em: &mut ExprManager,
-                ty: Expr,
-            ) -> Result<Expr, String> {
+            fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr> {
                 let args = ty.unfold_pi().0;
                 if args.len() != 2 {
-                    Err(format!("`=` cannot take type {:?}", ty))?
+                    Err(Error::new_string(format!(
+                        "`=` cannot take type {:?}",
+                        ty
+                    )))?
                 }
                 let e = em.mk_eq();
                 em.mk_app(e, args[0].clone())
@@ -635,15 +650,14 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         #[derive(Debug)]
         struct ConstSelect;
         impl OConst for ConstSelect {
-            fn apply(
-                &self,
-                em: &mut ExprManager,
-                ty: Expr,
-            ) -> Result<Expr, String> {
+            fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr> {
                 let a = ty
                     .as_pi()
                     .ok_or_else(|| {
-                        format!("`select` cannot take type {:?}", ty)
+                        Error::new_string(format!(
+                            "`select` cannot take type {:?}",
+                            ty
+                        ))
                     })?
                     .1;
                 let e = em.mk_select();
@@ -665,21 +679,21 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                         if let Some(d) = vm.defs.get(n) {
                             d.clone()
                         } else {
-                            return Err(format!(
+                            return Err(Error::new_string(format!(
                                 "const: undefined constant {:?}",
-                                n
-                            ));
+                                n,
+                            )));
                         }
                     }
                 };
                 vm.push_obj(O::Const(n.clone(), oc));
                 Ok(())
             }
-            _ => Err(format!("const: expected <name>, got {:?}", o)),
+            _ => Err(Error::new("const: expected <name>")),
         })
     }
 
-    fn const_term(&mut self) -> Result<(), String> {
+    fn const_term(&mut self) -> Result<()> {
         self.pop2("const term", |vm, x, y| match (&*x, &*y) {
             (O::Type(ty), O::Const(_, c)) => {
                 // apply constant to type
@@ -687,14 +701,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 vm.push_obj(O::Term(e));
                 Ok(())
             }
-            _ => Err(format!(
-                "const_term: expected <type,const>, got {:?}, {:?}",
-                x, y
-            )),
+            _ => Err(Error::new("const_term: expected <type,const>")),
         })
     }
 
-    fn var(&mut self) -> Result<(), String> {
+    fn var(&mut self) -> Result<()> {
         self.pop2("var", |vm, x, y| match (&*x, &*y) {
             (O::Type(ty), O::Name(n)) => {
                 // TODO: avoid allocating intermediate `String`
@@ -702,24 +713,22 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 vm.push_obj(O::Var(v));
                 Ok(())
             }
-            _ => {
-                Err(format!("var: expected <type,name>, got {:?}, {:?}", x, y))
-            }
+            _ => Err(Error::new("var: expected <type,name>")),
         })
     }
 
-    fn var_term(&mut self) -> Result<(), String> {
+    fn var_term(&mut self) -> Result<()> {
         self.pop1("var_term", |vm, o| match &*o {
             O::Var(v) => {
                 let e = vm.em.mk_var(v.clone());
                 vm.push_obj(O::Term(e));
                 Ok(())
             }
-            _ => Err(format!("var_term: expected <var>, got {:?}", o)),
+            _ => Err(Error::new("var_term: expected <var>")),
         })
     }
 
-    fn define_const(&mut self) -> Result<(), String> {
+    fn define_const(&mut self) -> Result<()> {
         self.pop2("define const", |vm, x, y| match (&*x, &*y) {
             (O::Term(rhs), O::Name(n)) => {
                 // make a definition `n := t`
@@ -731,7 +740,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 vm.cb.debug(|| {
                     format!(
                         "define const {:?}\n  with thm {:#?}\n  and vars {:?}",
-                        n, thm, ty_vars
+                        n, thm, ty_vars,
                     )
                 });
                 // type of `c` applied to `vars`
@@ -757,7 +766,9 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                         let thm_rhs = thm
                             .concl()
                             .unfold_eq()
-                            .ok_or("rhs must be an equality")?
+                            .ok_or_else(|| {
+                                Error::new("rhs must be an equality")
+                            })?
                             .1;
                         let thm_beta = vm.em.thm_beta_conv(thm_rhs)?;
                         thm = vm.em.thm_trans(&thm, &thm_beta)?;
@@ -771,14 +782,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 vm.push_obj(O::Thm(thm_a));
                 Ok(())
             }
-            _ => Err(format!(
-                "define const: expected <term,name>, got {:?}, {:?}",
-                x, y
-            )),
+            _ => Err(Error::new("define const: expected <term,name>")),
         })
     }
 
-    fn define_type_op_(&mut self) -> Result<(), String> {
+    fn define_type_op_(&mut self) -> Result<()> {
         let thm = self.stack.pop().unwrap().as_thm()?.clone();
         let names: Vec<String> = self
             .stack
@@ -787,15 +795,15 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             .as_list()?
             .iter()
             .map(|e| e.as_name().map(|n| n.to_string()))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>>>()?;
         let rep = self.stack.pop().unwrap().as_name()?.clone();
         let abs = self.stack.pop().unwrap().as_name()?.clone();
         let ty_name = self.stack.pop().unwrap().as_name()?.clone();
         if self.ty_defs.contains_key(&ty_name) {
-            return Err(format!(
+            return Err(Error::new_string(format!(
                 "type operator {:?} already defined",
-                &ty_name
-            ));
+                &ty_name,
+            )));
         }
 
         let def = self.em.thm_new_basic_type_definition(
@@ -809,11 +817,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         // to apply parameters expressions
 
         if def.fvars.len() != names.len() {
-            return Err(format!(
+            return Err(Error::new_string(format!(
                 "expected {} free variables, got {}",
                 names.len(),
-                def.fvars.len()
-            ));
+                def.fvars.len(),
+            )));
         }
 
         let reorder = names
@@ -830,10 +838,13 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                         }
                     })
                     .ok_or_else(|| {
-                        format!("cannot find variable with name {}", n)
+                        Error::new_string(format!(
+                            "cannot find variable with name {}",
+                            n
+                        ))
                     })
             })
-            .collect::<Result<Vec<usize>, String>>()?;
+            .collect::<Result<Vec<usize>>>()?;
 
         // implementation of the type constructor
 
@@ -845,9 +856,9 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 &self,
                 em: &mut ExprManager,
                 args: Vec<Expr>,
-            ) -> Result<Expr, String> {
+            ) -> Result<Expr> {
                 if args.len() != self.0.len() {
-                    return Err(format!("bad arity"));
+                    return Err(Error::new("bad arity"));
                 }
                 // re-shuffle args
                 let args2: Vec<Expr> =
@@ -918,37 +929,39 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         Ok(())
     }
 
-    fn define_type_op(&mut self) -> Result<(), String> {
+    fn define_type_op(&mut self) -> Result<()> {
         if self.stack.len() < 5 {
-            return Err(format!(
-                "define_type_op: not enough elements in stack"
+            return Err(Error::new(
+                "define_type_op: not enough elements in stack",
             ));
         }
-        self.define_type_op_().map_err(|s| format!("define_type_op: {}", s))
+        self.define_type_op_()
+            .map_err(|e| e.set_source(Error::new("define_type_op")))
     }
 
-    fn pop(&mut self) -> Result<(), String> {
+    fn pop(&mut self) -> Result<()> {
         if self.stack.pop().is_some() {
             Ok(())
         } else {
-            Err("pop: empty stack".to_string())
+            return Err(Error::new("pop: empty stack"));
         }
     }
 
-    fn remove(&mut self) -> Result<(), String> {
+    fn remove(&mut self) -> Result<()> {
         self.pop1("remove", |vm, o| match &*o {
             O::Int(n) => {
-                let o = vm.dict.remove(n).ok_or_else(|| {
-                    format!("remove: key {:?} not present", n)
-                })?;
+                let o = vm
+                    .dict
+                    .remove(n)
+                    .ok_or_else(|| Error::new("remove: key not present"))?;
                 vm.push(o);
                 Ok(())
             }
-            _ => Err(format!("remove: expected int, not {:?}", o)),
+            _ => Err(Error::new("remove: expected int")),
         })
     }
 
-    fn thm(&mut self) -> Result<(), String> {
+    fn thm(&mut self) -> Result<()> {
         self.pop3("thm", |vm, x, y, z| {
             let _phi = x.as_term()?;
             let l = y.as_list()?;
@@ -958,10 +971,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 if let O::Term(_) = x.get() {
                     Ok(())
                 } else {
-                    return Err(format!(
-                        "thm: expected term in list, not {:?}",
-                        x
-                    ));
+                    return Err(Error::new("thm: expected term in list"));
                 }
             })?;
             // TODO?: alpha rename with [terms] and [phi]? does it make any sense?
@@ -970,22 +980,22 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.theorems.insert(k, thm.clone());
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in thm:\n  {}", e))
+        .map_err(|e| e.set_source(Error::new("OT: failure in thm")))
     }
 
-    fn subst(&mut self) -> Result<(), String> {
+    fn subst(&mut self) -> Result<()> {
         self.pop2("subst", |vm, x, y| {
             let thm = x.as_thm()?;
             let l = y.as_list()?;
             // build type substitution first
             let mut subst = vec![];
             if l.len() != 2 {
-                return Err(format!("expected pair of subst, got {:?}", l));
+                return Err(Error::new("expected pair of subst"));
             }
             l[0].as_list()?.iter().try_for_each(|x| {
                 let l = x.as_list()?;
                 if l.len() != 2 {
-                    return Err(format!("expected <name>,<ty>, got {:?}", l));
+                    return Err(Error::new("expected <name>,<ty> in subst"));
                 }
                 let v = l[0].as_name()?;
                 let ty = l[1].as_type()?.clone();
@@ -1005,7 +1015,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             l[1].as_list()?.iter().try_for_each(|x| {
                 let l = x.as_list()?;
                 if l.len() != 2 {
-                    return Err(format!("expected <var>,<expr>, got {:?}", l));
+                    return Err(Error::new("expected <var>,<expr>"));
                 }
                 let v = l[0].as_var()?.clone();
                 let ty = l[1].as_term()?.clone();
@@ -1017,26 +1027,26 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.cb.debug(|| {
                 format!(
                     "instantiated\n  {:#?}\n  into {:#?}\n  with subst {:#?}",
-                    th1, th2, subst
+                    th1, th2, subst,
                 )
             });
             vm.push_obj(O::Thm(th2));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in subst:\n {}", e))
+        .map_err(|e| e.set_source(Error::new("OT: failure in subst")))
     }
 
-    fn refl(&mut self) -> Result<(), String> {
+    fn refl(&mut self) -> Result<()> {
         self.pop1("refl", |vm, x| {
             let t = x.as_term()?.clone();
             let th = vm.em.thm_refl(t);
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in refl: {}", e))
+        .map_err(|e| e.set_source(Error::new("OT: failure in refl")))
     }
 
-    fn trans(&mut self) -> Result<(), String> {
+    fn trans(&mut self) -> Result<()> {
         self.pop2("trans", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
@@ -1044,43 +1054,50 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in trans(<thm,thm>):\n {}", e))
+        .map_err(|e| {
+            e.set_source(Error::new("OT: failure in trans(<thm,thm>)"))
+        })
     }
 
-    fn sym(&mut self) -> Result<(), String> {
+    fn sym(&mut self) -> Result<()> {
         self.pop1("sym", |vm, x| {
             let th1 = x.as_thm()?.clone();
             let th = utils::thm_sym(&mut vm.em, &th1)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in refl: {}", e))
+        .map_err(|e| e.set_source(Error::new("OT: failure in refl")))
     }
 
-    fn eq_mp(&mut self) -> Result<(), String> {
+    fn eq_mp(&mut self) -> Result<()> {
         self.pop2("eq_mp", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
             let th = vm.em.thm_bool_eq(th1, th2).map_err(|e| {
-                format!("in eq_mp\n {:?},\n {:?}:\n {}", th1, th2, e)
+                e.set_source(Error::new_string(format!(
+                    "in eq_mp\n {:?},\n {:?}",
+                    th1, th2
+                )))
             })?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in eq_mp(<thm,thm>):\n {}", e))
+        .map_err(|e| {
+            e.set_source(Error::new("OT: failure in eq_mp(<thm,thm>)"))
+        })
     }
 
-    fn beta_conv(&mut self) -> Result<(), String> {
+    fn beta_conv(&mut self) -> Result<()> {
         self.pop1("beta_conv", |vm, x| {
             let t = x.as_term()?.clone();
             let th = vm.em.thm_beta_conv(&t)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in beta_conv: {}", e))
+        .map_err(|e| e.set_source(Error::new("OT: failure in beta_conv")))
     }
 
-    fn deduct_antisym(&mut self) -> Result<(), String> {
+    fn deduct_antisym(&mut self) -> Result<()> {
         self.pop2("deduct_antisym", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
@@ -1089,37 +1106,47 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             Ok(())
         })
         .map_err(|e| {
-            format!("OT: failure in deduct_antisym(<thm,thm>):\n {}", e)
+            e.set_source(Error::new("OT: failure in deduct_antisym(<thm,thm>)"))
         })
     }
 
-    fn prove_hyp(&mut self) -> Result<(), String> {
+    fn prove_hyp(&mut self) -> Result<()> {
         self.pop2("prove_hyp", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
-            let th = vm
-                .em
-                .thm_cut(th2, th1)
-                .map_err(|e| format!("in cut {:?}, {:?}:\n {}", th1, th2, e))?;
+            let th = vm.em.thm_cut(th2, th1).map_err(|e| {
+                e.set_source(Error::new_string(format!(
+                    "in cut {:?}, {:?}",
+                    th1, th2
+                )))
+            })?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| format!("OT: failure in prove_hyp(<thm,thm>):\n {}", e))
+        .map_err(|e| {
+            e.set_source(Error::new(
+                "OT: failure in prove_hyp(<thm,thm>):\n {}",
+            ))
+        })
     }
 
     /// Parse the given reader.
-    pub fn parse_str(&mut self, buf: &mut dyn BufRead) -> Result<(), String> {
+    pub fn parse_str(&mut self, buf: &mut dyn BufRead) -> Result<()> {
         // skip empty lines and comments
 
         for line in buf.lines() {
-            let line = line.map_err(|e| format!("error {:?}", e))?;
+            let line =
+                line.map_err(|e| Error::new_string(format!("error {:?}", e)))?;
             let line = line.trim();
             self.cb.debug(|| format!("// parse line {}", line));
             if line.starts_with("#") {
                 continue;
             } else if line.starts_with("\"") {
                 let name = Name::parse(line).ok_or_else(|| {
-                    format!("cannot parse name from line {:?}", line)
+                    Error::new_string(format!(
+                        "cannot parse name from line {:?}",
+                        line
+                    ))
                 })?;
                 self.push_obj(ObjImpl::Name(name))
             } else if let Ok(i) = line.parse::<usize>() {
@@ -1157,7 +1184,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                     "deductAntisym" => self.deduct_antisym()?,
                     "proveHyp" => self.prove_hyp()?,
                     "defineTypeOp" => self.define_type_op()?,
-                    _ => Err(format!("unknown command {:?}", line))?,
+                    _ => Err(Error::new_string(format!(
+                        "unknown command {:?}",
+                        line
+                    )))?,
                 }
             }
         }

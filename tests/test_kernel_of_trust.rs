@@ -4,8 +4,8 @@ use trustee::*;
 fn test_hashcons1() {
     let mut em = ExprManager::new();
     let b = em.mk_bool();
-    let t1 = em.mk_arrow(b.clone(), b.clone());
-    let t2 = em.mk_arrow(b.clone(), b.clone());
+    let t1 = em.mk_arrow(b.clone(), b.clone()).unwrap();
+    let t2 = em.mk_arrow(b.clone(), b.clone()).unwrap();
     assert_eq!(t1, t2);
 }
 
