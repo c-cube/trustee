@@ -13,6 +13,12 @@ cargo run --example parse_ot $@ \
   "ot-data/data/opentheory/pair-thm-1.31/pair-thm.art" \
   "ot-data/data/opentheory/natural-def-1.29/natural-def.art" \
   "ot-data/data/opentheory/natural-thm-1.22/natural-thm.art" \
+  "ot-data/data/opentheory/natural-order-def-1.33/natural-order-def.art" \
   "ot-data/data/opentheory/set-def-1.52/set-def.art" \
-  #"ot-data/data/opentheory/set-thm-1.75/set-thm.art" \
+  "ot-data/data/opentheory/set-thm-1.75/set-thm.art" \
+  "ot-data/data/opentheory/natural-order-thm-1.41/natural-order-thm.art" \
+ # "ot-data/data/opentheory/natural-add-def-1.25/natural-add-def.art" \
+ # "ot-data/data/opentheory/natural-add-thm-1.58/natural-add-thm.art" \
+ # "ot-data/data/opentheory/natural-add-sub-1.10/natural-add-sub.thy" \
+ # "ot-data/data/opentheory/natural-distance-1.52/natural-distance.thy" \
 
