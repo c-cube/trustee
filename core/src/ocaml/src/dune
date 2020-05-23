@@ -1,0 +1,22 @@
+
+(library
+  (name trustee)
+  (public_name trustee)
+  (c_library_flags :standard -ldl -lpthread)
+  (self_build_stubs_archive (trustee)) ; custom!
+  (c_flags -fPIC -std=c99)
+  (no_dynlink)
+  (flags :standard -warn-error -a+8))
+
+(rule
+ (targets libtrustee_stubs%{ext_lib}) ;libtrustee_c.so)
+ (deps ./lib.rs ../Cargo.toml ../Cargo.lock ../Makefile
+       ../cargo-config (source_tree ../vendor))
+ ;(mode fallback)
+ (action
+   (progn
+    (chdir ..
+      (run make CAML_LIB=%{ocaml-config:standard_library}
+           build-rust-stubs)) ; build
+    (run cp ../target/release/libtrustee_stubs%{ext_lib} .)
+    )))
