@@ -153,6 +153,48 @@ pub fn trustee_thm_assume(
     Ok(Pointer::alloc_custom(Thm(t)))
 }
 
+/* FIXME
+/// Parse OpenTheory
+#[ocaml::func]
+pub fn trustee_ot_parse(
+    mut ctx: Pointer<Ctx>,
+    s: &str,
+) -> Result<(Value, Value, Value), ocaml::Error> {
+    let mut ctx = ctx.as_mut().0.lock().unwrap();
+    let mut vm = trustee::open_theory::VM::new(&mut ctx);
+    let mut buf = std::io::BufReader::new(s.as_bytes());
+    eprintln!("reading string (len {})", s.as_bytes().len());
+    vm.parse_str(&mut buf).unwrap_or_else(|e| {
+        let msg = format!("trustee_parse_ot: {}", e);
+        ocaml::Error::raise_failure(&msg)
+    });
+    eprintln!("got OT article");
+    let article = vm.into_article();
+    let (v1, v2, v3) = article.get(&mut ctx);
+    ocaml::local!(a1, a2, a3);
+    a1 = (ocaml::Array::alloc(v1.len()) as ocaml::Array<Value>).to_value();
+    a2 = (ocaml::Array::alloc(v2.len()) as ocaml::Array<Value>).to_value();
+    a3 = (ocaml::Array::alloc(v3.len()) as ocaml::Array<Value>).to_value();
+    for (i, x) in v1.into_iter().enumerate() {
+        ocaml::Array::from_value(a1).set(i, Pointer::alloc_custom(Expr(x)))?
+    }
+    for (i, x) in v2.into_iter().enumerate() {
+        ocaml::Array::from_value(a2).set(i, Pointer::alloc_custom(Thm(x)))?
+    }
+    for (i, x) in v3.into_iter().enumerate() {
+        ocaml::Array::from_value(a3).set(i, Pointer::alloc_custom(Thm(x)))?
+    }
+    //let v1: Vec<_> =
+    //    v1.into_iter().map(|e| Pointer::alloc_custom(Expr(e))).collect();
+    //let v2: Vec<_> =
+    //    v2.into_iter().map(|e| Pointer::alloc_custom(Thm(e))).collect();
+    //let v3: Vec<_> =
+    //    v3.into_iter().map(|e| Pointer::alloc_custom(Thm(e))).collect();
+    //(v1.to_value(), v2.to_value(), v3.to_value())
+    Ok((a1, a2, a3))
+}
+*/
+
 /* TODO
 // === OPEN THEORY ====
 
