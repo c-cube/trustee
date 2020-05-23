@@ -9,7 +9,7 @@ module Expr = struct
   external to_string : t -> string = "trustee_expr_to_string"
   external is_type : t -> bool = "trustee_expr_is_type"
   external ty : t -> t = "trustee_expr_ty"
-  let pp out e = Format.pp_print_string out (to_string e)
+  let pp out e = Format.fprintf out "@[%a@]" Format.pp_print_text (to_string e)
 end
 
 module Thm = struct
@@ -18,7 +18,8 @@ module Thm = struct
   external concl : t -> expr = "trustee_thm_concl"
   external hyps : t -> expr array = "trustee_thm_hyps"
   let hyps_l th = Array.to_list (hyps th)
-  let pp out e = Format.fprintf out "@[%a@]" Format.pp_print_text (to_string e)
+  let pp out self =
+    Format.fprintf out "@[%a@]" Format.pp_print_text (to_string self)
 end
 
 module Ctx = struct
