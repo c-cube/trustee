@@ -50,6 +50,7 @@ impl fmt::Debug for OTypeOp {
 
 /// A constant, parametrized by its type.
 trait OConst: fmt::Debug {
+    fn expr(&self, em: &mut k::ExprManager) -> Expr;
     fn apply(&self, em: &mut k::ExprManager, e: Expr) -> Result<Expr>;
 }
 
@@ -170,6 +171,16 @@ pub struct Article {
     theorems: Vec<Thm>,
 }
 
+impl Article {
+    /// Get content of the article.
+    pub fn get(&self, em: &mut ExprManager) -> (Vec<Expr>, Vec<Thm>, Vec<Thm>) {
+        let v1 = self.defs.iter().map(|(_, c)| c.expr(em)).collect();
+        let v2 = self.assumptions.clone();
+        let v3 = self.theorems.clone();
+        (v1, v2, v3)
+    }
+}
+
 impl fmt::Display for Article {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
         write!(out, "Article {{\n")?;
@@ -226,6 +237,9 @@ struct CustomConst {
 }
 
 impl OConst for CustomConst {
+    fn expr(&self, _: &mut ExprManager) -> Expr {
+        self.c.clone()
+    }
     fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr> {
         use std::borrow::Cow;
 
@@ -635,6 +649,9 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         #[derive(Debug)]
         struct ConstEq;
         impl OConst for ConstEq {
+            fn expr(&self, em: &mut ExprManager) -> Expr {
+                em.mk_eq()
+            }
             fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr> {
                 let args = ty.unfold_pi().0;
                 if args.len() != 2 {
@@ -650,6 +667,9 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         #[derive(Debug)]
         struct ConstSelect;
         impl OConst for ConstSelect {
+            fn expr(&self, em: &mut ExprManager) -> Expr {
+                em.mk_select()
+            }
             fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr> {
                 let a = ty
                     .as_pi()
