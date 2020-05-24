@@ -1,0 +1,8 @@
+name: opentheory-dl
+version: 0.1.0
+
+dependencies:
+  myhtml:
+    github: kostya/myhtml
+  crystar:
+    github: naqvis/crystar
