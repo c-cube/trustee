@@ -322,7 +322,7 @@ pub fn match_<'a>(e1: &'a Expr, e2: &'a Expr) -> Option<UnifySubst<'a>> {
 /// Prove symmetry of equality.
 ///
 /// Goes from `A |- t=u` to `A |- u=t`.
-pub fn thm_sym(em: &mut ExprManager, mut th: Thm) -> Result<Thm> {
+pub fn thm_sym(em: &mut ExprManager, th: Thm) -> Result<Thm> {
     // start with `F |- t=u`.
     // now by left-congruence with `refl(=)`, `F |- ((=) t) = ((=) u)`.
     // by right-congruence with `refl(t)`, `F |- (((=) t) t) = (((=) u) t)`.

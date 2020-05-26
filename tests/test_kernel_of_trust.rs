@@ -81,7 +81,7 @@ fn test_assume() {
     let pa2 = em.mk_app(p.clone(), a.clone()).unwrap();
     let pa = em.mk_app(p, a).unwrap();
     assert_eq!(&pa, &pa2);
-    let th = em.thm_assume(&pa);
+    let th = em.thm_assume(pa.clone());
     assert_eq!(th.concl(), &pa);
     assert_eq!(th.hyps().len(), 1);
 }

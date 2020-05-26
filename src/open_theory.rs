@@ -463,13 +463,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let concl = x.as_term()?;
             let hyps: Vec<Expr> = y
                 .as_list()?
-                .iter()
+                .into_iter()
                 .map(|x| {
                     let t = x.as_term().map_err(|e| {
-                        e.set_source(Error::new_string(format!(
-                            "axiom: hyps contain non-term {:?}",
-                            x
-                        )))
+                        e.set_source(Error::new("axiom: hyps contain non-term"))
                     })?;
                     Ok(t.clone())
                 })
@@ -804,11 +801,12 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let mut thm = x.as_thm()?.clone();
             let renaming = y
                 .as_list()?
-                .iter()
-                .map(|x| match &**x {
-                    O::List(vec) if vec.len() == 2 => {
-                        let n = vec[0].as_name()?;
-                        let v = vec[1].as_var()?;
+                .into_iter()
+                .map(|x| match x.0 {
+                    O::List(mut vec) if vec.len() == 2 => {
+                        let v = vec.pop().unwrap().as_var()?;
+                        let n = vec.pop().unwrap().as_name()?;
+                        debug_assert_eq!(vec.len(), 0);
                         Ok((n, v))
                     }
                     _ => Err(Error::new(
@@ -894,7 +892,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             .pop()
             .unwrap()
             .as_list()?
-            .iter()
+            .into_iter()
             .map(|e| e.as_name().map(|n| n.to_string()))
             .collect::<Result<Vec<_>>>()?;
         let rep = self.stack.pop().unwrap().as_name()?.clone();
@@ -1068,7 +1066,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let l = y.as_list()?;
             let thm = z.as_thm()?;
 
-            l.iter().try_for_each(|x| {
+            l.into_iter().try_for_each(|x| {
                 if let O::Term(_) = x.get() {
                     Ok(())
                 } else {
@@ -1087,39 +1085,43 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     fn subst(&mut self) -> Result<()> {
         self.pop2("subst", |vm, x, y| {
             let thm = x.as_thm()?;
-            let l = y.as_list()?;
+            let mut l = y.as_list()?;
             // build type substitution first
             let mut subst = vec![];
             if l.len() != 2 {
                 return Err(Error::new("expected pair of subst"));
             }
-            l[0].as_list()?.iter().try_for_each(|x| {
-                let l = x.as_list()?;
+            let subst_t = l.pop().unwrap();
+            let subst_ty = l.pop().unwrap();
+            debug_assert_eq!(l.len(), 0);
+            subst_ty.as_list()?.into_iter().try_for_each(|x| {
+                let mut l = x.as_list()?;
                 if l.len() != 2 {
                     return Err(Error::new("expected <name>,<ty> in subst"));
                 }
-                let v = l[0].as_name()?;
-                let ty = l[1].as_type()?.clone();
+                let ty = l.pop().unwrap().as_type()?;
+                let v = l.pop().unwrap().as_name()?;
                 let pair = (Var::from_str(&v.to_string(), vm.em.mk_ty()), ty);
                 subst.push(pair);
                 Ok(())
             })?;
-            let th1 = vm.em.thm_instantiate(thm, &subst[..])?;
             vm.cb.debug(|| {
                 format!(
-                "instantiated\n  {:#?}\n  into {:#?}\n  with type subst {:#?}",
-                thm, th1, subst
-            )
+                    "instantiating\n  {:#?}\n  with type subst {:#?}",
+                    &thm, subst
+                )
             });
+            let th1 = vm.em.thm_instantiate(thm, &subst[..])?;
+            vm.cb.debug(|| format!("instantiated\n  into {:#?}", &th1));
             // then instantiate terms
             subst.clear();
-            l[1].as_list()?.iter().try_for_each(|x| {
-                let l = x.as_list()?;
+            subst_t.as_list()?.into_iter().try_for_each(|x| {
+                let mut l = x.as_list()?;
                 if l.len() != 2 {
                     return Err(Error::new("expected <var>,<expr>"));
                 }
-                let v = l[0].as_var()?.clone();
-                let ty = l[1].as_term()?.clone();
+                let ty = l.pop().unwrap().as_term()?;
+                let v = l.pop().unwrap().as_var()?;
                 let pair = (v, ty);
                 subst.push(pair);
                 Ok(())
@@ -1127,8 +1129,8 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let th2 = vm.em.thm_instantiate(th1, &subst[..])?;
             vm.cb.debug(|| {
                 format!(
-                    "instantiated\n  {:#?}\n  into {:#?}\n  with subst {:#?}",
-                    th1, th2, subst,
+                    "instantiated\n  into {:#?}\n  with subst {:#?}",
+                    &th2, subst,
                 )
             });
             vm.push_obj(O::Thm(th2));
@@ -1174,12 +1176,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("eq_mp", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
-            let th = vm.em.thm_bool_eq(th1, th2).map_err(|e| {
-                e.set_source(Error::new_string(format!(
-                    "in eq_mp\n {:?},\n {:?}",
-                    th1, th2
-                )))
-            })?;
+            let th = vm
+                .em
+                .thm_bool_eq(th1, th2)
+                .map_err(|e| e.set_source(Error::new("in eq_mp")))?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -1215,12 +1215,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("prove_hyp", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
-            let th = vm.em.thm_cut(th2, th1).map_err(|e| {
-                e.set_source(Error::new_string(format!(
-                    "in cut {:?}, {:?}",
-                    th1, th2
-                )))
-            })?;
+            let th = vm
+                .em
+                .thm_cut(th2, th1)
+                .map_err(|e| e.set_source(Error::new("in cut")))?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
