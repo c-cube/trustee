@@ -757,15 +757,24 @@ struct ExprBuiltins {
     ind: Expr,
 }
 
-fn hyps_merge(th1: &Thm, th2: &Thm) -> Vec<Expr> {
+fn hyps_merge(th1: &mut Thm, th2: &mut Thm) -> Vec<Expr> {
     if th1.0.hyps.len() == 0 {
-        th2.0.hyps.clone()
+        match Ref::get_mut(&mut th2.0) {
+            None => th2.0.hyps.clone(),
+            Some(th) => th.hyps,
+        }
     } else if th2.0.hyps.len() == 0 {
-        th1.0.hyps.clone()
+        match Ref::get_mut(&mut th1.0) {
+            None => th1.0.hyps.clone(),
+            Some(th) => th.hyps,
+        }
     } else {
-        let mut hyps: Vec<_> = th1.0.hyps.clone();
-        hyps.extend_from_slice(&th2.0.hyps[..]);
-        hyps
+        let mut v = match Ref::get_mut(&mut th1.0) {
+            None => th1.0.hyps.clone(),
+            Some(th) => th.hyps,
+        };
+        v.extend_from_slice(&th2.0.hyps[..]);
+        v
     }
 }
 
@@ -1372,7 +1381,7 @@ impl ExprManager {
     }
 
     /// `assume F` is `F |- F`
-    pub fn thm_assume(&mut self, e: &Expr) -> Thm {
+    pub fn thm_assume(&mut self, e: Expr) -> Thm {
         self.check_uid_(&e);
         Thm::make_(e.clone(), self.uid, vec![e.clone()])
     }
@@ -1387,9 +1396,9 @@ impl ExprManager {
     /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
     ///
     /// Can fail if the conclusions don't match properly.
-    pub fn thm_trans(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
-        self.check_thm_uid_(th1);
-        self.check_thm_uid_(th2);
+    pub fn thm_trans(&mut self, th1: Thm, th2: Thm) -> Result<Thm> {
+        self.check_thm_uid_(&th1);
+        self.check_thm_uid_(&th2);
         let (a, b) = th1
             .concl()
             .unfold_eq()
@@ -1404,32 +1413,32 @@ impl ExprManager {
             ));
         }
 
-        let hyps = hyps_merge(th1, th2);
         let eq_a_c = self.mk_eq_app(a.clone(), c.clone())?;
+        let hyps = hyps_merge(&mut th1, &mut th2);
         let th = Thm::make_(eq_a_c, self.uid, hyps);
         Ok(th)
     }
 
     /// `congr (F1 |- f=g) (F2 |- t=u)` is `F1, F2 |- f t=g u`
-    pub fn thm_congr(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
-        self.check_thm_uid_(th1);
-        self.check_thm_uid_(th2);
-        let (f, g) = th1.0.concl.unfold_eq().ok_or_else(|| {
+    pub fn thm_congr(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+        self.check_thm_uid_(&th1);
+        self.check_thm_uid_(&th2);
+        let (f, g) = th1.concl().unfold_eq().ok_or_else(|| {
             Error::new("congr: th1.concl must be an equality")
         })?;
-        let (t, u) = th2.0.concl.unfold_eq().ok_or_else(|| {
+        let (t, u) = th2.concl().unfold_eq().ok_or_else(|| {
             Error::new("congr: th2.concl must be an equality")
         })?;
         let ft = self.mk_app(f.clone(), t.clone())?;
         let gu = self.mk_app(g.clone(), u.clone())?;
         let eq = self.mk_eq_app(ft, gu)?;
-        let hyps = hyps_merge(th1, th2);
+        let hyps = hyps_merge(&mut th1, &mut th2);
         Ok(Thm::make_(eq, self.uid, hyps))
     }
 
     /// `congr (F1 |- f=g) ty` is `F1 |- f ty=g ty`
-    pub fn thm_congr_ty(&mut self, th: &Thm, ty: &Expr) -> Result<Thm> {
-        self.check_thm_uid_(th);
+    pub fn thm_congr_ty(&mut self, th: Thm, ty: &Expr) -> Result<Thm> {
+        self.check_thm_uid_(&th);
         self.check_uid_(ty);
         let (f, g) = th.0.concl.unfold_eq().ok_or_else(|| {
             Error::new("congr_ty: th.concl must be an equality")
@@ -1440,7 +1449,11 @@ impl ExprManager {
         let ft = self.mk_app(f.clone(), ty.clone())?;
         let gu = self.mk_app(g.clone(), ty.clone())?;
         let eq = self.mk_eq_app(ft, gu)?;
-        Ok(Thm::make_(eq, self.uid, th.0.hyps.clone()))
+        {
+            let thref = Ref::make_mut(&mut th.0);
+            thref.concl = eq;
+        }
+        Ok(th)
     }
 
     /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
@@ -1448,43 +1461,50 @@ impl ExprManager {
     /// Returns an error if the substitution is not closed.
     pub fn thm_instantiate(
         &mut self,
-        th: &Thm,
+        th: Thm,
         subst: &[(Var, Expr)],
     ) -> Result<Thm> {
-        self.check_thm_uid_(th);
+        self.check_thm_uid_(&th);
         if subst.iter().any(|(_, t)| !t.is_closed()) {
             return Err(Error::new(
                 "instantiate: substitution contains non-closed binding",
             ));
         }
 
-        let mut hyps = th.0.hyps.clone();
-        let concl = self.subst(&th.0.concl, subst)?;
-        for t in hyps.iter_mut() {
-            *t = self.subst(t, subst)?;
+        {
+            let thref = Ref::make_mut(&mut th.0);
+            thref.concl = self.subst(&thref.concl, subst)?;
+            for t in thref.hyps.iter_mut() {
+                *t = self.subst(t, subst)?;
+            }
         }
-        Ok(Thm::make_(concl, self.uid, hyps))
+        Ok(th)
     }
 
     /// `abs x (F |- t=u)` is `F |- (λx.t)=(λx.u)`
     ///
     /// Panics if `x` occurs freely in `F`.
-    pub fn thm_abs(&mut self, v: &Var, th: &Thm) -> Result<Thm> {
+    pub fn thm_abs(&mut self, v: &Var, thm: Thm) -> Result<Thm> {
         self.check_uid_(&v.ty);
-        self.check_thm_uid_(th);
-        if free_vars_iter(th.0.hyps.iter()).any(|v2| v == v2) {
+        self.check_thm_uid_(&thm);
+        if free_vars_iter(thm.0.hyps.iter()).any(|v2| v == v2) {
             return Err(Error::new(
                 "abs: variable occurs in one of the hypothesis",
             ));
         }
 
-        let (t, u) = th.0.concl.unfold_eq().ok_or_else(|| {
+        let (t, u) = thm.0.concl.unfold_eq().ok_or_else(|| {
             Error::new("abs: thm conclusion should be an equality")
         })?;
+
         let lam_t = self.mk_lambda(v.clone(), t.clone())?;
         let lam_u = self.mk_lambda(v.clone(), u.clone())?;
         let eq = self.mk_eq_app(lam_t, lam_u)?;
-        Ok(Thm::make_(eq, self.uid, th.0.hyps.clone()))
+        {
+            let thref = Ref::make_mut(&mut thm.0); // clone or acquire
+            thref.concl = eq;
+        }
+        Ok(thm)
     }
 
     /// `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`
@@ -1494,27 +1514,40 @@ impl ExprManager {
     ///
     /// NOTE: this is not strictly necessary, as it's not an axiom in HOL light,
     /// but we include it here anyway.
-    pub fn thm_cut(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
-        self.check_thm_uid_(th1);
-        self.check_thm_uid_(th2);
+    pub fn thm_cut(&mut self, th1: Thm, th2: Thm) -> Result<Thm> {
+        self.check_thm_uid_(&th1);
+        self.check_thm_uid_(&th2);
         let th1_c = &th1.0.concl;
         if !th2.0.hyps.contains(th1_c) {
             return Err(Error::new(
                 "cut: th2's hyps do not contain th1's conclusion",
             ));
         }
-        let concl = th2.0.concl.clone();
-        let mut hyps = th2.0.hyps.clone();
-        hyps.retain(|u| u != th1_c);
-        hyps.extend_from_slice(&th1.0.hyps[..]);
-        Ok(Thm::make_(concl, self.uid, hyps))
+        let th2_c = th2.0.concl.clone();
+        {
+            let thref = Ref::make_mut(&mut th1.0);
+            match Ref::get_mut(&mut th2.0) {
+                Some(thref2) => {
+                    thref
+                        .hyps
+                        .extend(thref2.hyps.into_iter().filter(|u| u != th1_c));
+                }
+                None => {
+                    thref.hyps.extend(
+                        th2.0.hyps.iter().filter(|u| u != &th1_c).cloned(),
+                    );
+                }
+            }
+            thref.concl = th2_c;
+        }
+        Ok(th1)
     }
 
     /// `mp (F1 |- a) (F2 |- a' ==> b)` is `F1, F2 |- b`
     /// where `a` and `a'` are alpha equivalent.
-    pub fn thm_mp(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
-        self.check_thm_uid_(th1);
-        self.check_thm_uid_(th2);
+    pub fn thm_mp(&mut self, th1: Thm, th2: Thm) -> Result<Thm> {
+        self.check_thm_uid_(&th1);
+        self.check_thm_uid_(&th2);
         let th2_c = &th2.0.concl;
         let (a, b) = th2_c.unfold_imply().ok_or_else(|| {
             Error::new("mp: second theorem must be an implication")
@@ -1524,15 +1557,15 @@ impl ExprManager {
                 "mp: conclusion of th1 does not match LHS of implication of th2",
             ));
         }
-        let hyps = hyps_merge(th1, th2);
+        let hyps = hyps_merge(&mut th1, &mut th2);
         Ok(Thm::make_(b.clone(), self.uid, hyps))
     }
 
     /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
     /// This is the boolean equivalent of transitivity.
-    pub fn thm_bool_eq(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
-        self.check_thm_uid_(th1);
-        self.check_thm_uid_(th2);
+    pub fn thm_bool_eq(&mut self, th1: Thm, th2: Thm) -> Result<Thm> {
+        self.check_thm_uid_(&th1);
+        self.check_thm_uid_(&th2);
         let th2_c = &th2.0.concl;
         let (a, b) = th2_c
             .unfold_eq()
@@ -1549,21 +1582,38 @@ impl ExprManager {
             ));
         }
 
-        let hyps = hyps_merge(th1, th2);
+        let hyps = hyps_merge(&mut th1, &mut th2);
         Ok(Thm::make_(b.clone(), self.uid, hyps))
     }
 
     /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
     /// This is a way of building a boolean `a=b` from proofs of
     /// `a==>b` and `b==>a` (or `a|-b` and [b|-a`).
-    pub fn thm_bool_eq_intro(&mut self, th1: &Thm, th2: &Thm) -> Result<Thm> {
-        self.check_thm_uid_(th1);
-        self.check_thm_uid_(th2);
-        let mut hyps = vec![];
-        hyps.extend(th1.0.hyps.iter().filter(|x| *x != &th2.0.concl).cloned());
-        hyps.extend(th2.0.hyps.iter().filter(|x| *x != &th1.0.concl).cloned());
+    pub fn thm_bool_eq_intro(&mut self, th1: Thm, th2: Thm) -> Result<Thm> {
+        self.check_thm_uid_(&th1);
+        self.check_thm_uid_(&th2);
         let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
-        Ok(Thm::make_(eq, self.uid, hyps))
+        {
+            let thref1 = Ref::make_mut(&mut th1.0);
+            thref1.hyps.retain(|x| x != &th2.0.concl);
+            match Ref::get_mut(&mut th2.0) {
+                None => {
+                    thref1.hyps.extend(
+                        th2.hyps()
+                            .iter()
+                            .filter(|x| *x != &th1.0.concl)
+                            .cloned(),
+                    );
+                }
+                Some(thref2) => {
+                    thref1.hyps.extend(
+                        thref2.hyps.into_iter().filter(|x| x != &th1.0.concl),
+                    );
+                }
+            }
+            thref1.concl = eq;
+        }
+        Ok(th1)
     }
 
     /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.

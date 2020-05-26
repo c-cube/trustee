@@ -61,7 +61,7 @@ pub fn thm_new_poly_definition(
     let thm_applied = {
         let mut thm = thm.clone();
         for v in e_vars.iter() {
-            thm = em.thm_congr_ty(&thm, &v)?;
+            thm = em.thm_congr_ty(thm, &v)?;
             // now replace `(λa:type. …) v` with its beta reduced version
             let thm_rhs = thm
                 .concl()
@@ -69,7 +69,7 @@ pub fn thm_new_poly_definition(
                 .ok_or_else(|| Error::new("rhs must be an equality"))?
                 .1;
             let thm_beta = em.thm_beta_conv(thm_rhs)?;
-            thm = em.thm_trans(&thm, &thm_beta)?;
+            thm = em.thm_trans(thm, thm_beta)?;
         }
         thm
     };
@@ -322,7 +322,7 @@ pub fn match_<'a>(e1: &'a Expr, e2: &'a Expr) -> Option<UnifySubst<'a>> {
 /// Prove symmetry of equality.
 ///
 /// Goes from `A |- t=u` to `A |- u=t`.
-pub fn thm_sym(em: &mut ExprManager, th: &Thm) -> Result<Thm> {
+pub fn thm_sym(em: &mut ExprManager, mut th: Thm) -> Result<Thm> {
     // start with `F |- t=u`.
     // now by left-congruence with `refl(=)`, `F |- ((=) t) = ((=) u)`.
     // by right-congruence with `refl(t)`, `F |- (((=) t) t) = (((=) u) t)`.
@@ -337,8 +337,8 @@ pub fn thm_sym(em: &mut ExprManager, th: &Thm) -> Result<Thm> {
         let eq = em.mk_eq();
         let eq_u = em.mk_app(eq, u.ty().clone())?;
         let th_r = em.thm_refl(eq_u);
-        let th_c_r = em.thm_congr(&th_r, th)?;
-        em.thm_congr(&th_c_r, &refl_t)?
+        let th_c_r = em.thm_congr(th_r, th)?;
+        em.thm_congr(th_c_r, refl_t.clone())?
     };
-    em.thm_bool_eq(&refl_t, &th_tequ_eq_ueqt)
+    em.thm_bool_eq(refl_t, th_tequ_eq_ueqt)
 }

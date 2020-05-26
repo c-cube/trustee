@@ -11,7 +11,7 @@ struct Name {
 }
 
 #[derive(Clone)]
-struct Obj(Rc<ObjImpl>);
+struct Obj(ObjImpl);
 
 /// An object for the VM
 #[derive(Debug, Clone)]
@@ -57,55 +57,55 @@ trait OConst: fmt::Debug {
 impl std::ops::Deref for Obj {
     type Target = ObjImpl;
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &self.0
     }
 }
 
 impl Obj {
     fn new(o: ObjImpl) -> Self {
-        Self(Rc::new(o))
+        Self(o)
     }
 
-    fn get(&self) -> &O {
-        &*self.0
+    fn get(self) -> O {
+        self.0
     }
 
-    fn as_list(&self) -> Result<&Vec<Obj>> {
+    fn as_list(self) -> Result<Vec<Obj>> {
         match self.get() {
             O::List(l) => Ok(l),
             _ => Err(Error::new("expected list")),
         }
     }
 
-    fn as_var(&self) -> Result<&Var> {
+    fn as_var(self) -> Result<Var> {
         match self.get() {
             O::Var(v) => Ok(v),
             _ => Err(Error::new("expected var")),
         }
     }
 
-    fn as_term(&self) -> Result<&Expr> {
+    fn as_term(self) -> Result<Expr> {
         match self.get() {
             O::Term(t) => Ok(t),
             _ => Err(Error::new("expected expr")),
         }
     }
 
-    fn as_name(&self) -> Result<&Name> {
+    fn as_name(self) -> Result<Name> {
         match self.get() {
             O::Name(n) => Ok(n),
             _ => Err(Error::new("expected name")),
         }
     }
 
-    fn as_type(&self) -> Result<&Expr> {
+    fn as_type(self) -> Result<Expr> {
         match self.get() {
             O::Type(t) => Ok(t),
             _ => Err(Error::new("expected type")),
         }
     }
 
-    fn as_thm(&self) -> Result<&Thm> {
+    fn as_thm(self) -> Result<Thm> {
         match self.get() {
             O::Thm(th) => Ok(th),
             _ => Err(Error::new("expected theorem")),
@@ -348,7 +348,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     }
 
     fn push_obj(&mut self, o: ObjImpl) {
-        self.push(Obj(Rc::new(o)))
+        self.push(Obj(o))
     }
 
     fn pop1<F, A>(&mut self, what: &str, f: F) -> Result<A>
@@ -413,7 +413,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("abs_thm", |vm, x, y| {
             let th = x.as_thm()?;
             let v = y.as_var()?;
-            let th = vm.em.thm_abs(v, th)?;
+            let th = vm.em.thm_abs(&v, th)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -451,7 +451,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     fn assume(&mut self) -> Result<()> {
         self.pop1("assume", |vm, x| {
             let t = x.as_term()?;
-            let th = vm.em.thm_assume(&t);
+            let th = vm.em.thm_assume(t);
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -559,7 +559,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 Rc::new(TyOpArrow)
             } else {
                 // lookup in definitions
-                if let Some(d) = vm.ty_defs.get(n) {
+                if let Some(d) = vm.ty_defs.get(&n) {
                     d.clone()
                 } else {
                     return Err(Error::new_string(format!(
@@ -597,14 +597,13 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     }
 
     fn cons(&mut self) -> Result<()> {
-        let a =
-            self.pop2("cons", |_vm, mut a, b| match Rc::make_mut(&mut a.0) {
-                O::List(ref mut v) => {
-                    v.insert(0, b);
-                    Ok(a)
-                }
-                _ => Err(Error::new("expected a list as second arg")),
-            })?;
+        let a = self.pop2("cons", |_vm, mut a, b| match a.0 {
+            O::List(ref mut v) => {
+                v.insert(0, b);
+                Ok(a)
+            }
+            _ => Err(Error::new("expected a list as second arg")),
+        })?;
         self.push(a);
         Ok(())
     }
@@ -844,7 +843,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
             // define each constant
             let c_l = renaming.into_iter().map(|(n, v)| {
-                let rhs = subst.iter().find(|(ref v2,_)| v==v2).ok_or_else(||
+                let rhs = subst.iter().find(|(ref v2,_)| &v==v2).ok_or_else(||
                     Error::new_string(format!("define_const_list: no binding for variable {:?}", &v)))?.1.clone();
                 let def = utils::thm_new_poly_definition(vm.em, &n.to_string(), rhs)?;
                 // now build the constant building closure
@@ -867,13 +866,13 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             thm = {
                 let subst: Vec<_> = c_l.iter()
                     .map(|ldef| (ldef.v.clone(),ldef.c_applied.clone())).collect();
-                vm.em.thm_instantiate(&thm, &subst)?
+                vm.em.thm_instantiate(thm, &subst)?
             };
 
             // resolve instantiated theorem with each constant definition thm
             // to remove the hypotheses
             for ldef in &c_l {
-                thm = vm.em.thm_cut(&ldef.thm_applied, &thm)?;
+                thm = vm.em.thm_cut(ldef.thm_applied.clone(), thm)?;
             }
 
             // push list of constants
@@ -928,7 +927,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
         let reorder = names
             .iter()
-            .map(|n| {
+            .map(|ref n| {
                 def.fvars
                     .iter()
                     .enumerate()
@@ -1015,16 +1014,16 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
         // push abs thm
         {
-            let abs_thm = &def.abs_thm;
-            let th = self.em.thm_abs(&def.abs_x, &abs_thm)?;
+            let abs_thm = def.abs_thm.clone();
+            let th = self.em.thm_abs(&def.abs_x, abs_thm)?;
             self.push_obj(O::Thm(th));
         }
 
         // push repr thm
         {
-            let repr_thm = &def.repr_thm;
+            let repr_thm = def.repr_thm.clone();
             let repr_thm2 = utils::thm_sym(&mut self.em, repr_thm)?;
-            let th = self.em.thm_abs(&def.repr_x, &repr_thm2)?;
+            let th = self.em.thm_abs(&def.repr_x, repr_thm2)?;
             self.push_obj(O::Thm(th));
         }
 
@@ -1125,7 +1124,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 subst.push(pair);
                 Ok(())
             })?;
-            let th2 = vm.em.thm_instantiate(&th1, &subst[..])?;
+            let th2 = vm.em.thm_instantiate(th1, &subst[..])?;
             vm.cb.debug(|| {
                 format!(
                     "instantiated\n  {:#?}\n  into {:#?}\n  with subst {:#?}",
@@ -1164,7 +1163,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     fn sym(&mut self) -> Result<()> {
         self.pop1("sym", |vm, x| {
             let th1 = x.as_thm()?.clone();
-            let th = utils::thm_sym(&mut vm.em, &th1)?;
+            let th = utils::thm_sym(&mut vm.em, th1)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
