@@ -25,17 +25,15 @@ end
 module Ctx = struct
   type t = ctx
   external create : unit -> t = "trustee_new_ctx"
-    (* FIXME
   external parse_ot_str : t -> string -> expr list * thm list * thm list = "trustee_ot_parse"
   let parse_ot_file vm f =
     let ic = open_in f in
     let n = in_channel_length ic in
     let content = really_input_string ic n in
     parse_ot_str vm content
-       *)
 end
 
-(* TODO
+(*
 module OpenTheory = struct
   type vm
   external create : ctx -> vm = "trustee_ot_create"
