@@ -1,6 +1,7 @@
 mod fnv;
 pub mod kernel_of_trust;
 pub mod open_theory;
+pub mod resp3;
 pub mod utils;
 
 pub use kernel_of_trust::ExprView::*;
