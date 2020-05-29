@@ -213,30 +213,156 @@ pub enum MsgReadEvent<'a> {
     StreamedStringEnd,
 }
 
-/// Parser for messages.
-///
-/// This reader yields a stream of `MsgReadEvent` that, together, compose
-/// a whole message.
-pub struct MsgReader<'a> {
-    r: &'a mut dyn io::BufRead,
-    /// Buffer used to read lines.
-    buf: String,
-    /// how many more events must be read
-    missing: usize,
-}
+pub mod read {
+    use super::*;
+    use std::io::*;
 
-impl<'a> MsgReader<'a> {
-    /// New reader.
-    pub fn new(r: &'a mut dyn io::BufRead) -> Self {
-        Self { r, missing: 1, buf: String::new() }
+    /// Parser for messages.
+    ///
+    /// This reader yields a stream of `MsgReadEvent` that, together, compose
+    /// a whole message.
+    pub struct MsgReader<'a> {
+        r: &'a mut dyn BufRead,
+        /// Buffer used to read lines.
+        buf: Vec<u8>,
+        /// how many more events must be read
+        missing: usize,
     }
 
-    /// Fetch the next event.
-    pub fn next_event(&mut self) -> io::Result<MsgReadEvent> {
+    macro_rules! invdata {
+        ($s: expr) => {
+            Error::new(ErrorKind::InvalidData, $s)
+        };
+    }
+
+    /// read the next line
+    fn next_line_<'a>(
+        r: &mut dyn BufRead,
+        buf: &'a mut Vec<u8>,
+    ) -> Result<&'a [u8]> {
+        let size = r.read_until(b'\n', buf)?;
+        if size < 2 {
+            return Err(invdata!("when reading a new line in resp3"));
+        }
+        if buf[size - 1] != b'\n' || buf[size - 2] != b'\r' {
+            return Err(invdata!(format!("line must end with \\r\\n")));
+        }
+        Ok(&buf[..])
+    }
+
+    fn parse_blob_<'a>(
+        r: &mut dyn BufRead,
+        buf: &'a mut Vec<u8>,
+        len: usize,
+    ) -> Result<&'a [u8]> {
+        if len > 500 * 1024 * 1024 {
+            panic!("blob of size {} is too big", len);
+        }
+        buf.clear();
+        buf.reserve_exact(len);
+        loop {
+            let missing = len - buf.len();
+            if missing == 0 {
+                return Ok(&buf[..]);
+            }
+
+            let mut slice = r.fill_buf()?;
+            if slice.len() == 0 {
+                return Err(invdata!("not enough data for the blob"));
+            } else if slice.len() > missing {
+                // trim
+                slice = &slice[0..missing];
+            }
+
+            buf.extend_from_slice(&slice);
+        }
+    }
+
+    fn parse_event_<'a>(
+        r: &mut dyn BufRead,
+        buf: &'a mut Vec<u8>,
+    ) -> Result<MsgReadEvent<'a>> {
         use MsgReadEvent as E;
-        let _ = self.r.read_line(&mut self.buf)?;
-        todo!() // TODO
-                //Ok(E::Null)
+
+        fn parse_int(s: &[u8]) -> io::Result<i64> {
+            // parse integer
+            let s = std::str::from_utf8(s)
+                .map_err(|_| invdata!("expected integer"))?;
+            let i =
+                s.parse::<i64>().map_err(|_| invdata!("expected integer"))?;
+            Ok(i)
+        }
+
+        buf.clear();
+        let bs = next_line_(r, buf)?;
+        match bs[0] {
+            b'_' if bs.len() == 1 => Ok(E::Null),
+            b'#' => match bs[1] {
+                b't' if bs.len() == 2 => Ok(E::Bool(true)),
+                b'f' if bs.len() == 2 => Ok(E::Bool(false)),
+                _ => return Err(invdata!("bool must be #t or #f")),
+            },
+            b':' => {
+                // parse integer
+                let i = parse_int(&bs[1..])?;
+                Ok(E::Int(i))
+            }
+            b'+' => {
+                // simple string
+                let s =
+                    std::str::from_utf8(&bs[1..]).ok().ok_or_else(|| {
+                        invdata!("`+` must be followed by a unicode string")
+                    })?;
+                Ok(E::Str(s))
+            }
+            b'-' => {
+                // simple error
+                let s =
+                    std::str::from_utf8(&bs[1..]).ok().ok_or_else(|| {
+                        invdata!("`-` must be followed by a unicode string")
+                    })?;
+                Ok(E::Error(s))
+            }
+            b'$' => {
+                // blob string
+                let len = parse_int(&bs[1..])?;
+                drop(bs);
+                // FIXME
+                let blob = parse_blob_(r, buf, len as usize)?;
+                Ok(E::Blob(blob))
+            }
+            // TODO: blob error
+            // TODO: array
+            // TODO: map
+            // TODO: set
+            // TODO: verbatim string
+            // TODO: push
+
+            // TODO: double
+            // TODO: annotation
+            // TODO: streamed string
+            c => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unknown message prefix {:?}", c),
+                ));
+            }
+        }
+    }
+
+    impl<'a> MsgReader<'a> {
+        /// New reader.
+        pub fn new(r: &'a mut dyn BufRead) -> Self {
+            Self { r, missing: 1, buf: vec![] }
+        }
+
+        /// Fetch the next event.
+        pub fn next_event(&mut self) -> Result<MsgReadEvent> {
+            assert!(self.missing > 0);
+            self.missing -= 1;
+
+            parse_event_(&mut self.r, &mut self.buf)
+        }
     }
 }
 
