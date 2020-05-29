@@ -201,13 +201,10 @@ pub enum MsgReadEvent<'a> {
     VerbatimStr(&'a str),
     Error(&'a str),
     ArrayStart(Option<usize>),
-    ArrayEnd,
     MapStart(Option<usize>),
-    MapEnd,
     SetStart(Option<usize>),
-    SetEnd,
+    End,
     PushStart(usize),
-    PushEnd(usize),
     StreamedStringStart,
     StreamedStringChunk(&'a [u8]),
     StreamedStringEnd,
@@ -225,8 +222,6 @@ pub mod read {
         r: &'a mut dyn BufRead,
         /// Buffer used to read lines.
         buf: Vec<u8>,
-        /// how many more events must be read
-        missing: usize,
     }
 
     macro_rules! invdata {
@@ -236,10 +231,7 @@ pub mod read {
     }
 
     /// read the next line
-    fn next_line_<'a>(
-        r: &mut dyn BufRead,
-        buf: &'a mut Vec<u8>,
-    ) -> Result<&'a [u8]> {
+    fn next_line_(r: &mut dyn BufRead, buf: &mut Vec<u8>) -> Result<()> {
         let size = r.read_until(b'\n', buf)?;
         if size < 2 {
             return Err(invdata!("when reading a new line in resp3"));
@@ -247,14 +239,14 @@ pub mod read {
         if buf[size - 1] != b'\n' || buf[size - 2] != b'\r' {
             return Err(invdata!(format!("line must end with \\r\\n")));
         }
-        Ok(&buf[..])
+        Ok(())
     }
 
-    fn parse_blob_<'a>(
+    fn parse_blob_(
         r: &mut dyn BufRead,
-        buf: &'a mut Vec<u8>,
+        buf: &mut Vec<u8>,
         len: usize,
-    ) -> Result<&'a [u8]> {
+    ) -> Result<()> {
         if len > 500 * 1024 * 1024 {
             panic!("blob of size {} is too big", len);
         }
@@ -263,7 +255,7 @@ pub mod read {
         loop {
             let missing = len - buf.len();
             if missing == 0 {
-                return Ok(&buf[..]);
+                return Ok(());
             }
 
             let mut slice = r.fill_buf()?;
@@ -282,8 +274,6 @@ pub mod read {
         r: &mut dyn BufRead,
         buf: &'a mut Vec<u8>,
     ) -> Result<MsgReadEvent<'a>> {
-        use MsgReadEvent as E;
-
         fn parse_int(s: &[u8]) -> io::Result<i64> {
             // parse integer
             let s = std::str::from_utf8(s)
@@ -294,53 +284,101 @@ pub mod read {
         }
 
         buf.clear();
-        let bs = next_line_(r, buf)?;
-        match bs[0] {
-            b'_' if bs.len() == 1 => Ok(E::Null),
-            b'#' => match bs[1] {
-                b't' if bs.len() == 2 => Ok(E::Bool(true)),
-                b'f' if bs.len() == 2 => Ok(E::Bool(false)),
+        next_line_(r, buf)?;
+        let c = buf[0];
+        match c {
+            b'_' if buf.len() == 1 => Ok(MsgReadEvent::Null),
+            b'#' => match buf[1] {
+                b't' if buf.len() == 2 => Ok(MsgReadEvent::Bool(true)),
+                b'f' if buf.len() == 2 => Ok(MsgReadEvent::Bool(false)),
                 _ => return Err(invdata!("bool must be #t or #f")),
             },
             b':' => {
                 // parse integer
-                let i = parse_int(&bs[1..])?;
-                Ok(E::Int(i))
+                let i = parse_int(&buf[1..])?;
+                Ok(MsgReadEvent::Int(i))
             }
             b'+' => {
                 // simple string
                 let s =
-                    std::str::from_utf8(&bs[1..]).ok().ok_or_else(|| {
+                    std::str::from_utf8(&buf[1..]).ok().ok_or_else(|| {
                         invdata!("`+` must be followed by a unicode string")
                     })?;
-                Ok(E::Str(s))
+                Ok(MsgReadEvent::Str(s))
             }
             b'-' => {
                 // simple error
                 let s =
-                    std::str::from_utf8(&bs[1..]).ok().ok_or_else(|| {
+                    std::str::from_utf8(&buf[1..]).ok().ok_or_else(|| {
                         invdata!("`-` must be followed by a unicode string")
                     })?;
-                Ok(E::Error(s))
+                Ok(MsgReadEvent::Error(s))
             }
-            b'$' => {
-                // blob string
-                let len = parse_int(&bs[1..])?;
-                drop(bs);
-                // FIXME
-                let blob = parse_blob_(r, buf, len as usize)?;
-                Ok(E::Blob(blob))
+            b'$' if buf.len() == 2 && buf[1] == b'?' => {
+                Ok(MsgReadEvent::StreamedStringStart)
+            }
+            b';' if buf.len() == 2 && buf[1] == b'0' => {
+                Ok(MsgReadEvent::StreamedStringEnd)
+            }
+            b'$' | b';' | b'!' => {
+                // some form of blob string
+                let len = parse_int(&buf[1..])?;
+                parse_blob_(r, buf, len as usize)?;
+                let blob = &buf[..];
+                let ev = if c == b'$' {
+                    MsgReadEvent::Blob(blob)
+                } else if c == b'!' {
+                    let err =
+                        std::str::from_utf8(blob).ok().ok_or_else(|| {
+                            invdata!("`!` must be followed by a unicode string")
+                        })?;
+                    MsgReadEvent::Error(err)
+                } else {
+                    MsgReadEvent::StreamedStringChunk(blob)
+                };
+                Ok(ev)
+            }
+            b'*' if buf.len() == 2 && buf[1] == b'?' => {
+                Ok(MsgReadEvent::ArrayStart(None))
+            }
+            b'*' => {
+                // array
+                let len = parse_int(&buf[1..])?;
+                Ok(MsgReadEvent::ArrayStart(Some(len as usize)))
+            }
+            b'>' => {
+                // push
+                let len = parse_int(&buf[1..])?;
+                Ok(MsgReadEvent::PushStart(len as usize))
+            }
+            b'%' if buf.len() == 2 && buf[1] == b'?' => {
+                Ok(MsgReadEvent::MapStart(None))
+            }
+            b'%' => {
+                // map
+                let len = parse_int(&buf[1..])?;
+                Ok(MsgReadEvent::MapStart(Some(len as usize)))
+            }
+            b'~' if buf.len() == 2 && buf[1] == b'?' => {
+                Ok(MsgReadEvent::SetStart(None))
+            }
+            b'~' => {
+                // set
+                let len = parse_int(&buf[1..])?;
+                Ok(MsgReadEvent::SetStart(Some(len as usize)))
+            }
+            b'.' => {
+                if buf.len() != 1 {
+                    return Err(invdata!("`.` should be alone on its line"));
+                }
+                Ok(MsgReadEvent::End)
             }
             // TODO: blob error
-            // TODO: array
-            // TODO: map
-            // TODO: set
             // TODO: verbatim string
             // TODO: push
 
             // TODO: double
             // TODO: annotation
-            // TODO: streamed string
             c => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -353,14 +391,12 @@ pub mod read {
     impl<'a> MsgReader<'a> {
         /// New reader.
         pub fn new(r: &'a mut dyn BufRead) -> Self {
-            Self { r, missing: 1, buf: vec![] }
+            Self { r, buf: vec![] }
         }
 
         /// Fetch the next event.
+        #[inline]
         pub fn next_event(&mut self) -> Result<MsgReadEvent> {
-            assert!(self.missing > 0);
-            self.missing -= 1;
-
             parse_event_(&mut self.r, &mut self.buf)
         }
     }
@@ -386,10 +422,91 @@ pub enum SimpleMsg {
     Attribute { attrs: Vec<(SimpleMsg, SimpleMsg)>, sub: Box<SimpleMsg> },
 }
 
+mod simple_msg {
+    use super::*;
+
+    // stack element
+    #[derive(Debug)]
+    enum StElem {
+        Start,
+        Ret(SimpleMsg),
+        Arr { missing: usize, v: Vec<SimpleMsg> },
+        Set { missing: usize, v: Vec<SimpleMsg> },
+        Map { missing: usize, v: Vec<(SimpleMsg, SimpleMsg)> },
+        StreamedStr(Vec<u8>),
+        Push { missing: usize, v: Vec<SimpleMsg> },
+    }
+    use StElem::*;
+
+    pub struct State<'a> {
+        r: read::MsgReader<'a>,
+        st: Vec<StElem>,
+    }
+
+    impl<'a> State<'a> {
+        pub fn new(r: &'a mut dyn io::BufRead) -> Self {
+            let r = read::MsgReader::new(r);
+            Self { st: vec![], r }
+        }
+
+        fn push_msg(&mut self, m: SimpleMsg) {
+            let mut m = m;
+            loop {
+                let top = self.st.pop().unwrap();
+                match top {
+                    Ret(..) => panic!(), // TODO
+                    Start => {
+                        assert_eq!(self.st.len(), 1);
+                        self.st.push(Ret(m));
+                        return;
+                    }
+                    Arr { mut missing, mut v } => {
+                        assert!(missing >= 1);
+                        v.push(m);
+                        missing -= 1;
+                        if missing == 0 {
+                            m = SimpleMsg::Array(v)
+                        } else {
+                            self.st.push(Arr { missing, v });
+                            return;
+                        }
+                    }
+                    // TODO
+                    Map { .. } => todo!(),
+                    Set { .. } => todo!(),
+                    Push { .. } => todo!(),
+                    StreamedStr(..) => todo!(),
+                }
+            }
+        }
+
+        pub fn parse(&mut self) -> io::Result<SimpleMsg> {
+            loop {
+                if self.st.is_empty() {
+                    panic!("bug in parse_str: empty stack")
+                }
+                let top = self.st.pop().unwrap();
+                // TODO: read token, push appropriate StElem or msg
+                match top {
+                    Ret(x) => return Ok(x),
+                    Start => todo!(),
+                    StreamedStr(..) => todo!(),
+                    Arr { .. } => todo!(),
+                    Set { .. } => todo!(),
+                    Map { .. } => todo!(),
+                    Push { .. } => todo!(),
+                }
+            }
+        }
+    }
+}
+
 impl SimpleMsg {
     /// Simple function to parse the given string.
-    pub fn parse_str(s: &[u8]) -> Result<Self, &'static str> {
-        todo!() // TODO: visitor + reader
+    pub fn parse_str(s: &[u8]) -> io::Result<Self> {
+        let mut r = s;
+        let mut state = simple_msg::State::new(&mut r);
+        state.parse()
     }
 }
 
