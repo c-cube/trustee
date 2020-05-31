@@ -8,6 +8,8 @@ fn test_simple1() {
     let b = m.ser_to_bytes().unwrap();
 
     assert_eq!("*2\r\n:42\r\n#t\r\n", std::str::from_utf8(&b).unwrap());
+
+    assert_eq!(&m, &SimpleMsg::parse_bytes(&b).unwrap());
 }
 
 #[test]
@@ -26,6 +28,14 @@ fn test_simple2() {
         "*3\r\n%2\r\n+a\r\n:1\r\n+b\r\n:2\r\n#f\r\n*3\r\n:4\r\n:5\r\n:6\r\n",
         std::str::from_utf8(&b).unwrap()
     );
+
+    assert_eq!(&m, &M::parse_bytes(&b).unwrap());
 }
 
-// TODO
+#[test]
+fn test_failures() {
+    let v = vec!["*3\r\n123", ":1234a\r\n"];
+    for &x in &v {
+        assert!(resp3::SimpleMsg::parse_bytes(x.as_bytes()).is_err());
+    }
+}
