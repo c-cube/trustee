@@ -231,6 +231,7 @@ fn read_next_line_<'a, 'b>(
     if buf[size - 1] != b'\n' || buf[size - 2] != b'\r' {
         return Err(invdata!(format!("line must end with \\r\\n")));
     }
+    buf.truncate(size - 2); // trim
     Ok(true)
 }
 
@@ -262,14 +263,14 @@ fn parse_blob_<'a, 'b>(
     }
 }
 
-pub fn parse_event_<'a, 'b>(
+fn parse_event_<'a, 'b>(
     r: &'a mut dyn io::BufRead,
     buf: &'b mut Vec<u8>,
 ) -> io::Result<Option<MsgReadEvent<'b>>> {
     fn parse_int(s: &[u8]) -> io::Result<i64> {
         // parse integer
-        let s =
-            std::str::from_utf8(s).map_err(|_| invdata!("expected integer"))?;
+        let s = std::str::from_utf8(s)
+            .map_err(|_| invdata!("expected utf8 integer"))?;
         let i = s.parse::<i64>().map_err(|_| invdata!("expected integer"))?;
         Ok(i)
     }
