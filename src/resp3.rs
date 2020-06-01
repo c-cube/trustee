@@ -244,10 +244,14 @@ fn parse_blob_<'a, 'b>(
         panic!("blob of size {} is too big", len);
     }
     buf.clear();
-    buf.reserve_exact(len);
+    buf.reserve_exact(len + 2); // keep space for \r\n
     loop {
-        let missing = len - buf.len();
+        let missing = len + 2 - buf.len();
         if missing == 0 {
+            if buf[len] != b'\r' || buf[len + 1] != b'\n' {
+                return Err(invdata!("blob does not end with '\\r\\n'"));
+            }
+            buf.truncate(len);
             return Ok(());
         }
 
@@ -260,6 +264,8 @@ fn parse_blob_<'a, 'b>(
         }
 
         buf.extend_from_slice(&slice);
+        let n_used = slice.len();
+        r.consume(n_used);
     }
 }
 
@@ -379,7 +385,7 @@ fn parse_event_<'a, 'b>(
         c => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("unknown message prefix {:?}", c),
+                format!("unknown message prefix '{:?}'", c),
             ));
         }
     }

@@ -1,9 +1,8 @@
+use resp3::SimpleMsg;
 use trustee::resp3;
 
 #[test]
 fn test_simple1() {
-    use resp3::SimpleMsg;
-
     let m = SimpleMsg::Array(vec![SimpleMsg::Int(42), SimpleMsg::Bool(true)]);
     let b = m.ser_to_bytes().unwrap();
 
@@ -14,7 +13,7 @@ fn test_simple1() {
 
 #[test]
 fn test_simple2() {
-    use resp3::SimpleMsg as M;
+    use SimpleMsg as M;
     let m = M::Array(vec![
         M::Map(vec![
             (M::Str("a".to_string()), M::Int(1)),
@@ -30,6 +29,20 @@ fn test_simple2() {
     );
 
     assert_eq!(&m, &M::parse_bytes(&b).unwrap());
+}
+
+#[test]
+fn test_read_dollar() {
+    let b = "*2\r\n$12\r\nhello world!\r\n:1\r\n".as_bytes();
+    assert_eq!(
+        SimpleMsg::Array(vec![
+            SimpleMsg::Blob(
+                "hello world!".as_bytes().iter().copied().collect()
+            ),
+            SimpleMsg::Int(1)
+        ]),
+        SimpleMsg::parse_bytes(b).unwrap()
+    );
 }
 
 #[test]
