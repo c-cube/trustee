@@ -330,7 +330,10 @@ fn parse_event_<'a, 'b>(
             parse_blob_(r, buf, len as usize)?;
             let blob = &buf[..];
             let ev = if c == b'$' {
-                MsgReadEvent::Blob(blob)
+                match std::str::from_utf8(blob) {
+                    Ok(s) => MsgReadEvent::Str(s),
+                    Err(_) => MsgReadEvent::Blob(blob),
+                }
             } else if c == b'!' {
                 let err = std::str::from_utf8(blob).ok().ok_or_else(|| {
                     invdata!("`!` must be followed by a unicode string")

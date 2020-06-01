@@ -36,9 +36,7 @@ fn test_read_dollar() {
     let b = "*2\r\n$12\r\nhello world!\r\n:1\r\n".as_bytes();
     assert_eq!(
         SimpleMsg::Array(vec![
-            SimpleMsg::Blob(
-                "hello world!".as_bytes().iter().copied().collect()
-            ),
+            SimpleMsg::Str("hello world!".to_string()),
             SimpleMsg::Int(1)
         ]),
         SimpleMsg::parse_bytes(b).unwrap()
