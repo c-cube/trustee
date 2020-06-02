@@ -939,7 +939,7 @@ impl ExprManager {
 
     /// Make `a = b`.
     ///
-    /// Panics if `a` and `b` do not have the same type.
+    /// Fails if `a` and `b` do not have the same type.
     pub fn mk_eq_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
         self.check_uid_(&a);
         self.check_uid_(&b);
@@ -1212,7 +1212,7 @@ impl ExprManager {
 
     /// The "type" of `type`. This is the only typeless expression.
     ///
-    /// Trying to compute this expression's type panics.
+    /// Trying to compute this expression's type will panic.
     pub fn mk_kind(&self) -> Expr {
         self.builtins_().kind.clone()
     }
@@ -1377,7 +1377,7 @@ impl ExprManager {
 
     /// Declare a new constant with given name and type.
     ///
-    /// panics if some constant with the same name exists, or if
+    /// Fails if some constant with the same name exists, or if
     /// the type is not closed.
     /// This constant has no axiom associated to it, it is entirely opaque.
     pub fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
@@ -1451,7 +1451,7 @@ impl ExprManager {
         Ok(Thm::make_(eq, self.uid, hyps))
     }
 
-    /// `congr (F1 |- f=g) ty` is `F1 |- f ty=g ty`
+    /// `congr_ty (F1 |- f=g) ty` is `F1 |- f ty=g ty`
     pub fn thm_congr_ty(&mut self, mut th: Thm, ty: &Expr) -> Result<Thm> {
         self.check_thm_uid_(&th);
         self.check_uid_(ty);
@@ -1498,7 +1498,7 @@ impl ExprManager {
 
     /// `abs x (F |- t=u)` is `F |- (λx.t)=(λx.u)`
     ///
-    /// Panics if `x` occurs freely in `F`.
+    /// Fails if `x` occurs freely in `F`.
     pub fn thm_abs(&mut self, v: &Var, mut thm: Thm) -> Result<Thm> {
         self.check_uid_(&v.ty);
         self.check_thm_uid_(&thm);

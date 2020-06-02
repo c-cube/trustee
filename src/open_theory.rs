@@ -148,7 +148,7 @@ impl Name {
         self.ptr.0.len()
     }
 
-    /// Parse a string nto a name.
+    /// Parse a string into a name.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         if s.as_bytes()[0] != b'"' || s.as_bytes()[s.len() - 1] != b'"' {
@@ -1294,6 +1294,14 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         }
 
         Ok(())
+    }
+
+    /// Parse the given file.
+    pub fn parse_file(&mut self, file: &str) -> Result<()> {
+        let file = std::fs::File::open(file)
+            .map_err(|e| Error::new_string(format!("error {:?}", e)))?;
+        let mut buf = std::io::BufReader::new(file);
+        self.parse_str(&mut buf)
     }
 }
 
