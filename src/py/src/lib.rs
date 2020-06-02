@@ -92,6 +92,18 @@ py_class!(class Thm |py| {
         let th = self.thm(py);
         Ok(th.to_string())
     }
+
+    def concl(&self) -> PyResult<Expr> {
+        let e = self.thm(py).concl();
+        Expr::create_instance(py, e.clone(), self.em(py).clone())
+    }
+
+    def hyps(&self) -> PyResult<Vec<Expr>> {
+        let e = self.thm(py).hyps().iter().map(|e| {
+            Expr::create_instance(py, e.clone(), self.em(py).clone())
+        }).collect::<PyResult<Vec<_>>>()?;
+        Ok(e)
+    }
 });
 
 py_class!(class NewTypeDef |py| {
