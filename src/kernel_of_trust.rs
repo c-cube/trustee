@@ -64,6 +64,10 @@ impl Error {
         self.source = Some(Box::new(src));
         self
     }
+
+    pub fn to_string(&self) -> String {
+        format!("{}", self)
+    }
 }
 
 /// Result type.
