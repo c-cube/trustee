@@ -94,6 +94,50 @@ py_class!(class Thm |py| {
     }
 });
 
+py_class!(class NewTypeDef |py| {
+    data td: k::NewTypeDef;
+    data em: Arc<Mutex<k::ExprManager>>;
+
+    def __repr__(&self) -> PyResult<String> {
+        Ok(format!("{:?}", self.td(py)))
+    }
+
+    /// The new type constructor
+    def tau(&self) -> PyResult<Expr> {
+        let td = self.td(py);
+        let em = self.em(py);
+        Expr::create_instance(py, td.tau.clone(), em.clone())
+    }
+
+    /// Function from the general type to `tau`
+    def c_abs(&self) -> PyResult<Expr> {
+        let td = self.td(py);
+        let em = self.em(py);
+        Expr::create_instance(py, td.c_abs.clone(), em.clone())
+    }
+
+    /// Function from `tau` back to the general type
+    def c_repr(&self) -> PyResult<Expr> {
+        let td = self.td(py);
+        let em = self.em(py);
+        Expr::create_instance(py, td.c_repr.clone(), em.clone())
+    }
+
+    /// `abs_thm` is `|- abs (repr x) = x`
+    def abs_thm(&self) -> PyResult<Thm> {
+        let td = self.td(py);
+        let em = self.em(py);
+        Thm::create_instance(py, td.abs_thm.clone(), em.clone())
+    }
+
+    /// `repr_thm` is `|- Phi x <=> repr (abs x) = x`
+    def repr_thm(&self) -> PyResult<Thm> {
+        let td = self.td(py);
+        let em = self.em(py);
+        Thm::create_instance(py, td.abs_thm.clone(), em.clone())
+    }
+});
+
 py_class!(class ExprManager |py| {
     data em: Arc<Mutex<k::ExprManager>>;
 
@@ -113,23 +157,27 @@ py_class!(class ExprManager |py| {
         Expr::create_instance(py, v, self.em(py).clone())
     }
 
-    def lambda(&self, name: &str, ty: Expr, body: Expr) -> PyResult<Expr> {
+    def lam(&self, v: Expr, body: Expr) -> PyResult<Expr> {
         let mut em = self.em(py).lock().unwrap();
-        let v = em.mk_lambda(k::Var::from_str(name, ty.expr(py).clone()),
+        let v = v.expr(py).as_var()
+            .ok_or_else(|| mk_err(py, "in lam, expected variable".to_string()))?;
+        let e = em.mk_lambda(v.clone(),
             body.expr(py).clone()).map_err(|e| mk_err(py, e.to_string()))?;
-        Expr::create_instance(py, v, self.em(py).clone())
+        Expr::create_instance(py, e, self.em(py).clone())
     }
 
-    def pi(&self, name: &str, ty: Expr, body: Expr) -> PyResult<Expr> {
+    def pi(&self, v: Expr, body: Expr) -> PyResult<Expr> {
         let mut em = self.em(py).lock().unwrap();
-        let v = em.mk_pi(k::Var::from_str(name, ty.expr(py).clone()),
+        let v = v.expr(py).as_var()
+            .ok_or_else(|| mk_err(py, "in pi, expected variable".to_string()))?;
+        let v = em.mk_pi(v.clone(),
             body.expr(py).clone()).map_err(|e| mk_err(py, e.to_string()))?;
         Expr::create_instance(py, v, self.em(py).clone())
     }
 
     def bool(&self) -> PyResult<Expr> {
         let em = self.em(py).lock().unwrap();
-        let e = em.mk_ty();
+        let e = em.mk_bool();
         Expr::create_instance(py, e, self.em(py).clone())
     }
 
@@ -151,6 +199,9 @@ py_class!(class ExprManager |py| {
         Expr::create_instance(py, e, self.em(py).clone())
     }
 
+    /// `eq_app(a,b)` is `a = b`.
+    ///
+    /// Fails if `a` and `b` do not have the same type.
     def eq_app(&self, e1: Expr, e2: Expr) -> PyResult<Expr> {
         let mut em = self.em(py).lock().unwrap();
         let e = em.mk_eq_app(e1.expr(py).clone(), e2.expr(py).clone())
@@ -158,18 +209,22 @@ py_class!(class ExprManager |py| {
         Expr::create_instance(py, e, self.em(py).clone())
     }
 
+    /// `assume F` is `F |- F`
     def assume(&self, e: Expr) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let th = em.thm_assume(e.expr(py).clone());
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
+    /// `refl t` is `|- t=t`
     def refl(&self, e: Expr) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let th = em.thm_refl(e.expr(py).clone());
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
+    /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
+    /// Fails if the term is not a beta-redex.
     def beta_conv(&self, e: Expr) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let th = em.thm_beta_conv(e.expr(py))
@@ -177,6 +232,8 @@ py_class!(class ExprManager |py| {
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
+    /// `mp (F1 |- a) (F2 |- a' ==> b)` is `F1, F2 |- b`
+    /// where `a` and `a'` are alpha equivalent.
     def mp(&self, th1: Thm, th2: Thm) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let th = em.thm_mp(th1.thm(py).clone(), th2.thm(py).clone())
@@ -184,6 +241,9 @@ py_class!(class ExprManager |py| {
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
+    /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
+    ///
+    /// Can fail if the conclusions don't match properly.
     def trans(&self, th1: Thm, th2: Thm) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let th = em.thm_trans(th1.thm(py).clone(), th2.thm(py).clone())
@@ -191,6 +251,7 @@ py_class!(class ExprManager |py| {
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
+    /// `congr (F1 |- f=g) ty` is `F1 |- f ty=g ty`
     def congr(&self, th1: Thm, th2: Thm) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let th = em.thm_congr(th1.thm(py).clone(), th2.thm(py).clone())
@@ -198,6 +259,13 @@ py_class!(class ExprManager |py| {
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
+    /// `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`
+    ///
+    /// This fails if `b` does not occur _syntactically_ in the hypothesis
+    /// of the second theorem.
+    ///
+    /// NOTE: this is not strictly necessary, as it's not an axiom in HOL light,
+    /// but we include it here anyway.
     def cut(&self, th1: Thm, th2: Thm) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let th = em.thm_cut(th1.thm(py).clone(), th2.thm(py).clone())
@@ -205,6 +273,8 @@ py_class!(class ExprManager |py| {
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
+    /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
+    /// This is the boolean equivalent of transitivity.
     def bool_eq(&self, th1: Thm, th2: Thm) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let th = em.thm_bool_eq(th1.thm(py).clone(), th2.thm(py).clone())
@@ -212,6 +282,9 @@ py_class!(class ExprManager |py| {
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
+    /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
+    /// This is a way of building a boolean `a=b` from proofs of
+    /// `a==>b` and `b==>a` (or `a|-b` and [b|-a`).
     def bool_eq_intro(&self, th1: Thm, th2: Thm) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let th = em.thm_bool_eq_intro(th1.thm(py).clone(), th2.thm(py).clone())
@@ -219,6 +292,7 @@ py_class!(class ExprManager |py| {
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
+    /// `congr_ty (F1 |- f=g) ty` is `F1 |- f ty=g ty`
     def congr_ty(&self, th1: Thm, ty: Expr) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let th = em.thm_congr_ty(th1.thm(py).clone(), ty.expr(py))
@@ -226,6 +300,9 @@ py_class!(class ExprManager |py| {
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
+    /// `abs x (F |- t=u)` is `F |- (λx.t)=(λx.u)`
+    ///
+    /// Panics if `x` occurs freely in `F`.
     def abs(&self, v: Expr, th1: Thm) -> PyResult<Thm> {
         let mut em = self.em(py).lock().unwrap();
         let v = v.expr(py).as_var()
@@ -235,7 +312,87 @@ py_class!(class ExprManager |py| {
         Thm::create_instance(py, th, self.em(py).clone())
     }
 
-    // TODO new basic def
-    // TODO new type op
-    // TODO instantiate
+    /// `basic_def(x=t)` where `x` is a variable and `t` a term
+    /// with a closed type,
+    /// returns a theorem `|- x=t` where `x` is now a constant, along with
+    /// the constant `x`.
+    def basic_def(&self, e: Expr) -> PyResult<(Thm, Expr)> {
+        let mut em = self.em(py).lock().unwrap();
+        let (th, e) = em.thm_new_basic_definition(e.expr(py).clone())
+            .map_err(|e| mk_err(py, e.to_string()))?;
+        let th = Thm::create_instance(py, th, self.em(py).clone())?;
+        let e = Expr::create_instance(py, e, self.em(py).clone())?;
+        Ok((th,e))
+    }
+
+    /// Create a new axiom `assumptions |- concl`.
+    /// **use with caution**
+    def axiom(&self, hyps: Vec<Expr>, concl: Expr) -> PyResult<Thm> {
+        let mut em = self.em(py).lock().unwrap();
+        let hyps = hyps.into_iter().map(|e| e.expr(py).clone()).collect();
+        let th = em.thm_axiom(hyps, concl.expr(py).clone());
+        Thm::create_instance(py, th, self.em(py).clone())
+    }
+
+    /// Introduce a new type operator.
+    ///
+    /// Here, too, we follow HOL light:
+    /// `new_basic_type_definition(tau, abs, repr, inhabited)`
+    /// where `inhabited` is the theorem `|- Phi x` with `x : ty`,
+    /// defines a new type operator named `tau` and two functions,
+    /// `abs : ty -> tau` and `repr: tau -> ty`.
+    ///
+    /// It returns a struct `NewTypeDef` containing `tau, absthm, reprthm`, where:
+    /// - `tau` is the new (possibly parametrized) type operator
+    /// - `absthm` is `|- abs (repr x) = x`
+    /// - `reprthm` is `|- Phi x <=> repr (abs x) = x`
+    def basic_ty_def(&self, name_tau: &str, name_abs: &str, name_repr: &str,
+        thm: Thm) -> PyResult<NewTypeDef> {
+        let mut em = self.em(py).lock().unwrap();
+        let td = em.thm_new_basic_type_definition(
+            k::Symbol::from_str(name_tau),
+            k::Symbol::from_str(name_abs),
+            k::Symbol::from_str(name_repr),
+            thm.thm(py).clone())
+            .map_err(|e| mk_err(py, e.to_string()))?;
+        NewTypeDef::create_instance(py, td, self.em(py).clone())
+    }
+
+    /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
+    ///
+    /// Returns an error if the substitution is not closed.
+    def instantiate(&self, thm: Thm, subst: Vec<(Expr, Expr)>) -> PyResult<Thm> {
+        let mut em = self.em(py).lock().unwrap();
+        let subst = subst.into_iter().map(|(v,e)| {
+            let v = v.expr(py).as_var()
+                .ok_or_else(|| mk_err(py, "instantiate: need variables".to_string()))?;
+            Ok((v.clone(), e.expr(py).clone()))
+        }).collect::<PyResult<Vec<_>>>()?;
+        let th = em.thm_instantiate(thm.thm(py).clone(), &subst)
+            .map_err(|e| mk_err(py, e.to_string()))?;
+        Thm::create_instance(py, th, self.em(py).clone())
+    }
+
+    /// Parse the list of open theory files.
+    def parse_ot(&self, files: Vec<String>)
+        -> PyResult<(Vec<Expr>, Vec<Thm>, Vec<Thm>)> {
+        let mut em = self.em(py).lock().unwrap();
+        let mut ot_vm = trustee::open_theory::VM::new(&mut em);
+        for s in files {
+            ot_vm.parse_file(&s)
+                .map_err(|e| mk_err(py, e.to_string()))?;
+        }
+        let article = ot_vm.into_article();
+        let (v1,v2,v3) = article.get(&mut em);
+        let v1 = v1.into_iter().map(|e| {
+            Expr::create_instance(py, e, self.em(py).clone())
+        }).collect::<PyResult<Vec<_>>>()?;
+        let v2 = v2.into_iter().map(|e| {
+            Thm::create_instance(py, e, self.em(py).clone())
+        }).collect::<PyResult<Vec<_>>>()?;
+        let v3 = v3.into_iter().map(|e| {
+            Thm::create_instance(py, e, self.em(py).clone())
+        }).collect::<PyResult<Vec<_>>>()?;
+        Ok((v1,v2,v3))
+    }
 });
