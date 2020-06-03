@@ -72,7 +72,7 @@ py_class!(class Expr |py| {
     def __richcmp__(&self, other : Expr, op : CompareOp) -> PyResult<bool> {
         match op {
             CompareOp::Eq => Ok(self.expr(py) == other.expr(py)),
-            _ => Err(PyErr::new::<exc::NotImplementedError,_>(py, "not implemented"))
+            _ => Err(PyErr::new::<exc::NotImplementedError,_>(py, "not implemented".to_string()))
         }
     }
     */
@@ -387,7 +387,7 @@ py_class!(class ExprManager |py| {
 
     /// Parse the list of open theory files.
     def parse_ot(&self, files: Vec<String>)
-        -> PyResult<(Vec<Expr>, Vec<Thm>, Vec<Thm>)> {
+        -> PyResult<(trustee::FnvHashMap<String,Expr>, Vec<Thm>, Vec<Thm>)> {
         let mut em = self.em(py).lock().unwrap();
         let mut ot_vm = trustee::open_theory::VM::new(&mut em);
         for s in files {
@@ -395,16 +395,17 @@ py_class!(class ExprManager |py| {
                 .map_err(|e| mk_err(py, e.to_string()))?;
         }
         let article = ot_vm.into_article();
-        let (v1,v2,v3) = article.get(&mut em);
-        let v1 = v1.into_iter().map(|e| {
-            Expr::create_instance(py, e, self.em(py).clone())
-        }).collect::<PyResult<Vec<_>>>()?;
+        let (tbl1,v2,v3) = article.get(&mut em);
+        let tbl1 = tbl1.into_iter().map(|(s,e)| {
+            let e= Expr::create_instance(py, e, self.em(py).clone())?;
+            Ok((s,e))
+        }).collect::<PyResult<trustee::FnvHashMap<_,_>>>()?;
         let v2 = v2.into_iter().map(|e| {
             Thm::create_instance(py, e, self.em(py).clone())
         }).collect::<PyResult<Vec<_>>>()?;
         let v3 = v3.into_iter().map(|e| {
             Thm::create_instance(py, e, self.em(py).clone())
         }).collect::<PyResult<Vec<_>>>()?;
-        Ok((v1,v2,v3))
+        Ok((tbl1,v2,v3))
     }
 });
