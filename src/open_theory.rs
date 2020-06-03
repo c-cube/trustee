@@ -167,7 +167,10 @@ impl Name {
 #[derive(Debug, Eq, PartialEq, Hash)]
 struct ThmKey(Expr, Vec<Expr>);
 
-/// An article obtained by interpreting a theory file.
+/// An article obtained by interpreting a theory file (or several).
+///
+/// We're not exactly compliant here, as we want to be able to parse several
+/// OT files without introducing intermediate axioms.
 #[derive(Debug)]
 pub struct Article {
     defs: fnv::FnvHashMap<Name, Rc<dyn OConst>>,
@@ -177,8 +180,15 @@ pub struct Article {
 
 impl Article {
     /// Get content of the article.
-    pub fn get(&self, em: &mut ExprManager) -> (Vec<Expr>, Vec<Thm>, Vec<Thm>) {
-        let v1 = self.defs.iter().map(|(_, c)| c.expr(em)).collect();
+    pub fn get(
+        &self,
+        em: &mut ExprManager,
+    ) -> (fnv::FnvHashMap<String, Expr>, Vec<Thm>, Vec<Thm>) {
+        let v1 = self
+            .defs
+            .iter()
+            .map(|(s, c)| (s.to_string(), c.expr(em)))
+            .collect();
         let v2 = self.assumptions.clone();
         let v3 = self.theorems.clone();
         (v1, v2, v3)
