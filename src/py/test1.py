@@ -1,13 +1,13 @@
 import trustee
 
-em = trustee.ExprManager()
+ctx = trustee.Ctx()
 
-x = em.var('x', em.bool())
+x = ctx.var('x', ctx.bool())
 
-true_def, true = em.basic_def(em.eq_app(em.var('true', em.bool()),
-        em.eq_app(em.lam(x,x), em.  lam(x,x))))
+true_def, true = ctx.basic_def(ctx.eq_app(ctx.var('true', ctx.bool()),
+        ctx.eq_app(ctx.lam(x,x), ctx.  lam(x,x))))
 
-ot1 = em.parse_ot([
+ot1 = ctx.parse_ot([
   "../../ot-data/data/opentheory/bool-def-1.11/bool-def.art",
   "../../ot-data/data/opentheory/axiom-extensionality-1.9/axiom-extensionality.art",
   "../../ot-data/data/opentheory/axiom-choice-1.8/axiom-choice.art",

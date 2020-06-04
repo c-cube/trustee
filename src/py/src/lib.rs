@@ -152,9 +152,12 @@ py_class!(class NewTypeDef |py| {
 
 py_class!(class Ctx |py| {
     data ctx: Arc<Mutex<k::Ctx>>;
+    data db: Arc<Mutex<trustee::Database>>;
 
     def __new__(_cls) -> PyResult<Ctx> {
-        Ctx::create_instance(py, Arc::new(Mutex::new(k::Ctx::new())))
+        let ctx = Arc::new(Mutex::new(k::Ctx::new()));
+        let db = Arc::new(Mutex::new(trustee::Database::new()));
+        Ctx::create_instance(py, ctx, db)
     }
 
     def type_(&self) -> PyResult<Expr> {
@@ -389,21 +392,21 @@ py_class!(class Ctx |py| {
     def parse_ot(&self, files: Vec<String>)
         -> PyResult<(trustee::FnvHashMap<String,Expr>, Vec<Thm>, Vec<Thm>)> {
         let mut ctx = self.ctx(py).lock().unwrap();
-        let mut ot_vm = trustee::open_theory::VM::new(&mut *ctx);
+        let mut db = self.db(py).lock().unwrap();
+        let mut ot_vm = trustee::open_theory::VM::new(&mut *ctx, &mut *db);
         for s in files {
             ot_vm.parse_file(&s)
                 .map_err(|e| mk_err(py, e.to_string()))?;
         }
-        let article = ot_vm.into_article();
-        let (tbl1,v2,v3) = article.get(&mut *ctx);
-        let tbl1 = tbl1.into_iter().map(|(s,e)| {
+        let trustee::open_theory::Article{defs, theorems, assumptions} = ot_vm.into_article();
+        let tbl1 = defs.into_iter().map(|(s,e)| {
             let e= Expr::create_instance(py, e, self.ctx(py).clone())?;
             Ok((s,e))
         }).collect::<PyResult<trustee::FnvHashMap<_,_>>>()?;
-        let v2 = v2.into_iter().map(|e| {
+        let v2 = assumptions.into_iter().map(|e| {
             Thm::create_instance(py, e, self.ctx(py).clone())
         }).collect::<PyResult<Vec<_>>>()?;
-        let v3 = v3.into_iter().map(|e| {
+        let v3 = theorems.into_iter().map(|e| {
             Thm::create_instance(py, e, self.ctx(py).clone())
         }).collect::<PyResult<Vec<_>>>()?;
         Ok((tbl1,v2,v3))
