@@ -2,7 +2,7 @@ use trustee::*;
 
 #[test]
 fn test_hashcons1() {
-    let mut em = ExprManager::new();
+    let mut em = Ctx::new();
     let b = em.mk_bool();
     let t1 = em.mk_arrow(b.clone(), b.clone()).unwrap();
     let t2 = em.mk_arrow(b.clone(), b.clone()).unwrap();
@@ -21,7 +21,7 @@ fn test_sym() {
 
 #[test]
 fn test_kind() {
-    let em = ExprManager::new();
+    let em = Ctx::new();
     let ty = em.mk_ty();
     let k = em.mk_kind();
     assert_eq!(&k, ty.ty());
@@ -30,14 +30,14 @@ fn test_kind() {
 #[test]
 #[should_panic]
 fn test_type_of_kind() {
-    let em = ExprManager::new();
+    let em = Ctx::new();
     let k = em.mk_kind();
     let _ = k.ty();
 }
 
 #[test]
 fn test_apply() {
-    let mut em = ExprManager::new();
+    let mut em = Ctx::new();
     let b = em.mk_bool();
     let b2b = em.mk_arrow(b.clone(), b.clone()).unwrap();
     let p = em.mk_var_str("p", b2b);
@@ -52,7 +52,7 @@ fn test_apply() {
 
 #[test]
 fn test_lambda() {
-    let mut em = ExprManager::new();
+    let mut em = Ctx::new();
     let b = em.mk_bool();
     let b2b = em.mk_arrow(b.clone(), b.clone()).unwrap();
     let p = em.mk_var_str("p", b2b);
@@ -73,7 +73,7 @@ fn test_lambda() {
 
 #[test]
 fn test_assume() {
-    let mut em = ExprManager::new();
+    let mut em = Ctx::new();
     let b = em.mk_bool();
     let b2b = em.mk_arrow(b.clone(), b.clone()).unwrap();
     let p = em.mk_var_str("p", b2b);
