@@ -26,7 +26,7 @@ pub struct NewPolyDef {
 /// defining the new constant `c`, and `vars` is the set of type variables
 /// closed over.
 pub fn thm_new_poly_definition(
-    em: &mut ExprManager,
+    em: &mut dyn CtxI,
     c: &str,
     rhs: Expr,
 ) -> Result<NewPolyDef> {
@@ -41,11 +41,9 @@ pub fn thm_new_poly_definition(
         c, rhs)));
     }
 
-    let ty_closed =
-        em.mk_pi_l(vars_ty_rhs.iter().cloned(), rhs.ty().clone())?;
+    let ty_closed = em.mk_pi_l(&vars_ty_rhs, rhs.ty().clone())?;
     let eqn = {
-        let rhs_closed =
-            em.mk_lambda_l(vars_ty_rhs.iter().cloned(), rhs.clone())?;
+        let rhs_closed = em.mk_lambda_l(&vars_ty_rhs, rhs.clone())?;
         let v = em.mk_var_str(c, ty_closed);
         em.mk_eq_app(v, rhs_closed)?
     };
@@ -322,7 +320,7 @@ pub fn match_<'a>(e1: &'a Expr, e2: &'a Expr) -> Option<UnifySubst<'a>> {
 /// Prove symmetry of equality.
 ///
 /// Goes from `A |- t=u` to `A |- u=t`.
-pub fn thm_sym(em: &mut ExprManager, th: Thm) -> Result<Thm> {
+pub fn thm_sym(em: &mut dyn CtxI, th: Thm) -> Result<Thm> {
     // start with `F |- t=u`.
     // now by left-congruence with `refl(=)`, `F |- ((=) t) = ((=) u)`.
     // by right-congruence with `refl(t)`, `F |- (((=) t) t) = (((=) u) t)`.

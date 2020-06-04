@@ -7,6 +7,6 @@ pub use fnv::{new_set_with_cap, new_table_with_cap, FnvHashMap, FnvHashSet};
 
 pub use kernel_of_trust::ExprView::*;
 pub use kernel_of_trust::{
-    Error, Expr, ExprManager, ExprView, Result, Symbol, Thm, Var,
+    Ctx, CtxI, Error, Expr, ExprView, Result, Symbol, Thm, Var,
 };
 pub use open_theory::VM;

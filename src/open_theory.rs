@@ -31,7 +31,7 @@ use ObjImpl as O;
 
 /// A type operator, i.e. a type builder.
 trait OTypeOp: fmt::Debug {
-    fn apply(&self, em: &mut k::ExprManager, args: Vec<Expr>) -> Result<Expr>;
+    fn apply(&self, ctx: &mut dyn k::CtxI, args: Vec<Expr>) -> Result<Expr>;
 }
 
 impl fmt::Debug for Obj {
@@ -50,8 +50,8 @@ impl fmt::Debug for OTypeOp {
 
 /// A constant, parametrized by its type.
 trait OConst: fmt::Debug {
-    fn expr(&self, em: &mut k::ExprManager) -> Expr;
-    fn apply(&self, em: &mut k::ExprManager, e: Expr) -> Result<Expr>;
+    fn expr(&self, ctx: &mut dyn k::CtxI) -> Expr;
+    fn apply(&self, ctx: &mut dyn k::CtxI, e: Expr) -> Result<Expr>;
 }
 
 impl std::ops::Deref for Obj {
@@ -182,12 +182,12 @@ impl Article {
     /// Get content of the article.
     pub fn get(
         &self,
-        em: &mut ExprManager,
+        ctx: &mut dyn k::CtxI,
     ) -> (fnv::FnvHashMap<String, Expr>, Vec<Thm>, Vec<Thm>) {
         let v1 = self
             .defs
             .iter()
-            .map(|(s, c)| (s.to_string(), c.expr(em)))
+            .map(|(s, c)| (s.to_string(), c.expr(ctx)))
             .collect();
         let v2 = self.assumptions.clone();
         let v3 = self.theorems.clone();
@@ -229,7 +229,7 @@ impl Callbacks for () {}
 /// This is used to parse and interpret an OpenTheory file.
 #[derive(Debug)]
 pub struct VM<'a, CB: Callbacks> {
-    em: &'a mut ExprManager,
+    ctx: &'a mut dyn k::CtxI,
     cb: CB,
     ty_vars: fnv::FnvHashMap<String, Var>,
     vars: fnv::FnvHashMap<String, (Var, Var)>, // "x" -> (x, α)
@@ -251,10 +251,10 @@ struct CustomConst {
 }
 
 impl OConst for CustomConst {
-    fn expr(&self, _: &mut ExprManager) -> Expr {
+    fn expr(&self, _: &mut dyn k::CtxI) -> Expr {
         self.c.clone()
     }
-    fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr> {
+    fn apply(&self, em: &mut dyn k::CtxI, ty: Expr) -> Result<Expr> {
         use std::borrow::Cow;
 
         if self.c_ty_vars == ty {
@@ -281,13 +281,11 @@ impl OConst for CustomConst {
             );
             // type of `c args`
             c_ty_vars = {
-                let app = em.mk_app_iter(self.c.clone(), |em, f| {
-                    for x in ty_vars.iter().cloned() {
-                        let v = em.mk_var(x);
-                        f(em, v)?
-                    }
-                    Ok(())
-                })?;
+                let mut app = self.c.clone();
+                for x in ty_vars.iter().cloned() {
+                    let v = em.mk_var(x);
+                    app = em.mk_app(app, v)?;
+                }
                 app.ty().clone()
             }
         }
@@ -304,16 +302,17 @@ impl OConst for CustomConst {
         //    c_ty_vars, ty, subst
         //);
         // now apply `c` to the proper type arguments
-        let t = em.mk_app_iter(self.c.clone(), |em, f| {
-            for v in ty_vars.iter() {
+        let t = {
+            let mut app = self.c.clone();
+            for v in &ty_vars[..] {
                 let ty = match subst.find_rec(v) {
                     Some(e) => e.clone(),
                     None => em.mk_var(v.clone()),
                 };
-                f(em, ty)?
+                app = em.mk_app(app, ty)?
             }
-            Ok(())
-        })?;
+            app
+        };
         //eprintln!("result constant is {:?}", &t);
         Ok(t)
     }
@@ -321,9 +320,9 @@ impl OConst for CustomConst {
 
 impl<'a, CB: Callbacks> VM<'a, CB> {
     /// Create a new VM using the given expression manager.
-    pub fn new_with(em: &'a mut ExprManager, cb: CB) -> Self {
+    pub fn new_with(ctx: &'a mut dyn k::CtxI, cb: CB) -> Self {
         VM {
-            em,
+            ctx,
             cb,
             ty_vars: fnv::new_table_with_cap(32),
             vars: fnv::new_table_with_cap(32),
@@ -410,7 +409,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("abs_term", |vm, x, y| {
             let body = x.as_term()?;
             let v = y.as_var()?;
-            let e = vm.em.mk_lambda(v.clone(), body.clone())?;
+            let e = vm.ctx.mk_lambda(v.clone(), body.clone())?;
             vm.push_obj(O::Term(e));
             Ok(())
         })
@@ -423,7 +422,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("abs_thm", |vm, x, y| {
             let th = x.as_thm()?;
             let v = y.as_var()?;
-            let th = vm.em.thm_abs(&v, th)?;
+            let th = vm.ctx.thm_abs(&v, th)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -436,7 +435,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("app_term", |vm, x, y| {
             let x = x.as_term()?;
             let f = y.as_term()?;
-            let e = vm.em.mk_app(f.clone(), x.clone())?;
+            let e = vm.ctx.mk_app(f.clone(), x.clone())?;
             vm.push_obj(O::Term(e));
             Ok(())
         })
@@ -449,7 +448,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("app_thm", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
-            let th = vm.em.thm_congr(th2, th1)?;
+            let th = vm.ctx.thm_congr(th2, th1)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -461,7 +460,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     fn assume(&mut self) -> Result<()> {
         self.pop1("assume", |vm, x| {
             let t = x.as_term()?;
-            let th = vm.em.thm_assume(t);
+            let th = vm.ctx.thm_assume(t);
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -487,7 +486,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 Some(th) => th.clone(),
                 None => {
                     let ThmKey(concl, hyps) = th_key; // consume key
-                    let ax = vm.em.thm_axiom(hyps, concl);
+                    let ax = vm.ctx.thm_axiom(hyps, concl)?;
                     vm.cb.debug(|| format!("## add axiom {:?}", ax));
                     vm.assumptions.push(ax.clone());
                     ax
@@ -523,7 +522,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         impl OTypeOp for TyOpConst {
             fn apply(
                 &self,
-                _em: &mut ExprManager,
+                _em: &mut dyn k::CtxI,
                 args: Vec<Expr>,
             ) -> Result<Expr> {
                 if args.len() != 0 {
@@ -543,7 +542,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         impl OTypeOp for TyOpArrow {
             fn apply(
                 &self,
-                em: &mut ExprManager,
+                em: &mut dyn k::CtxI,
                 mut args: Vec<Expr>,
             ) -> Result<Expr> {
                 if args.len() != 2 {
@@ -559,9 +558,9 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop1("type op", |vm, o| {
             let n = o.as_name()?;
             let oc = if n.len_pre() == 0 && n.base() == "bool" {
-                Rc::new(TyOpConst(vm.em.mk_bool()))
+                Rc::new(TyOpConst(vm.ctx.mk_bool()))
             } else if n.len_pre() == 0 && n.base() == "ind" {
-                Rc::new(TyOpConst(vm.em.mk_ind()))
+                Rc::new(TyOpConst(vm.ctx.mk_ind()))
             } else if n.len_pre() == 0 && n.base() == "->" {
                 Rc::new(TyOpArrow)
             } else {
@@ -640,8 +639,8 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                     return Err(Error::new("var_type: need unqualified name"));
                 }
                 // make a type variable
-                let ty = vm.em.mk_ty();
-                let v = vm.em.mk_var_str(&n.ptr.1, ty);
+                let ty = vm.ctx.mk_ty();
+                let v = vm.ctx.mk_var_str(&n.ptr.1, ty);
                 vm.push_obj(O::Type(v));
                 Ok(())
             }
@@ -660,7 +659,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                     })
                     .collect();
                 let args = args?;
-                let r = (&**f as &dyn OTypeOp).apply(&mut vm.em, args)?;
+                let r = (&**f as &dyn OTypeOp).apply(vm.ctx, args)?;
                 vm.push_obj(O::Type(r));
                 Ok(())
             }
@@ -672,10 +671,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         #[derive(Debug)]
         struct ConstEq;
         impl OConst for ConstEq {
-            fn expr(&self, em: &mut ExprManager) -> Expr {
+            fn expr(&self, em: &mut dyn k::CtxI) -> Expr {
                 em.mk_eq()
             }
-            fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr> {
+            fn apply(&self, em: &mut dyn k::CtxI, ty: Expr) -> Result<Expr> {
                 let args = ty.unfold_pi().0;
                 if args.len() != 2 {
                     Err(Error::new_string(format!(
@@ -690,10 +689,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         #[derive(Debug)]
         struct ConstSelect;
         impl OConst for ConstSelect {
-            fn expr(&self, em: &mut ExprManager) -> Expr {
+            fn expr(&self, em: &mut dyn k::CtxI) -> Expr {
                 em.mk_select()
             }
-            fn apply(&self, em: &mut ExprManager, ty: Expr) -> Result<Expr> {
+            fn apply(&self, em: &mut dyn k::CtxI, ty: Expr) -> Result<Expr> {
                 let a = ty
                     .as_pi()
                     .ok_or_else(|| {
@@ -740,7 +739,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("const term", |vm, x, y| match (&*x, &*y) {
             (O::Type(ty), O::Const(_, c)) => {
                 // apply constant to type
-                let e = (&**c as &dyn OConst).apply(vm.em, ty.clone())?;
+                let e = (&**c as &dyn OConst).apply(vm.ctx, ty.clone())?;
                 vm.push_obj(O::Term(e));
                 Ok(())
             }
@@ -763,7 +762,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     fn var_term(&mut self) -> Result<()> {
         self.pop1("var_term", |vm, o| match &*o {
             O::Var(v) => {
-                let e = vm.em.mk_var(v.clone());
+                let e = vm.ctx.mk_var(v.clone());
                 vm.push_obj(O::Term(e));
                 Ok(())
             }
@@ -776,7 +775,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             (O::Term(rhs), O::Name(n)) => {
                 // make a definition `n := t`
                 let def = utils::thm_new_poly_definition(
-                    &mut vm.em,
+                    vm.ctx,
                     &n.to_string(),
                     rhs.clone(),
                 )?;
@@ -853,7 +852,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let c_l = renaming.into_iter().map(|(n, v)| {
                 let rhs = subst.iter().find(|(ref v2,_)| &v==v2).ok_or_else(||
                     Error::new_string(format!("define_const_list: no binding for variable {:?}", &v)))?.1.clone();
-                let def = utils::thm_new_poly_definition(vm.em, &n.to_string(), rhs)?;
+                let def = utils::thm_new_poly_definition(vm.ctx, &n.to_string(), rhs)?;
                 // now build the constant building closure
                 let c_ty_vars = def.c_applied.ty().clone();
                 let c = Rc::new(CustomConst {
@@ -874,13 +873,13 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             thm = {
                 let subst: Vec<_> = c_l.iter()
                     .map(|ldef| (ldef.v.clone(),ldef.c_applied.clone())).collect();
-                vm.em.thm_instantiate(thm, &subst)?
+                vm.ctx.thm_instantiate(thm, &subst)?
             };
 
             // resolve instantiated theorem with each constant definition thm
             // to remove the hypotheses
             for ldef in &c_l {
-                thm = vm.em.thm_cut(ldef.thm_applied.clone(), thm)?;
+                thm = vm.ctx.thm_cut(ldef.thm_applied.clone(), thm)?;
             }
 
             // push list of constants
@@ -915,7 +914,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             )));
         }
 
-        let def = self.em.thm_new_basic_type_definition(
+        let def = self.ctx.thm_new_basic_type_definition(
             ty_name.to_symbol(),
             abs.to_symbol(),
             rep.to_symbol(),
@@ -963,7 +962,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         impl OTypeOp for TyOpCustom {
             fn apply(
                 &self,
-                em: &mut ExprManager,
+                em: &mut dyn k::CtxI,
                 args: Vec<Expr>,
             ) -> Result<Expr> {
                 if args.len() != self.0.len() {
@@ -986,11 +985,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.push_obj(O::TypeOp(ty_name, ty_op));
 
         let fvars_exprs: Vec<_> =
-            def.fvars.iter().map(|v| self.em.mk_var(v.clone())).collect();
+            def.fvars.iter().map(|v| self.ctx.mk_var(v.clone())).collect();
 
         // define and push abs
         {
-            let c_vars = self.em.mk_app_l(def.c_abs.clone(), &fvars_exprs)?;
+            let c_vars = self.ctx.mk_app_l(def.c_abs.clone(), &fvars_exprs)?;
             let c_ty_vars = c_vars.ty().clone();
             let oc = CustomConst {
                 n: abs.clone(),
@@ -1006,7 +1005,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
         // define and push repr
         {
-            let c_vars = self.em.mk_app_l(def.c_repr.clone(), &fvars_exprs)?;
+            let c_vars = self.ctx.mk_app_l(def.c_repr.clone(), &fvars_exprs)?;
             let c_ty_vars = c_vars.ty().clone();
             let oc = CustomConst {
                 n: rep.clone(),
@@ -1023,15 +1022,15 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         // push abs thm
         {
             let abs_thm = def.abs_thm.clone();
-            let th = self.em.thm_abs(&def.abs_x, abs_thm)?;
+            let th = self.ctx.thm_abs(&def.abs_x, abs_thm)?;
             self.push_obj(O::Thm(th));
         }
 
         // push repr thm
         {
             let repr_thm = def.repr_thm.clone();
-            let repr_thm2 = utils::thm_sym(&mut self.em, repr_thm)?;
-            let th = self.em.thm_abs(&def.repr_x, repr_thm2)?;
+            let repr_thm2 = utils::thm_sym(self.ctx, repr_thm)?;
+            let th = self.ctx.thm_abs(&def.repr_x, repr_thm2)?;
             self.push_obj(O::Thm(th));
         }
 
@@ -1111,7 +1110,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 }
                 let ty = l.pop().unwrap().as_type()?;
                 let v = l.pop().unwrap().as_name()?;
-                let pair = (Var::from_str(&v.to_string(), vm.em.mk_ty()), ty);
+                let pair = (Var::from_str(&v.to_string(), vm.ctx.mk_ty()), ty);
                 subst.push(pair);
                 Ok(())
             })?;
@@ -1121,7 +1120,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                     &thm, subst
                 )
             });
-            let th1 = vm.em.thm_instantiate(thm, &subst[..])?;
+            let th1 = vm.ctx.thm_instantiate(thm, &subst[..])?;
             vm.cb.debug(|| format!("instantiated\n  into {:#?}", &th1));
             // then instantiate terms
             subst.clear();
@@ -1136,7 +1135,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 subst.push(pair);
                 Ok(())
             })?;
-            let th2 = vm.em.thm_instantiate(th1, &subst[..])?;
+            let th2 = vm.ctx.thm_instantiate(th1, &subst[..])?;
             vm.cb.debug(|| {
                 format!(
                     "instantiated\n  into {:#?}\n  with subst {:#?}",
@@ -1152,7 +1151,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     fn refl(&mut self) -> Result<()> {
         self.pop1("refl", |vm, x| {
             let t = x.as_term()?.clone();
-            let th = vm.em.thm_refl(t);
+            let th = vm.ctx.thm_refl(t);
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -1163,7 +1162,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("trans", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
-            let th = vm.em.thm_trans(th2, th1)?;
+            let th = vm.ctx.thm_trans(th2, th1)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -1175,7 +1174,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     fn sym(&mut self) -> Result<()> {
         self.pop1("sym", |vm, x| {
             let th1 = x.as_thm()?.clone();
-            let th = utils::thm_sym(&mut vm.em, th1)?;
+            let th = utils::thm_sym(vm.ctx, th1)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -1187,7 +1186,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
             let th = vm
-                .em
+                .ctx
                 .thm_bool_eq(th1, th2)
                 .map_err(|e| e.set_source(Error::new("in eq_mp")))?;
             vm.push_obj(O::Thm(th));
@@ -1201,7 +1200,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     fn beta_conv(&mut self) -> Result<()> {
         self.pop1("beta_conv", |vm, x| {
             let t = x.as_term()?.clone();
-            let th = vm.em.thm_beta_conv(&t)?;
+            let th = vm.ctx.thm_beta_conv(&t)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -1212,7 +1211,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("deduct_antisym", |vm, x, y| {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
-            let th = vm.em.thm_bool_eq_intro(th1, th2)?;
+            let th = vm.ctx.thm_bool_eq_intro(th1, th2)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
@@ -1226,7 +1225,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let th1 = x.as_thm()?;
             let th2 = y.as_thm()?;
             let th = vm
-                .em
+                .ctx
                 .thm_cut(th2, th1)
                 .map_err(|e| e.set_source(Error::new("in cut")))?;
             vm.push_obj(O::Thm(th));
@@ -1317,7 +1316,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
 impl<'a> VM<'a, ()> {
     /// Trivial constructor.
-    pub fn new(em: &'a mut ExprManager) -> Self {
+    pub fn new(em: &'a mut dyn k::CtxI) -> Self {
         VM::new_with(em, ())
     }
 }
