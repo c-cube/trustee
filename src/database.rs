@@ -68,6 +68,14 @@ impl Database {
         self.thm_rev.get(k)
     }
 
+    fn insert_thm_(&mut self, name: String, thm: Thm) {
+        if self.thm.contains_key(&name) {
+            panic!("theorem named {:?} already declared in DB", name)
+        }
+        self.thm.insert(name, thm.clone());
+        self.thm_rev.insert(ThmKey::new(&thm), thm);
+    }
+
     /// Insert a new theorem into the DB.
     pub fn insert_thm(&mut self, name: Option<&str>, thm: Thm) {
         let name = name.map_or_else(
@@ -77,10 +85,66 @@ impl Database {
             },
             |s| s.to_string(),
         );
-        if self.thm.contains_key(&name) {
-            panic!("theorem named {:?} already declared in DB", name)
-        }
-        self.thm.insert(name, thm.clone());
-        self.thm_rev.insert(ThmKey::new(&thm), thm);
+        self.insert_thm_(name, thm)
     }
+
+    /// Add an axiom.
+    pub fn add_axiom(&mut self, th: Thm) {
+        self.axioms.push(th)
+    }
+
+    /// Add a definition.
+    pub fn insert_def(&mut self, name: String, e: Expr, th: Thm) {
+        self.insert_thm_(name.clone(), th.clone());
+        self.defs.insert(name, (e, th));
+    }
+
+    /// Add a type definition.
+    pub fn insert_ty_def(&mut self, d: k::NewTypeDef) {
+        self.insert_def(
+            d.c_abs.to_string(),
+            d.c_abs.clone(),
+            d.abs_thm.clone(),
+        );
+        self.insert_def(
+            d.c_repr.to_string(),
+            d.c_repr.clone(),
+            d.repr_thm.clone(),
+        );
+        self.ty_defs.insert(d.tau.to_string(), d);
+    }
+
+    /// Lookup any kind of value that has the given name.
+    ///
+    /// The value may be a definition, a type definition, a named theorem, etc.
+    pub fn get_by_name(&self, s: &str) -> Option<AnyValue> {
+        if let Some((e, th)) = self.def_by_name(s) {
+            Some(AnyValue::Def(e, th))
+        } else if let Some(th) = self.thm_by_name(s) {
+            Some(AnyValue::Thm(th))
+        } else if let Some(d) = self.ty_def_by_name(s) {
+            Some(AnyValue::TyDef(d))
+        } else {
+            None
+        }
+    }
+
+    /// Iterate on all items in the database.
+    pub fn all_items(&self) -> impl Iterator<Item = AnyValue> {
+        use AnyValue as A;
+        self.defs
+            .iter()
+            .map(|(_, (t, th))| A::Def(t, th))
+            .chain(self.ty_defs.iter().map(|(_, d)| A::TyDef(d)))
+            .chain(self.thm.iter().map(|(_, th)| A::Thm(th)))
+            .chain(self.axioms.iter().map(|th| A::Axiom(th)))
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum AnyValue<'a> {
+    Def(&'a Expr, &'a Thm),
+    TyDef(&'a k::NewTypeDef),
+    Thm(&'a Thm),
+    Axiom(&'a Thm),
 }

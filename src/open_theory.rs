@@ -478,6 +478,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                     ax
                 }
             };
+            vm.db.add_axiom(ax.clone());
             vm.push_obj(O::Thm(ax));
             Ok(())
         })
@@ -783,6 +784,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
                 // define and push
                 vm.defs.insert(n.clone(), c.clone());
+                vm.db.insert_def(n.to_string(), def.c.clone(), def.thm.clone());
                 vm.push_obj(O::Const(n.clone(), c));
                 vm.push_obj(O::Thm(def.thm_applied));
                 Ok(())
@@ -851,8 +853,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
                 // define and push
                 vm.defs.insert(n.clone(), c.clone());
-                Ok(LocalConst{c_applied: def.c_applied, v:v.clone(), n: n.clone(),
-                thm_applied: def.thm_applied, cst: c})
+                vm.db.insert_def(n.to_string(), def.c.clone(), def.thm.clone());
+                Ok(LocalConst{
+                    c_applied: def.c_applied, v:v.clone(), n: n.clone(),
+                    thm_applied: def.thm_applied, cst: c
+                })
             }).collect::<Result<Vec<LocalConst>>>()?;
 
             // instantiate `thm` with `v_i := c_i`
@@ -968,6 +973,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         // define and push type op
         let ty_op = Rc::new(TyOpCustom(reorder, def.clone()));
         self.ty_defs.insert(ty_name.clone(), ty_op.clone());
+        self.db.insert_ty_def(def.clone());
         self.push_obj(O::TypeOp(ty_name, ty_op));
 
         let fvars_exprs: Vec<_> =
