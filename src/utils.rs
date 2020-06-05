@@ -180,6 +180,15 @@ impl<'a> UnifySubst<'a> {
     }
 }
 
+impl<'a> Into<kernel_of_trust::Subst> for UnifySubst<'a> {
+    fn into(self) -> kernel_of_trust::Subst {
+        self.0
+            .iter()
+            .map(|(v, e)| ((*v).clone(), (*e).clone()))
+            .collect::<Vec<_>>()
+    }
+}
+
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum UnifOp {
     Match,
