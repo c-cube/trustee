@@ -151,7 +151,7 @@ py_class!(class NewTypeDef |py| {
     def repr_thm(&self) -> PyResult<Thm> {
         let td = self.td(py);
         let em = self.ctx(py);
-        Thm::create_instance(py, td.abs_thm.clone(), em.clone())
+        Thm::create_instance(py, td.repr_thm.clone(), em.clone())
     }
 });
 
@@ -205,6 +205,7 @@ py_class!(class Ctx |py| {
         }
     }
 
+    /// Lookup in the DB.
     def find(&self, s: &str) -> PyResult<cpython::PyObject> {
         self.__getitem__(py, s)
     }
