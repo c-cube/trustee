@@ -5,11 +5,14 @@ use cpython::{
     py_class,
     py_module_initializer,
     PyErr,
+    PyObject,
     PyResult,
     Python,
+    PythonObject,
+    ToPyObject,
 };
 use std::{sync::Arc, sync::Mutex};
-use trustee::kernel_of_trust as k;
+use trustee::{database as db, kernel_of_trust as k};
 
 // add bindings to the generated python module
 // N.B: names: "rust2py" must be the name of the `.so` or `.pyd` file
@@ -17,6 +20,8 @@ py_module_initializer!(trustee, inittrustee_py, PyInit_trustee, |py, m| {
     m.add(py, "__doc__", "Python bindings for trustee.")?;
     m.add_class::<Ctx>(py)?;
     m.add_class::<Expr>(py)?;
+    m.add_class::<Thm>(py)?;
+    m.add_class::<NewTypeDef>(py)?;
     Ok(())
 });
 
@@ -24,7 +29,7 @@ fn mk_err(py: Python, s: String) -> PyErr {
     PyErr::new::<exc::ValueError, _>(py, s)
 }
 
-py_class!(class Expr |py| {
+py_class!(pub class Expr |py| {
     data expr: k::Expr;
     data ctx: Arc<Mutex<k::Ctx>>;
 
@@ -79,7 +84,7 @@ py_class!(class Expr |py| {
 
 });
 
-py_class!(class Thm |py| {
+py_class!(pub class Thm |py| {
     data thm: k::Thm;
     data ctx: Arc<Mutex<k::Ctx>>;
 
@@ -150,6 +155,33 @@ py_class!(class NewTypeDef |py| {
     }
 });
 
+fn any_val_to_py_obj<'a>(
+    py: Python,
+    v: db::AnyValue<'a>,
+    ctx: &Arc<Mutex<k::Ctx>>,
+) -> PyResult<PyObject> {
+    use db::AnyValue as A;
+    match v {
+        A::Def(e, th) => {
+            let e = Expr::create_instance(py, e.clone(), ctx.clone())?;
+            let th = Thm::create_instance(py, th.clone(), ctx.clone())?;
+            Ok((e, th).to_py_object(py).into_object())
+        }
+        A::Thm(th) => {
+            let th = Thm::create_instance(py, th.clone(), ctx.clone())?;
+            Ok(th.into_object())
+        }
+        A::Axiom(th) => {
+            let th = Thm::create_instance(py, th.clone(), ctx.clone())?;
+            Ok(th.into_object())
+        }
+        A::TyDef(d) => {
+            let d = NewTypeDef::create_instance(py, d.clone(), ctx.clone())?;
+            Ok(d.into_object())
+        }
+    }
+}
+
 py_class!(class Ctx |py| {
     data ctx: Arc<Mutex<k::Ctx>>;
     data db: Arc<Mutex<trustee::Database>>;
@@ -159,6 +191,39 @@ py_class!(class Ctx |py| {
         let db = Arc::new(Mutex::new(trustee::Database::new()));
         Ctx::create_instance(py, ctx, db)
     }
+
+    /// Lookup in the DB
+    def __getitem__(&self, s: &str) -> PyResult<cpython::PyObject> {
+        let db = self.db(py).lock().unwrap();
+        match db.get_by_name(s) {
+            Some(a) => {
+                Ok(any_val_to_py_obj(py, a, &self.ctx(py))?)
+            }
+            None => {
+                Err(mk_err(py, "no object with that name in the DB".to_string()))
+            }
+        }
+    }
+
+    def find(&self, s: &str) -> PyResult<cpython::PyObject> {
+        self.__getitem__(py, s)
+    }
+
+    /// Return a list of all items in the DB.
+    def db_items(&self) -> PyResult<Vec<PyObject>> {
+        let db = self.db(py).lock().unwrap();
+        let v = db.all_items().map(|v| {
+            any_val_to_py_obj(py, v, self.ctx(py))
+        }).collect::<PyResult<Vec<_>>>()?;
+        Ok(v)
+    }
+
+    /* TODO
+    def __contains__(&self, s: &str) -> PyResult<bool> {
+        let db = self.db(py).lock().unwrap();
+        Ok(db.get_by_name(s).is_some())
+    }
+    */
 
     def type_(&self) -> PyResult<Expr> {
         let em = self.ctx(py).lock().unwrap();
