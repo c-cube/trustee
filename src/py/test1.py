@@ -28,6 +28,3 @@ ot1 = ctx.parse_ot([
   #"../../ot-data/data/opentheory/natural-add-def-1.25/natural-add-def.art",
     ])
 
-print(f"num axioms: {len(ot1[1])}")
-for x in ot1[1]:
-    print(x)

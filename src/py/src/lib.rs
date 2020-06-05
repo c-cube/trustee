@@ -12,7 +12,7 @@ use cpython::{
     ToPyObject,
 };
 use std::{sync::Arc, sync::Mutex};
-use trustee::{database as db, kernel_of_trust as k};
+use trustee::{database as db, kernel_of_trust as k, utils};
 
 // add bindings to the generated python module
 // N.B: names: "rust2py" must be the name of the `.so` or `.pyd` file
@@ -152,6 +152,29 @@ py_class!(class NewTypeDef |py| {
         let td = self.td(py);
         let em = self.ctx(py);
         Thm::create_instance(py, td.repr_thm.clone(), em.clone())
+    }
+});
+
+py_class!(class NewPolyDef |py| {
+    data def: utils::NewPolyDef;
+    data ctx: Arc<Mutex<k::Ctx>>;
+
+    def __repr__(&self) -> PyResult<String> {
+        Ok(format!("{:?}", self.def(py)))
+    }
+
+    /// The new constant.
+    def c(&self) -> PyResult<Expr> {
+        let d = self.def(py);
+        let em = self.ctx(py);
+        Expr::create_instance(py, d.c_applied.clone(), em.clone())
+    }
+
+    /// The theorem defining the new constant.
+    def thm(&self) -> PyResult<Thm> {
+        let d = self.def(py);
+        let em = self.ctx(py);
+        Thm::create_instance(py, d.thm_applied.clone(), em.clone())
     }
 });
 
@@ -332,6 +355,14 @@ py_class!(class Ctx |py| {
         Thm::create_instance(py, th, self.ctx(py).clone())
     }
 
+    /// Symmetry: `sym (F |- a=b)` is `F |- b=a`
+    def sym(&self, th: Thm) -> PyResult<Thm> {
+        let mut em = self.ctx(py).lock().unwrap();
+        let th = utils::thm_sym(&mut *em, th.thm(py).clone())
+            .map_err(|e| mk_err(py, e.to_string()))?;
+        Thm::create_instance(py, th, self.ctx(py).clone())
+    }
+
     /// `congr (F1 |- f=g) ty` is `F1 |- f ty=g ty`
     def congr(&self, th1: Thm, th2: Thm) -> PyResult<Thm> {
         let mut em = self.ctx(py).lock().unwrap();
@@ -405,6 +436,17 @@ py_class!(class Ctx |py| {
         let e = Expr::create_instance(py, e, self.ctx(py).clone())?;
         Ok((th,e))
     }
+
+    /// Polymorphic definition.
+    def poly_def(&self, name: &str, e: Expr) -> PyResult<NewPolyDef> {
+        let mut ctx = self.ctx(py).lock().unwrap();
+        let e = e.expr(py);
+        let def = utils::thm_new_poly_definition(&mut *ctx, name, e.clone())
+            .map_err(|e| mk_err(py, e.to_string()))?;
+        NewPolyDef::create_instance(py, def, self.ctx(py).clone())
+    }
+
+    // TODO: polymorphic type def
 
     /// Create a new axiom `assumptions |- concl`.
     /// **use with caution**
