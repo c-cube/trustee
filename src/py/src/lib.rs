@@ -1,9 +1,13 @@
 // see https://github.com/dgrunwald/rust-cpython
 
+#[macro_use]
+extern crate cpython;
+
 use cpython::{
     exc, // CompareOp, PyObject,
     py_class,
     py_module_initializer,
+    CompareOp,
     PyErr,
     PyObject,
     PyResult,
@@ -47,11 +51,29 @@ py_class!(pub class Expr |py| {
     def __call__(&self, arg : Expr) -> PyResult<Expr> {
         let em = self.ctx(py);
         let mut g_em = em.lock().unwrap();
-        let e = g_em.mk_app(self.expr(py).clone(), arg.expr(py).clone())
-            .map_err(|e| mk_err(py, e.to_string()))?;
+        let e = {
+            g_em.mk_app(self.expr(py).clone(), arg.expr(py).clone())
+                .map_err(|e| mk_err(py, e.to_string()))?
+        };
         drop(g_em);
         Expr::create_instance(py, e, em.clone())
     }
+
+    /* FIXME
+    // application!
+    def __call__(&self, * arg : &[Expr] ) -> PyResult<Expr> {
+        let em = self.ctx(py);
+        let mut g_em = em.lock().unwrap();
+        let e = {
+            let args =
+                arg.iter().map(|e| e.expr(py).clone()).collect::<Vec<_>>();
+            g_em.mk_app_l(self.expr(py).clone(), &args)
+                .map_err(|e| mk_err(py, e.to_string()))?
+        };
+        drop(g_em);
+        Expr::create_instance(py, e, em.clone())
+    }
+    */
 
     def ty(&self) -> PyResult<Expr> {
         let e = self.expr(py);
@@ -73,14 +95,15 @@ py_class!(pub class Expr |py| {
     // TODO: var(ty)
     // TODO: mk_eq(other)
 
-    /* FIXME
     def __richcmp__(&self, other : Expr, op : CompareOp) -> PyResult<bool> {
+        let e1 = self.expr(py);
+        let e2 = other.expr(py);
         match op {
-            CompareOp::Eq => Ok(self.expr(py) == other.expr(py)),
+            CompareOp::Eq => Ok(e1 == e2),
+            CompareOp::Ne => Ok(e1 != e2),
             _ => Err(PyErr::new::<exc::NotImplementedError,_>(py, "not implemented".to_string()))
         }
     }
-    */
 
 });
 
@@ -111,7 +134,7 @@ py_class!(pub class Thm |py| {
     }
 });
 
-py_class!(class NewTypeDef |py| {
+py_class!(pub class NewTypeDef |py| {
     data td: k::NewTypeDef;
     data ctx: Arc<Mutex<k::Ctx>>;
 
@@ -155,7 +178,7 @@ py_class!(class NewTypeDef |py| {
     }
 });
 
-py_class!(class NewPolyDef |py| {
+py_class!(pub class NewPolyDef |py| {
     data def: utils::NewPolyDef;
     data ctx: Arc<Mutex<k::Ctx>>;
 
@@ -205,7 +228,7 @@ fn any_val_to_py_obj<'a>(
     }
 }
 
-py_class!(class Ctx |py| {
+py_class!(pub class Ctx |py| {
     data ctx: Arc<Mutex<k::Ctx>>;
     data db: Arc<Mutex<trustee::Database>>;
 
@@ -217,6 +240,16 @@ py_class!(class Ctx |py| {
 
     /// Lookup in the DB
     def __getitem__(&self, s: &str) -> PyResult<cpython::PyObject> {
+        self.find(py, s)
+    }
+
+    /// Number of elements
+    def __len__(&self) -> PyResult<usize> {
+        Ok(self.db(py).lock().unwrap().size())
+    }
+
+    /// Lookup in the DB.
+    def find(&self, s: &str) -> PyResult<cpython::PyObject> {
         let db = self.db(py).lock().unwrap();
         match db.get_by_name(s) {
             Some(a) => {
@@ -228,11 +261,6 @@ py_class!(class Ctx |py| {
         }
     }
 
-    /// Lookup in the DB.
-    def find(&self, s: &str) -> PyResult<cpython::PyObject> {
-        self.__getitem__(py, s)
-    }
-
     /// Return a list of all items in the DB.
     def db_items(&self) -> PyResult<Vec<PyObject>> {
         let db = self.db(py).lock().unwrap();
@@ -242,12 +270,10 @@ py_class!(class Ctx |py| {
         Ok(v)
     }
 
-    /* TODO
     def __contains__(&self, s: &str) -> PyResult<bool> {
         let db = self.db(py).lock().unwrap();
         Ok(db.get_by_name(s).is_some())
     }
-    */
 
     def type_(&self) -> PyResult<Expr> {
         let em = self.ctx(py).lock().unwrap();

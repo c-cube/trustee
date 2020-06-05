@@ -129,6 +129,11 @@ impl Database {
         }
     }
 
+    pub fn size(&self) -> usize {
+        let Self { defs, thm, ty_defs, thm_rev: _, n: _, axioms } = self;
+        defs.len() + thm.len() + ty_defs.len() + axioms.len() + defs.len()
+    }
+
     /// Iterate on all items in the database.
     pub fn all_items(&self) -> impl Iterator<Item = AnyValue> {
         use AnyValue as A;
