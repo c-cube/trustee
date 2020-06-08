@@ -20,9 +20,9 @@ impl ThmKey {
 /// A constant, defined or just opaque.
 #[derive(Debug, Clone)]
 pub struct Constant {
-    /// Definition, if any.
-    pub def: Option<Expr>,
-    /// Theorem for `c = def`, if any.
+    /// The constant itself.
+    pub expr: Expr,
+    /// Theorem for `c = …`, if any.
     pub thm: Option<Thm>,
     /// Fixity of the constant: how does it parse/print.
     pub fixity: crate::syntax::Fixity,
@@ -99,7 +99,6 @@ impl Database {
     /// it is theorems that contain it.
     pub fn forget_def(&mut self, s: &str) -> Result<()> {
         if let Some(c) = self.consts.get_mut(s) {
-            c.def = None;
             c.thm = None;
             Ok(())
         } else {
@@ -143,7 +142,7 @@ impl Database {
     pub fn insert_def(&mut self, name: String, e: Expr, th: Thm) {
         self.insert_thm_(name.clone(), th.clone()).unwrap();
         let c = Constant {
-            def: Some(e),
+            expr: e,
             thm: Some(th),
             fixity: syntax::Fixity::Nullary,
         };

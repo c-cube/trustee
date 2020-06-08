@@ -142,16 +142,10 @@ py_class!(pub class Constant |py| {
         Ok(format!("{:?}", self.c(py)))
     }
 
-    def expr(&self) -> PyResult<Option<Expr>> {
+    def expr(&self) -> PyResult<Expr> {
         let c = self.c(py);
-        match &c.def {
-            None => Ok(None),
-            Some(e) => {
-                let em = self.ctx(py);
-                Expr::create_instance(py, e.clone(), em.clone())
-                    .map(|x| Some(x))
-            }
-        }
+        let em = self.ctx(py);
+        Expr::create_instance(py, c.expr.clone(), em.clone())
     }
 
     def thm(&self) -> PyResult<Option<Thm>> {

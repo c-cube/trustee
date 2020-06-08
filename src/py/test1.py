@@ -29,13 +29,13 @@ ot1 = ctx.parse_ot([
     ])
 
 
-true, def_true = ctx.find('Data.Bool.T')
-false, def_false = ctx.find('Data.Bool.F')
-exists, def_exists = ctx.find('Data.Bool.?')
-forall, def_forall = ctx.find('Data.Bool.!')
-not_, def_not = ctx.find('Data.Bool.~')
-cond, def_cond = ctx.find('Data.Bool.cond')
-pair, def_pair = ctx.find('Data.Pair.,')
-fst, def_fst = ctx.find('Data.Pair.fst')
-snd, def_snd = ctx.find('Data.Pair.snd')
+true = ctx.find('Data.Bool.T')
+false = ctx.find('Data.Bool.F')
+exists = ctx.find('Data.Bool.?')
+forall = ctx.find('Data.Bool.!')
+not_ = ctx.find('Data.Bool.~')
+cond = ctx.find('Data.Bool.cond')
+pair = ctx.find('Data.Pair.,')
+fst = ctx.find('Data.Pair.fst')
+snd = ctx.find('Data.Pair.snd')
 
