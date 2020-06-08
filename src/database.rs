@@ -17,12 +17,24 @@ impl ThmKey {
     }
 }
 
+/// A constant, defined or just opaque.
+#[derive(Debug, Clone)]
+pub struct Constant {
+    /// Definition, if any.
+    pub def: Option<Expr>,
+    /// Theorem for `c = def`, if any.
+    pub thm: Option<Thm>,
+    /// Fixity of the constant: how does it parse/print.
+    pub fixity: crate::syntax::Fixity,
+}
+
 /// A database of definitions and theorems.
 #[derive(Debug)]
 pub struct Database {
     /// Counter for basic names.
     n: usize,
-    defs: FnvHashMap<String, (Expr, Thm)>,
+    /// Constants.
+    consts: FnvHashMap<String, Constant>,
     ty_defs: FnvHashMap<String, k::NewTypeDef>,
     /// Axioms declared so far
     axioms: Vec<Thm>,
@@ -36,7 +48,7 @@ impl Database {
     pub fn new() -> Self {
         Self {
             n: 0,
-            defs: new_table_with_cap(32),
+            consts: new_table_with_cap(32),
             ty_defs: new_table_with_cap(16),
             axioms: vec![],
             thm: new_table_with_cap(16),
@@ -45,8 +57,8 @@ impl Database {
     }
 
     /// Find a definition in the database.
-    pub fn def_by_name(&self, s: &str) -> Option<&(Expr, Thm)> {
-        self.defs.get(s)
+    pub fn def_by_name(&self, s: &str) -> Option<&Constant> {
+        self.consts.get(s)
     }
 
     /// Find a type definition in the database.
@@ -68,16 +80,50 @@ impl Database {
         self.thm_rev.get(k)
     }
 
-    fn insert_thm_(&mut self, name: String, thm: Thm) {
+    /// Change fixity of a constant.
+    pub fn set_fixity(&mut self, s: &str, fix: syntax::Fixity) -> Result<()> {
+        if let Some(c) = self.consts.get_mut(s) {
+            c.fixity = fix;
+            Ok(())
+        } else {
+            Err(k::Error::new_string(format!(
+                "cannot set fixity of unknown constant `{}`",
+                s
+            )))
+        }
+    }
+
+    /// Forget the definition of constant `s`.
+    ///
+    /// From now on `s` will be opaque, and the only information we have about
+    /// it is theorems that contain it.
+    pub fn forget_def(&mut self, s: &str) -> Result<()> {
+        if let Some(c) = self.consts.get_mut(s) {
+            c.def = None;
+            c.thm = None;
+            Ok(())
+        } else {
+            Err(k::Error::new_string(format!(
+                "cannot forget def of unknown constant `{}`",
+                s
+            )))
+        }
+    }
+
+    fn insert_thm_(&mut self, name: String, thm: Thm) -> Result<()> {
         if self.thm.contains_key(&name) {
-            panic!("theorem named {:?} already declared in DB", name)
+            return Err(k::Error::new_string(format!(
+                "theorem named {:?} already declared in DB",
+                name
+            )));
         }
         self.thm.insert(name, thm.clone());
         self.thm_rev.insert(ThmKey::new(&thm), thm);
+        Ok(())
     }
 
     /// Insert a new theorem into the DB.
-    pub fn insert_thm(&mut self, name: Option<&str>, thm: Thm) {
+    pub fn insert_thm(&mut self, name: Option<&str>, thm: Thm) -> Result<()> {
         let name = name.map_or_else(
             || {
                 self.n += 1;
@@ -96,7 +142,12 @@ impl Database {
     /// Add a definition.
     pub fn insert_def(&mut self, name: String, e: Expr, th: Thm) {
         self.insert_thm_(name.clone(), th.clone());
-        self.defs.insert(name, (e, th));
+        let c = Constant {
+            def: Some(e),
+            thm: Some(th),
+            fixity: syntax::Fixity::Nullary,
+        };
+        self.consts.insert(name, c);
     }
 
     /// Add a type definition.
@@ -118,8 +169,8 @@ impl Database {
     ///
     /// The value may be a definition, a type definition, a named theorem, etc.
     pub fn get_by_name(&self, s: &str) -> Option<AnyValue> {
-        if let Some((e, th)) = self.def_by_name(s) {
-            Some(AnyValue::Def(e, th))
+        if let Some(c) = self.def_by_name(s) {
+            Some(AnyValue::Def(c))
         } else if let Some(th) = self.thm_by_name(s) {
             Some(AnyValue::Thm(th))
         } else if let Some(d) = self.ty_def_by_name(s) {
@@ -130,16 +181,16 @@ impl Database {
     }
 
     pub fn size(&self) -> usize {
-        let Self { defs, thm, ty_defs, thm_rev: _, n: _, axioms } = self;
-        defs.len() + thm.len() + ty_defs.len() + axioms.len() + defs.len()
+        let Self { consts, thm, ty_defs, thm_rev: _, n: _, axioms } = self;
+        consts.len() + thm.len() + ty_defs.len() + axioms.len()
     }
 
     /// Iterate on all items in the database.
     pub fn all_items(&self) -> impl Iterator<Item = AnyValue> {
         use AnyValue as A;
-        self.defs
+        self.consts
             .iter()
-            .map(|(_, (t, th))| A::Def(t, th))
+            .map(|(_, c)| A::Def(c))
             .chain(self.ty_defs.iter().map(|(_, d)| A::TyDef(d)))
             .chain(self.thm.iter().map(|(_, th)| A::Thm(th)))
             .chain(self.axioms.iter().map(|th| A::Axiom(th)))
@@ -148,7 +199,7 @@ impl Database {
 
 #[derive(Debug, Copy, Clone)]
 pub enum AnyValue<'a> {
-    Def(&'a Expr, &'a Thm),
+    Def(&'a Constant),
     TyDef(&'a k::NewTypeDef),
     Thm(&'a Thm),
     Axiom(&'a Thm),

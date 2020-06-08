@@ -134,6 +134,39 @@ py_class!(pub class Thm |py| {
     }
 });
 
+py_class!(pub class Constant |py| {
+    data c: db::Constant;
+    data ctx: Arc<Mutex<k::Ctx>>;
+
+    def __repr__(&self) -> PyResult<String> {
+        Ok(format!("{:?}", self.c(py)))
+    }
+
+    def expr(&self) -> PyResult<Option<Expr>> {
+        let c = self.c(py);
+        match &c.def {
+            None => Ok(None),
+            Some(e) => {
+                let em = self.ctx(py);
+                Expr::create_instance(py, e.clone(), em.clone())
+                    .map(|x| Some(x))
+            }
+        }
+    }
+
+    def thm(&self) -> PyResult<Option<Thm>> {
+        let c = self.c(py);
+        match &c.thm {
+            None => Ok(None),
+            Some(th) => {
+                let em = self.ctx(py);
+                Thm::create_instance(py, th.clone(), em.clone())
+                    .map(|x| Some(x))
+            }
+        }
+    }
+});
+
 py_class!(pub class NewTypeDef |py| {
     data td: k::NewTypeDef;
     data ctx: Arc<Mutex<k::Ctx>>;
@@ -208,10 +241,9 @@ fn any_val_to_py_obj<'a>(
 ) -> PyResult<PyObject> {
     use db::AnyValue as A;
     match v {
-        A::Def(e, th) => {
-            let e = Expr::create_instance(py, e.clone(), ctx.clone())?;
-            let th = Thm::create_instance(py, th.clone(), ctx.clone())?;
-            Ok((e, th).to_py_object(py).into_object())
+        A::Def(c) => {
+            let c = Constant::create_instance(py, c.clone(), ctx.clone())?;
+            Ok(c.into_object())
         }
         A::Thm(th) => {
             let th = Thm::create_instance(py, th.clone(), ctx.clone())?;
