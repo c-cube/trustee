@@ -1076,7 +1076,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             })?;
             // TODO?: alpha rename with [terms] and [phi]? does it make any sense?
             vm.cb.debug(|| format!("## add theorem {:?} phi={:?}", thm, _phi));
-            vm.db.insert_thm(None, thm.clone());
+            vm.db.insert_thm(None, thm.clone())?;
             vm.new_theorems.push(thm.clone());
             Ok(())
         })

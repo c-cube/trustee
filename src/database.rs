@@ -141,7 +141,7 @@ impl Database {
 
     /// Add a definition.
     pub fn insert_def(&mut self, name: String, e: Expr, th: Thm) {
-        self.insert_thm_(name.clone(), th.clone());
+        self.insert_thm_(name.clone(), th.clone()).unwrap();
         let c = Constant {
             def: Some(e),
             thm: Some(th),
