@@ -43,8 +43,12 @@ pub enum Fixity {
     Binder(BindingPower),
 }
 
-/// Binding power. The higher,
-pub type BindingPower = u32;
+/// Binding power. The higher, the stronger it tights.
+///
+/// It's a pair because it's left and right binding powers so we can represent
+/// associativity.
+/// See https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html .
+pub type BindingPower = (u32, u32);
 
 #[derive(Debug, Clone)]
 pub enum PExprView {
@@ -73,11 +77,12 @@ struct Lexer<'a> {
     line: usize,
     /// Current column in `src`
     col: usize,
+    is_done: bool,
 }
 
 impl<'a> Lexer<'a> {
     fn new(src: &'a str) -> Self {
-        Self { src, i: 0, line: 1, col: 1 }
+        Self { src, i: 0, line: 1, col: 1, is_done: false }
     }
 
     pub fn cur_pos(&self) -> (usize, usize) {
@@ -87,6 +92,7 @@ impl<'a> Lexer<'a> {
     // get next token
     fn next_(&mut self) -> Tok<'a> {
         use Tok::*;
+        assert!(!self.is_done);
 
         let bytes = self.src.as_bytes();
 
@@ -106,6 +112,7 @@ impl<'a> Lexer<'a> {
         }
 
         if self.i >= bytes.len() {
+            self.is_done = true;
             return EOF;
         } else if bytes[self.i] == b'(' {
             self.i += 1;
@@ -166,7 +173,7 @@ impl<'a> Lexer<'a> {
 impl<'a> Iterator for Lexer<'a> {
     type Item = Tok<'a>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.i >= self.src.len() {
+        if self.is_done {
             None
         } else {
             Some(self.next_())
@@ -180,13 +187,15 @@ impl<'a> Iterator for Lexer<'a> {
 pub struct Parser<'a> {
     db: &'a db::Database,
     lexer: Lexer<'a>,
+    cur: Tok<'a>,
 }
 
 impl<'a> Parser<'a> {
     /// New parser using the given string `src`.
     pub fn new(db: &'a db::Database, src: &'a str) -> Self {
-        let lexer = Lexer::new(src);
-        Self { db, lexer }
+        let mut lexer = Lexer::new(src);
+        let cur = lexer.next_(); // parse first token
+        Self { db, lexer, cur }
     }
 
     /// Return current `(line,column)` pair.
@@ -226,7 +235,6 @@ mod test {
         let lexer = Lexer::new("((12+ f(x, Y))--- z)");
         let toks = lexer.collect::<Vec<_>>();
         assert_eq!(
-            toks,
             vec![
                 LPAREN,
                 LPAREN,
@@ -241,8 +249,18 @@ mod test {
                 RPAREN,
                 SYM("---"),
                 SYM("z"),
-                RPAREN
-            ]
+                RPAREN,
+                EOF
+            ],
+            toks
         );
+    }
+
+    #[test]
+    fn test_lex_empty() {
+        // always at least one token
+        let lexer = Lexer::new("");
+        let toks: Vec<_> = lexer.collect();
+        assert_eq!(vec![Tok::EOF], toks);
     }
 }
