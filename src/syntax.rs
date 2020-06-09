@@ -181,6 +181,8 @@ pub type BindingPower = (u8, u8);
 enum Tok<'a> {
     LPAREN,
     RPAREN,
+    COLON,
+    DOT,
     SYM(&'a str),
     DOLLAR_SYM(&'a str),
     NUM(&'a str),
@@ -244,6 +246,14 @@ impl<'a> Lexer<'a> {
             self.i += 1;
             self.col += 1;
             return RPAREN;
+        } else if c == b':' {
+            self.i += 1;
+            self.col += 1;
+            COLON
+        } else if c == b'.' {
+            self.i += 1;
+            self.col += 1;
+            DOT
         } else if c == b'$' {
             // operator but without any precedence
             let mut j = self.i + 1;
@@ -382,46 +392,86 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse a bound variable.
+    fn parse_var(&mut self) -> Result<Var> {
+        use Tok::*;
+
+        let v = match self.next_() {
+            SYM(s) => s,
+            t => {
+                return Err(Error::new_string(format!(
+                    "unexpected token {:?} while parsing bound variable",
+                    t
+                )))
+            }
+        };
+
+        let ty = if let COLON = self.peek_() {
+            self.eat_(COLON)?;
+            Some(self.parse_bp(0)?)
+        } else {
+            None
+        };
+        Ok(Var { name: Symbol::from_str(v), ty })
+    }
+
     /// Parse an expression, up to EOF.
     ///
     /// `bp` is the current binding power for this Pratt parser.
     pub fn parse_bp(&mut self, bp: u8) -> Result<PExpr> {
         use Tok::*;
 
-        let mut lhs = match self.next_() {
-            SYM(s) => {
-                let t_loc = self.loc();
-                let t = PExpr::var(s, t_loc);
-                match self.fixity_(s) {
-                    Fixity::Prefix((_, r_bp)) => {
-                        let arg = self.parse_bp(r_bp)?;
-                        t.apply(arg, t_loc)
+        let mut lhs = {
+            let t = self.next_();
+            match t {
+                SYM(s) => {
+                    let t_loc = self.loc();
+                    let t = PExpr::var(s, t_loc);
+                    match self.fixity_(s) {
+                        Fixity::Prefix((_, r_bp)) => {
+                            let arg = self.parse_bp(r_bp)?;
+                            t.apply(arg, t_loc)
+                        }
+                        Fixity::Infix(..) => {
+                            return Err(Error::new(
+                                "unexpected infix operator",
+                            ));
+                        }
+                        Fixity::Postfix(..) => {
+                            return Err(Error::new(
+                                "unexpected infix operator",
+                            ));
+                        }
+                        Fixity::Binder((_, l2)) => {
+                            let v = self.parse_var()?;
+                            self.eat_(DOT)?;
+                            let body = self.parse_bp(l2)?;
+                            PExpr::bind(s, v, body, t_loc)
+                        }
+                        _ => t,
                     }
-                    Fixity::Infix(..) => {
-                        return Err(Error::new("unexpected infix operator"));
-                    }
-                    Fixity::Postfix(..) => {
-                        return Err(Error::new("unexpected infix operator"));
-                    }
-                    _ => t,
+                }
+                DOLLAR_SYM(s) => PExpr::dollar_var(s, self.loc()), // TODO: handle prefix op
+                NUM(s) => PExpr::var(s, self.loc()),
+                LPAREN => {
+                    let t = self.parse_bp(0)?;
+                    self.eat_(RPAREN)?;
+                    t
+                }
+                RPAREN | DOT | EOF | COLON => {
+                    return Err(Error::new_string(format!(
+                        "unexpected token {:?}'",
+                        t
+                    )))
                 }
             }
-            DOLLAR_SYM(s) => PExpr::dollar_var(s, self.loc()), // TODO: handle prefix op
-            NUM(s) => PExpr::var(s, self.loc()),
-            LPAREN => {
-                let t = self.parse_bp(0)?;
-                self.eat_(RPAREN)?;
-                t
-            }
-            RPAREN => return Err(Error::new("unexpected ')'")),
-            EOF => return Err(Error::new("unexpected EOF")),
         };
 
         loop {
             let loc_op = self.loc();
             let (op, l_bp, r_bp) = match self.peek_() {
                 EOF => return Ok(lhs),
-                RPAREN => break,
+                RPAREN | COLON | DOT => break,
                 LPAREN => {
                     self.next_();
                     let t = self.parse_bp(0)?; // maximum binding power
@@ -432,6 +482,12 @@ impl<'a> Parser<'a> {
                 DOLLAR_SYM(s) => {
                     let v = PExpr::dollar_var(s, self.loc());
                     // simple application
+                    lhs = lhs.apply(v, self.loc());
+                    self.next_();
+                    continue;
+                }
+                NUM(s) => {
+                    let v = PExpr::num(s, self.loc());
                     lhs = lhs.apply(v, self.loc());
                     self.next_();
                     continue;
@@ -457,15 +513,13 @@ impl<'a> Parser<'a> {
                             lhs = v.apply(lhs, loc_op);
                             continue;
                         }
-                        Fixity::Prefix(..) => todo!(),
-                        Fixity::Binder(..) => todo!(),
+                        Fixity::Prefix(..) => {
+                            return Err(Error::new("unexpected prefix symbol"))
+                        }
+                        Fixity::Binder(..) => {
+                            return Err(Error::new("unexpected inder"))
+                        }
                     }
-                }
-                NUM(s) => {
-                    let v = PExpr::num(s, self.loc());
-                    lhs = lhs.apply(v, self.loc());
-                    self.next_();
-                    continue;
                 }
             };
 
@@ -485,9 +539,18 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    fn parse_top_(&mut self) -> Result<PExpr> {
+        let e = self.parse_bp(0)?;
+        if self.peek_() != Tok::EOF {
+            Err(Error::new("expected EOF"))
+        } else {
+            Ok(e)
+        }
+    }
+
     /// Parse an expression, up to EOF.
     pub fn parse(&mut self) -> Result<PExpr> {
-        self.parse_bp(0).map_err(|e| {
+        self.parse_top_().map_err(|e| {
             e.set_source(Error::new_string(format!(
                 "parse expression, at {:?}",
                 self.loc()
@@ -575,25 +638,23 @@ mod test {
 
     #[test]
     fn test_parser2() {
-        let s = "(f x) = y";
-        let get_fix = |s: &str| {
-            if s == "=" {
-                Some(Fixity::Infix((5, 5)))
-            } else {
-                None
-            }
+        let get_fix = |s: &str| match s {
+            "=" => Some(Fixity::Infix((10, 10))),
+            "!" | "?" => Some(Fixity::Binder((0, 5))),
+            _ => None,
         };
+        let s = "?y. (!x: foo bar. f x) = y";
         let e = parse(&get_fix, s).unwrap();
-        assert_eq!("(= (f x) y)", e.to_string());
+        assert_eq!("(?y. (= (!x: (foo bar). (f x)) y))", e.to_string());
     }
 
-    // test from the blog post
+    // test adapted from the blog post
     #[test]
     fn test_parser3() {
         let fix = |s: &str| match s {
             "+" | "-" => Some(Fixity::Infix((1, 2))),
             "*" | "/" => Some(Fixity::Infix((3, 4))),
-            "." => Some(Fixity::Infix((10, 9))),
+            "o" => Some(Fixity::Infix((10, 9))),
             "~" => Some(Fixity::Prefix((0, 5))), // prefix -
             "!" => Some(Fixity::Postfix((7, 0))),
             _ => None,
@@ -618,23 +679,23 @@ mod test {
         let s = parse(&fix, "a + b * c * d + e").unwrap();
         assert_eq!(s.to_string(), "(+ (+ a (* (* b c) d)) e)");
 
-        let s = parse(&fix, "f . g . h").unwrap();
-        assert_eq!(s.to_string(), "(. f (. g h))");
+        let s = parse(&fix, "f o g o h").unwrap();
+        assert_eq!(s.to_string(), "(o f (o g h))");
 
-        let s = parse(&fix, " 1 + 2 + f . g . h * 3 * 4").unwrap();
-        assert_eq!(s.to_string(), "(+ (+ 1 2) (* (* (. f (. g h)) 3) 4))");
+        let s = parse(&fix, " 1 + 2 + f o g o h * 3 * 4").unwrap();
+        assert_eq!(s.to_string(), "(+ (+ 1 2) (* (* (o f (o g h)) 3) 4))");
 
         let s = parse(&fix, "~ ~1 * 2").unwrap();
         assert_eq!(s.to_string(), "(* (~ (~ 1)) 2)");
 
-        let s = parse(&fix, "~ ~f . g").unwrap();
-        assert_eq!(s.to_string(), "(~ (~ (. f g)))");
+        let s = parse(&fix, "~ ~f o g").unwrap();
+        assert_eq!(s.to_string(), "(~ (~ (o f g)))");
 
         let s = parse(&fix, "~9!").unwrap();
         assert_eq!(s.to_string(), "(~ (! 9))");
 
-        let s = parse(&fix, "f . g !").unwrap();
-        assert_eq!(s.to_string(), "(! (. f g))");
+        let s = parse(&fix, "f o g !").unwrap();
+        assert_eq!(s.to_string(), "(! (o f g))");
 
         let s = parse(&fix, "(((0)))").unwrap();
         assert_eq!(s.to_string(), "0");
