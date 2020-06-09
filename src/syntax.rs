@@ -177,10 +177,12 @@ pub type BindingPower = (u8, u8);
 
 // token
 #[derive(Debug, Copy, Clone, PartialEq)]
+#[allow(non_camel_case_types)]
 enum Tok<'a> {
     LPAREN,
     RPAREN,
     SYM(&'a str),
+    DOLLAR_SYM(&'a str),
     NUM(&'a str),
     EOF,
 }
@@ -231,19 +233,34 @@ impl<'a> Lexer<'a> {
         if self.i >= bytes.len() {
             self.is_done = true;
             return EOF;
-        } else if bytes[self.i] == b'(' {
+        }
+
+        let c = bytes[self.i];
+        if c == b'(' {
             self.i += 1;
             self.col += 1;
             return LPAREN;
-        } else if bytes[self.i] == b')' {
+        } else if c == b')' {
             self.i += 1;
             self.col += 1;
             return RPAREN;
-        }
-        let c = bytes[self.i];
-
-        let mut j = self.i + 1;
-        if c.is_ascii_alphabetic() {
+        } else if c == b'$' {
+            // operator but without any precedence
+            let mut j = self.i + 1;
+            while j < bytes.len() {
+                let c2 = bytes[j];
+                if c2.is_ascii_punctuation() {
+                    j += 1
+                } else {
+                    break;
+                }
+            }
+            let slice = &self.src[self.i + 1..j];
+            self.col += j - self.i;
+            self.i = j;
+            return DOLLAR_SYM(slice);
+        } else if c.is_ascii_alphabetic() {
+            let mut j = self.i + 1;
             while j < bytes.len() {
                 let c2 = bytes[j];
                 if c2.is_ascii_alphanumeric() {
@@ -257,6 +274,7 @@ impl<'a> Lexer<'a> {
             self.i = j;
             return SYM(slice);
         } else if c.is_ascii_digit() {
+            let mut j = self.i + 1;
             while j < bytes.len() {
                 let c2 = bytes[j];
                 if c2.is_ascii_digit() {
@@ -269,6 +287,7 @@ impl<'a> Lexer<'a> {
             self.i = j;
             return NUM(slice);
         } else if c.is_ascii_punctuation() {
+            let mut j = self.i + 1;
             while j < bytes.len() {
                 let c2 = bytes[j];
                 if c2.is_ascii_punctuation() {
@@ -370,7 +389,24 @@ impl<'a> Parser<'a> {
         use Tok::*;
 
         let mut lhs = match self.next_() {
-            SYM(s) => PExpr::var(s, self.loc()), // TODO: handle prefix op
+            SYM(s) => {
+                let t_loc = self.loc();
+                let t = PExpr::var(s, t_loc);
+                match self.fixity_(s) {
+                    Fixity::Prefix((_, r_bp)) => {
+                        let arg = self.parse_bp(r_bp)?;
+                        t.apply(arg, t_loc)
+                    }
+                    Fixity::Infix(..) => {
+                        return Err(Error::new("unexpected infix operator"));
+                    }
+                    Fixity::Postfix(..) => {
+                        return Err(Error::new("unexpected infix operator"));
+                    }
+                    _ => t,
+                }
+            }
+            DOLLAR_SYM(s) => PExpr::dollar_var(s, self.loc()), // TODO: handle prefix op
             NUM(s) => PExpr::var(s, self.loc()),
             LPAREN => {
                 let t = self.parse_bp(0)?;
@@ -393,8 +429,16 @@ impl<'a> Parser<'a> {
                     lhs = lhs.apply(t, loc_op);
                     continue;
                 }
+                DOLLAR_SYM(s) => {
+                    let v = PExpr::dollar_var(s, self.loc());
+                    // simple application
+                    lhs = lhs.apply(v, self.loc());
+                    self.next_();
+                    continue;
+                }
                 SYM(s) => {
-                    let v = PExpr::var(s, self.loc());
+                    let loc_op = self.loc();
+                    let v = PExpr::var(s, loc_op);
                     match self.fixity_(s) {
                         Fixity::Infix((l1, l2)) => (v, l1, l2),
                         Fixity::Nullary => {
@@ -403,8 +447,17 @@ impl<'a> Parser<'a> {
                             self.next_();
                             continue;
                         }
+                        Fixity::Postfix((l_bp, _)) => {
+                            if l_bp < bp {
+                                break;
+                            }
+                            self.next_();
+
+                            // postfix operator applied to lhs
+                            lhs = v.apply(lhs, loc_op);
+                            continue;
+                        }
                         Fixity::Prefix(..) => todo!(),
-                        Fixity::Postfix(..) => todo!(),
                         Fixity::Binder(..) => todo!(),
                     }
                 }
@@ -413,7 +466,7 @@ impl<'a> Parser<'a> {
                     lhs = lhs.apply(v, self.loc());
                     self.next_();
                     continue;
-                } // TODO: dollar var
+                }
             };
 
             if l_bp < bp {
@@ -425,7 +478,6 @@ impl<'a> Parser<'a> {
             let rhs = self.parse_bp(r_bp)?;
 
             // infix apply
-            dbg!("app", &op, &lhs, &rhs);
             let app = op.apply_l(&[lhs, rhs], loc_op);
             lhs = app;
         }
@@ -435,7 +487,12 @@ impl<'a> Parser<'a> {
 
     /// Parse an expression, up to EOF.
     pub fn parse(&mut self) -> Result<PExpr> {
-        self.parse_bp(0)
+        self.parse_bp(0).map_err(|e| {
+            e.set_source(Error::new_string(format!(
+                "parse expression, at {:?}",
+                self.loc()
+            )))
+        })
     }
 }
 
@@ -536,7 +593,9 @@ mod test {
         let fix = |s: &str| match s {
             "+" | "-" => Some(Fixity::Infix((1, 2))),
             "*" | "/" => Some(Fixity::Infix((3, 4))),
-            "." => Some(Fixity::Infix((6, 5))),
+            "." => Some(Fixity::Infix((10, 9))),
+            "~" => Some(Fixity::Prefix((0, 5))), // prefix -
+            "!" => Some(Fixity::Postfix((7, 0))),
             _ => None,
         };
         let s = parse(&fix, "1").unwrap();
@@ -564,5 +623,20 @@ mod test {
 
         let s = parse(&fix, " 1 + 2 + f . g . h * 3 * 4").unwrap();
         assert_eq!(s.to_string(), "(+ (+ 1 2) (* (* (. f (. g h)) 3) 4))");
+
+        let s = parse(&fix, "~ ~1 * 2").unwrap();
+        assert_eq!(s.to_string(), "(* (~ (~ 1)) 2)");
+
+        let s = parse(&fix, "~ ~f . g").unwrap();
+        assert_eq!(s.to_string(), "(~ (~ (. f g)))");
+
+        let s = parse(&fix, "~9!").unwrap();
+        assert_eq!(s.to_string(), "(~ (! 9))");
+
+        let s = parse(&fix, "f . g !").unwrap();
+        assert_eq!(s.to_string(), "(! (. f g))");
+
+        let s = parse(&fix, "(((0)))").unwrap();
+        assert_eq!(s.to_string(), "0");
     }
 }
