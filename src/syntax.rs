@@ -54,12 +54,18 @@ pub enum PExprView {
     Bind { binder: Symbol, v: Var, body: PExpr },
 }
 
-/// Parser for expressions.
-///
-/// It uses the precedence table provided by a `Database`, and an IO stream.
-pub struct Parser<'a> {
-    db: &'a db::Database,
-    /// The source code.
+// token
+#[derive(Debug, PartialEq)]
+enum Tok<'a> {
+    LPAREN,
+    RPAREN,
+    SYM(&'a str),
+    NUM(&'a str),
+    EOF,
+}
+
+/// Lexer for expressions.
+struct Lexer<'a> {
     src: &'a str,
     /// Index in `src`
     i: usize,
@@ -69,11 +75,174 @@ pub struct Parser<'a> {
     col: usize,
 }
 
+impl<'a> Lexer<'a> {
+    fn new(src: &'a str) -> Self {
+        Self { src, i: 0, line: 1, col: 1 }
+    }
+
+    pub fn cur_pos(&self) -> (usize, usize) {
+        (self.line, self.col)
+    }
+
+    // get next token
+    fn next_(&mut self) -> Tok<'a> {
+        use Tok::*;
+
+        let bytes = self.src.as_bytes();
+
+        // skip whitespace
+        while self.i < bytes.len() {
+            let c = bytes[self.i];
+            if c == b' ' || c == b'\t' {
+                self.i += 1;
+                self.col += 1;
+            } else if c == b'\n' {
+                self.col = 1;
+                self.line += 1;
+                self.i += 1;
+            } else {
+                break;
+            }
+        }
+
+        if self.i >= bytes.len() {
+            return EOF;
+        } else if bytes[self.i] == b'(' {
+            self.i += 1;
+            self.col += 1;
+            return LPAREN;
+        } else if bytes[self.i] == b')' {
+            self.i += 1;
+            self.col += 1;
+            return RPAREN;
+        }
+        let c = bytes[self.i];
+
+        let mut j = self.i + 1;
+        if c.is_ascii_alphabetic() {
+            while j < bytes.len() {
+                let c2 = bytes[j];
+                if c2.is_ascii_alphanumeric() {
+                    j += 1
+                } else {
+                    break;
+                }
+            }
+            let slice = &self.src[self.i..j];
+            self.col += j - self.i;
+            self.i = j;
+            return SYM(slice);
+        } else if c.is_ascii_digit() {
+            while j < bytes.len() {
+                let c2 = bytes[j];
+                if c2.is_ascii_digit() {
+                    j += 1
+                } else {
+                    break;
+                }
+            }
+            let slice = &self.src[self.i..j];
+            self.i = j;
+            return NUM(slice);
+        } else if c.is_ascii_punctuation() {
+            while j < bytes.len() {
+                let c2 = bytes[j];
+                if c2.is_ascii_punctuation() {
+                    j += 1
+                } else {
+                    break;
+                }
+            }
+            let slice = &self.src[self.i..j];
+            self.col += j - self.i;
+            self.i = j;
+            return SYM(slice);
+        } else {
+            todo!("handle char {:?}", c) // TODO? error?
+        }
+    }
+}
+
+impl<'a> Iterator for Lexer<'a> {
+    type Item = Tok<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.i >= self.src.len() {
+            None
+        } else {
+            Some(self.next_())
+        }
+    }
+}
+
+/// Parser for expressions.
+///
+/// It uses the precedence table provided by a `Database`, and an IO stream.
+pub struct Parser<'a> {
+    db: &'a db::Database,
+    lexer: Lexer<'a>,
+}
+
 impl<'a> Parser<'a> {
     /// New parser using the given string `src`.
     pub fn new(db: &'a db::Database, src: &'a str) -> Self {
-        Self { db, src, i: 0, line: 1, col: 1 }
+        let lexer = Lexer::new(src);
+        Self { db, lexer }
     }
 
-    // TODO!
+    /// Return current `(line,column)` pair.
+    pub fn cur_pos(&self) -> (usize, usize) {
+        self.lexer.cur_pos()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_lexer1() {
+        use Tok::*;
+        let lexer = Lexer::new(" foo + bar13(hello! world) ");
+        let toks = lexer.collect::<Vec<_>>();
+        assert_eq!(
+            toks,
+            vec![
+                SYM("foo"),
+                SYM("+"),
+                SYM("bar13"),
+                LPAREN,
+                SYM("hello"),
+                SYM("!"),
+                SYM("world"),
+                RPAREN,
+                EOF
+            ]
+        );
+    }
+
+    #[test]
+    fn test_lexer2() {
+        use Tok::*;
+        let lexer = Lexer::new("((12+ f(x, Y))--- z)");
+        let toks = lexer.collect::<Vec<_>>();
+        assert_eq!(
+            toks,
+            vec![
+                LPAREN,
+                LPAREN,
+                NUM("12"),
+                SYM("+"),
+                SYM("f"),
+                LPAREN,
+                SYM("x"),
+                SYM(","),
+                SYM("Y"),
+                RPAREN,
+                RPAREN,
+                SYM("---"),
+                SYM("z"),
+                RPAREN
+            ]
+        );
+    }
 }
