@@ -5,11 +5,10 @@
 //! for the main parser and terminology.
 
 use crate::{kernel_of_trust as k, Error, Result};
-use std::{cell::RefCell, fmt, rc::Rc, u8};
+use std::{cell::RefCell, fmt, rc::Rc, u16};
 
-/// Reuse symbols from the kernel.
-type Symbol = k::Symbol;
-
+/// ## Definition of the AST
+///
 /// The AST used for parsing and type inference.
 #[derive(Clone)]
 pub struct PExpr(Rc<PExprCell>);
@@ -40,6 +39,9 @@ pub struct Var {
     name: Symbol,
     ty: Option<PExpr>,
 }
+
+/// Reuse symbols from the kernel.
+type Symbol = k::Symbol;
 
 // custom debug that prints as S-expressions
 impl fmt::Debug for PExpr {
@@ -95,12 +97,12 @@ impl PExpr {
     }
 
     /// Flatten an application.
-    pub fn unfold_app(&self) -> (PExpr, Vec<PExpr>) {
-        let mut t = self.clone();
+    pub fn unfold_app(&self) -> (&PExpr, Vec<&PExpr>) {
+        let mut t = self;
         let mut args = vec![];
         while let App(f, a) = &t.0.view {
-            args.push(a.clone());
-            t = f.clone();
+            args.push(a);
+            t = f;
         }
         args.reverse();
         (t, args)
@@ -141,6 +143,8 @@ impl PExpr {
     }
 }
 
+/// ## Parsing
+///
 /// How a symbol behaves in the grammar: prefix, infix, postfix, constant.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Fixity {
@@ -173,7 +177,7 @@ impl Fixity {
 /// It's a pair because it's left and right binding powers so we can represent
 /// associativity.
 /// See https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html .
-pub type BindingPower = (u8, u8);
+pub type BindingPower = (u16, u16);
 
 // token
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -418,7 +422,7 @@ impl<'a> Parser<'a> {
     /// Parse an expression, up to EOF.
     ///
     /// `bp` is the current binding power for this Pratt parser.
-    pub fn parse_bp(&mut self, bp: u8) -> Result<PExpr> {
+    pub fn parse_bp(&mut self, bp: u16) -> Result<PExpr> {
         use Tok::*;
 
         let mut lhs = {
@@ -568,6 +572,159 @@ pub fn parse(
     p.parse()
 }
 
+/// ## Pretty printing
+///
+/// This struct captures an expression to print and a fixity function used
+/// to properly display infix symbols and insert parenthesis.
+#[derive(Copy, Clone)]
+pub struct PrintStr<'a> {
+    e: &'a PExpr,
+    get_fixity: &'a dyn Fn(&str) -> Option<Fixity>,
+    min_bp: u16,
+}
+
+impl<'a> PrintStr<'a> {
+    /// New printer for the given expression.
+    pub fn new(
+        get_fixity: &'a dyn Fn(&str) -> Option<Fixity>,
+        e: &'a PExpr,
+    ) -> Self {
+        Self { e, get_fixity, min_bp: 0 }
+    }
+
+    fn set_e_(&self, e2: &'a PExpr) -> Self {
+        PrintStr { e: e2, ..*self }
+    }
+
+    fn set_bp_(&self, bp: u16) -> Self {
+        PrintStr { min_bp: bp, ..*self }
+    }
+
+    /// Pretty print into the given formatter.
+    fn pp_bp(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self.e.view() {
+            DollarVar(v) => write!(fmt, "${}", v.name()),
+            Var(v) => write!(fmt, "{}", v.name()),
+            Num(s) => write!(fmt, "{}", s),
+            App(..) => {
+                let (f, args) = self.e.unfold_app();
+                debug_assert!(args.len() > 0);
+
+                if let Var(s) = f.view() {
+                    match (*self.get_fixity)(s.name()) {
+                        Some(Fixity::Infix((lp, rp))) if args.len() == 2 => {
+                            // TODO: remove implicit args?
+                            let need_paren = self.min_bp >= lp;
+                            if need_paren {
+                                write!(fmt, "(")?;
+                            }
+                            write!(
+                                fmt,
+                                "{} {} {}",
+                                self.set_e_(&args[0]).set_bp_(lp),
+                                self.set_e_(f).set_bp_(u16::MAX),
+                                self.set_e_(&args[1]).set_bp_(rp),
+                            )?;
+
+                            if need_paren {
+                                write!(fmt, ")")?;
+                            }
+                            return Ok(());
+                        }
+                        Some(Fixity::Prefix((_, rp))) if args.len() == 1 => {
+                            let need_paren = self.min_bp >= rp;
+                            if need_paren {
+                                write!(fmt, "(")?;
+                            }
+                            write!(
+                                fmt,
+                                "{} {}",
+                                self.set_e_(f),
+                                self.set_e_(&args[0]).set_bp_(rp)
+                            )?;
+                            if need_paren {
+                                write!(fmt, ")")?;
+                            }
+                            return Ok(());
+                        }
+                        Some(Fixity::Postfix((lp, _))) if args.len() == 1 => {
+                            let need_paren = self.min_bp >= lp;
+                            if need_paren {
+                                write!(fmt, "(")?;
+                            }
+                            write!(
+                                fmt,
+                                "{} {}",
+                                self.set_e_(&args[0]).set_bp_(lp),
+                                self.set_e_(f),
+                            )?;
+                            if need_paren {
+                                write!(fmt, ")")?;
+                            }
+                            return Ok(());
+                        }
+                        Some(Fixity::Binder(..)) => panic!(
+                            "unexpected binder fixity for symbol {:?}",
+                            s
+                        ),
+                        Some(..) | None => (),
+                    }
+                }
+
+                let need_paren = self.min_bp == u16::MAX;
+                if need_paren {
+                    write!(fmt, "(")?;
+                }
+                let sub_bp = u16::MAX; // application binds tightly
+                self.set_e_(f).set_bp_(sub_bp).pp_bp(fmt)?;
+                for x in args {
+                    write!(fmt, " {}", self.set_e_(x).set_bp_(sub_bp))?;
+                }
+
+                if need_paren {
+                    write!(fmt, ")")?;
+                }
+                Ok(())
+            }
+            Bind { binder, v, body } => {
+                let r_bp = match (*self.get_fixity)(binder.name()) {
+                    Some(Fixity::Binder((_, x))) => x,
+                    None => 1,
+                    _ => panic!(
+                        "expected binder {:?} to have binder fixity",
+                        binder
+                    ),
+                };
+                if self.min_bp > r_bp {
+                    write!(fmt, "(")?;
+                }
+                write!(fmt, "{}{}", binder.name(), v.name.name())?;
+                if let Some(ty) = &v.ty {
+                    write!(fmt, ": {}", self.set_e_(ty).set_bp_(0))?;
+                }
+                write!(fmt, ". ")?;
+                self.set_e_(body).set_bp_(r_bp).pp_bp(fmt)?;
+
+                if self.min_bp > r_bp {
+                    write!(fmt, ")")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<'a> fmt::Display for PrintStr<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        self.pp_bp(fmt)
+    }
+}
+
+pub fn print(get_fix: &dyn Fn(&str) -> Option<Fixity>, e: &PExpr) -> String {
+    let pp = PrintStr::new(get_fix, e);
+    format!("{}", pp)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -646,6 +803,10 @@ mod test {
         let s = "?y. (!x: foo bar. f x) = y";
         let e = parse(&get_fix, s).unwrap();
         assert_eq!("(?y. (= (!x: (foo bar). (f x)) y))", e.to_string());
+        assert_eq!(
+            "?y. (!x: foo bar. f x) = y",
+            format!("{}", PrintStr::new(&get_fix, &e))
+        );
     }
 
     // test adapted from the blog post
