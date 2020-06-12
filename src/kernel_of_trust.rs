@@ -1255,7 +1255,11 @@ impl Ctx {
                     }
                     Some(self.subst1_(ty_body_f, 0, arg)?)
                 }
-                _ => panic!("cannot apply term with a non-pi type"),
+                _ => {
+                    return Err(Error::new(
+                        "cannot apply term with a non-pi type",
+                    ))
+                }
             },
         })
     }

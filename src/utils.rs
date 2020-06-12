@@ -143,6 +143,11 @@ pub fn need_to_rename_before_unif(
 pub struct UnifySubst<'a>(Vec<(&'a Var, &'a Expr)>);
 
 impl<'a> UnifySubst<'a> {
+    /// New empty substitution.
+    pub fn new() -> Self {
+        Self(vec![])
+    }
+
     /// Find a variable `v` in this substitution.
     pub fn find(&self, v: &'a Var) -> Option<&'a Expr> {
         match self.0.binary_search_by_key(&v, |pair| pair.0) {
@@ -194,7 +199,8 @@ enum UnifOp {
     Match,
     Unify,
 }
-struct UnifySt<'a> {
+
+pub struct UnifySt<'a> {
     op: UnifOp,
     solved: fnv::FnvHashSet<(&'a Expr, &'a Expr)>,
     subst: UnifySubst<'a>,
@@ -306,6 +312,16 @@ impl<'a> UnifySt<'a> {
         } else {
             None
         }
+    }
+
+    pub fn start(
+        mut self,
+        e1: &'a Expr,
+        e2: &'a Expr,
+    ) -> Option<UnifySubst<'a>> {
+        self.to_solve.clear();
+        self.add_pair(e1, e2);
+        self.solve()
     }
 }
 

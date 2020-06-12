@@ -4,8 +4,8 @@
 //! We follow https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
 //! for the main parser and terminology.
 
-use crate::{kernel_of_trust as k, Error, Result};
-use std::{cell::RefCell, fmt, rc::Rc, u16};
+use crate::{database as db, fnv, kernel_of_trust as k, utils, Error, Result};
+use std::{cell::RefCell, fmt, rc::Rc, sync::atomic, u16};
 
 /// ## Definition of the AST
 ///
@@ -16,9 +16,12 @@ pub struct PExpr(Rc<PExprCell>);
 /// Content of an expression.
 #[derive(Clone)]
 pub struct PExprCell {
+    /// View of the expression
     view: PExprView,
+    /// Location in the input (start location)
     loc: (usize, usize),
-    ty: RefCell<Option<k::Expr>>,
+    /// The expression this resolves into after type inference
+    resolved: RefCell<Option<k::Expr>>,
 }
 
 /// The root of an expression.
@@ -93,7 +96,7 @@ impl PExpr {
     }
 
     fn mk_(view: PExprView, loc: (usize, usize)) -> Self {
-        PExpr(Rc::new(PExprCell { view, loc, ty: RefCell::new(None) }))
+        PExpr(Rc::new(PExprCell { view, loc, resolved: RefCell::new(None) }))
     }
 
     /// Flatten an application.
@@ -277,7 +280,9 @@ impl<'a> Lexer<'a> {
             let mut j = self.i + 1;
             while j < bytes.len() {
                 let c2 = bytes[j];
-                if c2.is_ascii_alphanumeric() {
+                if c2.is_ascii_alphanumeric()
+                    || (c.is_ascii_uppercase() && c2 == b'.')
+                {
                     j += 1
                 } else {
                     break;
@@ -613,7 +618,7 @@ impl<'a> PrintStr<'a> {
                 if let Var(s) = f.view() {
                     match (*self.get_fixity)(s.name()) {
                         Some(Fixity::Infix((lp, rp))) if args.len() == 2 => {
-                            // TODO: remove implicit args?
+                            // TODO: remove implicit args? or use a dollar
                             let need_paren = self.min_bp >= lp;
                             if need_paren {
                                 write!(fmt, "(")?;
@@ -723,6 +728,158 @@ impl<'a> fmt::Display for PrintStr<'a> {
 pub fn print(get_fix: &dyn Fn(&str) -> Option<Fixity>, e: &PExpr) -> String {
     let pp = PrintStr::new(get_fix, e);
     format!("{}", pp)
+}
+
+/// ## Type inference.
+///
+/// Type inference allows us to turn syntactic terms of type `PExpr`
+/// into fully resolved `kernel_of_trust::Expr`.
+/// It might fail if the input term is not well typed or not inferrable.
+pub struct TypeInferenceCtx<'a> {
+    ctx: &'a mut k::Ctx,
+    db: &'a mut db::Database,
+    gen_vars: Vec<k::Expr>, // freshly allocated variables
+    vmap: fnv::FnvHashMap<Symbol, k::Expr>, // variables
+}
+
+// used to allocate fresh variables
+static GENSYM: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+
+impl<'a> TypeInferenceCtx<'a> {
+    /// New type inference context.
+    pub fn new(ctx: &'a mut k::Ctx, db: &'a mut db::Database) -> Self {
+        Self { ctx, db, gen_vars: vec![], vmap: fnv::new_table_with_cap(16) }
+    }
+
+    fn new_name_(&mut self, s: &str) -> String {
+        let n = GENSYM.fetch_add(1, atomic::Ordering::Relaxed);
+        format!("{}{}", s, n)
+    }
+
+    fn new_ty_var_(&mut self) -> k::Expr {
+        let ty = self.ctx.mk_ty();
+        let name = self.new_name_("'a");
+        let v = self.ctx.mk_var_str(&name, ty);
+        self.gen_vars.push(v.clone());
+        v
+    }
+
+    fn infer_var_(&mut self, v: &Symbol, is_dollar: bool) -> Result<k::Expr> {
+        match self.vmap.get(v) {
+            Some(e2) => {
+                Ok(e2.clone()) // cached
+            }
+            None => {
+                // lookup in database
+                if let Some(c) = self.db.def_by_name(v.name()) {
+                    Ok(c.expr.clone())
+                } else if is_dollar {
+                    Err(Error::new(
+                        "dollar symbols can only be used for defined constants",
+                    ))
+                } else {
+                    // allocate new var
+                    let ty_v = self.new_ty_var_();
+                    let ev = self.ctx.mk_var(k::Var::new(v.clone(), ty_v));
+                    self.vmap.insert(v.clone(), ev.clone());
+                    Ok(ev)
+                }
+            }
+        }
+    }
+
+    fn infer_lam_(&mut self, v: &Var, body: &PExpr) -> Result<k::Expr> {
+        // type of `v`
+        let ty_v = match &v.ty {
+            None => self.new_ty_var_(),
+            Some(ty) => self.infer_(ty)?,
+        };
+        if self.vmap.contains_key(&v.name) {
+            return Err(Error::new("shadowing of variables is forbidden"));
+        }
+        // locally insert a variable `v` with given type.
+        let local_v = k::Var::new(v.name.clone(), ty_v);
+        let local_ev = self.ctx.mk_var(local_v.clone());
+        self.vmap.insert(v.name.clone(), local_ev.clone());
+        // infer body
+        let body = self.infer_(body);
+        self.vmap.remove(&v.name);
+        let e = self.ctx.mk_lambda(local_v, body?)?;
+        Ok(e)
+    }
+
+    fn infer_(&mut self, e: &PExpr) -> Result<k::Expr> {
+        // cached
+        if let Some(e) = &*e.0.resolved.borrow() {
+            return Ok(e.clone());
+        }
+
+        let e2 = match &e.0.view {
+            Var(v) if v.name() == "_" => {
+                // wildcard: generative variable. Do not cache.
+                let ty_v = self.new_ty_var_();
+                let name = self.new_name_("$x");
+                self.ctx.mk_var_str(&name, ty_v)
+            }
+            Var(v) => self.infer_var_(v, false)?,
+            DollarVar(v) => self.infer_var_(v, true)?,
+            App(f, a) => {
+                let f = self.infer_(f)?;
+                let a = self.infer_(a)?;
+
+                self.ctx.mk_app(f, a).map_err(|err| {
+                    err.set_source(Error::new_string(format!(
+                        "inferring {:?} at {:?}",
+                        e, e.0.loc
+                    )))
+                })?
+
+                // TODO: unify types, in case `f` is a variable
+                /*
+                match ty_f.view() {
+                    k::EPi(..) => {
+                        // direct apply
+
+                    },
+                    _ => {
+                        let b =
+                    }
+
+                }
+                utils::unify(f.ty(),
+                */
+            }
+            Num(_) => todo!("type inference for numbers"),
+            Bind { binder, v, body } if binder.name() == "\\" => {
+                // pure lambda
+                self.infer_lam_(v, body)?
+            }
+            Bind { binder, v, body } => {
+                // `binder x. body` is sugar for `binder (λx. body)`
+                let binder = self
+                    .db
+                    .def_by_name(binder.name())
+                    .ok_or_else(|| {
+                        Error::new_string(format!(
+                            "cannot find binder {:?}",
+                            &binder
+                        ))
+                    })?
+                    .expr
+                    .clone();
+                let lam = self.infer_lam_(v, body)?;
+                self.ctx.mk_app(binder, lam)?
+            }
+        };
+        *e.0.resolved.borrow_mut() = Some(e2.clone());
+        Ok(e2)
+    }
+
+    /// Perform type inference to turn `e` into a proper expression.
+    pub fn infer(&mut self, e: &PExpr) -> Result<k::Expr> {
+        self.gen_vars.clear();
+        self.infer_(e)
+    }
 }
 
 #[cfg(test)]
@@ -860,5 +1017,55 @@ mod test {
 
         let s = parse(&fix, "(((0)))").unwrap();
         assert_eq!(s.to_string(), "0");
+    }
+
+    #[test]
+    fn test_parser4() {
+        let s = "f _";
+        let get_fix = |_: &str| None;
+        let e = parse(&get_fix, s).unwrap();
+        assert_eq!("(f _)", e.to_string());
+    }
+
+    #[test]
+    fn test_infer1() {
+        let mut ctx = k::Ctx::new();
+        let mut db = db::Database::new();
+
+        // test parse 2
+        let get_fix = |s: &str| match s {
+            "=" => Some(Fixity::Infix((10, 10))),
+            "\\" => Some(Fixity::Binder((0, 5))),
+            _ => None,
+        };
+        let s = "\\y. (\\x: foo bar. f x) = y";
+        let e = parse(&get_fix, s).unwrap();
+        assert_eq!("(\\y. (= (\\x: (foo bar). (f x)) y))", e.to_string());
+
+        // now infer
+        let mut ictx = TypeInferenceCtx::new(&mut ctx, &mut db);
+        let e2 = ictx.infer(&e).unwrap();
+        println!("{:?}", e2);
+    }
+
+    #[test]
+    fn test_infer2() {
+        let mut ctx = k::Ctx::new();
+        let mut db = db::Database::new();
+
+        // test parse 2
+        let get_fix = |s: &str| match s {
+            "=" => Some(Fixity::Infix((10, 10))),
+            "!" | "?" | "\\" => Some(Fixity::Binder((0, 5))),
+            _ => None,
+        };
+        let s = "?y. (!x: foo bar. f x) = y";
+        let e = parse(&get_fix, s).unwrap();
+        assert_eq!("(?y. (= (!x: (foo bar). (f x)) y))", e.to_string());
+
+        // now infer
+        let mut ictx = TypeInferenceCtx::new(&mut ctx, &mut db);
+        let e2 = ictx.infer(&e).unwrap();
+        println!("{:?}", e2);
     }
 }
