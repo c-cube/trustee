@@ -39,3 +39,5 @@ pair = ctx.find('Data.Pair.,')
 fst = ctx.find('Data.Pair.fst')
 snd = ctx.find('Data.Pair.snd')
 
+t1 = ctx.parse_expr('(\\x. x)')
+mem = ctx.parse_expr('Set.member')

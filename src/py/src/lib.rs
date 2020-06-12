@@ -548,6 +548,28 @@ py_class!(pub class Ctx |py| {
         Thm::create_instance(py, th, self.ctx(py).clone())
     }
 
+    /// Parse an expression.
+    def parse_expr(&self, s: &str) -> PyResult<Expr> {
+        use trustee::syntax as sy;
+        let mut ctx = self.ctx(py).lock().unwrap();
+        let mut db = self.db(py).lock().unwrap();
+        let get_fixity = |s:&str| {
+            if s == "\\" { Some(sy::Fixity::Binder((5,6))) }
+            else {
+                match db.def_by_name(&s) {
+                    None => None,
+                    Some(c) => Some(c.fixity)
+                }
+            }
+        };
+        let pe = sy::parse(&get_fixity, s)
+            .map_err(|e| mk_err(py, e.to_string()))?;
+        let mut tyinf = sy::TypeInferenceCtx::new(&mut *ctx, &mut *db);
+        let e = tyinf.infer(&pe)
+            .map_err(|e| mk_err(py, e.to_string()))?;
+        Expr::create_instance(py, e, self.ctx(py).clone())
+    }
+
     /// Parse the list of open theory files.
     def parse_ot(&self, files: Vec<String>)
         -> PyResult<(trustee::FnvHashMap<String,Expr>, Vec<Thm>, Vec<Thm>)> {
