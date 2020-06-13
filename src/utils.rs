@@ -365,3 +365,21 @@ pub fn thm_sym(em: &mut dyn CtxI, th: Thm) -> Result<Thm> {
     };
     em.thm_bool_eq(refl_t, th_tequ_eq_ueqt)
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_sym() {
+        let mut ctx = Ctx::new();
+        let bool = ctx.mk_bool();
+        let x = ctx.mk_var_str("x", bool.clone());
+        let y = ctx.mk_var_str("y", bool.clone());
+        let x_eq_y = ctx.mk_eq_app(x.clone(), y.clone()).unwrap();
+        let y_eq_x = ctx.mk_eq_app(y.clone(), x.clone()).unwrap();
+        let th = ctx.thm_assume(x_eq_y);
+        let th2 = thm_sym(&mut ctx, th).unwrap();
+        assert_eq!(th2.concl(), &y_eq_x);
+    }
+}
