@@ -1027,6 +1027,7 @@ mod test {
         assert_eq!("(f _)", e.to_string());
     }
 
+    /* FIXME
     #[test]
     fn test_infer1() {
         let mut ctx = k::Ctx::new();
@@ -1068,4 +1069,5 @@ mod test {
         let e2 = ictx.infer(&e).unwrap();
         println!("{:?}", e2);
     }
+    */
 }
