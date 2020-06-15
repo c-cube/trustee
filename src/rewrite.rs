@@ -102,14 +102,11 @@ where
 pub struct Rule {
     lhs: Expr,
     th: Thm,
+    ordered: bool, // only works if `lhs>rhs`.
 }
 
 impl Rule {
-    /// Create a rewrite rule from a theorem `A |- lhs=rhs`.
-    ///
-    /// Will fail if the theorem is not an equation, or if some
-    /// free variables of `rhs` are not in `lhs`.
-    pub fn new(th: &Thm) -> Result<Self> {
+    fn new_(th: &Thm, ordered: bool) -> Result<Self> {
         let (lhs, rhs) = th.concl().unfold_eq().ok_or_else(|| {
             Error::new("rewrite rule conclusion must be an equation")
         })?;
@@ -129,7 +126,41 @@ impl Rule {
                 )))
             }
         };
-        Ok(Rule { lhs: lhs.clone(), th: th.clone() })
+        // TODO: not used for now?
+        if !ordered {
+            match vl.iter().find(|v| !vr.contains(v)) {
+                None => (),
+                Some(v) => {
+                    return Err(Error::new_string(format!(
+                        "variable {:?} occurs freely in LHS of unordered rule but not RHS",
+                        v
+                    )))
+                }
+            };
+        }
+        Ok(Rule { lhs: lhs.clone(), th: th.clone(), ordered })
+    }
+
+    /// Create a rewrite rule from a theorem `|- lhs=rhs`.
+    ///
+    /// Will fail if the theorem is not an equation, or if some
+    /// free variables of `rhs` are not in `lhs`, or if the theorem has
+    /// assumptions.
+    pub fn new(th: &Thm) -> Result<Self> {
+        Self::new_(th, false)
+    }
+
+    /// Create an unordered rewrite rule from a theorem `|- t1=t2`.
+    ///
+    /// This can rewrite both `t1σ` into `t2σ`, or `t2σ` into `t1σ`
+    /// for a substitution `σ`, depending on which is the bigger term.
+    ///
+    /// Will fail if the theorem is not an equation, or if `t1` and `t2`
+    /// do not have the same set of free `t1` and `t2`
+    /// do not have the same set of free variables.
+    /// free variables of `rhs` are not in `lhs`.
+    pub fn new_unordered(th: &Thm) -> Result<Self> {
+        Self::new_(th, true)
     }
 }
 
