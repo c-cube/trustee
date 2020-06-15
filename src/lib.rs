@@ -2,6 +2,7 @@ pub mod database;
 mod fnv;
 pub mod kernel_of_trust;
 pub mod open_theory;
+pub mod rewrite;
 pub mod syntax;
 pub mod utils;
 

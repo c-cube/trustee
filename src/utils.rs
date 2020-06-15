@@ -1,6 +1,6 @@
 //! Utils that are outside the kernel of trust itself.
 
-use crate::*;
+use crate::{kernel_of_trust as k, *};
 
 /// Result of the definition of a new polymorphic constant.
 #[derive(Debug, Clone)]
@@ -175,6 +175,13 @@ impl<'a> UnifySubst<'a> {
         }
     }
 
+    pub fn to_k_subst(&self) -> k::Subst {
+        self.0
+            .iter()
+            .map(|(v, e)| ((*v).clone(), (*e).clone()))
+            .collect::<Vec<_>>()
+    }
+
     fn add_(&mut self, v: &'a Var, e: &'a Expr) {
         debug_assert!(self.find(v).is_none());
         self.0.push((v, e));
@@ -188,7 +195,7 @@ impl<'a> UnifySubst<'a> {
 impl<'a> Into<kernel_of_trust::Subst> for UnifySubst<'a> {
     fn into(self) -> kernel_of_trust::Subst {
         self.0
-            .iter()
+            .into_iter()
             .map(|(v, e)| ((*v).clone(), (*e).clone()))
             .collect::<Vec<_>>()
     }
