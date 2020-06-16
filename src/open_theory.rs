@@ -247,7 +247,7 @@ impl OConst for CustomConst {
         let mut ty_vars = Cow::Borrowed(&self.ty_vars);
         // rename if needed
         if let Some(mut data) =
-            utils::need_to_rename_before_unif(&c_ty_vars, &ty)
+            algo::need_to_rename_before_unif(&c_ty_vars, &ty)
         {
             //eprintln!(
             //    "need to rename in const {:?}:{:?}, to unify with type {:?}",
@@ -270,7 +270,7 @@ impl OConst for CustomConst {
             }
         }
         // match type, so we're sure that `ty_vars` all disappear
-        let subst = utils::match_(&c_ty_vars, &ty).ok_or_else(|| {
+        let subst = algo::match_(&c_ty_vars, &ty).ok_or_else(|| {
             Error::new_string(format!(
                 "unification failed\n  between {:?} and {:?}\n  \
                     when applying constant {:?}",
@@ -761,7 +761,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("define const", |vm, x, y| match (&*x, &*y) {
             (O::Term(rhs), O::Name(n)) => {
                 // make a definition `n := t`
-                let def = utils::thm_new_poly_definition(
+                let def = algo::thm_new_poly_definition(
                     vm.ctx,
                     &n.to_string(),
                     rhs.clone(),
@@ -840,7 +840,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let c_l = renaming.into_iter().map(|(n, v)| {
                 let rhs = subst.iter().find(|(ref v2,_)| &v==v2).ok_or_else(||
                     Error::new_string(format!("define_const_list: no binding for variable {:?}", &v)))?.1.clone();
-                let def = utils::thm_new_poly_definition(vm.ctx, &n.to_string(), rhs)?;
+                let def = algo::thm_new_poly_definition(vm.ctx, &n.to_string(), rhs)?;
                 // now build the constant building closure
                 let c_ty_vars = def.c_applied.ty().clone();
                 let c = Rc::new(CustomConst {
@@ -1021,7 +1021,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         // push repr thm
         {
             let repr_thm = def.repr_thm.clone();
-            let repr_thm2 = utils::thm_sym(self.ctx, repr_thm)?;
+            let repr_thm2 = algo::thm_sym(self.ctx, repr_thm)?;
             let th = self.ctx.thm_abs(&def.repr_x, repr_thm2)?;
             self.push_obj(O::Thm(th));
         }
@@ -1166,7 +1166,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     fn sym(&mut self) -> Result<()> {
         self.pop1("sym", |vm, x| {
             let th1 = x.as_thm()?.clone();
-            let th = utils::thm_sym(vm.ctx, th1)?;
+            let th = algo::thm_sym(vm.ctx, th1)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })

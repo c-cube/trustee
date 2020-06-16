@@ -4,7 +4,7 @@
 //! We follow https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
 //! for the main parser and terminology.
 
-use crate::{database as db, fnv, kernel_of_trust as k, utils, Error, Result};
+use crate::{database as db, fnv, kernel_of_trust as k, Error, Result};
 use std::{cell::RefCell, fmt, rc::Rc, sync::atomic, u16};
 
 /// ## Definition of the AST

@@ -1,10 +1,9 @@
+pub mod algo;
 pub mod database;
 mod fnv;
 pub mod kernel_of_trust;
 pub mod open_theory;
-pub mod rewrite;
 pub mod syntax;
-pub mod utils;
 
 pub use fnv::{new_set_with_cap, new_table_with_cap, FnvHashMap, FnvHashSet};
 
