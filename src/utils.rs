@@ -383,13 +383,13 @@ pub fn thm_sym_conv(ctx: &mut dyn CtxI, e: Expr) -> Result<Thm> {
         e.unfold_eq().ok_or_else(|| Error::new("sym: expect an equation"))?;
     let th1 = {
         let hyp = ctx.thm_assume(e.clone());
-        dbg!(thm_sym(ctx, hyp)?)
+        thm_sym(ctx, hyp)?
     };
 
     let th2 = {
         let eq = ctx.mk_eq_app(u.clone(), t.clone())?;
         let hyp = ctx.thm_assume(eq);
-        dbg!(thm_sym(ctx, hyp)?)
+        thm_sym(ctx, hyp)?
     };
 
     ctx.thm_bool_eq_intro(th1, th2)
