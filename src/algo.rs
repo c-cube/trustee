@@ -395,12 +395,301 @@ pub fn thm_sym_conv(ctx: &mut dyn CtxI, e: Expr) -> Result<Thm> {
     ctx.thm_bool_eq_intro(th1, th2)
 }
 
+/// Congruence closure.
+pub mod cc {
+    use super::*;
+    use std::collections::{HashMap, HashSet, VecDeque};
+
+    /// congruence closure state.
+    pub struct CC<'a> {
+        ctx: &'a mut dyn CtxI,
+        tbl: HashMap<Expr, usize>,
+        nodes: Vec<Node>,
+        sigs: HashMap<Signature, usize>,
+        tasks: VecDeque<Task>,
+        tmp_tbl: HashSet<usize>, // temporary
+    }
+
+    #[derive(Eq, PartialEq, Debug, Hash, Clone)]
+    enum Signature {
+        SApp(NodeIdx, NodeIdx),
+        SAppTy(NodeIdx, Expr),
+    }
+
+    enum Task {
+        Merge(NodeIdx, NodeIdx, Thm),
+        UpdateSig(NodeIdx),
+    }
+
+    #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+    pub struct NodeIdx(usize);
+
+    struct Node {
+        e: Expr,
+        root: Option<usize>,
+        expl: Option<(usize, Thm)>,
+        parents: Vec<usize>,
+        sig: Option<Signature>,
+    }
+
+    impl<'a> CC<'a> {
+        /// New congruence closure.
+        pub fn new(ctx: &'a mut dyn CtxI) -> Self {
+            Self {
+                ctx,
+                tbl: HashMap::new(),
+                nodes: vec![],
+                tasks: VecDeque::new(),
+                sigs: HashMap::new(),
+                tmp_tbl: HashSet::new(),
+            }
+        }
+
+        /// Add an theorem theorem to the congruence closure.
+        ///
+        /// Fails if the conclusion is not an equation.
+        pub fn add_thm(&mut self, th: Thm) -> Result<()> {
+            if let Some((a, b)) = th.concl().unfold_eq() {
+                let na = self.add(a);
+                let nb = self.add(b);
+                if self.find(na) != self.find(nb) {
+                    self.tasks.push_back(Task::Merge(na, nb, th.clone()));
+                }
+                Ok(())
+            } else {
+                return Err(Error::new(
+                    "cc: cannot add theorem with non equational conclusion",
+                ));
+            }
+        }
+
+        /// Add the expression to the congruence closure.
+        pub fn add(&mut self, e: &Expr) -> NodeIdx {
+            match self.tbl.get(e) {
+                Some(n) => NodeIdx(*n),
+                None => {
+                    let idx = self.nodes.len();
+                    self.nodes.push(Node {
+                        e: e.clone(),
+                        root: None,
+                        expl: None,
+                        parents: vec![],
+                        sig: None,
+                    });
+                    self.tasks.push_back(Task::UpdateSig(NodeIdx(idx)));
+                    match e.view() {
+                        EApp(f, arg) => {
+                            let f_idx = self.add(f);
+                            self.nodes[f_idx.0].parents.push(idx);
+                            let sig = if arg.ty().is_type() {
+                                Signature::SAppTy(f_idx, arg.clone())
+                            } else {
+                                let arg_idx = self.add(arg);
+                                self.nodes[arg_idx.0].parents.push(idx);
+                                Signature::SApp(f_idx, arg_idx)
+                            };
+                            self.tasks.push_back(Task::UpdateSig(NodeIdx(idx)));
+                            self.nodes[idx].sig = Some(sig);
+                        }
+                        // TODO: handle lambda? need a rule for `abs` with DB index
+                        ELambda(..) => (),
+                        EVar(..) | EBoundVar(..) | EConst(..) | EPi(..)
+                        | EKind | EType => (),
+                    }
+                    NodeIdx(idx)
+                }
+            }
+        }
+
+        /// Find representative for the given node.
+        fn find(&self, idx: NodeIdx) -> NodeIdx {
+            let mut i = idx.0;
+            loop {
+                let n = &self.nodes[i];
+                match &n.root {
+                    None => return NodeIdx(i),
+                    Some(n2) => {
+                        i = *n2;
+                    }
+                }
+            }
+        }
+
+        /// Find common ancestor of `n1` and `n2`.
+        /// Precondition: `find(n1) == find(n2)`.
+        fn find_common_ancestor(
+            &mut self,
+            n1: NodeIdx,
+            n2: NodeIdx,
+        ) -> NodeIdx {
+            self.tmp_tbl.clear();
+
+            // add whole path to `tmp_tbl`
+            let mut i = n1.0;
+            loop {
+                self.tmp_tbl.insert(i);
+                let n = &self.nodes[i];
+                match n.expl {
+                    Some((n2, _)) => i = n2,
+                    None => break,
+                }
+            }
+
+            i = n2.0;
+            loop {
+                // in both paths
+                if self.tmp_tbl.contains(&i) {
+                    return NodeIdx(i);
+                }
+
+                let n = &self.nodes[i];
+                match n.expl {
+                    Some((n2, _)) => i = n2,
+                    None => panic!("no common ancestor"),
+                }
+            }
+        }
+
+        /// Explain why `n1 == parent`.
+        fn explain_along(
+            &mut self,
+            n1: NodeIdx,
+            parent: NodeIdx,
+            reverse: bool,
+        ) -> Thm {
+            let mut idx = n1.0;
+            let mut th = {
+                let e1 = self.nodes[idx].e.clone();
+                self.ctx.thm_refl(e1)
+            };
+
+            while idx != parent.0 {
+                let n = &self.nodes[idx];
+                match &n.expl {
+                    None => panic!("not an ancestor"),
+                    Some((n2, th_idx_n2)) => {
+                        let mut th_idx_n2 = th_idx_n2.clone();
+                        if reverse {
+                            th_idx_n2 = thm_sym(self.ctx, th_idx_n2).unwrap();
+                        }
+                        th = dbg!(self.ctx.thm_trans(th, th_idx_n2)).unwrap();
+                        idx = *n2;
+                    }
+                }
+            }
+            th
+        }
+
+        /// Re-root proof forest at `i`.
+        fn reroot_at(&mut self, mut i: usize) {
+            let mut prev = None;
+            loop {
+                let n = &mut self.nodes[i];
+                match &n.expl {
+                    None => {
+                        n.expl = prev;
+                        return;
+                    }
+                    Some((j, th_i_j)) => {
+                        let j = *j;
+                        let th_i_j = th_i_j.clone();
+                        n.expl = prev;
+                        prev =
+                            Some((i, algo::thm_sym(self.ctx, th_i_j).unwrap()));
+                        i = j; // continue
+                    }
+                }
+            }
+        }
+
+        pub fn prove_eq(&mut self, n1: NodeIdx, n2: NodeIdx) -> Option<Thm> {
+            let r1 = self.find(n1);
+            let r2 = self.find(n2);
+
+            if r1 == r2 {
+                let middle = dbg!(self.find_common_ancestor(n1, n2));
+                let th1 = self.explain_along(n1, middle, false);
+                let th2 = self.explain_along(n2, middle, true);
+                let th = self.ctx.thm_trans(th1, th2).unwrap();
+                Some(th)
+            } else {
+                None
+            }
+        }
+
+        /// Fixpoint of the congruence closure algorithm.
+        pub fn update(&mut self) {
+            while let Some(t) = self.tasks.pop_front() {
+                match t {
+                    Task::UpdateSig(i) => {
+                        let n = &self.nodes[i.0];
+                        if let Some(sig) = &n.sig {
+                            let sig2 = match sig {
+                                Signature::SApp(a, b) => {
+                                    let a = self.find(*a);
+                                    let b = self.find(*b);
+                                    Signature::SApp(a, b)
+                                }
+                                Signature::SAppTy(a, b) => {
+                                    Signature::SAppTy(self.find(*a), b.clone())
+                                }
+                            };
+                            if let Some(repr) = self.sigs.get(&sig2) {
+                                todo!()
+                                // FIXME: make theorem that justifies the merge
+                                // self.tasks.push_back(Task::Merge(i, repr,
+                            }
+                        }
+                    }
+                    Task::Merge(i, j, th) => {
+                        let i1 = self.find(i);
+                        let i2 = self.find(j);
+
+                        if i1 != i2 {
+                            // merge i1 into i2
+                            self.reroot_at(i.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// prove
+    pub fn prove_cc(
+        ctx: &mut dyn CtxI,
+        hyps: &[Thm],
+        goal: &Expr,
+    ) -> Result<Option<Thm>> {
+        let mut cc = CC::new(ctx);
+
+        let (e1, e2) = match goal.unfold_eq() {
+            Some(tup) => tup,
+            None => {
+                return Err(Error::new("prove_cc requires an equational goal"))
+            }
+        };
+
+        for th in hyps {
+            cc.add_thm(th.clone())?;
+        }
+        let n1 = cc.add(e1);
+        let n2 = cc.add(e2);
+
+        cc.update();
+
+        Ok(cc.prove_eq(n1, n2))
+    }
+}
+
+pub use cc::{prove_cc, CC};
+
+/// ## Rewriting
+///
+/// Rewriting algorithms.
 pub mod rw {
     use super::*;
 
-    /// ## Rewriting
-    ///
-    /// Rewriting algorithms.
     /// Result of a rewrite step.
     pub enum RewriteResult {
         /// No rewrite step.

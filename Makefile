@@ -10,5 +10,10 @@ clean:
 check:
 	@cargo check
 
+doc:
+	@cargo doc
+
 test:
 	@cargo test
+
+.PHONY: doc clean
