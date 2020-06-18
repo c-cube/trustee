@@ -403,11 +403,11 @@ pub mod cc {
     /// congruence closure state.
     pub struct CC<'a> {
         ctx: &'a mut dyn CtxI,
-        tbl: HashMap<Expr, usize>,
+        tbl: HashMap<Expr, NodeIdx>,
         nodes: Vec<Node>,
-        sigs: HashMap<Signature, usize>,
+        sigs: HashMap<Signature, NodeIdx>,
         tasks: VecDeque<Task>,
-        tmp_tbl: HashSet<usize>, // temporary
+        tmp_tbl: HashSet<NodeIdx>, // temporary
     }
 
     #[derive(Eq, PartialEq, Debug, Hash, Clone)]
@@ -417,7 +417,7 @@ pub mod cc {
     }
 
     enum Task {
-        Merge(NodeIdx, NodeIdx, Thm),
+        Merge(NodeIdx, NodeIdx, Expl),
         UpdateSig(NodeIdx),
     }
 
@@ -426,11 +426,29 @@ pub mod cc {
 
     struct Node {
         e: Expr,
-        root: Option<usize>,
-        expl: Option<(usize, Thm)>,
-        parents: Vec<usize>,
+        /// Pointer to representative (via union find).
+        root: Option<NodeIdx>,
+        /// Proof forest.
+        expl: Option<(NodeIdx, Expl)>,
+        /// Next element of the class.
+        next: NodeIdx,
+        /// All nodes that are parents of `e`.
+        parents: Vec<NodeIdx>,
+        /// Original signature for `e`, if any.
         sig: Option<Signature>,
     }
+
+    /// Explanation for the merge of two classes.
+    #[derive(Clone)]
+    enum Expl {
+        /// merge two applications because of subterms
+        ECong,
+        /// merge two type applications because of heads
+        ECongTy,
+        /// merge two terms because of `thm`
+        EMerge { th: Thm },
+    }
+    use Expl::*;
 
     impl<'a> CC<'a> {
         /// New congruence closure.
@@ -453,7 +471,12 @@ pub mod cc {
                 let na = self.add(a);
                 let nb = self.add(b);
                 if self.find(na) != self.find(nb) {
-                    self.tasks.push_back(Task::Merge(na, nb, th.clone()));
+                    // merge the two classes
+                    self.tasks.push_back(Task::Merge(
+                        na,
+                        nb,
+                        Expl::EMerge { th: th.clone() },
+                    ));
                 }
                 Ok(())
             } else {
@@ -466,17 +489,18 @@ pub mod cc {
         /// Add the expression to the congruence closure.
         pub fn add(&mut self, e: &Expr) -> NodeIdx {
             match self.tbl.get(e) {
-                Some(n) => NodeIdx(*n),
+                Some(n) => *n,
                 None => {
-                    let idx = self.nodes.len();
+                    let idx = NodeIdx(self.nodes.len());
                     self.nodes.push(Node {
                         e: e.clone(),
+                        next: idx,
                         root: None,
                         expl: None,
                         parents: vec![],
                         sig: None,
                     });
-                    self.tasks.push_back(Task::UpdateSig(NodeIdx(idx)));
+                    self.tasks.push_back(Task::UpdateSig(idx));
                     match e.view() {
                         EApp(f, arg) => {
                             let f_idx = self.add(f);
@@ -488,31 +512,37 @@ pub mod cc {
                                 self.nodes[arg_idx.0].parents.push(idx);
                                 Signature::SApp(f_idx, arg_idx)
                             };
-                            self.tasks.push_back(Task::UpdateSig(NodeIdx(idx)));
-                            self.nodes[idx].sig = Some(sig);
+                            // find congruences, if any
+                            self.tasks.push_back(Task::UpdateSig(idx));
+                            self.nodes[idx.0].sig = Some(sig);
                         }
                         // TODO: handle lambda? need a rule for `abs` with DB index
                         ELambda(..) => (),
                         EVar(..) | EBoundVar(..) | EConst(..) | EPi(..)
                         | EKind | EType => (),
                     }
-                    NodeIdx(idx)
+                    idx
                 }
             }
         }
 
         /// Find representative for the given node.
         fn find(&self, idx: NodeIdx) -> NodeIdx {
-            let mut i = idx.0;
+            let mut i = idx;
             loop {
-                let n = &self.nodes[i];
+                let n = &self.nodes[i.0];
                 match &n.root {
-                    None => return NodeIdx(i),
+                    None => return i,
                     Some(n2) => {
                         i = *n2;
                     }
                 }
             }
+        }
+
+        /// Are these nodes equal?
+        pub fn are_eq(&self, n1: NodeIdx, n2: NodeIdx) -> bool {
+            self.find(n1) == self.find(n2)
         }
 
         /// Find common ancestor of `n1` and `n2`.
@@ -521,31 +551,31 @@ pub mod cc {
             &mut self,
             n1: NodeIdx,
             n2: NodeIdx,
-        ) -> NodeIdx {
+        ) -> Result<NodeIdx> {
             self.tmp_tbl.clear();
 
             // add whole path to `tmp_tbl`
-            let mut i = n1.0;
+            let mut i = n1;
             loop {
                 self.tmp_tbl.insert(i);
-                let n = &self.nodes[i];
+                let n = &self.nodes[i.0];
                 match n.expl {
                     Some((n2, _)) => i = n2,
                     None => break,
                 }
             }
 
-            i = n2.0;
+            i = n2;
             loop {
                 // in both paths
                 if self.tmp_tbl.contains(&i) {
-                    return NodeIdx(i);
+                    return Ok(i);
                 }
 
-                let n = &self.nodes[i];
+                let n = &self.nodes[i.0];
                 match n.expl {
                     Some((n2, _)) => i = n2,
-                    None => panic!("no common ancestor"),
+                    None => return Err(Error::new("no common ancestor")),
                 }
             }
         }
@@ -553,67 +583,118 @@ pub mod cc {
         /// Explain why `n1 == parent`.
         fn explain_along(
             &mut self,
-            n1: NodeIdx,
+            n_init: NodeIdx,
             parent: NodeIdx,
-            reverse: bool,
-        ) -> Thm {
-            let mut idx = n1.0;
+        ) -> Result<Thm> {
+            let mut idx = n_init;
             let mut th = {
-                let e1 = self.nodes[idx].e.clone();
+                let e1 = self.nodes[idx.0].e.clone();
                 self.ctx.thm_refl(e1)
             };
 
-            while idx != parent.0 {
-                let n = &self.nodes[idx];
+            while idx != parent {
+                let n = &self.nodes[idx.0];
                 match &n.expl {
-                    None => panic!("not an ancestor"),
-                    Some((n2, th_idx_n2)) => {
-                        let mut th_idx_n2 = th_idx_n2.clone();
-                        if reverse {
-                            th_idx_n2 = thm_sym(self.ctx, th_idx_n2).unwrap();
+                    None => return Err(Error::new("not an ancestor")),
+                    Some((idx2, expl_n2)) => {
+                        let idx2 = *idx2;
+                        let expl_n2 = expl_n2.clone();
+
+                        let n2 = &self.nodes[idx2.0];
+
+                        // theorem for `n == n2`
+                        let mut th_n_n2 = match expl_n2 {
+                            EMerge { th } => th.clone(),
+                            ECong => match (n.sig.clone(), n2.sig.clone()) {
+                                (
+                                    Some(Signature::SApp(h1, arg1)),
+                                    Some(Signature::SApp(h2, arg2)),
+                                ) => {
+                                    let th_hd = self.prove_eq(h1, h2)?;
+                                    let th_arg = self.prove_eq(arg1, arg2)?;
+                                    self.ctx.thm_congr(th_hd, th_arg)?
+                                }
+                                _ => panic!("cong on non applications"),
+                            },
+                            ECongTy => match (n.sig.clone(), n2.sig.clone()) {
+                                (
+                                    Some(Signature::SAppTy(h1, arg1)),
+                                    Some(Signature::SAppTy(h2, arg2)),
+                                ) => {
+                                    assert_eq!(&arg1, &arg2);
+                                    let th_hd = self.prove_eq(h1, h2)?;
+                                    self.ctx.thm_congr_ty(th_hd, &arg1)?
+                                }
+                                _ => panic!("congTy on non applications"),
+                            },
+                        };
+
+                        // re-borrow
+                        let n = &self.nodes[idx.0];
+                        let n2 = &self.nodes[idx2.0];
+                        if let Some((a, b)) = th_n_n2.concl().unfold_eq() {
+                            if b == &n.e {
+                                debug_assert_eq!(a, &n2.e);
+                                // th_n_n2 is proof of `n2 == n`, so we need
+                                // symmetry to get `n == n2`
+                                th_n_n2 = thm_sym(self.ctx, th_n_n2)?;
+                            } else {
+                                debug_assert_eq!(a, &n.e);
+                                debug_assert_eq!(b, &n2.e);
+                            }
+                        } else {
+                            return Err(Error::new(
+                                "theorem is not equational",
+                            ));
                         }
-                        th = dbg!(self.ctx.thm_trans(th, th_idx_n2)).unwrap();
-                        idx = *n2;
+
+                        // th is proof for `n_init == n`, so the composition
+                        // gives `n_init == n2`
+                        th = dbg!(self.ctx.thm_trans(th, th_n_n2)).unwrap();
+                        idx = idx2;
                     }
                 }
             }
-            th
+            Ok(th)
         }
 
         /// Re-root proof forest at `i`.
-        fn reroot_at(&mut self, mut i: usize) {
+        fn reroot_at(&mut self, mut i: NodeIdx) {
             let mut prev = None;
             loop {
-                let n = &mut self.nodes[i];
+                let n = &mut self.nodes[i.0];
                 match &n.expl {
                     None => {
                         n.expl = prev;
                         return;
                     }
-                    Some((j, th_i_j)) => {
+                    Some((j, expl_i_j)) => {
                         let j = *j;
-                        let th_i_j = th_i_j.clone();
+                        let expl_i_j = expl_i_j.clone();
                         n.expl = prev;
-                        prev =
-                            Some((i, algo::thm_sym(self.ctx, th_i_j).unwrap()));
+                        prev = Some((i, expl_i_j));
                         i = j; // continue
                     }
                 }
             }
         }
 
-        pub fn prove_eq(&mut self, n1: NodeIdx, n2: NodeIdx) -> Option<Thm> {
+        /// Provide a theorem for `n1 == n2`.
+        ///
+        /// Fails if `n1` and `n2` are not equal, or if some error occurs
+        /// during the proof (indicating a bug).
+        pub fn prove_eq(&mut self, n1: NodeIdx, n2: NodeIdx) -> Result<Thm> {
             let r1 = self.find(n1);
             let r2 = self.find(n2);
 
             if r1 == r2 {
-                let middle = dbg!(self.find_common_ancestor(n1, n2));
-                let th1 = self.explain_along(n1, middle, false);
-                let th2 = self.explain_along(n2, middle, true);
-                let th = self.ctx.thm_trans(th1, th2).unwrap();
-                Some(th)
+                let middle = dbg!(self.find_common_ancestor(n1, n2)?);
+                let th1 = self.explain_along(n1, middle)?;
+                let th2 = self.explain_along(n2, middle)?;
+                let th = self.ctx.thm_trans(th1, th2)?;
+                Ok(th)
             } else {
-                None
+                Err(Error::new("nodes are not equal"))
             }
         }
 
@@ -624,30 +705,54 @@ pub mod cc {
                     Task::UpdateSig(i) => {
                         let n = &self.nodes[i.0];
                         if let Some(sig) = &n.sig {
-                            let sig2 = match sig {
+                            let (sig2, expl) = match sig {
                                 Signature::SApp(a, b) => {
-                                    let a = self.find(*a);
-                                    let b = self.find(*b);
-                                    Signature::SApp(a, b)
+                                    let a2 = self.find(*a);
+                                    let b2 = self.find(*b);
+                                    (Signature::SApp(a2, b2), Expl::ECong)
                                 }
-                                Signature::SAppTy(a, b) => {
-                                    Signature::SAppTy(self.find(*a), b.clone())
-                                }
+                                Signature::SAppTy(a, b) => (
+                                    Signature::SAppTy(self.find(*a), b.clone()),
+                                    Expl::ECongTy,
+                                ),
                             };
                             if let Some(repr) = self.sigs.get(&sig2) {
-                                todo!()
-                                // FIXME: make theorem that justifies the merge
-                                // self.tasks.push_back(Task::Merge(i, repr,
+                                // collision, merge
+                                self.tasks
+                                    .push_front(Task::Merge(i, *repr, expl))
                             }
                         }
                     }
-                    Task::Merge(i, j, th) => {
-                        let i1 = self.find(i);
-                        let i2 = self.find(j);
+                    Task::Merge(i, j, expl_i_j) => {
+                        let r1 = self.find(i);
+                        let r2 = self.find(j);
 
-                        if i1 != i2 {
-                            // merge i1 into i2
-                            self.reroot_at(i.0);
+                        // these should be roots
+                        debug_assert!(self.nodes[r1.0].root.is_none());
+                        debug_assert!(self.nodes[r2.0].root.is_none());
+
+                        if r1 != r2 {
+                            // merge [r1] into [r2]
+                            {
+                                let mut i = r1;
+                                loop {
+                                    self.nodes[i.0].root = Some(r2);
+                                    i = self.nodes[i.0].next;
+
+                                    if i == r1 {
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // update signatures of parents of [r1]
+                            for x in &self.nodes[r1.0].parents {
+                                debug_assert!(self.nodes[x.0].sig.is_some());
+                                self.tasks.push_back(Task::UpdateSig(*x));
+                            }
+
+                            self.reroot_at(i);
+                            self.nodes[i.0].expl = Some((j, expl_i_j));
                         }
                     }
                 }
@@ -678,7 +783,11 @@ pub mod cc {
 
         cc.update();
 
-        Ok(cc.prove_eq(n1, n2))
+        if cc.are_eq(n1, n2) {
+            Ok(Some(cc.prove_eq(n1, n2)?))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -777,7 +886,6 @@ pub mod rw {
     pub struct RewriteRule {
         lhs: Expr,
         th: Thm,
-        ordered: bool, // only works if `lhs>rhs`.
     }
 
     impl RewriteRule {
@@ -813,7 +921,7 @@ pub mod rw {
                     }
                 };
             }
-            Ok(Self { lhs: lhs.clone(), th: th.clone(), ordered })
+            Ok(Self { lhs: lhs.clone(), th: th.clone() })
         }
 
         /// Create a rewrite rule from a theorem `|- lhs=rhs`.
