@@ -416,6 +416,7 @@ pub mod cc {
         SAppTy(NodeIdx, Expr),
     }
 
+    #[derive(Debug)]
     enum Task {
         Merge(NodeIdx, NodeIdx, Expl),
         UpdateSig(NodeIdx),
@@ -439,7 +440,7 @@ pub mod cc {
     }
 
     /// Explanation for the merge of two classes.
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     enum Expl {
         /// merge two applications because of subterms
         ECong,
@@ -471,8 +472,12 @@ pub mod cc {
                 let na = self.add(a);
                 let nb = self.add(b);
                 if self.find(na) != self.find(nb) {
+                    eprintln!(
+                        "cc: merge {:?} and {:?} from add thm {:?}",
+                        na, nb, &th
+                    );
                     // merge the two classes
-                    self.tasks.push_back(Task::Merge(
+                    self.tasks.push_front(Task::Merge(
                         na,
                         nb,
                         Expl::EMerge { th: th.clone() },
@@ -492,6 +497,7 @@ pub mod cc {
                 Some(n) => *n,
                 None => {
                     let idx = NodeIdx(self.nodes.len());
+                    self.tbl.insert(e.clone(), idx);
                     self.nodes.push(Node {
                         e: e.clone(),
                         next: idx,
@@ -500,16 +506,17 @@ pub mod cc {
                         parents: vec![],
                         sig: None,
                     });
-                    self.tasks.push_back(Task::UpdateSig(idx));
                     match e.view() {
                         EApp(f, arg) => {
                             let f_idx = self.add(f);
-                            self.nodes[f_idx.0].parents.push(idx);
+                            let f_repr = self.find(f_idx);
+                            self.nodes[f_repr.0].parents.push(idx);
                             let sig = if arg.ty().is_type() {
                                 Signature::SAppTy(f_idx, arg.clone())
                             } else {
                                 let arg_idx = self.add(arg);
-                                self.nodes[arg_idx.0].parents.push(idx);
+                                let arg_repr = self.find(arg_idx);
+                                self.nodes[arg_repr.0].parents.push(idx);
                                 Signature::SApp(f_idx, arg_idx)
                             };
                             // find congruences, if any
@@ -650,7 +657,7 @@ pub mod cc {
 
                         // th is proof for `n_init == n`, so the composition
                         // gives `n_init == n2`
-                        th = dbg!(self.ctx.thm_trans(th, th_n_n2)).unwrap();
+                        th = self.ctx.thm_trans(th, th_n_n2)?;
                         idx = idx2;
                     }
                 }
@@ -688,9 +695,10 @@ pub mod cc {
             let r2 = self.find(n2);
 
             if r1 == r2 {
-                let middle = dbg!(self.find_common_ancestor(n1, n2)?);
+                let middle = self.find_common_ancestor(n1, n2)?;
                 let th1 = self.explain_along(n1, middle)?;
                 let th2 = self.explain_along(n2, middle)?;
+                let th2 = thm_sym(self.ctx, th2)?; // prove middle=n2
                 let th = self.ctx.thm_trans(th1, th2)?;
                 Ok(th)
             } else {
@@ -718,8 +726,12 @@ pub mod cc {
                             };
                             if let Some(repr) = self.sigs.get(&sig2) {
                                 // collision, merge
+                                //eprintln!("congrence found for {:?}", sig2);
                                 self.tasks
                                     .push_front(Task::Merge(i, *repr, expl))
+                            } else {
+                                // insert into table so we can detect collisions
+                                self.sigs.insert(sig2, i);
                             }
                         }
                     }
@@ -744,12 +756,20 @@ pub mod cc {
                                     }
                                 }
                             }
+                            let r1n = self.nodes[r1.0].next;
+                            self.nodes[r1.0].next = self.nodes[r2.0].next;
+                            self.nodes[r2.0].next = r1n;
 
                             // update signatures of parents of [r1]
                             for x in &self.nodes[r1.0].parents {
                                 debug_assert!(self.nodes[x.0].sig.is_some());
                                 self.tasks.push_back(Task::UpdateSig(*x));
                             }
+
+                            // merge parent sets
+                            let p1: Vec<_> =
+                                self.nodes[r1.0].parents.drain(..).collect();
+                            self.nodes[r2.0].parents.extend(p1);
 
                             self.reroot_at(i);
                             self.nodes[i.0].expl = Some((j, expl_i_j));
