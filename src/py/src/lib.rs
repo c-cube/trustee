@@ -16,7 +16,7 @@ use cpython::{
     ToPyObject,
 };
 use std::{sync::Arc, sync::Mutex};
-use trustee::{database as db, kernel_of_trust as k, utils};
+use trustee::{algo, database as db, kernel_of_trust as k};
 
 // add bindings to the generated python module
 // N.B: names: "rust2py" must be the name of the `.so` or `.pyd` file
@@ -206,7 +206,7 @@ py_class!(pub class NewTypeDef |py| {
 });
 
 py_class!(pub class NewPolyDef |py| {
-    data def: utils::NewPolyDef;
+    data def: algo::NewPolyDef;
     data ctx: Arc<Mutex<k::Ctx>>;
 
     def __repr__(&self) -> PyResult<String> {
@@ -368,7 +368,8 @@ py_class!(pub class Ctx |py| {
     /// `assume F` is `F |- F`
     def assume(&self, e: Expr) -> PyResult<Thm> {
         let mut em = self.ctx(py).lock().unwrap();
-        let th = em.thm_assume(e.expr(py).clone());
+        let th = em.thm_assume(e.expr(py).clone())
+            .map_err(|e| mk_err(py, e.to_string()))?;
         Thm::create_instance(py, th, self.ctx(py).clone())
     }
 
@@ -410,7 +411,7 @@ py_class!(pub class Ctx |py| {
     /// Symmetry: `sym (F |- a=b)` is `F |- b=a`
     def sym(&self, th: Thm) -> PyResult<Thm> {
         let mut em = self.ctx(py).lock().unwrap();
-        let th = utils::thm_sym(&mut *em, th.thm(py).clone())
+        let th = algo::thm_sym(&mut *em, th.thm(py).clone())
             .map_err(|e| mk_err(py, e.to_string()))?;
         Thm::create_instance(py, th, self.ctx(py).clone())
     }
@@ -493,7 +494,7 @@ py_class!(pub class Ctx |py| {
     def poly_def(&self, name: &str, e: Expr) -> PyResult<NewPolyDef> {
         let mut ctx = self.ctx(py).lock().unwrap();
         let e = e.expr(py);
-        let def = utils::thm_new_poly_definition(&mut *ctx, name, e.clone())
+        let def = algo::thm_new_poly_definition(&mut *ctx, name, e.clone())
             .map_err(|e| mk_err(py, e.to_string()))?;
         NewPolyDef::create_instance(py, def, self.ctx(py).clone())
     }

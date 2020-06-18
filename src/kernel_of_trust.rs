@@ -1627,9 +1627,12 @@ impl Ctx {
     }
 
     /// `assume F` is `F |- F`
-    pub fn thm_assume(&mut self, e: Expr) -> Thm {
+    pub fn thm_assume(&mut self, e: Expr) -> Result<Thm> {
         self.check_uid_(&e);
-        Thm::make_(e.clone(), self.uid, vec![e.clone()])
+        if e.ty() != &self.builtins_().bool {
+            return Err(Error::new("cannot assume non-boolean expression"));
+        }
+        Ok(Thm::make_(e.clone(), self.uid, vec![e.clone()]))
     }
 
     /// `refl t` is `|- t=t`
@@ -2680,7 +2683,7 @@ mod test {
         let pa2 = em.mk_app(p.clone(), a.clone()).unwrap();
         let pa = em.mk_app(p, a).unwrap();
         assert_eq!(&pa, &pa2);
-        let th = em.thm_assume(pa.clone());
+        let th = em.thm_assume(pa.clone()).unwrap();
         assert_eq!(th.concl(), &pa);
         assert_eq!(th.hyps().len(), 1);
     }

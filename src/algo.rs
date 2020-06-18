@@ -1041,7 +1041,7 @@ mod test {
         let y = ctx.mk_var_str("y", bool.clone());
         let x_eq_y = ctx.mk_eq_app(x.clone(), y.clone()).unwrap();
         let y_eq_x = ctx.mk_eq_app(y.clone(), x.clone()).unwrap();
-        let th = ctx.thm_assume(x_eq_y);
+        let th = ctx.thm_assume(x_eq_y).unwrap();
         let th2 = thm_sym(&mut ctx, th).unwrap();
         assert_eq!(th2.concl(), &y_eq_x);
     }
