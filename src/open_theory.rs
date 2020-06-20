@@ -1,8 +1,8 @@
 //! Parser and interpreter for [OpenTheory](http://www.gilith.com/opentheory/article.html)
 
 use {
-    crate::database::ThmKey, crate::kernel_of_trust as k, crate::*, std::fmt,
-    std::io::BufRead, std::rc::Rc,
+    crate::kernel_of_trust as k, crate::*, std::fmt, std::io::BufRead,
+    std::rc::Rc,
 };
 
 #[derive(Clone, Eq, PartialEq, Hash)]
@@ -163,6 +163,17 @@ impl Name {
     }
 }
 
+/// Used for looking up theorems.
+#[derive(Debug, Eq, PartialEq, Hash)]
+struct ThmKey(Expr, Vec<Expr>);
+
+impl ThmKey {
+    /// New key from this theorem.
+    pub fn new(th: &Thm) -> Self {
+        ThmKey(th.concl().clone(), th.hyps_vec().clone())
+    }
+}
+
 /// An article obtained by interpreting a theory file (or several).
 ///
 /// We're not exactly compliant here, as we want to be able to parse several
@@ -209,7 +220,6 @@ impl Callbacks for () {}
 #[derive(Debug)]
 pub struct VM<'a, CB: Callbacks> {
     ctx: &'a mut dyn k::CtxI,
-    db: &'a mut crate::Database,
     cb: CB,
     ty_vars: fnv::FnvHashMap<String, Var>,
     vars: fnv::FnvHashMap<String, (Var, Var)>, // "x" -> (x, α)
@@ -217,8 +227,8 @@ pub struct VM<'a, CB: Callbacks> {
     ty_defs: fnv::FnvHashMap<Name, Rc<dyn OTypeOp>>,
     stack: Vec<Obj>,
     dict: fnv::FnvHashMap<usize, Obj>,
-    new_assumptions: Vec<Thm>,
-    new_theorems: Vec<Thm>,
+    assumptions: Vec<Thm>,
+    theorems: fnv::FnvHashMap<ThmKey, Thm>,
 }
 
 #[derive(Debug)]
@@ -300,14 +310,9 @@ impl OConst for CustomConst {
 
 impl<'a, CB: Callbacks> VM<'a, CB> {
     /// Create a new VM using the given expression manager.
-    pub fn new_with(
-        ctx: &'a mut dyn k::CtxI,
-        db: &'a mut Database,
-        cb: CB,
-    ) -> Self {
+    pub fn new_with(ctx: &'a mut dyn k::CtxI, cb: CB) -> Self {
         VM {
             ctx,
-            db,
             cb,
             ty_vars: fnv::new_table_with_cap(32),
             vars: fnv::new_table_with_cap(32),
@@ -315,24 +320,19 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             ty_defs: fnv::new_table_with_cap(8),
             stack: vec![],
             dict: fnv::new_table_with_cap(32),
-            new_assumptions: vec![],
-            new_theorems: vec![],
+            assumptions: vec![],
+            theorems: fnv::new_table_with_cap(32),
         }
     }
 
     /// Turn into an article.
     pub fn into_article(self) -> Article {
-        let VM {
-            defs,
-            new_assumptions: assumptions,
-            new_theorems: theorems,
-            ctx,
-            ..
-        } = self;
+        let VM { defs, assumptions, theorems, ctx, .. } = self;
         let defs = defs
             .into_iter()
             .map(|(n, oc)| (n.to_string(), oc.expr(ctx).clone()))
             .collect();
+        let theorems: Vec<_> = theorems.into_iter().map(|x| x.1).collect();
         Article { defs, assumptions, theorems }
     }
 
@@ -468,17 +468,16 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 .collect::<Result<_>>()?;
             let th_key = ThmKey(concl.clone(), hyps);
             // see if there already is a theorem matching this "axiom"
-            let ax = match vm.db.thm_by_key(&th_key) {
+            let ax = match vm.theorems.get(&th_key) {
                 Some(th) => th.clone(),
                 None => {
                     let ThmKey(concl, hyps) = th_key; // consume key
                     let ax = vm.ctx.thm_axiom(hyps, concl)?;
                     vm.cb.debug(|| format!("## add axiom {:?}", ax));
-                    vm.new_assumptions.push(ax.clone());
+                    vm.assumptions.push(ax.clone());
                     ax
                 }
             };
-            vm.db.add_axiom(ax.clone());
             vm.push_obj(O::Thm(ax));
             Ok(())
         })
@@ -784,7 +783,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
                 // define and push
                 vm.defs.insert(n.clone(), c.clone());
-                vm.db.insert_def(n.to_string(), def.c.clone(), def.thm.clone());
+                vm.theorems.insert(ThmKey::new(&def.thm), def.thm.clone());
                 vm.push_obj(O::Const(n.clone(), c));
                 vm.push_obj(O::Thm(def.thm_applied));
                 Ok(())
@@ -853,7 +852,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
                 // define and push
                 vm.defs.insert(n.clone(), c.clone());
-                vm.db.insert_def(n.to_string(), def.c.clone(), def.thm.clone());
+                vm.theorems.insert(ThmKey::new(&def.thm), def.thm.clone());
                 Ok(LocalConst{
                     c_applied: def.c_applied, v:v.clone(), n: n.clone(),
                     thm_applied: def.thm_applied, cst: c
@@ -973,7 +972,6 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         // define and push type op
         let ty_op = Rc::new(TyOpCustom(reorder, def.clone()));
         self.ty_defs.insert(ty_name.clone(), ty_op.clone());
-        self.db.insert_ty_def(def.clone());
         self.push_obj(O::TypeOp(ty_name, ty_op));
 
         let fvars_exprs: Vec<_> =
@@ -1076,8 +1074,8 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             })?;
             // TODO?: alpha rename with [terms] and [phi]? does it make any sense?
             vm.cb.debug(|| format!("## add theorem {:?} phi={:?}", thm, _phi));
-            vm.db.insert_thm(None, thm.clone())?;
-            vm.new_theorems.push(thm.clone());
+            let k = ThmKey::new(&thm);
+            vm.theorems.insert(k, thm.clone());
             Ok(())
         })
         .map_err(|e| e.set_source(Error::new("OT: failure in thm")))
@@ -1308,7 +1306,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
 impl<'a> VM<'a, ()> {
     /// Trivial constructor.
-    pub fn new(ctx: &'a mut dyn k::CtxI, db: &'a mut Database) -> Self {
-        VM::new_with(ctx, db, ())
+    pub fn new(ctx: &'a mut dyn k::CtxI) -> Self {
+        VM::new_with(ctx, ())
     }
 }

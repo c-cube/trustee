@@ -239,10 +239,6 @@ fn any_val_to_py_obj<'a>(
             let c = Constant::create_instance(py, c.clone(), ctx.clone())?;
             Ok(c.into_object())
         }
-        A::Thm(th) => {
-            let th = Thm::create_instance(py, th.clone(), ctx.clone())?;
-            Ok(th.into_object())
-        }
         A::Axiom(th) => {
             let th = Thm::create_instance(py, th.clone(), ctx.clone())?;
             Ok(th.into_object())
@@ -259,8 +255,9 @@ py_class!(pub class Ctx |py| {
     data db: Arc<Mutex<trustee::Database>>;
 
     def __new__(_cls) -> PyResult<Ctx> {
-        let ctx = Arc::new(Mutex::new(k::Ctx::new()));
-        let db = Arc::new(Mutex::new(trustee::Database::new()));
+        let mut ctx = k::Ctx::new();
+        let db = Arc::new(Mutex::new(trustee::Database::new(&mut ctx)));
+        let ctx = Arc::new(Mutex::new(ctx));
         Ctx::create_instance(py, ctx, db)
     }
 
@@ -575,8 +572,7 @@ py_class!(pub class Ctx |py| {
     def parse_ot(&self, files: Vec<String>)
         -> PyResult<(trustee::FnvHashMap<String,Expr>, Vec<Thm>, Vec<Thm>)> {
         let mut ctx = self.ctx(py).lock().unwrap();
-        let mut db = self.db(py).lock().unwrap();
-        let mut ot_vm = trustee::open_theory::VM::new(&mut *ctx, &mut *db);
+        let mut ot_vm = trustee::open_theory::VM::new(&mut *ctx);
         for s in files {
             ot_vm.parse_file(&s)
                 .map_err(|e| mk_err(py, e.to_string()))?;

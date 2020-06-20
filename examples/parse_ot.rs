@@ -16,8 +16,7 @@ impl open_theory::Callbacks for LogCB {
 
 fn parse_all() -> trustee::Result<()> {
     let mut ctx = Ctx::new();
-    let mut db = Database::new();
-    let mut vm = open_theory::VM::new_with(&mut ctx, &mut db, LogCB);
+    let mut vm = open_theory::VM::new_with(&mut ctx, LogCB);
     for f in args().skip(1) {
         info!("# parsing file {:?}", f);
         let file =
