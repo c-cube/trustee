@@ -115,6 +115,21 @@ impl Symbol {
     }
 }
 
+impl std::borrow::Borrow<str> for Symbol {
+    fn borrow(&self) -> &str {
+        match self {
+            Symbol::Builtin(s) => match s {
+                BS::Eq => "=",
+                BS::Imply => "==>",
+                BS::Select => "select",
+                BS::Bool => "Bool",
+                BS::Ind => "IND",
+            },
+            Symbol::Named(s) => &*s,
+        }
+    }
+}
+
 /// De Buijn indices.
 pub type DbIndex = u32;
 
@@ -837,8 +852,13 @@ pub trait CtxI: fmt::Debug {
     /// This constant has no axiom associated to it, it is entirely opaque.
     fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr>;
 
-    /// `assume F` is `F |- F`
-    fn thm_assume(&mut self, e: Expr) -> Thm;
+    /// Find a constant by name. Returns `None` if no such constant exists.
+    fn find_const(&self, s: &str) -> Option<&Expr>;
+
+    /// `assume F` is `F |- F`.
+    ///
+    /// This fails if `F` is not a boolean.
+    fn thm_assume(&mut self, e: Expr) -> Result<Thm>;
 
     /// `refl t` is `|- t=t`
     fn thm_refl(&mut self, e: Expr) -> Thm;
@@ -1264,7 +1284,7 @@ impl Ctx {
         })
     }
 
-    // TODO: have a (dense) stack of substitutions to do? could be useful
+    // TODO(perf): have a (dense) stack of substitutions to do? could be useful
     // for type inference in `f t1…tn`, instantiating `n` Π types at once.
 
     /// Replace DB0 in `t` by `u`, under `k` intermediate binders.
@@ -1465,37 +1485,6 @@ impl Ctx {
         self.hashcons_(EApp(a, b))
     }
 
-    /// Apply `f` to the given arguments.
-    ///
-    /// `I` is an iterator that takes a closure and calls it on
-    /// a series of expressions successively.
-    pub fn mk_app_iter<I>(&mut self, f: Expr, mut args: I) -> Result<Expr>
-    where
-        I: FnMut(
-            &mut Self,
-            &mut dyn FnMut(&mut Self, Expr) -> Result<()>,
-        ) -> Result<()>,
-    {
-        // TODO: compute type in one go?
-        let mut e = f;
-        args(self, &mut |em: &mut Self, x: Expr| {
-            let e2 = e.clone();
-            e = em.mk_app(e2, x)?;
-            Ok(())
-        })?;
-        Ok(e)
-    }
-
-    /// Apply `f` to the given arguments.
-    pub fn mk_app_l(&mut self, f: Expr, args: &[Expr]) -> Result<Expr> {
-        self.mk_app_iter(f, |em, f| {
-            for x in args {
-                f(em, x.clone())?
-            }
-            Ok(())
-        })
-    }
-
     /// Make a free variable.
     pub fn mk_var(&mut self, v: Var) -> Expr {
         self.check_uid_(&v.ty);
@@ -1544,493 +1533,9 @@ impl Ctx {
         self.subst(&body, &[(v, db0)])
     }
 
-    /// Make a lambda term by abstracting on `v`.
-    pub fn mk_lambda(&mut self, v: Var, body: Expr) -> Result<Expr> {
-        self.check_uid_(&v.ty);
-        self.check_uid_(&body);
-        let v_ty = v.ty.clone();
-        let body = self.abs_on_(v, body)?;
-        self.mk_lambda_(v_ty, body)
-    }
-
-    /// Bind several variables at once.
-    pub fn mk_lambda_l<I>(&mut self, vars: I, body: Expr) -> Result<Expr>
-    where
-        I: DoubleEndedIterator<Item = Var>,
-    {
-        let mut e = body;
-        // TODO: substitute more efficiently (with a stack, rather than one by one)?
-        // right-assoc
-        for v in vars.rev() {
-            e = self.mk_lambda(v, e)?;
-        }
-        Ok(e)
-    }
-
     /// Make a pi term.
     fn mk_pi_(&mut self, ty_var: Expr, body: Expr) -> Result<Expr> {
         self.hashcons_(EPi(ty_var, body))
-    }
-
-    /// Make a pi term by absracting on `v`.
-    pub fn mk_pi(&mut self, v: Var, body: Expr) -> Result<Expr> {
-        self.check_uid_(&v.ty);
-        self.check_uid_(&body);
-        let v_ty = v.ty.clone();
-        let body = self.abs_on_(v, body)?;
-        self.mk_pi_(v_ty, body)
-    }
-
-    /// Bind several variables at once.
-    pub fn mk_pi_l<I>(&mut self, vars: I, body: Expr) -> Result<Expr>
-    where
-        I: DoubleEndedIterator<Item = Var>,
-    {
-        let mut e = body;
-        // TODO: substitute more efficiently (with a stack, rather than one by one)?
-        // right-assoc
-        for v in vars.rev() {
-            e = self.mk_pi(v, e)?;
-        }
-        Ok(e)
-    }
-
-    /// Make an arrow `a -> b` term.
-    ///
-    /// This builds `Π_:a. b`.
-    pub fn mk_arrow(&mut self, ty1: Expr, ty2: Expr) -> Result<Expr> {
-        // need to shift ty2 by 1 to account for the Π binder.
-        self.check_uid_(&ty1);
-        self.check_uid_(&ty2);
-        let ty2 = self.shift_(&ty2, 1, 0)?;
-        self.mk_pi_(ty1, ty2)
-    }
-
-    /// Declare a new constant with given name and type.
-    ///
-    /// Fails if some constant with the same name exists, or if
-    /// the type is not closed.
-    /// This constant has no axiom associated to it, it is entirely opaque.
-    pub fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
-        self.check_uid_(&ty);
-        if self.consts.contains_key(&s) {
-            return Err(Error::new("a constant with this name already exists"));
-        }
-        if !ty.is_closed() || ty.free_vars().next().is_some() {
-            return Err(Error::new(
-                "cannot create constant with non-closed type",
-            ));
-        }
-        let c = self.hashcons_(EConst(ConstContent { name: s.clone(), ty }))?;
-        self.add_const_(c.clone());
-        Ok(c)
-    }
-
-    /// `assume F` is `F |- F`
-    pub fn thm_assume(&mut self, e: Expr) -> Result<Thm> {
-        self.check_uid_(&e);
-        if e.ty() != &self.builtins_().bool {
-            return Err(Error::new("cannot assume non-boolean expression"));
-        }
-        Ok(Thm::make_(e.clone(), self.uid, vec![e.clone()]))
-    }
-
-    /// `refl t` is `|- t=t`
-    pub fn thm_refl(&mut self, e: Expr) -> Thm {
-        self.check_uid_(&e);
-        let t = self.mk_eq_app(e.clone(), e.clone()).expect("refl");
-        Thm::make_(t, self.uid, vec![])
-    }
-
-    /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
-    ///
-    /// Can fail if the conclusions don't match properly.
-    pub fn thm_trans(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
-        self.check_thm_uid_(&th1);
-        self.check_thm_uid_(&th2);
-        let (a, b) = th1
-            .concl()
-            .unfold_eq()
-            .ok_or_else(|| Error::new("trans: th1 must be an equation"))?;
-        let (b2, c) = th2
-            .concl()
-            .unfold_eq()
-            .ok_or_else(|| Error::new("trans: th2 must be an equation"))?;
-        if b != b2 {
-            return Err(Error::new(
-                "trans: th1 and th2's conclusions do not align",
-            ));
-        }
-
-        let eq_a_c = self.mk_eq_app(a.clone(), c.clone())?;
-        let hyps = hyps_merge(&mut th1, &mut th2);
-        let th = Thm::make_(eq_a_c, self.uid, hyps);
-        Ok(th)
-    }
-
-    /// `congr (F1 |- f=g) (F2 |- t=u)` is `F1, F2 |- f t=g u`
-    pub fn thm_congr(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
-        self.check_thm_uid_(&th1);
-        self.check_thm_uid_(&th2);
-        let (f, g) = th1.concl().unfold_eq().ok_or_else(|| {
-            Error::new("congr: th1.concl must be an equality")
-        })?;
-        let (t, u) = th2.concl().unfold_eq().ok_or_else(|| {
-            Error::new("congr: th2.concl must be an equality")
-        })?;
-        let ft = self.mk_app(f.clone(), t.clone())?;
-        let gu = self.mk_app(g.clone(), u.clone())?;
-        let eq = self.mk_eq_app(ft, gu)?;
-        let hyps = hyps_merge(&mut th1, &mut th2);
-        Ok(Thm::make_(eq, self.uid, hyps))
-    }
-
-    /// `congr_ty (F1 |- f=g) ty` is `F1 |- f ty=g ty`
-    pub fn thm_congr_ty(&mut self, mut th: Thm, ty: &Expr) -> Result<Thm> {
-        self.check_thm_uid_(&th);
-        self.check_uid_(ty);
-        let (f, g) = th.0.concl.unfold_eq().ok_or_else(|| {
-            Error::new("congr_ty: th.concl must be an equality")
-        })?;
-        if ty.view() == &EKind || !ty.ty().is_type() {
-            return Err(Error::new("congr_ty: argument must be a type"));
-        }
-        let ft = self.mk_app(f.clone(), ty.clone())?;
-        let gu = self.mk_app(g.clone(), ty.clone())?;
-        let eq = self.mk_eq_app(ft, gu)?;
-        {
-            let thref = Ref::make_mut(&mut th.0);
-            thref.concl = eq;
-        }
-        Ok(th)
-    }
-
-    /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
-    ///
-    /// Returns an error if the substitution is not closed.
-    pub fn thm_instantiate(
-        &mut self,
-        mut th: Thm,
-        subst: &[(Var, Expr)],
-    ) -> Result<Thm> {
-        self.check_thm_uid_(&th);
-        if subst.iter().any(|(_, t)| !t.is_closed()) {
-            return Err(Error::new(
-                "instantiate: substitution contains non-closed binding",
-            ));
-        }
-
-        {
-            let thref = Ref::make_mut(&mut th.0);
-            thref.concl = self.subst(&thref.concl, subst)?;
-            for t in thref.hyps.iter_mut() {
-                *t = self.subst(t, subst)?;
-            }
-        }
-        Ok(th)
-    }
-
-    /// `abs x (F |- t=u)` is `F |- (λx.t)=(λx.u)`
-    ///
-    /// Fails if `x` occurs freely in `F`.
-    pub fn thm_abs(&mut self, v: &Var, mut thm: Thm) -> Result<Thm> {
-        self.check_uid_(&v.ty);
-        self.check_thm_uid_(&thm);
-        if free_vars_iter(thm.0.hyps.iter()).any(|v2| v == v2) {
-            return Err(Error::new(
-                "abs: variable occurs in one of the hypothesis",
-            ));
-        }
-
-        let (t, u) = thm.0.concl.unfold_eq().ok_or_else(|| {
-            Error::new("abs: thm conclusion should be an equality")
-        })?;
-
-        let lam_t = self.mk_lambda(v.clone(), t.clone())?;
-        let lam_u = self.mk_lambda(v.clone(), u.clone())?;
-        let eq = self.mk_eq_app(lam_t, lam_u)?;
-        {
-            let thref = Ref::make_mut(&mut thm.0); // clone or acquire
-            thref.concl = eq;
-        }
-        Ok(thm)
-    }
-
-    /// `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`
-    ///
-    /// This fails if `b` does not occur _syntactically_ in the hypothesis
-    /// of the second theorem.
-    ///
-    /// NOTE: this is not strictly necessary, as it's not an axiom in HOL light,
-    /// but we include it here anyway.
-    pub fn thm_cut(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
-        self.check_thm_uid_(&th1);
-        self.check_thm_uid_(&th2);
-        let th1_c = th1.0.concl.clone();
-        if !th2.0.hyps.contains(&th1_c) {
-            return Err(Error::new(
-                "cut: th2's hyps do not contain th1's conclusion",
-            ));
-        }
-        let th2_c = th2.0.concl.clone();
-        {
-            let thref = Ref::make_mut(&mut th1.0);
-            match Ref::get_mut(&mut th2.0) {
-                Some(thref2) => {
-                    // can't move out of thref2, so we just steal
-                    let mut v = vec![];
-                    std::mem::swap(&mut v, &mut thref2.hyps);
-                    thref.hyps.extend(v.into_iter().filter(|u| *u != th1_c));
-                }
-                None => {
-                    thref.hyps.extend(
-                        th2.0.hyps.iter().filter(|u| *u != &th1_c).cloned(),
-                    );
-                }
-            }
-            thref.concl = th2_c;
-        }
-        Ok(th1)
-    }
-
-    /// `mp (F1 |- a) (F2 |- a' ==> b)` is `F1, F2 |- b`
-    /// where `a` and `a'` are alpha equivalent.
-    pub fn thm_mp(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
-        self.check_thm_uid_(&th1);
-        self.check_thm_uid_(&th2);
-        let th2_c = &th2.0.concl;
-        let (a, b) = th2_c.unfold_imply().ok_or_else(|| {
-            Error::new("mp: second theorem must be an implication")
-        })?;
-        if &th1.0.concl != a {
-            return Err(Error::new(
-                "mp: conclusion of th1 does not match LHS of implication of th2",
-            ));
-        }
-        let b = b.clone();
-        let hyps = hyps_merge(&mut th1, &mut th2);
-        Ok(Thm::make_(b, self.uid, hyps))
-    }
-
-    /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
-    /// This is the boolean equivalent of transitivity.
-    pub fn thm_bool_eq(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
-        self.check_thm_uid_(&th1);
-        self.check_thm_uid_(&th2);
-        let th2_c = &th2.0.concl;
-        let (a, b) = th2_c
-            .unfold_eq()
-            .filter(|(a, _)| a.ty() == &self.builtins_().bool)
-            .ok_or_else(|| {
-                //Some((a, b)) if a.ty() == &self.builtins_().bool => (a, b),
-                Error::new(
-                    "bool-eq: th2 should have a boleean equality as conclusion",
-                )
-            })?;
-        if a != &th1.0.concl {
-            return Err(Error::new(
-                "bool-eq: the conclusion of th1 is not compatible with th2",
-            ));
-        }
-        let b = b.clone();
-
-        let hyps = hyps_merge(&mut th1, &mut th2);
-        Ok(Thm::make_(b, self.uid, hyps))
-    }
-
-    /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
-    /// This is a way of building a boolean `a=b` from proofs of
-    /// `a==>b` and `b==>a` (or `a|-b` and [b|-a`).
-    pub fn thm_bool_eq_intro(
-        &mut self,
-        mut th1: Thm,
-        mut th2: Thm,
-    ) -> Result<Thm> {
-        self.check_thm_uid_(&th1);
-        self.check_thm_uid_(&th2);
-        let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
-        {
-            let th1_c = th1.0.concl.clone();
-            let thref1 = Ref::make_mut(&mut th1.0);
-            thref1.hyps.retain(|x| x != &th2.0.concl);
-            match Ref::get_mut(&mut th2.0) {
-                None => {
-                    thref1.hyps.extend(
-                        th2.hyps().iter().filter(|x| *x != &th1_c).cloned(),
-                    );
-                }
-                Some(thref2) => {
-                    let mut v = vec![]; // steal thref2.hyps
-                    std::mem::swap(&mut v, &mut thref2.hyps);
-                    thref1.hyps.extend(v.into_iter().filter(|x| x != &th1_c));
-                }
-            }
-            thref1.concl = eq;
-        }
-        Ok(th1)
-    }
-
-    /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
-    /// Fails if the term is not a beta-redex.
-    pub fn thm_beta_conv(&mut self, e: &Expr) -> Result<Thm> {
-        self.check_uid_(e);
-        let (f, arg) = e
-            .as_app()
-            .ok_or_else(|| Error::new("beta-conv: expect an application"))?;
-        let (ty, bod) = f.as_lambda().ok_or_else(|| {
-            Error::new("beta-conv: expect a lambda in the application")
-        })?;
-        debug_assert_eq!(ty, arg.ty()); // should already be enforced by typing.
-
-        let lhs = e.clone();
-        let rhs = self.subst1_(bod, 0, arg)?;
-        let eq = self.mk_eq_app(lhs, rhs)?;
-        Ok(Thm::make_(eq, self.uid, vec![]))
-    }
-
-    /// `new_basic_definition (x=t)` where `x` is a variable and `t` a term
-    /// with a closed type,
-    /// returns a theorem `|- x=t` where `x` is now a constant, along with
-    /// the constant `x`.
-    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Expr)> {
-        self.check_uid_(&e);
-        let (x, rhs) = e
-            .unfold_eq()
-            .and_then(|(x, rhs)| x.as_var().map(|x| (x, rhs)))
-            .ok_or_else(|| {
-                Error::new(
-                    "new definition: expr should be an equation `x = rhs` with rhs closed",
-                )
-            })?;
-        if !rhs.is_closed() || rhs.has_free_vars() {
-            return Err(Error::new("RHS of equation should be closed"));
-        }
-        // checks that the type of `x` is closed
-        if !x.ty.is_closed() || x.ty.has_free_vars() {
-            return Err(Error::new(
-                "LHS of equation should have a closed type",
-            ));
-        }
-
-        let c = self.mk_new_const(x.name.clone(), x.ty.clone())?;
-        let eqn = self.mk_eq_app(c.clone(), rhs.clone())?;
-        let thm = Thm::make_(eqn, self.uid, vec![]);
-        Ok((thm, c))
-    }
-
-    /// Create a new axiom `assumptions |- concl`.
-    /// **use with caution**
-    pub fn thm_axiom(&mut self, hyps: Vec<Expr>, concl: Expr) -> Thm {
-        self.check_uid_(&concl);
-        hyps.iter().for_each(|e| self.check_uid_(e));
-
-        let thm = Thm::make_(concl, self.uid, hyps);
-        self.axioms.push(thm.clone());
-        thm
-    }
-
-    /// Introduce a new type operator.
-    ///
-    /// Here, too, we follow HOL light:
-    /// `new_basic_type_definition(tau, abs, repr, inhabited)`
-    /// where `inhabited` is the theorem `|- Phi x` with `x : ty`,
-    /// defines a new type operator named `tau` and two functions,
-    /// `abs : ty -> tau` and `repr: tau -> ty`.
-    ///
-    /// It returns a struct `NewTypeDef` containing `tau, absthm, reprthm`, where:
-    /// - `tau` is the new (possibly parametrized) type operator
-    /// - `absthm` is `|- abs (repr x) = x`
-    /// - `reprthm` is `|- Phi x <=> repr (abs x) = x`
-    pub fn thm_new_basic_type_definition(
-        &mut self,
-        name_tau: Symbol,
-        abs: Symbol,
-        repr: Symbol,
-        thm_inhabited: Thm,
-    ) -> Result<NewTypeDef> {
-        self.check_thm_uid_(&thm_inhabited);
-        if thm_inhabited.hyps().len() > 0 {
-            return Err(Error::new(
-                "new_basic_type_def: theorem must not have hypotheses",
-            ));
-        }
-        let (phi, witness) =
-            thm_inhabited.concl().as_app().ok_or_else(|| {
-                Error::new("conclusion of theorem must be `(Phi x)`")
-            })?;
-        // the concrete type
-        let ty = witness.ty().clone();
-        // check that all free variables are type variables
-        let mut fvars: Vec<Var> =
-            thm_inhabited.concl().free_vars().cloned().collect();
-        fvars.sort_unstable();
-        fvars.dedup();
-
-        if fvars.iter().any(|v| !v.ty.is_type()) {
-            return Err(Error::new(
-                "new_basic_type_def: definition contains \
-                a free variable that does not have type `type`",
-            ));
-        }
-
-        // free vars, as expressions
-        let fvars_exprs: Vec<_> =
-            fvars.iter().map(|v| self.mk_var(v.clone())).collect();
-
-        // construct new type and mapping functions
-        let tau = {
-            let ttype = self.mk_ty();
-            let ty_tau = self.mk_pi_l(fvars.iter().cloned(), ttype)?;
-            self.mk_new_const(name_tau, ty_tau)?
-        };
-
-        // `tau` applied to `fvars`
-        let tau_vars = self.mk_app_l(tau.clone(), &fvars_exprs)?;
-
-        let c_abs = {
-            let ty = self.mk_arrow(ty.clone(), tau_vars.clone())?;
-            let ty = self.mk_pi_l(fvars.iter().cloned(), ty)?;
-            self.mk_new_const(abs, ty)?
-        };
-        let c_repr = {
-            let ty = self.mk_arrow(tau_vars.clone(), ty.clone())?;
-            let ty = self.mk_pi_l(fvars.iter().cloned(), ty)?;
-            self.mk_new_const(repr, ty)?
-        };
-
-        let abs_x = self.mk_var_str("x", tau_vars.clone());
-        let abs_thm = {
-            // `|- abs (repr x) = x`
-            let repr = self.mk_app_l(c_repr.clone(), &fvars_exprs)?;
-            let t = self.mk_app(repr, abs_x.clone())?;
-            let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
-            let abs_t = self.mk_app(abs, t)?;
-            let eqn = self.mk_eq_app(abs_t.clone(), abs_x.clone())?;
-            Thm::make_(eqn, self.uid, vec![])
-        };
-        let repr_x = self.mk_var_str("x", ty.clone());
-        let repr_thm = {
-            // `|- Phi x <=> repr (abs x) = x`
-            let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
-            let t1 = self.mk_app(abs, repr_x.clone())?;
-            let repr = self.mk_app_l(c_repr.clone(), &fvars_exprs)?;
-            let t2 = self.mk_app(repr, t1)?;
-            let eq_t2_x = self.mk_eq_app(t2, repr_x.clone())?;
-            let phi_x = self.mk_app(phi.clone(), repr_x.clone())?;
-            Thm::make_(self.mk_eq_app(phi_x, eq_t2_x)?, self.uid, vec![])
-        };
-
-        let c = NewTypeDef {
-            tau,
-            c_repr,
-            c_abs,
-            fvars,
-            repr_x: repr_x.as_var().unwrap().clone(),
-            abs_thm,
-            abs_x: abs_x.as_var().unwrap().clone(),
-            repr_thm,
-        };
-        Ok(c)
     }
 }
 
@@ -2235,9 +1740,16 @@ impl CtxI for Ctx {
         Ok(c)
     }
 
-    fn thm_assume(&mut self, e: Expr) -> Thm {
+    fn find_const(&self, s: &str) -> Option<&Expr> {
+        self.consts.get(s)
+    }
+
+    fn thm_assume(&mut self, e: Expr) -> Result<Thm> {
         self.check_uid_(&e);
-        Thm::make_(e.clone(), self.uid, vec![e.clone()])
+        if e.ty() != &self.builtins_().bool {
+            return Err(Error::new("cannot assume non-boolean expression"));
+        }
+        Ok(Thm::make_(e.clone(), self.uid, vec![e.clone()]))
     }
 
     fn thm_refl(&mut self, e: Expr) -> Thm {
@@ -2544,7 +2056,7 @@ impl CtxI for Ctx {
         // construct new type and mapping functions
         let tau = {
             let ttype = self.mk_ty();
-            let ty_tau = self.mk_pi_l(fvars.iter().cloned(), ttype)?;
+            let ty_tau = self.mk_pi_l(&fvars, ttype)?;
             self.mk_new_const(name_tau, ty_tau)?
         };
 
@@ -2553,12 +2065,12 @@ impl CtxI for Ctx {
 
         let c_abs = {
             let ty = self.mk_arrow(ty.clone(), tau_vars.clone())?;
-            let ty = self.mk_pi_l(fvars.iter().cloned(), ty)?;
+            let ty = self.mk_pi_l(&fvars, ty)?;
             self.mk_new_const(abs, ty)?
         };
         let c_repr = {
             let ty = self.mk_arrow(tau_vars.clone(), ty.clone())?;
-            let ty = self.mk_pi_l(fvars.iter().cloned(), ty)?;
+            let ty = self.mk_pi_l(&fvars, ty)?;
             self.mk_new_const(repr, ty)?
         };
 
