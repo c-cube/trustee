@@ -4,147 +4,7 @@
 //! We follow https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
 //! for the main parser and terminology.
 
-use crate::{database as db, fnv, kernel_of_trust as k, Error, Result};
-use std::{cell::RefCell, fmt, rc::Rc, sync::atomic, u16};
-
-/// ## Definition of the AST
-///
-/// The AST used for parsing and type inference.
-#[derive(Clone)]
-pub struct PExpr(Rc<PExprCell>);
-
-/// Content of an expression.
-#[derive(Clone)]
-pub struct PExprCell {
-    /// View of the expression
-    view: PExprView,
-    /// Location in the input (start location)
-    loc: (usize, usize),
-    /// The expression this resolves into after type inference
-    resolved: RefCell<Option<k::Expr>>,
-}
-
-/// The root of an expression.
-#[derive(Debug, Clone)]
-pub enum PExprView {
-    Var(Symbol),
-    Num(String),
-    DollarVar(Symbol), // `$foo`: non-infix version of `foo` with explicit type args
-    App(PExpr, PExpr),
-    Bind { binder: Symbol, v: Var, body: PExpr },
-}
-
-use PExprView::*;
-
-/// A (possibly type-annotated) variable
-#[derive(Clone)]
-pub struct Var {
-    name: Symbol,
-    ty: Option<PExpr>,
-}
-
-/// Reuse symbols from the kernel.
-type Symbol = k::Symbol;
-
-// custom debug that prints as S-expressions
-impl fmt::Debug for PExpr {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match &self.0.view {
-            Var(v) => write!(fmt, "{}", v.name()),
-            Num(s) => write!(fmt, "{}", s),
-            DollarVar(v) => write!(fmt, "${}", v.name()),
-            App(..) => {
-                // print nested applications as flattened
-                let (f, args) = self.unfold_app();
-                write!(fmt, "({:?}", f)?;
-                for x in args {
-                    write!(fmt, " {:?}", x)?;
-                }
-                write!(fmt, ")")
-            }
-            Bind { binder, v, body } => {
-                write!(fmt, "({}{:?}. {:?})", binder.name(), v, body)
-            }
-        }
-    }
-}
-
-// custom debug that prints type if specified
-impl fmt::Debug for Var {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match &self.ty {
-            None => write!(fmt, "{}", self.name.name()),
-            Some(ty) => write!(fmt, "{}: {:?}", self.name.name(), ty),
-        }
-    }
-}
-
-impl PExpr {
-    /// Print expression as a S-expr.
-    pub fn to_string(&self) -> String {
-        format!("{:?}", self)
-    }
-
-    /// View of the term.
-    #[inline]
-    pub fn view(&self) -> &PExprView {
-        &self.0.view
-    }
-
-    pub fn loc(&self) -> (usize, usize) {
-        self.0.loc
-    }
-
-    fn mk_(view: PExprView, loc: (usize, usize)) -> Self {
-        PExpr(Rc::new(PExprCell { view, loc, resolved: RefCell::new(None) }))
-    }
-
-    /// Flatten an application.
-    pub fn unfold_app(&self) -> (&PExpr, Vec<&PExpr>) {
-        let mut t = self;
-        let mut args = vec![];
-        while let App(f, a) = &t.0.view {
-            args.push(a);
-            t = f;
-        }
-        args.reverse();
-        (t, args)
-    }
-
-    /// Create a variable.
-    pub fn var(s: &str, loc: (usize, usize)) -> Self {
-        Self::mk_(Var(Symbol::from_str(s)), loc)
-    }
-
-    /// Create a number.
-    pub fn num(s: &str, loc: (usize, usize)) -> Self {
-        Self::mk_(Num(s.to_string()), loc)
-    }
-
-    /// Create a variable.
-    pub fn dollar_var(s: &str, loc: (usize, usize)) -> Self {
-        Self::mk_(DollarVar(Symbol::from_str(s)), loc)
-    }
-
-    /// Create an application.
-    pub fn apply(&self, arg: PExpr, loc: (usize, usize)) -> Self {
-        Self::mk_(App(self.clone(), arg), loc)
-    }
-
-    /// Create an application from a list of arguments.
-    pub fn apply_l(&self, args: &[PExpr], loc: (usize, usize)) -> Self {
-        let mut t = self.clone();
-        for x in args.iter() {
-            t = t.apply(x.clone(), loc)
-        }
-        t
-    }
-
-    /// Create a binder.
-    pub fn bind(b: &str, v: Var, body: PExpr, loc: (usize, usize)) -> Self {
-        Self::mk_(Bind { binder: Symbol::from_str(b), v, body }, loc)
-    }
-}
+use crate::{kernel_of_trust as k, CtxI, Error, Result};
 
 /// ## Parsing
 ///
@@ -182,15 +42,17 @@ impl Fixity {
 /// See https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html .
 pub type BindingPower = (u16, u16);
 
-// token
+/// A token of the language. This is zero-copy.
 #[derive(Debug, Copy, Clone, PartialEq)]
-#[allow(non_camel_case_types)]
 enum Tok<'a> {
     LPAREN,
     RPAREN,
     COLON,
     DOT,
+    #[allow(non_camel_case_types)]
+    QUESTION_MARK,
     SYM(&'a str),
+    #[allow(non_camel_case_types)]
     DOLLAR_SYM(&'a str),
     NUM(&'a str),
     EOF,
@@ -261,6 +123,9 @@ impl<'a> Lexer<'a> {
             self.i += 1;
             self.col += 1;
             DOT
+        } else if c == b'?' {
+            self.i += 1;
+            QUESTION_MARK
         } else if c == b'$' {
             // operator but without any precedence
             let mut j = self.i + 1;
@@ -336,23 +201,83 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
+/// An interpolation argument.
+///
+/// This is used to fill in "gaps" in the parsed expression, represented
+/// by a "?", similar to SQL parametrized queries.
+#[derive(Clone, Copy, Debug)]
+pub enum InterpolationArg<'a> {
+    Thm(&'a k::Thm),
+    Expr(&'a k::Expr),
+}
+
+impl<'a> From<&'a k::Thm> for InterpolationArg<'a> {
+    fn from(x: &'a k::Thm) -> Self {
+        InterpolationArg::Thm(x)
+    }
+}
+impl<'a> From<&'a k::Expr> for InterpolationArg<'a> {
+    fn from(x: &'a k::Expr) -> Self {
+        InterpolationArg::Expr(x)
+    }
+}
+
 /// Parser for expressions.
 ///
-/// It uses a fixity function, and a string to parse.
+/// It uses a fixity function, and a lexer that yields the stream of tokens
+/// to parse.
 pub struct Parser<'a> {
+    ctx: &'a mut dyn CtxI,
     get_fix: &'a dyn Fn(&str) -> Option<Fixity>,
     lexer: Lexer<'a>,
     next_tok: Option<Tok<'a>>,
+    /// Interpolation arguments.
+    qargs: &'a [InterpolationArg<'a>],
+    /// Index in `qargs`
+    qargs_idx: usize,
+}
+
+// TODO: binders: select, with, \\, pi
+// TODO: infix: =, ==>
+// TODO: normal names: Bool, $=, $==>, $select, type, defined constants
+
+macro_rules! perror {
+    ($self: ident, $fmt: literal) => {
+        Error::new_string(format!(
+                    concat!( "parse error at {:?}: ", $fmt), $self.loc()))
+    };
+    ($self: ident, $fmt: literal, $($arg:expr ),*) => {
+        Error::new_string(format!(
+                    concat!( "parse error at {:?}: ", $fmt), $self.loc(),
+                    $($arg),*))
+    };
 }
 
 impl<'a> Parser<'a> {
+    /// New parser using the given string `src` and interpolation arguments `qargs`.
+    ///
+    /// Holes in the source `src` will be filled with elements of `qargs`.
+    /// A parse error will be emitted if the number of holes in `src` does not
+    /// correspond to the length of `qargs`.
+    pub fn new_with_args(
+        ctx: &'a mut dyn CtxI,
+        get_fix: &'a dyn Fn(&str) -> Option<Fixity>,
+        src: &'a str,
+        qargs: &'a [InterpolationArg<'a>],
+    ) -> Self {
+        let lexer = Lexer::new(src);
+        Self { ctx, get_fix, lexer, next_tok: None, qargs, qargs_idx: 0 }
+    }
+
     /// New parser using the given string `src`.
+    ///
+    /// The string must not contain interpolation holes `"?"`.
     pub fn new(
+        ctx: &'a mut dyn CtxI,
         get_fix: &'a dyn Fn(&str) -> Option<Fixity>,
         src: &'a str,
     ) -> Self {
-        let lexer = Lexer::new(src);
-        Self { get_fix, lexer, next_tok: None }
+        Self::new_with_args(ctx, get_fix, src, &[])
     }
 
     /// Return current `(line,column)` pair.
@@ -390,7 +315,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Consume `tok` an nothing else.
+    /// Consume `tok` and fail on anything else.
     fn eat_(&mut self, tok: Tok) -> Result<()> {
         let t = self.peek_();
         if t == tok {
@@ -402,113 +327,210 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a bound variable.
-    fn parse_var(&mut self) -> Result<Var> {
+    fn parse_bnd_var(
+        &mut self,
+        ty_expected: Option<k::Expr>,
+    ) -> Result<k::Var> {
         use Tok::*;
 
         let v = match self.next_() {
             SYM(s) => s,
             t => {
-                return Err(Error::new_string(format!(
+                return Err(perror!(
+                    self,
                     "unexpected token {:?} while parsing bound variable",
                     t
-                )))
+                ))
             }
         };
 
-        let ty = if let COLON = self.peek_() {
+        let ty_parsed = if let COLON = self.peek_() {
             self.eat_(COLON)?;
-            Some(self.parse_bp(0)?)
+            // the expression after `:` should have type `type`.
+            let ty_ty = self.ctx.mk_ty();
+            Some(self.parse_bp_(0, Some(ty_ty))?)
         } else {
             None
         };
-        Ok(Var { name: Symbol::from_str(v), ty })
+
+        let ty = match (ty_parsed, ty_expected) {
+            (Some(ty), _) => ty,
+            (None, Some(ty)) => ty,
+            (None, None) => {
+                return Err(perror!(
+                    self,
+                    "cannot find type for variable {}",
+                    v
+                ));
+            }
+        };
+
+        let v = k::Var { name: k::Symbol::from_str(v), ty };
+        Ok(v)
+    }
+
+    fn expr_of_atom_(&mut self, s: &str) -> Result<k::Expr> {
+        Ok(self
+            .ctx
+            .find_const(s)
+            .ok_or_else(|| perror!(self, "unknown constant {:?}", s))?
+            .clone())
+    }
+
+    /// Apply an infix token.
+    fn apply_sym2_(
+        &mut self,
+        s: &str,
+        e1: k::Expr,
+        e2: k::Expr,
+    ) -> Result<k::Expr> {
+        match s {
+            "=" => self.ctx.mk_app(e1, e2),
+            "==>" => {
+                let i = self.ctx.mk_imply();
+                self.ctx.mk_app_l(i, &[e1, e2])
+            }
+            _ => Err(perror!(self, "todo: handle infix '{:?}'", s)),
+        }
+    }
+
+    /// Apply binder `b`.
+    fn mk_binder_(
+        &mut self,
+        _b: &str,
+        _v: k::Var,
+        _body: k::Expr,
+    ) -> Result<k::Expr> {
+        todo!() // TODO
+    }
+
+    // TODO
+    /*
+    fn apply_sym1_(&mut self, s: &str, k: k::Expr) -> Result<k::Expr> {
+        match s {
+            "=" => todo!(),
+            "==>" => todo!(),
+            "with" => todo!(),
+        }
+    }
+    */
+
+    fn interpol_expr_(&mut self) -> Result<k::Expr> {
+        // look for an interpolation argument
+        Ok(if self.qargs_idx < self.qargs.len() {
+            let e = match self.qargs[self.qargs_idx] {
+                InterpolationArg::Expr(e) => e.clone(),
+                InterpolationArg::Thm(_) => {
+                    return Err(perror!(
+                    self,
+                    "interpolation parameter {} is a theorem, expected a term",
+                    self.qargs_idx
+                ))
+                }
+            };
+            self.qargs_idx += 1;
+            e
+        } else {
+            return Err(perror!(self, "too many interpolation '?'"));
+        })
     }
 
     /// Parse an expression, up to EOF.
     ///
     /// `bp` is the current binding power for this Pratt parser.
-    pub fn parse_bp(&mut self, bp: u16) -> Result<PExpr> {
+    fn parse_bp_(
+        &mut self,
+        bp: u16,
+        mut ty_expected: Option<k::Expr>,
+    ) -> Result<k::Expr> {
         use Tok::*;
 
         let mut lhs = {
             let t = self.next_();
             match t {
                 SYM(s) => {
-                    let t_loc = self.loc();
-                    let t = PExpr::var(s, t_loc);
+                    // TODO: get a constant for that, fail if undefined
                     match self.fixity_(s) {
                         Fixity::Prefix((_, r_bp)) => {
-                            let arg = self.parse_bp(r_bp)?;
-                            t.apply(arg, t_loc)
+                            let arg = self.parse_bp_(r_bp, None)?;
+                            let lhs = self.expr_of_atom_(s)?;
+                            self.ctx.mk_app(lhs, arg)?
                         }
                         Fixity::Infix(..) => {
-                            return Err(Error::new(
-                                "unexpected infix operator",
+                            return Err(perror!(
+                                self,
+                                "unexpected infix operator {:?}",
+                                s
                             ));
                         }
                         Fixity::Postfix(..) => {
-                            return Err(Error::new(
-                                "unexpected infix operator",
+                            return Err(perror!(
+                                self,
+                                "unexpected infix operator {:?}",
+                                s
                             ));
                         }
                         Fixity::Binder((_, l2)) => {
-                            let v = self.parse_var()?;
+                            // TODO: provide expected type, maybe
+                            let v = self.parse_bnd_var(None)?;
                             self.eat_(DOT)?;
-                            let body = self.parse_bp(l2)?;
-                            PExpr::bind(s, v, body, t_loc)
+                            // TODO: provide expected type of body?
+                            let body = self.parse_bp_(l2, None)?;
+                            self.mk_binder_(s, v, body)?
                         }
-                        _ => t,
+                        _ => self.expr_of_atom_(s)?,
                     }
                 }
-                DOLLAR_SYM(s) => PExpr::dollar_var(s, self.loc()), // TODO: handle prefix op
-                NUM(s) => PExpr::var(s, self.loc()),
+                DOLLAR_SYM(s) => self.expr_of_atom_(s)?,
+                QUESTION_MARK => self.interpol_expr_()?,
+                NUM(_s) => todo!("parse number"), // PExpr::var(s, self.loc()),
                 LPAREN => {
-                    let t = self.parse_bp(0)?;
+                    let t = self.parse_bp_(0, ty_expected)?;
                     self.eat_(RPAREN)?;
                     t
                 }
                 RPAREN | DOT | EOF | COLON => {
-                    return Err(Error::new_string(format!(
-                        "unexpected token {:?}'",
-                        t
-                    )))
+                    return Err(perror!(self, "unexpected token {:?}'", t))
                 }
             }
         };
 
         loop {
-            let loc_op = self.loc();
             let (op, l_bp, r_bp) = match self.peek_() {
                 EOF => return Ok(lhs),
                 RPAREN | COLON | DOT => break,
                 LPAREN => {
+                    // TODO: set ty_expected to `lhs`'s first argument's type.
                     self.next_();
-                    let t = self.parse_bp(0)?; // maximum binding power
+                    let t = self.parse_bp_(0, None)?; // maximum binding power
                     self.eat_(RPAREN)?;
-                    lhs = lhs.apply(t, loc_op);
+                    lhs = self.ctx.mk_app(lhs, t)?;
                     continue;
                 }
                 DOLLAR_SYM(s) => {
-                    let v = PExpr::dollar_var(s, self.loc());
+                    let arg = self.expr_of_atom_(s)?;
+
+                    self.next_();
                     // simple application
-                    lhs = lhs.apply(v, self.loc());
-                    self.next_();
+                    lhs = self.ctx.mk_app(lhs, arg)?;
                     continue;
                 }
-                NUM(s) => {
-                    let v = PExpr::num(s, self.loc());
-                    lhs = lhs.apply(v, self.loc());
+                QUESTION_MARK => {
                     self.next_();
+                    let arg = self.interpol_expr_()?;
+
+                    // simple application
+                    lhs = self.ctx.mk_app(lhs, arg)?;
                     continue;
                 }
+                NUM(_s) => todo!("handle numbers"),
                 SYM(s) => {
-                    let loc_op = self.loc();
-                    let v = PExpr::var(s, loc_op);
                     match self.fixity_(s) {
-                        Fixity::Infix((l1, l2)) => (v, l1, l2),
+                        Fixity::Infix((l1, l2)) => (s, l1, l2),
                         Fixity::Nullary => {
                             // simple application
-                            lhs = lhs.apply(v, self.loc());
+                            let arg = self.expr_of_atom_(s)?;
+                            lhs = self.ctx.mk_app(lhs, arg)?;
                             self.next_();
                             continue;
                         }
@@ -519,7 +541,8 @@ impl<'a> Parser<'a> {
                             self.next_();
 
                             // postfix operator applied to lhs
-                            lhs = v.apply(lhs, loc_op);
+                            let po = self.expr_of_atom_(s)?;
+                            lhs = self.ctx.mk_app(po, lhs)?;
                             continue;
                         }
                         Fixity::Prefix(..) => {
@@ -538,348 +561,42 @@ impl<'a> Parser<'a> {
 
             self.next_();
 
-            let rhs = self.parse_bp(r_bp)?;
+            let rhs = self.parse_bp_(r_bp, None)?;
 
             // infix apply
-            let app = op.apply_l(&[lhs, rhs], loc_op);
+            let app = self.apply_sym2_(op, lhs, rhs)?;
             lhs = app;
         }
 
         Ok(lhs)
     }
 
-    fn parse_top_(&mut self) -> Result<PExpr> {
-        let e = self.parse_bp(0)?;
+    // TODO: parse/execute statements:
+    // -``def f := expr`
+    // - `tydef tau := thm, abs, repr`
+    // - `
+
+    /// Parse an expression, up to EOF.
+    pub fn parse(&mut self) -> Result<k::Expr> {
+        let e = self.parse_bp_(0, None)?;
         if self.peek_() != Tok::EOF {
-            Err(Error::new("expected EOF"))
+            Err(perror!(self, "expected EOF"))
+        } else if self.qargs_idx < self.qargs.len() {
+            Err(perror!(self, "expected all {} interpolation arguments to be used, but only {} were", self.qargs.len(), self.qargs_idx))
         } else {
             Ok(e)
         }
-    }
-
-    /// Parse an expression, up to EOF.
-    pub fn parse(&mut self) -> Result<PExpr> {
-        self.parse_top_().map_err(|e| {
-            e.set_source(Error::new_string(format!(
-                "parse expression, at {:?}",
-                self.loc()
-            )))
-        })
     }
 }
 
 /// Parse the string into an expression.
 pub fn parse(
+    ctx: &mut dyn CtxI,
     get_fix: &dyn Fn(&str) -> Option<Fixity>,
     s: &str,
-) -> Result<PExpr> {
-    let mut p = Parser::new(get_fix, s);
+) -> Result<k::Expr> {
+    let mut p = Parser::new(ctx, get_fix, s);
     p.parse()
-}
-
-/// ## Pretty printing
-///
-/// This struct captures an expression to print and a fixity function used
-/// to properly display infix symbols and insert parenthesis.
-#[derive(Copy, Clone)]
-pub struct PrintStr<'a> {
-    e: &'a PExpr,
-    get_fixity: &'a dyn Fn(&str) -> Option<Fixity>,
-    min_bp: u16,
-}
-
-impl<'a> PrintStr<'a> {
-    /// New printer for the given expression.
-    pub fn new(
-        get_fixity: &'a dyn Fn(&str) -> Option<Fixity>,
-        e: &'a PExpr,
-    ) -> Self {
-        Self { e, get_fixity, min_bp: 0 }
-    }
-
-    fn set_e_(&self, e2: &'a PExpr) -> Self {
-        PrintStr { e: e2, ..*self }
-    }
-
-    fn set_bp_(&self, bp: u16) -> Self {
-        PrintStr { min_bp: bp, ..*self }
-    }
-
-    /// Pretty print into the given formatter.
-    fn pp_bp(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self.e.view() {
-            DollarVar(v) => write!(fmt, "${}", v.name()),
-            Var(v) => write!(fmt, "{}", v.name()),
-            Num(s) => write!(fmt, "{}", s),
-            App(..) => {
-                let (f, args) = self.e.unfold_app();
-                debug_assert!(args.len() > 0);
-
-                if let Var(s) = f.view() {
-                    match (*self.get_fixity)(s.name()) {
-                        Some(Fixity::Infix((lp, rp))) if args.len() == 2 => {
-                            // TODO: remove implicit args? or use a dollar
-                            let need_paren = self.min_bp >= lp;
-                            if need_paren {
-                                write!(fmt, "(")?;
-                            }
-                            write!(
-                                fmt,
-                                "{} {} {}",
-                                self.set_e_(&args[0]).set_bp_(lp),
-                                self.set_e_(f).set_bp_(u16::MAX),
-                                self.set_e_(&args[1]).set_bp_(rp),
-                            )?;
-
-                            if need_paren {
-                                write!(fmt, ")")?;
-                            }
-                            return Ok(());
-                        }
-                        Some(Fixity::Prefix((_, rp))) if args.len() == 1 => {
-                            let need_paren = self.min_bp >= rp;
-                            if need_paren {
-                                write!(fmt, "(")?;
-                            }
-                            write!(
-                                fmt,
-                                "{} {}",
-                                self.set_e_(f),
-                                self.set_e_(&args[0]).set_bp_(rp)
-                            )?;
-                            if need_paren {
-                                write!(fmt, ")")?;
-                            }
-                            return Ok(());
-                        }
-                        Some(Fixity::Postfix((lp, _))) if args.len() == 1 => {
-                            let need_paren = self.min_bp >= lp;
-                            if need_paren {
-                                write!(fmt, "(")?;
-                            }
-                            write!(
-                                fmt,
-                                "{} {}",
-                                self.set_e_(&args[0]).set_bp_(lp),
-                                self.set_e_(f),
-                            )?;
-                            if need_paren {
-                                write!(fmt, ")")?;
-                            }
-                            return Ok(());
-                        }
-                        Some(Fixity::Binder(..)) => panic!(
-                            "unexpected binder fixity for symbol {:?}",
-                            s
-                        ),
-                        Some(..) | None => (),
-                    }
-                }
-
-                let need_paren = self.min_bp == u16::MAX;
-                if need_paren {
-                    write!(fmt, "(")?;
-                }
-                let sub_bp = u16::MAX; // application binds tightly
-                self.set_e_(f).set_bp_(sub_bp).pp_bp(fmt)?;
-                for x in args {
-                    write!(fmt, " {}", self.set_e_(x).set_bp_(sub_bp))?;
-                }
-
-                if need_paren {
-                    write!(fmt, ")")?;
-                }
-                Ok(())
-            }
-            Bind { binder, v, body } => {
-                let r_bp = match (*self.get_fixity)(binder.name()) {
-                    Some(Fixity::Binder((_, x))) => x,
-                    None => 1,
-                    _ => panic!(
-                        "expected binder {:?} to have binder fixity",
-                        binder
-                    ),
-                };
-                if self.min_bp > r_bp {
-                    write!(fmt, "(")?;
-                }
-                write!(fmt, "{}{}", binder.name(), v.name.name())?;
-                if let Some(ty) = &v.ty {
-                    write!(fmt, ": {}", self.set_e_(ty).set_bp_(0))?;
-                }
-                write!(fmt, ". ")?;
-                self.set_e_(body).set_bp_(r_bp).pp_bp(fmt)?;
-
-                if self.min_bp > r_bp {
-                    write!(fmt, ")")?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-impl<'a> fmt::Display for PrintStr<'a> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        self.pp_bp(fmt)
-    }
-}
-
-pub fn print(get_fix: &dyn Fn(&str) -> Option<Fixity>, e: &PExpr) -> String {
-    let pp = PrintStr::new(get_fix, e);
-    format!("{}", pp)
-}
-
-/// ## Type inference.
-///
-/// Type inference allows us to turn syntactic terms of type `PExpr`
-/// into fully resolved `kernel_of_trust::Expr`.
-/// It might fail if the input term is not well typed or not inferrable.
-pub struct TypeInferenceCtx<'a> {
-    ctx: &'a mut k::Ctx,
-    db: &'a mut db::Database,
-    gen_vars: Vec<k::Expr>, // freshly allocated variables
-    vmap: fnv::FnvHashMap<Symbol, k::Expr>, // variables
-}
-
-// used to allocate fresh variables
-static GENSYM: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
-
-impl<'a> TypeInferenceCtx<'a> {
-    /// New type inference context.
-    pub fn new(ctx: &'a mut k::Ctx, db: &'a mut db::Database) -> Self {
-        Self { ctx, db, gen_vars: vec![], vmap: fnv::new_table_with_cap(16) }
-    }
-
-    fn new_name_(&mut self, s: &str) -> String {
-        let n = GENSYM.fetch_add(1, atomic::Ordering::Relaxed);
-        format!("{}{}", s, n)
-    }
-
-    fn new_ty_var_(&mut self) -> k::Expr {
-        let ty = self.ctx.mk_ty();
-        let name = self.new_name_("'a");
-        let v = self.ctx.mk_var_str(&name, ty);
-        self.gen_vars.push(v.clone());
-        v
-    }
-
-    fn infer_var_(&mut self, v: &Symbol, is_dollar: bool) -> Result<k::Expr> {
-        match self.vmap.get(v) {
-            Some(e2) => {
-                Ok(e2.clone()) // cached
-            }
-            None => {
-                // lookup in database
-                if let Some(c) = self.db.def_by_name(v.name()) {
-                    Ok(c.expr.clone())
-                } else if is_dollar {
-                    Err(Error::new(
-                        "dollar symbols can only be used for defined constants",
-                    ))
-                } else {
-                    // allocate new var
-                    let ty_v = self.new_ty_var_();
-                    let ev = self.ctx.mk_var(k::Var::new(v.clone(), ty_v));
-                    self.vmap.insert(v.clone(), ev.clone());
-                    Ok(ev)
-                }
-            }
-        }
-    }
-
-    fn infer_lam_(&mut self, v: &Var, body: &PExpr) -> Result<k::Expr> {
-        // type of `v`
-        let ty_v = match &v.ty {
-            None => self.new_ty_var_(),
-            Some(ty) => self.infer_(ty)?,
-        };
-        if self.vmap.contains_key(&v.name) {
-            return Err(Error::new("shadowing of variables is forbidden"));
-        }
-        // locally insert a variable `v` with given type.
-        let local_v = k::Var::new(v.name.clone(), ty_v);
-        let local_ev = self.ctx.mk_var(local_v.clone());
-        self.vmap.insert(v.name.clone(), local_ev.clone());
-        // infer body
-        let body = self.infer_(body);
-        self.vmap.remove(&v.name);
-        let e = self.ctx.mk_lambda(local_v, body?)?;
-        Ok(e)
-    }
-
-    fn infer_(&mut self, e: &PExpr) -> Result<k::Expr> {
-        // cached
-        if let Some(e) = &*e.0.resolved.borrow() {
-            return Ok(e.clone());
-        }
-
-        let e2 = match &e.0.view {
-            Var(v) if v.name() == "_" => {
-                // wildcard: generative variable. Do not cache.
-                let ty_v = self.new_ty_var_();
-                let name = self.new_name_("$x");
-                self.ctx.mk_var_str(&name, ty_v)
-            }
-            Var(v) => self.infer_var_(v, false)?,
-            DollarVar(v) => self.infer_var_(v, true)?,
-            App(f, a) => {
-                let f = self.infer_(f)?;
-                let a = self.infer_(a)?;
-
-                self.ctx.mk_app(f, a).map_err(|err| {
-                    err.set_source(Error::new_string(format!(
-                        "inferring {:?} at {:?}",
-                        e, e.0.loc
-                    )))
-                })?
-
-                // TODO: unify types, in case `f` is a variable
-                /*
-                match ty_f.view() {
-                    k::EPi(..) => {
-                        // direct apply
-
-                    },
-                    _ => {
-                        let b =
-                    }
-
-                }
-                utils::unify(f.ty(),
-                */
-            }
-            Num(_) => todo!("type inference for numbers"),
-            Bind { binder, v, body } if binder.name() == "\\" => {
-                // pure lambda
-                self.infer_lam_(v, body)?
-            }
-            Bind { binder, v, body } => {
-                // `binder x. body` is sugar for `binder (λx. body)`
-                let binder = self
-                    .db
-                    .def_by_name(binder.name())
-                    .ok_or_else(|| {
-                        Error::new_string(format!(
-                            "cannot find binder {:?}",
-                            &binder
-                        ))
-                    })?
-                    .expr
-                    .clone();
-                let lam = self.infer_lam_(v, body)?;
-                self.ctx.mk_app(binder, lam)?
-            }
-        };
-        *e.0.resolved.borrow_mut() = Some(e2.clone());
-        Ok(e2)
-    }
-
-    /// Perform type inference to turn `e` into a proper expression.
-    pub fn infer(&mut self, e: &PExpr) -> Result<k::Expr> {
-        self.gen_vars.clear();
-        self.infer_(e)
-    }
 }
 
 #[cfg(test)]
@@ -942,6 +659,7 @@ mod test {
         assert_eq!(vec![Tok::EOF], toks);
     }
 
+    /*
     #[test]
     fn test_parser1() {
         let s = "foo";
@@ -966,59 +684,6 @@ mod test {
         );
     }
 
-    // test adapted from the blog post
-    #[test]
-    fn test_parser3() {
-        let fix = |s: &str| match s {
-            "+" | "-" => Some(Fixity::Infix((1, 2))),
-            "*" | "/" => Some(Fixity::Infix((3, 4))),
-            "o" => Some(Fixity::Infix((10, 9))),
-            "~" => Some(Fixity::Prefix((0, 5))), // prefix -
-            "!" => Some(Fixity::Postfix((7, 0))),
-            _ => None,
-        };
-        let s = parse(&fix, "1").unwrap();
-        assert_eq!(s.to_string(), "1");
-
-        let s = parse(&fix, "1 + 2 * 3").unwrap();
-        assert_eq!(
-            vec![
-                Tok::NUM("1"),
-                Tok::SYM("+"),
-                Tok::NUM("2"),
-                Tok::SYM("*"),
-                Tok::NUM("3"),
-                Tok::EOF,
-            ],
-            Lexer::new("1 + 2 * 3").collect::<Vec<_>>()
-        );
-        assert_eq!(s.to_string(), "(+ 1 (* 2 3))");
-
-        let s = parse(&fix, "a + b * c * d + e").unwrap();
-        assert_eq!(s.to_string(), "(+ (+ a (* (* b c) d)) e)");
-
-        let s = parse(&fix, "f o g o h").unwrap();
-        assert_eq!(s.to_string(), "(o f (o g h))");
-
-        let s = parse(&fix, " 1 + 2 + f o g o h * 3 * 4").unwrap();
-        assert_eq!(s.to_string(), "(+ (+ 1 2) (* (* (o f (o g h)) 3) 4))");
-
-        let s = parse(&fix, "~ ~1 * 2").unwrap();
-        assert_eq!(s.to_string(), "(* (~ (~ 1)) 2)");
-
-        let s = parse(&fix, "~ ~f o g").unwrap();
-        assert_eq!(s.to_string(), "(~ (~ (o f g)))");
-
-        let s = parse(&fix, "~9!").unwrap();
-        assert_eq!(s.to_string(), "(~ (! 9))");
-
-        let s = parse(&fix, "f o g !").unwrap();
-        assert_eq!(s.to_string(), "(! (o f g))");
-
-        let s = parse(&fix, "(((0)))").unwrap();
-        assert_eq!(s.to_string(), "0");
-    }
-
     #[test]
     fn test_parser4() {
         let s = "f _";
@@ -1026,6 +691,7 @@ mod test {
         let e = parse(&get_fix, s).unwrap();
         assert_eq!("(f _)", e.to_string());
     }
+    */
 
     /* FIXME
     #[test]
