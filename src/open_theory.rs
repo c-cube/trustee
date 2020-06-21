@@ -446,7 +446,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
     fn assume(&mut self) -> Result<()> {
         self.pop1("assume", |vm, x| {
             let t = x.as_term()?;
-            let th = vm.ctx.thm_assume(t);
+            let th = vm.ctx.thm_assume(t)?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })

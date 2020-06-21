@@ -26,7 +26,7 @@ pub struct NewPolyDef {
 /// defining the new constant `c`, and `vars` is the set of type variables
 /// closed over.
 pub fn thm_new_poly_definition(
-    em: &mut dyn CtxI,
+    ctx: &mut dyn CtxI,
     c: &str,
     rhs: Expr,
 ) -> Result<NewPolyDef> {
@@ -41,33 +41,33 @@ pub fn thm_new_poly_definition(
         c, rhs)));
     }
 
-    let ty_closed = em.mk_pi_l(&vars_ty_rhs, rhs.ty().clone())?;
+    let ty_closed = ctx.mk_pi_l(&vars_ty_rhs, rhs.ty().clone())?;
     let eqn = {
-        let rhs_closed = em.mk_lambda_l(&vars_ty_rhs, rhs.clone())?;
-        let v = em.mk_var_str(c, ty_closed);
-        em.mk_eq_app(v, rhs_closed)?
+        let rhs_closed = ctx.mk_lambda_l(&vars_ty_rhs, rhs.clone())?;
+        let v = ctx.mk_var_str(c, ty_closed);
+        ctx.mk_eq_app(v, rhs_closed)?
     };
-    let (thm, c) = em.thm_new_basic_definition(eqn)?;
+    let (thm, c) = ctx.thm_new_basic_definition(eqn)?;
 
     // type variables as expressions
     let e_vars: Vec<_> =
-        vars_ty_rhs.iter().cloned().map(|v| em.mk_var(v)).collect();
+        vars_ty_rhs.iter().cloned().map(|v| ctx.mk_var(v)).collect();
 
-    let c_applied = em.mk_app_l(c.clone(), &e_vars)?;
+    let c_applied = ctx.mk_app_l(c.clone(), &e_vars)?;
 
     // apply `thm` to the type variables
     let thm_applied = {
         let mut thm = thm.clone();
         for v in e_vars.iter() {
-            thm = em.thm_congr_ty(thm, &v)?;
+            thm = ctx.thm_congr_ty(thm, &v)?;
             // now replace `(λa:type. …) v` with its beta reduced version
             let thm_rhs = thm
                 .concl()
                 .unfold_eq()
                 .ok_or_else(|| Error::new("rhs must be an equality"))?
                 .1;
-            let thm_beta = em.thm_beta_conv(thm_rhs)?;
-            thm = em.thm_trans(thm, thm_beta)?;
+            let thm_beta = ctx.thm_beta_conv(thm_rhs)?;
+            thm = ctx.thm_trans(thm, thm_beta)?;
         }
         thm
     };
@@ -382,13 +382,13 @@ pub fn thm_sym_conv(ctx: &mut dyn CtxI, e: Expr) -> Result<Thm> {
     let (t, u) =
         e.unfold_eq().ok_or_else(|| Error::new("sym: expect an equation"))?;
     let th1 = {
-        let hyp = ctx.thm_assume(e.clone());
+        let hyp = ctx.thm_assume(e.clone())?;
         thm_sym(ctx, hyp)?
     };
 
     let th2 = {
         let eq = ctx.mk_eq_app(u.clone(), t.clone())?;
-        let hyp = ctx.thm_assume(eq);
+        let hyp = ctx.thm_assume(eq)?;
         thm_sym(ctx, hyp)?
     };
 
