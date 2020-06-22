@@ -705,6 +705,16 @@ pub fn parse_expr(ctx: &mut dyn CtxI, s: &str) -> Result<k::Expr> {
     p.parse()
 }
 
+/// Parse the string into an expression with a set of parameters.
+pub fn parse_expr_with_args(
+    ctx: &mut dyn CtxI,
+    s: &str,
+    qargs: &[InterpolationArg],
+) -> Result<k::Expr> {
+    let mut p = Parser::new_with_args(ctx, s, qargs);
+    p.parse()
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -790,6 +800,56 @@ mod test {
         for (x, y) in &pairs {
             let mut ctx = k::Ctx::new();
             let r = parse_expr(&mut ctx, x).map_err(|e| {
+                e.set_source(Error::new_string(format!("parsing {:?}", x)))
+            })?;
+            let r2 = format!("{:?}", r);
+            assert_eq!(&r2, *y);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parser2_interpol() -> Result<()> {
+        let cases: Vec<(
+            &'static str,
+            &'static str,
+            &'static dyn Fn(&mut dyn CtxI) -> Result<Vec<k::Expr>>,
+        )> = vec![
+            (
+                "with a:?. select x:?. x=a",
+                "(select bool (λx0 : bool. (= bool x0 a)))",
+                &|ctx: &mut dyn CtxI| Ok(vec![ctx.mk_bool(), ctx.mk_bool()]),
+            ),
+            (
+                r#"(\x:bool. ?= x) "#,
+                "(λx0 : bool. (= bool x0 x0))",
+                &|ctx: &mut dyn CtxI| {
+                    let b = ctx.mk_bool();
+                    Ok(vec![ctx.mk_var_str("x", b)])
+                },
+            ),
+            /*
+            (
+                r#"(\x y:bool. x= y) "#,
+                "(λx0 : bool. (λx1 : bool. (= bool x0 x1)))",
+            ),
+            (
+                "with a:bool. with b:bool. (a=b) = (b=a)",
+                "(= bool (= bool a b) (= bool b a))",
+            ),
+            (
+                "with (a b:bool). (a=b) = (b=a)",
+                "(= bool (= bool a b) (= bool b a))",
+            ),
+             */
+        ];
+
+        for (x, y, f) in &cases {
+            let mut ctx = k::Ctx::new();
+            let args: Vec<_> = f(&mut ctx)?;
+            let qargs: Vec<InterpolationArg> =
+                args.iter().map(|x| x.into()).collect();
+            let r = parse_expr_with_args(&mut ctx, x, &qargs).map_err(|e| {
                 e.set_source(Error::new_string(format!("parsing {:?}", x)))
             })?;
             let r2 = format!("{:?}", r);
