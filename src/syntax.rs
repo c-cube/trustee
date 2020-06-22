@@ -301,6 +301,7 @@ impl<'a> Parser<'a> {
             "with" => Fixity::Binder((1, 2)),
             "\\" => Fixity::Binder((30, 31)),
             "select" => Fixity::Binder((26, 27)),
+            "pi" => Fixity::Binder((32, 33)),
             _ => Fixity::Nullary,
         }
     }
@@ -361,7 +362,7 @@ impl<'a> Parser<'a> {
             (None, None) => {
                 return Err(perror!(
                     self,
-                    "cannot find type for variable {}",
+                    "cannot infer type for variable {}",
                     v
                 ));
             }
@@ -372,6 +373,11 @@ impl<'a> Parser<'a> {
     }
 
     fn expr_of_atom_(&mut self, s: &str) -> Result<k::Expr> {
+        // local variables
+        if let Some(v) = self.local.iter().find(|x| x.name.name() == s) {
+            let e = self.ctx.mk_var(v.clone());
+            return Ok(e);
+        };
         Ok(match s {
             "=" => self.ctx.mk_eq(),
             "==>" => self.ctx.mk_imply(),
@@ -400,6 +406,7 @@ impl<'a> Parser<'a> {
                 let i = self.ctx.mk_imply();
                 self.ctx.mk_app_l(i, &[e1, e2])
             }
+            "->" => self.ctx.mk_arrow(e1, e2),
             _ => Err(perror!(self, "todo: handle infix '{:?}'", s)),
         }
     }
@@ -411,7 +418,7 @@ impl<'a> Parser<'a> {
         _v: k::Var,
         _body: k::Expr,
     ) -> Result<k::Expr> {
-        todo!() // TODO
+        return Err(perror!(self, "TODO: mk binder")); // TODO
     }
 
     // TODO
@@ -481,6 +488,9 @@ impl<'a> Parser<'a> {
                             ));
                         }
                         Fixity::Binder((_, l2)) => {
+                            // TODO: handle multiple variables in there
+                            // as in: `with (a b:type) (f:a->b). …`
+
                             // TODO: provide expected type, maybe
                             let v = self.parse_bnd_var(None)?;
                             let old_l = self.local.len();
