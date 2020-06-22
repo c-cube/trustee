@@ -11,7 +11,9 @@ edition = "2018"
 [dev-dependencies]
 log = "*"
 env_logger = { version= "*", default-features=false, features=["termcolor", "atty"] }
+anyhow="1.0"
 
 [[example]]
-
 name = "parse_ot"
+[[example]]
+name = "cli"
