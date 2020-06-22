@@ -296,12 +296,13 @@ impl<'a> Parser<'a> {
     #[inline]
     fn fixity_(&self, s: &str) -> Fixity {
         match s {
-            "=" => Fixity::Infix((10, 11)),
-            "==>" => Fixity::Infix((6, 5)),
+            "=" => Fixity::Infix((30, 31)),
+            "==>" => Fixity::Infix((46, 45)),
+            "->" => Fixity::Infix((80, 81)),
             "with" => Fixity::Binder((1, 2)),
-            "\\" => Fixity::Binder((30, 31)),
-            "select" => Fixity::Binder((26, 27)),
-            "pi" => Fixity::Binder((32, 33)),
+            "\\" => Fixity::Binder((20, 21)),
+            "select" => Fixity::Binder((22, 23)),
+            "pi" => Fixity::Binder((24, 25)),
             _ => Fixity::Nullary,
         }
     }
@@ -329,23 +330,45 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a bound variable.
-    fn parse_bnd_var(
+    /// Parse a (list of) bound variable(s) of the same type.
+    fn parse_bnd_var_list_(
         &mut self,
-        ty_expected: Option<k::Expr>,
-    ) -> Result<k::Var> {
+        ty_expected: Option<&k::Expr>,
+    ) -> Result<usize> {
         use Tok::*;
+        const MAX_NUM: usize = 16;
 
-        let v = match self.next_() {
-            SYM(s) => s,
-            t => {
-                return Err(perror!(
-                    self,
-                    "unexpected token {:?} while parsing bound variable",
-                    t
-                ))
-            }
-        };
+        // parse at most 16 of them
+        let mut names: [&'a str; MAX_NUM] = [""; MAX_NUM];
+        let mut i = 0;
+
+        loop {
+            match self.peek_() {
+                SYM(s) => {
+                    names[i] = s;
+                    i += 1;
+                    if i >= MAX_NUM {
+                        return Err(perror!(
+                            self,
+                            "cannot parse more than {} variables in one binder",
+                            MAX_NUM
+                        ));
+                    }
+                    self.next_();
+                }
+                COLON | DOT => break,
+                t => {
+                    return Err(perror!(
+                        self,
+                        "unexpected token {:?} while parsing bound variable",
+                        t
+                    ))
+                }
+            };
+        }
+        if i == 0 {
+            return Err(perror!(self, "expected a variable name",));
+        }
 
         let ty_parsed = if let COLON = self.peek_() {
             self.eat_(COLON)?;
@@ -356,20 +379,66 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let ty = match (ty_parsed, ty_expected) {
-            (Some(ty), _) => ty,
+        let ty = match (&ty_parsed, ty_expected) {
+            (Some(ty), _) => &ty,
             (None, Some(ty)) => ty,
             (None, None) => {
                 return Err(perror!(
                     self,
-                    "cannot infer type for variable {}",
-                    v
+                    "cannot infer type for bound variable(s)",
                 ));
             }
         };
 
-        let v = k::Var { name: k::Symbol::from_str(v), ty };
-        Ok(v)
+        // push variables now that we have their type.
+        for j in 0..i {
+            let v =
+                k::Var { name: k::Symbol::from_str(names[j]), ty: ty.clone() };
+            self.local.push(v)
+        }
+
+        Ok(i)
+    }
+
+    /// Parse a list of bound variables and pushes them onto `self.local`.
+    ///
+    /// Returns the number of parsed variables.
+    fn parse_bnd_vars_(
+        &mut self,
+        ty_expected: Option<&k::Expr>,
+    ) -> Result<usize> {
+        use Tok::*;
+
+        let mut n = 0;
+        loop {
+            match self.peek_() {
+                LPAREN => {
+                    self.next_();
+                    n += self.parse_bnd_var_list_(ty_expected)?;
+                    self.eat_(RPAREN)?;
+                },
+                SYM(_) => {
+                    n += self.parse_bnd_var_list_(ty_expected)?;
+                    break;
+                }
+                DOT => break,
+                t => {
+                    return Err(perror!(
+                        self,
+                        "unexpected token {:?} while parsing a list of bound variables",
+                        t))
+                }
+
+            }
+        }
+        if n == 0 {
+            return Err(perror!(
+                self,
+                "expected at least one bound variable after binder",
+            ));
+        }
+
+        Ok(n)
     }
 
     fn expr_of_atom_(&mut self, s: &str) -> Result<k::Expr> {
@@ -401,7 +470,7 @@ impl<'a> Parser<'a> {
         e2: k::Expr,
     ) -> Result<k::Expr> {
         match s {
-            "=" => self.ctx.mk_app(e1, e2),
+            "=" => self.ctx.mk_eq_app(e1, e2),
             "==>" => {
                 let i = self.ctx.mk_imply();
                 self.ctx.mk_app_l(i, &[e1, e2])
@@ -414,23 +483,32 @@ impl<'a> Parser<'a> {
     /// Apply binder `b`.
     fn mk_binder_(
         &mut self,
-        _b: &str,
-        _v: k::Var,
-        _body: k::Expr,
+        b: &str,
+        local_offset: usize,
+        body: k::Expr,
     ) -> Result<k::Expr> {
-        return Err(perror!(self, "TODO: mk binder")); // TODO
+        let vars = &self.local[local_offset..];
+        Ok(match b {
+            "with" => {
+                body // not a realy binder
+            }
+            "\\" => self.ctx.mk_lambda_l(vars, body)?,
+            "pi" => self.ctx.mk_pi_l(vars, body)?,
+            "select" => {
+                // turn `select x. p` into `select (λx. p)`
+                let mut t = body;
+                for v in vars {
+                    let ty_v = v.ty();
+                    let sel = self.ctx.mk_select();
+                    let sel = self.ctx.mk_app(sel, ty_v.clone())?;
+                    let lam = self.ctx.mk_lambda(v.clone(), t)?;
+                    t = self.ctx.mk_app(sel, lam)?;
+                }
+                t
+            }
+            _ => return Err(perror!(self, "TODO: mk binder {}", b)),
+        })
     }
-
-    // TODO
-    /*
-    fn apply_sym1_(&mut self, s: &str, k: k::Expr) -> Result<k::Expr> {
-        match s {
-            "=" => todo!(),
-            "==>" => todo!(),
-            "with" => todo!(),
-        }
-    }
-    */
 
     /// Look for an interpolation argument and consume it
     fn interpol_expr_(&mut self) -> Result<k::Expr> {
@@ -483,7 +561,7 @@ impl<'a> Parser<'a> {
                         Fixity::Postfix(..) => {
                             return Err(perror!(
                                 self,
-                                "unexpected infix operator {:?}",
+                                "unexpected postfix operator {:?}",
                                 s
                             ));
                         }
@@ -491,15 +569,15 @@ impl<'a> Parser<'a> {
                             // TODO: handle multiple variables in there
                             // as in: `with (a b:type) (f:a->b). …`
 
-                            // TODO: provide expected type, maybe
-                            let v = self.parse_bnd_var(None)?;
-                            let old_l = self.local.len();
-                            self.local.push(v.clone());
+                            let local_offset = self.local.len();
+                            // TODO: provide expected type, maybe?
+                            self.parse_bnd_vars_(None)?;
                             self.eat_(DOT)?;
                             // TODO: provide expected type of body?
                             let body = self.parse_bp_(l2, None)?;
-                            self.local.truncate(old_l);
-                            self.mk_binder_(s, v, body)?
+                            let result = self.mk_binder_(s, local_offset, body);
+                            self.local.truncate(local_offset);
+                            result?
                         }
                         _ => self.expr_of_atom_(s)?,
                     }
@@ -513,7 +591,7 @@ impl<'a> Parser<'a> {
                     t
                 }
                 RPAREN | DOT | EOF | COLON => {
-                    return Err(perror!(self, "unexpected token {:?}'", t))
+                    return Err(perror!(self, "unexpected token {:?}", t))
                 }
             }
         };
@@ -546,7 +624,7 @@ impl<'a> Parser<'a> {
                     lhs = self.ctx.mk_app(lhs, arg)?;
                     continue;
                 }
-                NUM(_s) => todo!("handle numbers"),
+                NUM(_s) => return Err(perror!(self, "handle numbers")),
                 SYM(s) => {
                     match self.fixity_(s) {
                         Fixity::Infix((l1, l2)) => (s, l1, l2),
@@ -569,10 +647,18 @@ impl<'a> Parser<'a> {
                             continue;
                         }
                         Fixity::Prefix(..) => {
-                            return Err(Error::new("unexpected prefix symbol"))
+                            return Err(perror!(
+                                self,
+                                "unexpected prefix symbol {:?}",
+                                s
+                            ))
                         }
                         Fixity::Binder(..) => {
-                            return Err(Error::new("unexpected inder"))
+                            return Err(perror!(
+                                self,
+                                "unexpected binder {:?}",
+                                s
+                            ))
                         }
                     }
                 }
@@ -679,81 +765,36 @@ mod test {
         assert_eq!(vec![Tok::EOF], toks);
     }
 
-    /*
     #[test]
-    fn test_parser1() {
-        let s = "foo";
-        let get_fix = |_: &str| None;
-        let e = parse(&get_fix, s).unwrap();
-        assert_eq!("foo", e.to_string());
+    fn test_parser1() -> Result<()> {
+        let pairs = [
+            (
+                "with a:bool. select x:bool. x=a",
+                "(select bool (λx0 : bool. (= bool x0 a)))",
+            ),
+            (r#"(\x:bool. x= x) "#, "(λx0 : bool. (= bool x0 x0))"),
+            (
+                r#"(\x y:bool. x= y) "#,
+                "(λx0 : bool. (λx1 : bool. (= bool x0 x1)))",
+            ),
+            (
+                "with a:bool. with b:bool. (a=b) = (b=a)",
+                "(= bool (= bool a b) (= bool b a))",
+            ),
+            (
+                "with (a b:bool). (a=b) = (b=a)",
+                "(= bool (= bool a b) (= bool b a))",
+            ),
+        ];
+
+        for (x, y) in &pairs {
+            let mut ctx = k::Ctx::new();
+            let r = parse_expr(&mut ctx, x).map_err(|e| {
+                e.set_source(Error::new_string(format!("parsing {:?}", x)))
+            })?;
+            let r2 = format!("{:?}", r);
+            assert_eq!(&r2, *y);
+        }
+        Ok(())
     }
-
-    #[test]
-    fn test_parser2() {
-        let get_fix = |s: &str| match s {
-            "=" => Some(Fixity::Infix((10, 10))),
-            "!" | "?" => Some(Fixity::Binder((0, 5))),
-            _ => None,
-        };
-        let s = "?y. (!x: foo bar. f x) = y";
-        let e = parse(&get_fix, s).unwrap();
-        assert_eq!("(?y. (= (!x: (foo bar). (f x)) y))", e.to_string());
-        assert_eq!(
-            "?y. (!x: foo bar. f x) = y",
-            format!("{}", PrintStr::new(&get_fix, &e))
-        );
-    }
-
-    #[test]
-    fn test_parser4() {
-        let s = "f _";
-        let get_fix = |_: &str| None;
-        let e = parse(&get_fix, s).unwrap();
-        assert_eq!("(f _)", e.to_string());
-    }
-    */
-
-    /* FIXME
-    #[test]
-    fn test_infer1() {
-        let mut ctx = k::Ctx::new();
-        let mut db = db::Database::new();
-
-        // test parse 2
-        let get_fix = |s: &str| match s {
-            "=" => Some(Fixity::Infix((10, 10))),
-            "\\" => Some(Fixity::Binder((0, 5))),
-            _ => None,
-        };
-        let s = "\\y. (\\x: foo bar. f x) = y";
-        let e = parse(&get_fix, s).unwrap();
-        assert_eq!("(\\y. (= (\\x: (foo bar). (f x)) y))", e.to_string());
-
-        // now infer
-        let mut ictx = TypeInferenceCtx::new(&mut ctx, &mut db);
-        let e2 = ictx.infer(&e).unwrap();
-        println!("{:?}", e2);
-    }
-
-    #[test]
-    fn test_infer2() {
-        let mut ctx = k::Ctx::new();
-        let mut db = db::Database::new();
-
-        // test parse 2
-        let get_fix = |s: &str| match s {
-            "=" => Some(Fixity::Infix((10, 10))),
-            "!" | "?" | "\\" => Some(Fixity::Binder((0, 5))),
-            _ => None,
-        };
-        let s = "?y. (!x: foo bar. f x) = y";
-        let e = parse(&get_fix, s).unwrap();
-        assert_eq!("(?y. (= (!x: (foo bar). (f x)) y))", e.to_string());
-
-        // now infer
-        let mut ictx = TypeInferenceCtx::new(&mut ctx, &mut db);
-        let e2 = ictx.infer(&e).unwrap();
-        println!("{:?}", e2);
-    }
-    */
 }

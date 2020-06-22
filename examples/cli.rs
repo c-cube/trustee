@@ -13,12 +13,17 @@ fn main() -> anyhow::Result<()> {
     let mut buf = String::new();
     loop {
         write!(stdout, "> ")?;
-        let _ = stdin.read_line(&mut buf)?;
+        let n = stdin.read_line(&mut buf)?;
+        if n == 0 {
+            break;
+        }
         match syntax::parse_expr(&mut ctx, &buf) {
             Ok(e) => println!("got expr: {:?}", e),
             Err(e) => {
                 println!("err: {}", e);
             }
         }
+        buf.clear();
     }
+    Ok(())
 }
