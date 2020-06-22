@@ -87,6 +87,18 @@ pub enum BuiltinSymbol {
 }
 use BuiltinSymbol as BS;
 
+impl BuiltinSymbol {
+    pub fn name(&self) -> &'static str {
+        match self {
+            BS::Eq => "=",
+            BS::Imply => "==>",
+            BS::Select => "select",
+            BS::Bool => "bool",
+            BS::Ind => "ind",
+        }
+    }
+}
+
 /// Any kind of symbol.
 #[derive(Debug, Clone, Ord, PartialOrd, Hash, Eq, PartialEq)]
 pub enum Symbol {
@@ -103,13 +115,7 @@ impl Symbol {
 
     pub fn name(&self) -> &str {
         match &self {
-            Symbol::Builtin(s) => match s {
-                BS::Eq => "=",
-                BS::Imply => "==>",
-                BS::Select => "select",
-                BS::Bool => "Bool",
-                BS::Ind => "ind",
-            },
+            Symbol::Builtin(s) => s.name(),
             Symbol::Named(s) => &*s,
         }
     }
@@ -118,13 +124,7 @@ impl Symbol {
 impl std::borrow::Borrow<str> for Symbol {
     fn borrow(&self) -> &str {
         match self {
-            Symbol::Builtin(s) => match s {
-                BS::Eq => "=",
-                BS::Imply => "==>",
-                BS::Select => "select",
-                BS::Bool => "Bool",
-                BS::Ind => "IND",
-            },
+            Symbol::Builtin(s) => s.name(),
             Symbol::Named(s) => &*s,
         }
     }

@@ -43,16 +43,15 @@ impl Fixity {
 pub type BindingPower = (u16, u16);
 
 /// A token of the language. This is zero-copy.
+#[allow(non_camel_case_types)]
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum Tok<'a> {
     LPAREN,
     RPAREN,
     COLON,
     DOT,
-    #[allow(non_camel_case_types)]
     QUESTION_MARK,
     SYM(&'a str),
-    #[allow(non_camel_case_types)]
     DOLLAR_SYM(&'a str),
     NUM(&'a str),
     EOF,
@@ -228,7 +227,8 @@ impl<'a> From<&'a k::Expr> for InterpolationArg<'a> {
 /// to parse.
 pub struct Parser<'a> {
     ctx: &'a mut dyn CtxI,
-    get_fix: &'a dyn Fn(&str) -> Option<Fixity>,
+    /// Local variables, from binders.
+    local: Vec<k::Var>,
     lexer: Lexer<'a>,
     next_tok: Option<Tok<'a>>,
     /// Interpolation arguments.
@@ -261,23 +261,18 @@ impl<'a> Parser<'a> {
     /// correspond to the length of `qargs`.
     pub fn new_with_args(
         ctx: &'a mut dyn CtxI,
-        get_fix: &'a dyn Fn(&str) -> Option<Fixity>,
         src: &'a str,
         qargs: &'a [InterpolationArg<'a>],
     ) -> Self {
         let lexer = Lexer::new(src);
-        Self { ctx, get_fix, lexer, next_tok: None, qargs, qargs_idx: 0 }
+        Self { ctx, local: vec![], lexer, next_tok: None, qargs, qargs_idx: 0 }
     }
 
     /// New parser using the given string `src`.
     ///
     /// The string must not contain interpolation holes `"?"`.
-    pub fn new(
-        ctx: &'a mut dyn CtxI,
-        get_fix: &'a dyn Fn(&str) -> Option<Fixity>,
-        src: &'a str,
-    ) -> Self {
-        Self::new_with_args(ctx, get_fix, src, &[])
+    pub fn new(ctx: &'a mut dyn CtxI, src: &'a str) -> Self {
+        Self::new_with_args(ctx, src, &[])
     }
 
     /// Return current `(line,column)` pair.
@@ -300,7 +295,14 @@ impl<'a> Parser<'a> {
 
     #[inline]
     fn fixity_(&self, s: &str) -> Fixity {
-        (*self.get_fix)(s).unwrap_or(Fixity::Nullary)
+        match s {
+            "=" => Fixity::Infix((10, 11)),
+            "==>" => Fixity::Infix((6, 5)),
+            "with" => Fixity::Binder((1, 2)),
+            "\\" => Fixity::Binder((30, 31)),
+            "select" => Fixity::Binder((26, 27)),
+            _ => Fixity::Nullary,
+        }
     }
 
     /// Consume current token and return the next one.
@@ -370,11 +372,19 @@ impl<'a> Parser<'a> {
     }
 
     fn expr_of_atom_(&mut self, s: &str) -> Result<k::Expr> {
-        Ok(self
-            .ctx
-            .find_const(s)
-            .ok_or_else(|| perror!(self, "unknown constant {:?}", s))?
-            .clone())
+        Ok(match s {
+            "=" => self.ctx.mk_eq(),
+            "==>" => self.ctx.mk_imply(),
+            "select" => self.ctx.mk_select(),
+            "ind" => self.ctx.mk_ind(),
+            "bool" => self.ctx.mk_bool(),
+            "type" => self.ctx.mk_ty(),
+            _ => self
+                .ctx
+                .find_const(s)
+                .ok_or_else(|| perror!(self, "unknown constant {:?}", s))?
+                .clone(),
+        })
     }
 
     /// Apply an infix token.
@@ -415,8 +425,8 @@ impl<'a> Parser<'a> {
     }
     */
 
+    /// Look for an interpolation argument and consume it
     fn interpol_expr_(&mut self) -> Result<k::Expr> {
-        // look for an interpolation argument
         Ok(if self.qargs_idx < self.qargs.len() {
             let e = match self.qargs[self.qargs_idx] {
                 InterpolationArg::Expr(e) => e.clone(),
@@ -441,7 +451,7 @@ impl<'a> Parser<'a> {
     fn parse_bp_(
         &mut self,
         bp: u16,
-        mut ty_expected: Option<k::Expr>,
+        ty_expected: Option<k::Expr>,
     ) -> Result<k::Expr> {
         use Tok::*;
 
@@ -473,9 +483,12 @@ impl<'a> Parser<'a> {
                         Fixity::Binder((_, l2)) => {
                             // TODO: provide expected type, maybe
                             let v = self.parse_bnd_var(None)?;
+                            let old_l = self.local.len();
+                            self.local.push(v.clone());
                             self.eat_(DOT)?;
                             // TODO: provide expected type of body?
                             let body = self.parse_bp_(l2, None)?;
+                            self.local.truncate(old_l);
                             self.mk_binder_(s, v, body)?
                         }
                         _ => self.expr_of_atom_(s)?,
@@ -572,9 +585,8 @@ impl<'a> Parser<'a> {
     }
 
     // TODO: parse/execute statements:
-    // -``def f := expr`
-    // - `tydef tau := thm, abs, repr`
-    // - `
+    // -``def f := expr; …`
+    // - `tydef tau := thm, abs, repr; …`
 
     /// Parse an expression, up to EOF.
     pub fn parse(&mut self) -> Result<k::Expr> {
@@ -582,7 +594,9 @@ impl<'a> Parser<'a> {
         if self.peek_() != Tok::EOF {
             Err(perror!(self, "expected EOF"))
         } else if self.qargs_idx < self.qargs.len() {
-            Err(perror!(self, "expected all {} interpolation arguments to be used, but only {} were", self.qargs.len(), self.qargs_idx))
+            Err(perror!(self,
+                    "expected all {} interpolation arguments to be used, but only {} were",
+                    self.qargs.len(), self.qargs_idx))
         } else {
             Ok(e)
         }
@@ -590,12 +604,8 @@ impl<'a> Parser<'a> {
 }
 
 /// Parse the string into an expression.
-pub fn parse(
-    ctx: &mut dyn CtxI,
-    get_fix: &dyn Fn(&str) -> Option<Fixity>,
-    s: &str,
-) -> Result<k::Expr> {
-    let mut p = Parser::new(ctx, get_fix, s);
+pub fn parse_expr(ctx: &mut dyn CtxI, s: &str) -> Result<k::Expr> {
+    let mut p = Parser::new(ctx, s);
     p.parse()
 }
 
