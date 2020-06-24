@@ -52,6 +52,8 @@ enum Tok<'a> {
     DOT,
     QUESTION_MARK,
     SYM(&'a str),
+    LET,
+    IN,
     DOLLAR_SYM(&'a str),
     NUM(&'a str),
     EOF,
@@ -155,7 +157,13 @@ impl<'a> Lexer<'a> {
             let slice = &self.src[self.i..j];
             self.col += j - self.i;
             self.i = j;
-            return SYM(slice);
+            return if slice == "let" {
+                LET
+            } else if slice == "in" {
+                IN
+            } else {
+                SYM(slice)
+            };
         } else if c.is_ascii_digit() {
             let mut j = self.i + 1;
             while j < bytes.len() {
@@ -227,8 +235,10 @@ impl<'a> From<&'a k::Expr> for InterpolationArg<'a> {
 /// to parse.
 pub struct Parser<'a> {
     ctx: &'a mut dyn CtxI,
-    /// Local variables, from binders.
+    /// Local variables from binders.
     local: Vec<k::Var>,
+    /// Let bindings (`let x = y in z`)
+    let_bindings: Vec<(&'a str, k::Expr)>,
     lexer: Lexer<'a>,
     next_tok: Option<Tok<'a>>,
     /// Interpolation arguments.
@@ -265,7 +275,15 @@ impl<'a> Parser<'a> {
         qargs: &'a [InterpolationArg<'a>],
     ) -> Self {
         let lexer = Lexer::new(src);
-        Self { ctx, local: vec![], lexer, next_tok: None, qargs, qargs_idx: 0 }
+        Self {
+            ctx,
+            local: vec![],
+            let_bindings: vec![],
+            lexer,
+            next_tok: None,
+            qargs,
+            qargs_idx: 0,
+        }
     }
 
     /// New parser using the given string `src`.
@@ -330,6 +348,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse a symbol and return it.
+    fn parse_sym_(&mut self) -> Result<&'a str> {
+        use Tok::*;
+        match self.next_() {
+            SYM(s) => Ok(s),
+            t => Err(perror!(self, "expected symbol, got {:?}", t)),
+        }
+    }
+
     /// Parse a (list of) bound variable(s) of the same type.
     fn parse_bnd_var_list_(
         &mut self,
@@ -374,7 +401,7 @@ impl<'a> Parser<'a> {
             self.eat_(COLON)?;
             // the expression after `:` should have type `type`.
             let ty_ty = self.ctx.mk_ty();
-            Some(self.parse_bp_(0, Some(ty_ty))?)
+            Some(self.parse_expr_bp_(0, Some(ty_ty))?)
         } else {
             None
         };
@@ -441,7 +468,12 @@ impl<'a> Parser<'a> {
         Ok(n)
     }
 
+    /// Resolve a single symbol into a (constant or variable) expression.
     fn expr_of_atom_(&mut self, s: &str) -> Result<k::Expr> {
+        // let bindings
+        if let Some((_, e)) = self.let_bindings.iter().find(|(v, _)| *v == s) {
+            return Ok(e.clone());
+        };
         // local variables
         if let Some(v) = self.local.iter().find(|x| x.name.name() == s) {
             let e = self.ctx.mk_var(v.clone());
@@ -463,7 +495,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Apply an infix token.
-    fn apply_sym2_(
+    fn apply_expr_infix_(
         &mut self,
         s: &str,
         e1: k::Expr,
@@ -481,7 +513,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Apply binder `b`.
-    fn mk_binder_(
+    fn mk_expr_binder_(
         &mut self,
         b: &str,
         local_offset: usize,
@@ -530,10 +562,10 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse an expression, up to EOF.
+    /// Parse an expression.
     ///
     /// `bp` is the current binding power for this Pratt parser.
-    fn parse_bp_(
+    fn parse_expr_bp_(
         &mut self,
         bp: u16,
         ty_expected: Option<k::Expr>,
@@ -543,11 +575,23 @@ impl<'a> Parser<'a> {
         let mut lhs = {
             let t = self.next_();
             match t {
+                LET => {
+                    // parse `let x = y in e`.
+                    let v = self.parse_sym_()?;
+                    self.eat_(SYM("="))?;
+                    let e = self.parse_expr_bp_(0, None)?;
+                    self.eat_(IN)?;
+                    let n_let = self.let_bindings.len();
+                    self.let_bindings.push((v, e));
+                    let body = self.parse_expr_bp_(bp, ty_expected);
+                    self.let_bindings.truncate(n_let);
+                    body?
+                }
                 SYM(s) => {
                     // TODO: get a constant for that, fail if undefined
                     match self.fixity_(s) {
                         Fixity::Prefix((_, r_bp)) => {
-                            let arg = self.parse_bp_(r_bp, None)?;
+                            let arg = self.parse_expr_bp_(r_bp, None)?;
                             let lhs = self.expr_of_atom_(s)?;
                             self.ctx.mk_app(lhs, arg)?
                         }
@@ -574,8 +618,9 @@ impl<'a> Parser<'a> {
                             self.parse_bnd_vars_(None)?;
                             self.eat_(DOT)?;
                             // TODO: provide expected type of body?
-                            let body = self.parse_bp_(l2, None)?;
-                            let result = self.mk_binder_(s, local_offset, body);
+                            let body = self.parse_expr_bp_(l2, None)?;
+                            let result =
+                                self.mk_expr_binder_(s, local_offset, body);
                             self.local.truncate(local_offset);
                             result?
                         }
@@ -586,11 +631,11 @@ impl<'a> Parser<'a> {
                 QUESTION_MARK => self.interpol_expr_()?,
                 NUM(_s) => todo!("parse number"), // PExpr::var(s, self.loc()),
                 LPAREN => {
-                    let t = self.parse_bp_(0, ty_expected)?;
+                    let t = self.parse_expr_bp_(0, ty_expected)?;
                     self.eat_(RPAREN)?;
                     t
                 }
-                RPAREN | DOT | EOF | COLON => {
+                RPAREN | DOT | EOF | COLON | IN => {
                     return Err(perror!(self, "unexpected token {:?}", t))
                 }
             }
@@ -599,11 +644,11 @@ impl<'a> Parser<'a> {
         loop {
             let (op, l_bp, r_bp) = match self.peek_() {
                 EOF => return Ok(lhs),
-                RPAREN | COLON | DOT => break,
+                RPAREN | COLON | DOT | IN | LET => break,
                 LPAREN => {
                     // TODO: set ty_expected to `lhs`'s first argument's type.
                     self.next_();
-                    let t = self.parse_bp_(0, None)?; // maximum binding power
+                    let t = self.parse_expr_bp_(0, None)?; // maximum binding power
                     self.eat_(RPAREN)?;
                     lhs = self.ctx.mk_app(lhs, t)?;
                     continue;
@@ -670,10 +715,10 @@ impl<'a> Parser<'a> {
 
             self.next_();
 
-            let rhs = self.parse_bp_(r_bp, None)?;
+            let rhs = self.parse_expr_bp_(r_bp, None)?;
 
             // infix apply
-            let app = self.apply_sym2_(op, lhs, rhs)?;
+            let app = self.apply_expr_infix_(op, lhs, rhs)?;
             lhs = app;
         }
 
@@ -685,8 +730,8 @@ impl<'a> Parser<'a> {
     // - `tydef tau := thm, abs, repr; …`
 
     /// Parse an expression, up to EOF.
-    pub fn parse(&mut self) -> Result<k::Expr> {
-        let e = self.parse_bp_(0, None)?;
+    pub fn parse_expr(&mut self) -> Result<k::Expr> {
+        let e = self.parse_expr_bp_(0, None)?;
         if self.peek_() != Tok::EOF {
             Err(perror!(self, "expected EOF"))
         } else if self.qargs_idx < self.qargs.len() {
@@ -702,7 +747,7 @@ impl<'a> Parser<'a> {
 /// Parse the string into an expression.
 pub fn parse_expr(ctx: &mut dyn CtxI, s: &str) -> Result<k::Expr> {
     let mut p = Parser::new(ctx, s);
-    p.parse()
+    p.parse_expr()
 }
 
 /// Parse the string into an expression with a set of parameters.
@@ -712,7 +757,7 @@ pub fn parse_expr_with_args(
     qargs: &[InterpolationArg],
 ) -> Result<k::Expr> {
     let mut p = Parser::new_with_args(ctx, s, qargs);
-    p.parse()
+    p.parse_expr()
 }
 
 #[cfg(test)]
@@ -743,7 +788,7 @@ mod test {
     #[test]
     fn test_lexer2() {
         use Tok::*;
-        let lexer = Lexer::new("((12+ f(x, Y))--- z)");
+        let lexer = Lexer::new("((12+ f(x, in Y))---let z)wlet)");
         let toks = lexer.collect::<Vec<_>>();
         assert_eq!(
             vec![
@@ -755,11 +800,15 @@ mod test {
                 LPAREN,
                 SYM("x"),
                 SYM(","),
+                IN,
                 SYM("Y"),
                 RPAREN,
                 RPAREN,
                 SYM("---"),
+                LET,
                 SYM("z"),
+                RPAREN,
+                SYM("wlet"),
                 RPAREN,
                 EOF
             ],
@@ -793,6 +842,10 @@ mod test {
             ),
             (
                 "with (a b:bool). (a=b) = (b=a)",
+                "(= bool (= bool a b) (= bool b a))",
+            ),
+            (
+                "let t=bool in with (a b:t). (let y = b in (a=y)) = let y = a in (b=y)",
                 "(= bool (= bool a b) (= bool b a))",
             ),
         ];

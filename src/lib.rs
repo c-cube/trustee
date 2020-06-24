@@ -11,3 +11,4 @@ pub use kernel_of_trust::{
     Ctx, CtxI, Error, Expr, ExprView, Result, Symbol, Thm, Var,
 };
 pub use open_theory::VM;
+pub use syntax::{parse_expr, parse_expr_with_args};
