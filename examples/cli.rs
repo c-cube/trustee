@@ -17,8 +17,8 @@ fn main() -> anyhow::Result<()> {
         if n == 0 {
             break;
         }
-        match syntax::parse_expr(&mut ctx, &buf) {
-            Ok(e) => println!("got expr: {:?}", e),
+        match syntax::parse_statement(&mut ctx, &buf) {
+            Ok(res) => println!("got: {:?}", res),
             Err(e) => {
                 println!("err: {}", e);
             }

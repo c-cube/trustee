@@ -60,7 +60,6 @@ enum Tok<'a> {
 }
 
 /// Lexer for expressions.
-#[derive(Clone, Debug)]
 struct Lexer<'a> {
     src: &'a str,
     /// Index in `src`
@@ -196,21 +195,6 @@ impl<'a> Lexer<'a> {
             todo!("handle char {:?}", c) // TODO? error?
         }
     }
-
-    /// Find next occurrence of `c`.
-    ///
-    /// If it is found, restrict the current lexer forward to before `c`,
-    /// and return a new Lexer for the slice after `c`.
-    fn split_on_(&mut self, c: u8) -> Option<Lexer<'a>> {
-        for (j, c_j) in self.src.as_bytes()[self.i..].iter().enumerate() {
-            if c == *c_j {
-                let lex = Lexer::new(&self.src[j + 1..]);
-                self.src = &self.src[..j];
-                return Some(lex);
-            }
-        }
-        None
-    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
@@ -250,7 +234,8 @@ impl<'a> From<&'a k::Expr> for InterpolationArg<'a> {
 pub enum ParseOutput {
     Expr(k::Expr),
     Thm(k::Thm),
-    SideEffect,
+    Def((k::Expr, k::Thm)),
+    DefTy(k::NewTypeDef),
 }
 
 /// Parser for expressions.
@@ -752,54 +737,10 @@ impl<'a> Parser<'a> {
     // TODO: parse/execute statements:
     // - `tydef tau := thm, abs, repr; …`
 
-    /// Parse a toplevel statement.
-    fn parse_statement_(&mut self) -> Result<ParseOutput> {
-        use Tok::*;
-
-        match self.peek_() {
-            SYM("def") => {
-                self.next_();
-                let id = self.parse_sym_()?;
-                self.eat_(SYM("="))?;
-                let rhs = self.parse_expr_bp_(0, None)?;
-                let v = self.ctx.mk_var_str(id, rhs.ty().clone());
-                let v_eq_rhs = self.ctx.mk_eq_app(v, rhs)?;
-                let d = self.ctx.thm_new_basic_definition(v_eq_rhs)?;
-                Ok(ParseOutput::Thm(d.0))
-            }
-            SYM("defty") => todo!("define type"), // TODO
-            SYM("defthm") => todo!("parse theorem"), // TODO
-            SYM("decl") => todo!("parse declaration"), // TODO
-            _ => Ok(ParseOutput::Expr(self.parse_expr_bp_(0, None)?)),
-        }
-    }
-
-    /// Parse and execute all statements before `;`.
-    fn parse_intro_(&mut self) -> Result<()> {
-        loop {
-            match self.lexer.split_on_(b';') {
-                None => break,
-                Some(lex_next) => {
-                    let _r = self.parse_statement_()?;
-                    dbg!(_r);
-                    // now prepare for the next statement
-                    let (line, col) = self.lexer.cur_pos();
-                    self.lexer = lex_next;
-                    self.lexer.line = line;
-                    self.lexer.col = col + 1;
-                    self.next_tok = None;
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Parse an expression, up to EOF.
     ///
     /// Any preceding side-effecting statement is processed prior.
     pub fn parse_expr(&mut self) -> Result<k::Expr> {
-        self.parse_intro_()?;
-
         let e = self.parse_expr_bp_(0, None)?;
         if self.peek_() != Tok::EOF {
             Err(perror!(self, "expected EOF"))
@@ -816,9 +757,27 @@ impl<'a> Parser<'a> {
     ///
     /// Any preceding side-effecting statement is processed prior.
     pub fn parse_statement(&mut self) -> Result<ParseOutput> {
-        // TODO: parse preceding statements
-        self.parse_intro_()?;
-        todo!()
+        use Tok::*;
+
+        match self.peek_() {
+            SYM("def") => {
+                self.next_();
+                let id = self.parse_sym_()?;
+                self.eat_(SYM("="))?;
+                let rhs = self.parse_expr_bp_(0, None)?;
+                let v = self.ctx.mk_var_str(id, rhs.ty().clone());
+                let v_eq_rhs = self.ctx.mk_eq_app(v, rhs)?;
+                let d = self.ctx.thm_new_basic_definition(v_eq_rhs)?;
+                Ok(ParseOutput::Def((d.1, d.0)))
+            }
+            SYM("defty") => todo!("define type"), // TODO
+            SYM("defthm") => todo!("parse theorem"), // TODO
+            SYM("decl") => todo!("parse declaration"), // TODO
+            // TODO: read file <name>
+            // TODO: show <sym>: print description of that (const or thm)
+            // TODO: prove <thm>: print the theorem (from tactics)
+            _ => Ok(ParseOutput::Expr(self.parse_expr_bp_(0, None)?)),
+        }
     }
 }
 
@@ -836,6 +795,22 @@ pub fn parse_expr_with_args(
 ) -> Result<k::Expr> {
     let mut p = Parser::new_with_args(ctx, s, qargs);
     p.parse_expr()
+}
+
+/// Parse the string into a statement.
+pub fn parse_statement(ctx: &mut dyn CtxI, s: &str) -> Result<ParseOutput> {
+    let mut p = Parser::new(ctx, s);
+    p.parse_statement()
+}
+
+/// Parse the string into a statement, with a set of parameters.
+pub fn parse_statement_with_args(
+    ctx: &mut dyn CtxI,
+    s: &str,
+    qargs: &[InterpolationArg],
+) -> Result<ParseOutput> {
+    let mut p = Parser::new_with_args(ctx, s, qargs);
+    p.parse_statement()
 }
 
 #[cfg(test)]
@@ -903,7 +878,7 @@ mod test {
     }
 
     #[test]
-    fn test_parser1() -> Result<()> {
+    fn test_parser_expr() -> Result<()> {
         let pairs = [
             (
                 "with a:bool. select x:bool. x=a",
@@ -940,7 +915,7 @@ mod test {
     }
 
     #[test]
-    fn test_parser2_interpol() -> Result<()> {
+    fn test_parser_expr_interpol() -> Result<()> {
         let cases: Vec<(
             &'static str,
             &'static str,
@@ -990,9 +965,26 @@ mod test {
     }
 
     #[test]
-    fn test_parser_intro() -> Result<()> {
+    fn test_parser_statement() -> Result<()> {
         let mut ctx = k::Ctx::new();
-        let _e = parse_expr(&mut ctx, r#"def true = (\x:bool. x=x); true"#)?;
+        let d = parse_statement(
+            &mut ctx,
+            r#"def true = (let f = (\x: bool. x=x) in f=f)"#,
+        )?;
+        println!("def true: {:?}", d);
+        println!("find true? {:?}", ctx.find_const("true"));
+        let e = parse_expr(&mut ctx, r#"true"#)?;
+        println!("parse true: {:?}", e);
+
+        let d2 = parse_statement(
+            &mut ctx,
+            r#"def false = (\x: bool. true) = (\x: bool. x)"#,
+        )?;
+        println!("def false: {:?}", d2);
+        println!("find false? {:?}", ctx.find_const("false"));
+        let e = parse_expr(&mut ctx, r#"false"#)?;
+        println!("parse false: {:?}", e);
+
         Ok(())
     }
 }

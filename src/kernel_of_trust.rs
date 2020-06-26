@@ -121,15 +121,6 @@ impl Symbol {
     }
 }
 
-impl std::borrow::Borrow<str> for Symbol {
-    fn borrow(&self) -> &str {
-        match self {
-            Symbol::Builtin(s) => s.name(),
-            Symbol::Named(s) => &*s,
-        }
-    }
-}
-
 /// De Buijn indices.
 pub type DbIndex = u32;
 
@@ -983,7 +974,7 @@ pub struct Ctx {
     tbl: fnv::FnvHashMap<ExprView, WExpr>,
     builtins: Option<ExprBuiltins>,
     // TODO: WExpr + collection? duplicate with `tbl`
-    consts: fnv::FnvHashMap<Symbol, Expr>,
+    consts: fnv::FnvHashMap<Ref<str>, Expr>,
     eq: Option<Expr>,
     imply: Option<Expr>,
     select: Option<Expr>,
@@ -1138,8 +1129,11 @@ impl Ctx {
 
     fn add_const_(&mut self, e: Expr) {
         let consts = &mut self.consts;
-        let name = if let EConst(ref c) = e.0.view {
-            c.name.clone()
+        let name = if let EConst(ConstContent { name, .. }) = &e.0.view {
+            match name {
+                Symbol::Named(n) => n.clone(),
+                Symbol::Builtin(..) => return,
+            }
         } else {
             unreachable!("not a constant: {:?}", e);
         };
@@ -1727,7 +1721,7 @@ impl CtxI for Ctx {
 
     fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
         self.check_uid_(&ty);
-        if self.consts.contains_key(&s) {
+        if self.consts.contains_key(s.name()) {
             return Err(Error::new("a constant with this name already exists"));
         }
         if !ty.is_closed() || ty.free_vars().next().is_some() {
