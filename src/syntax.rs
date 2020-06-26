@@ -60,6 +60,7 @@ enum Tok<'a> {
 }
 
 /// Lexer for expressions.
+#[derive(Clone, Debug)]
 struct Lexer<'a> {
     src: &'a str,
     /// Index in `src`
@@ -80,7 +81,7 @@ impl<'a> Lexer<'a> {
         (self.line, self.col)
     }
 
-    // get next token
+    /// get next token.
     fn next_(&mut self) -> Tok<'a> {
         use Tok::*;
         assert!(!self.is_done);
@@ -195,6 +196,21 @@ impl<'a> Lexer<'a> {
             todo!("handle char {:?}", c) // TODO? error?
         }
     }
+
+    /// Find next occurrence of `c`.
+    ///
+    /// If it is found, restrict the current lexer forward to before `c`,
+    /// and return a new Lexer for the slice after `c`.
+    fn split_on_(&mut self, c: u8) -> Option<Lexer<'a>> {
+        for (j, c_j) in self.src.as_bytes()[self.i..].iter().enumerate() {
+            if c == *c_j {
+                let lex = Lexer::new(&self.src[j + 1..]);
+                self.src = &self.src[..j];
+                return Some(lex);
+            }
+        }
+        None
+    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
@@ -227,6 +243,14 @@ impl<'a> From<&'a k::Expr> for InterpolationArg<'a> {
     fn from(x: &'a k::Expr) -> Self {
         InterpolationArg::Expr(x)
     }
+}
+
+/// Result of parsing a statement.
+#[derive(Debug, Clone)]
+pub enum ParseOutput {
+    Expr(k::Expr),
+    Thm(k::Thm),
+    SideEffect,
 }
 
 /// Parser for expressions.
@@ -726,11 +750,56 @@ impl<'a> Parser<'a> {
     }
 
     // TODO: parse/execute statements:
-    // -``def f := expr; …`
     // - `tydef tau := thm, abs, repr; …`
 
+    /// Parse a toplevel statement.
+    fn parse_statement_(&mut self) -> Result<ParseOutput> {
+        use Tok::*;
+
+        match self.peek_() {
+            SYM("def") => {
+                self.next_();
+                let id = self.parse_sym_()?;
+                self.eat_(SYM("="))?;
+                let rhs = self.parse_expr_bp_(0, None)?;
+                let v = self.ctx.mk_var_str(id, rhs.ty().clone());
+                let v_eq_rhs = self.ctx.mk_eq_app(v, rhs)?;
+                let d = self.ctx.thm_new_basic_definition(v_eq_rhs)?;
+                Ok(ParseOutput::Thm(d.0))
+            }
+            SYM("defty") => todo!("define type"), // TODO
+            SYM("defthm") => todo!("parse theorem"), // TODO
+            SYM("decl") => todo!("parse declaration"), // TODO
+            _ => Ok(ParseOutput::Expr(self.parse_expr_bp_(0, None)?)),
+        }
+    }
+
+    /// Parse and execute all statements before `;`.
+    fn parse_intro_(&mut self) -> Result<()> {
+        loop {
+            match self.lexer.split_on_(b';') {
+                None => break,
+                Some(lex_next) => {
+                    let _r = self.parse_statement_()?;
+                    dbg!(_r);
+                    // now prepare for the next statement
+                    let (line, col) = self.lexer.cur_pos();
+                    self.lexer = lex_next;
+                    self.lexer.line = line;
+                    self.lexer.col = col + 1;
+                    self.next_tok = None;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Parse an expression, up to EOF.
+    ///
+    /// Any preceding side-effecting statement is processed prior.
     pub fn parse_expr(&mut self) -> Result<k::Expr> {
+        self.parse_intro_()?;
+
         let e = self.parse_expr_bp_(0, None)?;
         if self.peek_() != Tok::EOF {
             Err(perror!(self, "expected EOF"))
@@ -741,6 +810,15 @@ impl<'a> Parser<'a> {
         } else {
             Ok(e)
         }
+    }
+
+    /// Parse a toplevel statement, up to EOF.
+    ///
+    /// Any preceding side-effecting statement is processed prior.
+    pub fn parse_statement(&mut self) -> Result<ParseOutput> {
+        // TODO: parse preceding statements
+        self.parse_intro_()?;
+        todo!()
     }
 }
 
@@ -908,6 +986,13 @@ mod test {
             let r2 = format!("{:?}", r);
             assert_eq!(&r2, *y);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parser_intro() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        let _e = parse_expr(&mut ctx, r#"def true = (\x:bool. x=x); true"#)?;
         Ok(())
     }
 }
