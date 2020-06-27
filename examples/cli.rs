@@ -13,10 +13,12 @@ fn main() -> anyhow::Result<()> {
     let mut buf = String::new();
     loop {
         write!(stdout, "> ")?;
+        stdout.flush()?;
         let n = stdin.read_line(&mut buf)?;
         if n == 0 {
             break;
         }
+        log::info!("parse line {:?}", &buf);
         match syntax::parse_statements(&mut ctx, &buf) {
             Ok(res) => {
                 for x in res {
@@ -24,7 +26,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             Err(e) => {
-                println!("err: {}", e);
+                log::error!("err: {}", e);
             }
         }
         buf.clear();

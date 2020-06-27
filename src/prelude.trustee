@@ -1,5 +1,13 @@
 def true = let f = (\x: bool. x=x) in f=f.
 def false = (\x: bool. x=x) = (\x: bool. x=true).
+
+# `|- true`
+defthm true_is_true = (bool_eq (refl (\x: bool. x=x)) (sym def_true)).
+
+#defthm 
+
+
+# TODO: define these instead
 decl not : bool -> bool.
 decl /\ : bool -> bool -> bool.
 decl \/ : bool -> bool -> bool.
@@ -9,6 +17,7 @@ def exists = \(a:type)(f: a->bool). not (forall a (\y:a. not (f y))).
 # TODO
 # defthm ax_andintro = axiom (
 
+# TODO: define Peano axioms
 decl nat: type. decl zero: nat. decl succ: nat -> nat.
 #defthm ax_pean
 

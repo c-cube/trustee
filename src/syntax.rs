@@ -808,16 +808,87 @@ impl<'a> Parser<'a> {
                 self.next_();
                 let s = self.parse_sym_()?;
                 let bool = self.ctx.mk_bool();
-                match s {
+                let r = match s {
                     "axiom" => {
                         let e = self.parse_expr_bp_(0, Some(bool))?;
                         let th = self.ctx.thm_axiom(vec![], e)?;
-                        Ok(th)
+                        th
                     }
+                    "assume" => {
+                        let e = self.parse_expr_bp_(0, Some(bool))?;
+                        let th = self.ctx.thm_assume(e)?;
+                        th
+                    }
+                    "refl" => {
+                        let e = self.parse_expr_bp_(0, None)?;
+                        let th = self.ctx.thm_refl(e);
+                        th
+                    }
+                    "sym" => {
+                        let th1 = self.parse_thm_()?;
+                        let th = crate::algo::thm_sym(self.ctx, th1)?;
+                        th
+                    }
+                    "mp" => {
+                        let th1 = self.parse_thm_()?;
+                        let th2 = self.parse_thm_()?;
+                        let th = self.ctx.thm_mp(th1, th2)?;
+                        th
+                    }
+                    "trans" => {
+                        let th1 = self.parse_thm_()?;
+                        let th2 = self.parse_thm_()?;
+                        let th = self.ctx.thm_trans(th1, th2)?;
+                        th
+                    }
+                    "congr" => {
+                        let th1 = self.parse_thm_()?;
+                        let th2 = self.parse_thm_()?;
+                        let th = self.ctx.thm_congr(th1, th2)?;
+                        th
+                    }
+                    "congr_ty" => {
+                        let th1 = self.parse_thm_()?;
+                        let ty_ty = self.ctx.mk_ty();
+                        let ty = self.parse_expr_bp_(0, Some(ty_ty))?;
+                        let th = self.ctx.thm_congr_ty(th1, &ty)?;
+                        th
+                    }
+                    "cut" => {
+                        let th1 = self.parse_thm_()?;
+                        let th2 = self.parse_thm_()?;
+                        let th = self.ctx.thm_cut(th1, th2)?;
+                        th
+                    }
+                    "bool_eq" => {
+                        let th1 = self.parse_thm_()?;
+                        let th2 = self.parse_thm_()?;
+                        let th = self.ctx.thm_bool_eq(th1, th2)?;
+                        th
+                    }
+                    "bool_eq_intro" => {
+                        let th1 = self.parse_thm_()?;
+                        let th2 = self.parse_thm_()?;
+                        let th = self.ctx.thm_bool_eq_intro(th1, th2)?;
+                        th
+                    }
+                    "beta_conv" => {
+                        let e = self.parse_expr_bp_(0, Some(bool))?;
+                        let th = self.ctx.thm_beta_conv(&e)?;
+                        th
+                    }
+                    // TODO: instantiate
+                    // TODO: abs
                     _ => {
-                        Err(perror!(self, "unknown theorem combinator {:?}", s))
+                        return Err(perror!(
+                            self,
+                            "unknown theorem combinator {:?}",
+                            s
+                        ))
                     }
-                }
+                };
+                self.eat_(RPAREN)?;
+                Ok(r)
             }
             t => {
                 Err(perror!(self, "expected theorem, unexpected token {:?}", t))
@@ -838,6 +909,7 @@ impl<'a> Parser<'a> {
                 let v = self.ctx.mk_var_str(id, rhs.ty().clone());
                 let v_eq_rhs = self.ctx.mk_eq_app(v, rhs)?;
                 let d = self.ctx.thm_new_basic_definition(v_eq_rhs)?;
+                self.ctx.define_lemma(&format!("def_{}", id), d.0.clone());
                 ParseOutput::Def((d.1, d.0))
             }
             SYM("decl") => {
@@ -849,7 +921,7 @@ impl<'a> Parser<'a> {
                 let c = self.ctx.mk_new_const(k::Symbol::from_str(id), ty)?;
                 ParseOutput::Expr(c)
             }
-            SYM("pledge_no_more_axioms") => {
+            SYM("pledge_no_new_axiom") => {
                 self.next_();
                 self.ctx.pledge_no_new_axiom();
                 ParseOutput::SideEffect("pledged no more axioms")
