@@ -846,6 +846,14 @@ pub trait CtxI: fmt::Debug {
     /// Find a constant by name. Returns `None` if no such constant exists.
     fn find_const(&self, s: &str) -> Option<&Expr>;
 
+    /// Define a named lemma.
+    ///
+    /// If another lemma with the same name exists, it will be replaced.
+    fn define_lemma(&mut self, s: &str, th: Thm);
+
+    /// Find a lemma by name. Returns `None` if no such theorem exists.
+    fn find_lemma(&self, s: &str) -> Option<&Thm>;
+
     /// `assume F` is `F |- F`.
     ///
     /// This fails if `F` is not a boolean.
@@ -973,8 +981,8 @@ pub struct Ctx {
     /// Hashconsing table, with weak semantics.
     tbl: fnv::FnvHashMap<ExprView, WExpr>,
     builtins: Option<ExprBuiltins>,
-    // TODO: WExpr + collection? duplicate with `tbl`
     consts: fnv::FnvHashMap<Ref<str>, Expr>,
+    lemmas: fnv::FnvHashMap<Ref<str>, Thm>,
     eq: Option<Expr>,
     imply: Option<Expr>,
     select: Option<Expr>,
@@ -1049,6 +1057,7 @@ impl Ctx {
             tbl,
             builtins: None,
             consts: fnv::new_table_with_cap(n),
+            lemmas: fnv::new_table_with_cap(n),
             eq: None,
             imply: None,
             select: None,
@@ -1736,6 +1745,14 @@ impl CtxI for Ctx {
 
     fn find_const(&self, s: &str) -> Option<&Expr> {
         self.consts.get(s)
+    }
+
+    fn define_lemma(&mut self, name: &str, th: Thm) {
+        self.lemmas.insert(name.into(), th);
+    }
+
+    fn find_lemma(&self, s: &str) -> Option<&Thm> {
+        self.lemmas.get(s)
     }
 
     fn thm_assume(&mut self, e: Expr) -> Result<Thm> {

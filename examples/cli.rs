@@ -17,8 +17,12 @@ fn main() -> anyhow::Result<()> {
         if n == 0 {
             break;
         }
-        match syntax::parse_statement(&mut ctx, &buf) {
-            Ok(res) => println!("got: {:?}", res),
+        match syntax::parse_statements(&mut ctx, &buf) {
+            Ok(res) => {
+                for x in res {
+                    println!("got: {:?}", x)
+                }
+            }
             Err(e) => {
                 println!("err: {}", e);
             }

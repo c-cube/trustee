@@ -52,6 +52,7 @@ enum Tok<'a> {
     DOT,
     QUESTION_MARK,
     SYM(&'a str),
+    // TODO: QUOTED_SYM(&'a str),
     LET,
     IN,
     DOLLAR_SYM(&'a str),
@@ -80,6 +81,25 @@ impl<'a> Lexer<'a> {
         (self.line, self.col)
     }
 
+    /// Read the rest of the line.
+    fn rest_of_line(&mut self) -> &'a str {
+        assert!(!self.is_done);
+        let i = self.i;
+        let bytes = self.src.as_bytes();
+
+        while self.i < bytes.len() && bytes[self.i] != b'\n' {
+            self.i += 1;
+        }
+        let j = self.i;
+        if self.i < bytes.len() && bytes[self.i] == b'\n' {
+            // newline
+            self.i += 1;
+            self.col = 1;
+            self.line += 1;
+        }
+        &self.src[i..j]
+    }
+
     /// get next token.
     fn next_(&mut self) -> Tok<'a> {
         use Tok::*;
@@ -90,7 +110,9 @@ impl<'a> Lexer<'a> {
         // skip whitespace
         while self.i < bytes.len() {
             let c = bytes[self.i];
-            if c == b' ' || c == b'\t' {
+            if c == b'#' {
+                self.rest_of_line();
+            } else if c == b' ' || c == b'\t' {
                 self.i += 1;
                 self.col += 1;
             } else if c == b'\n' {
@@ -236,6 +258,8 @@ pub enum ParseOutput {
     Thm(k::Thm),
     Def((k::Expr, k::Thm)),
     DefTy(k::NewTypeDef),
+    SideEffect(&'static str),
+    Include { n_stmt: usize },
 }
 
 /// Parser for expressions.
@@ -734,12 +758,114 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    /// Parse a theorem, from combinators.
+    fn parse_thm_(&mut self) -> Result<k::Thm> {
+        use Tok::*;
+
+        match self.peek_() {
+            SYM(s) => {
+                if let Some(th) = self.ctx.find_lemma(s) {
+                    let th = th.clone();
+                    self.next_();
+                    Ok(th)
+                } else {
+                    Err(perror!(self, "unknown theorem '{}'", s))
+                }
+            }
+            LPAREN => {
+                self.next_();
+                let s = self.parse_sym_()?;
+                let bool = self.ctx.mk_bool();
+                match s {
+                    "axiom" => {
+                        let e = self.parse_expr_bp_(0, Some(bool))?;
+                        let th = self.ctx.thm_axiom(vec![], e)?;
+                        Ok(th)
+                    }
+                    _ => {
+                        Err(perror!(self, "unknown theorem combinator {:?}", s))
+                    }
+                }
+            }
+            t => {
+                Err(perror!(self, "expected theorem, unexpected token {:?}", t))
+            }
+        }
+    }
+
+    /// Parse a toplevel statement, `.` terminated.
+    fn parse_statement_(&mut self) -> Result<ParseOutput> {
+        use Tok::*;
+
+        let r = match self.peek_() {
+            SYM("def") => {
+                self.next_();
+                let id = self.parse_sym_()?;
+                self.eat_(SYM("="))?;
+                let rhs = self.parse_expr_bp_(0, None)?;
+                let v = self.ctx.mk_var_str(id, rhs.ty().clone());
+                let v_eq_rhs = self.ctx.mk_eq_app(v, rhs)?;
+                let d = self.ctx.thm_new_basic_definition(v_eq_rhs)?;
+                ParseOutput::Def((d.1, d.0))
+            }
+            SYM("decl") => {
+                self.next_();
+                let id = self.parse_sym_()?;
+                self.eat_(COLON)?;
+                let ty_ty = self.ctx.mk_ty();
+                let ty = self.parse_expr_bp_(0, Some(ty_ty))?;
+                let c = self.ctx.mk_new_const(k::Symbol::from_str(id), ty)?;
+                ParseOutput::Expr(c)
+            }
+            SYM("pledge_no_more_axioms") => {
+                self.next_();
+                self.ctx.pledge_no_new_axiom();
+                ParseOutput::SideEffect("pledged no more axioms")
+            }
+            SYM("defthm") => {
+                self.next_();
+                let name = self.parse_sym_()?;
+                self.eat_(SYM("="))?;
+                let th = self.parse_thm_()?;
+                self.ctx.define_lemma(name, th.clone());
+                ParseOutput::Thm(th)
+            }
+            SYM("defty") => todo!("define type"), // TODO
+            SYM("thm") => {
+                self.next_();
+                let th = self.parse_thm_()?;
+                ParseOutput::Thm(th)
+            }
+            SYM("include") => {
+                // FIXME: read one token instead
+                let s = self.lexer.rest_of_line().trim();
+                self.next_tok = None;
+                let n = self.include_(s)?;
+                ParseOutput::Include { n_stmt: n }
+            }
+            // TODO: read file <name>
+            // TODO: show <sym>: print description of that (const or thm)
+            // TODO: prove <thm>: print the theorem (from tactics)
+            _ => ParseOutput::Expr(self.parse_expr_bp_(0, None)?),
+        };
+        self.eat_(DOT)?;
+        Ok(r)
+    }
+
+    /// Include file, return how many statements were included.
+    fn include_(&mut self, s: &str) -> Result<usize> {
+        // read file to include
+        let content = std::fs::read_to_string(s).map_err(|e| {
+            perror!(self, "error when including file {:?}: {}", s, e)
+        })?;
+        let mut sub = Parser::new(self.ctx, &content);
+        sub.parse_statements().map(|v| v.len())
+    }
+
     // TODO: parse/execute statements:
     // - `tydef tau := thm, abs, repr; …`
 
     /// Parse an expression, up to EOF.
-    ///
-    /// Any preceding side-effecting statement is processed prior.
     pub fn parse_expr(&mut self) -> Result<k::Expr> {
         let e = self.parse_expr_bp_(0, None)?;
         if self.peek_() != Tok::EOF {
@@ -754,30 +880,26 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a toplevel statement, up to EOF.
-    ///
-    /// Any preceding side-effecting statement is processed prior.
     pub fn parse_statement(&mut self) -> Result<ParseOutput> {
         use Tok::*;
 
-        match self.peek_() {
-            SYM("def") => {
-                self.next_();
-                let id = self.parse_sym_()?;
-                self.eat_(SYM("="))?;
-                let rhs = self.parse_expr_bp_(0, None)?;
-                let v = self.ctx.mk_var_str(id, rhs.ty().clone());
-                let v_eq_rhs = self.ctx.mk_eq_app(v, rhs)?;
-                let d = self.ctx.thm_new_basic_definition(v_eq_rhs)?;
-                Ok(ParseOutput::Def((d.1, d.0)))
-            }
-            SYM("defty") => todo!("define type"), // TODO
-            SYM("defthm") => todo!("parse theorem"), // TODO
-            SYM("decl") => todo!("parse declaration"), // TODO
-            // TODO: read file <name>
-            // TODO: show <sym>: print description of that (const or thm)
-            // TODO: prove <thm>: print the theorem (from tactics)
-            _ => Ok(ParseOutput::Expr(self.parse_expr_bp_(0, None)?)),
+        let r = self.parse_statement_()?;
+        if self.peek_() != EOF {
+            return Err(perror!(self, "expected EOF"));
         }
+        Ok(r)
+    }
+
+    /// Parse a list of toplevel statements, up to EOF.
+    pub fn parse_statements(&mut self) -> Result<Vec<ParseOutput>> {
+        use Tok::*;
+        let mut v = vec![];
+
+        while self.peek_() != EOF {
+            let st = self.parse_statement_()?;
+            v.push(st)
+        }
+        Ok(v)
     }
 }
 
@@ -811,6 +933,15 @@ pub fn parse_statement_with_args(
 ) -> Result<ParseOutput> {
     let mut p = Parser::new_with_args(ctx, s, qargs);
     p.parse_statement()
+}
+
+/// Parse the string into a list of statements.
+pub fn parse_statements(
+    ctx: &mut dyn CtxI,
+    s: &str,
+) -> Result<Vec<ParseOutput>> {
+    let mut p = Parser::new(ctx, s);
+    p.parse_statements()
 }
 
 #[cfg(test)]
