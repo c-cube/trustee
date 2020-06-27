@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
         match syntax::parse_statements(&mut ctx, &buf) {
             Ok(res) => {
                 for x in res {
-                    println!("got: {:?}", x)
+                    println!("got: {:#?}", x)
                 }
             }
             Err(e) => {

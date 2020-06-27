@@ -52,7 +52,7 @@ enum Tok<'a> {
     DOT,
     QUESTION_MARK,
     SYM(&'a str),
-    // TODO: QUOTED_SYM(&'a str),
+    QUOTED_STR(&'a str),
     LET,
     IN,
     DOLLAR_SYM(&'a str),
@@ -70,6 +70,15 @@ struct Lexer<'a> {
     /// Current column in `src`
     col: usize,
     is_done: bool,
+}
+
+/// Symbol that can be infix or prefix or postfix
+fn is_ascii_symbol(c: u8) -> bool {
+    match c {
+        b'=' | b',' | b';' | b'<' | b'>' | b'!' | b'/' | b'\\' | b'+'
+        | b'-' | b'~' | b'*' | b'&' | b'%' | b'@' => true,
+        _ => false,
+    }
 }
 
 impl<'a> Lexer<'a> {
@@ -154,7 +163,7 @@ impl<'a> Lexer<'a> {
             let mut j = self.i + 1;
             while j < bytes.len() {
                 let c2 = bytes[j];
-                if c2.is_ascii_punctuation() {
+                if is_ascii_symbol(c2) {
                     j += 1
                 } else {
                     break;
@@ -164,11 +173,25 @@ impl<'a> Lexer<'a> {
             self.col += j - self.i;
             self.i = j;
             return DOLLAR_SYM(slice);
+        } else if c == b'"' {
+            // TODO: escaping of inner '"' ?
+            let mut j = self.i + 1;
+            while j < bytes.len() {
+                let c2 = bytes[j];
+                if c2 == b'"' {
+                    break;
+                }
+                j += 1
+            }
+            let s = &self.src[self.i + 1..j];
+            self.i = j + 1;
+            QUOTED_STR(s)
         } else if c.is_ascii_alphabetic() {
             let mut j = self.i + 1;
             while j < bytes.len() {
                 let c2 = bytes[j];
                 if c2.is_ascii_alphanumeric()
+                    || c2 == b'_'
                     || (c.is_ascii_uppercase() && c2 == b'.')
                 {
                     j += 1
@@ -199,11 +222,11 @@ impl<'a> Lexer<'a> {
             let slice = &self.src[self.i..j];
             self.i = j;
             return NUM(slice);
-        } else if c.is_ascii_punctuation() {
+        } else if is_ascii_symbol(c) {
             let mut j = self.i + 1;
             while j < bytes.len() {
                 let c2 = bytes[j];
-                if c2.is_ascii_punctuation() {
+                if is_ascii_symbol(c2) {
                     j += 1
                 } else {
                     break;
@@ -214,7 +237,8 @@ impl<'a> Lexer<'a> {
             self.i = j;
             return SYM(slice);
         } else {
-            todo!("handle char {:?}", c) // TODO? error?
+            let s = &[c];
+            todo!("handle char {:?} ({:?})", c, std::str::from_utf8(s)) // TODO? error?
         }
     }
 }
@@ -259,7 +283,7 @@ pub enum ParseOutput {
     Def((k::Expr, k::Thm)),
     DefTy(k::NewTypeDef),
     SideEffect(&'static str),
-    Include { n_stmt: usize },
+    Include(Vec<ParseOutput>),
 }
 
 /// Parser for expressions.
@@ -349,7 +373,7 @@ impl<'a> Parser<'a> {
         match s {
             "=" => Fixity::Infix((30, 31)),
             "==>" => Fixity::Infix((46, 45)),
-            "->" => Fixity::Infix((80, 81)),
+            "->" => Fixity::Infix((81, 80)),
             "with" => Fixity::Binder((1, 2)),
             "\\" => Fixity::Binder((20, 21)),
             "select" => Fixity::Binder((22, 23)),
@@ -545,6 +569,17 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Expected type for variables bound by `b`.
+    fn binder_type_hint_(&mut self, b: &str) -> Result<Option<k::Expr>> {
+        Ok(match b {
+            "pi" => {
+                let ty = self.ctx.mk_ty();
+                Some(ty)
+            }
+            _ => None,
+        })
+    }
+
     /// Apply binder `b`.
     fn mk_expr_binder_(
         &mut self,
@@ -555,7 +590,7 @@ impl<'a> Parser<'a> {
         let vars = &self.local[local_offset..];
         Ok(match b {
             "with" => {
-                body // not a realy binder
+                body // not a real binder
             }
             "\\" => self.ctx.mk_lambda_l(vars, body)?,
             "pi" => self.ctx.mk_pi_l(vars, body)?,
@@ -643,14 +678,11 @@ impl<'a> Parser<'a> {
                             ));
                         }
                         Fixity::Binder((_, l2)) => {
-                            // TODO: handle multiple variables in there
-                            // as in: `with (a b:type) (f:a->b). …`
-
                             let local_offset = self.local.len();
-                            // TODO: provide expected type, maybe?
-                            self.parse_bnd_vars_(None)?;
+                            let ty_expected_vars = self.binder_type_hint_(s)?;
+                            self.parse_bnd_vars_(ty_expected_vars.as_ref())?;
                             self.eat_(DOT)?;
-                            // TODO: provide expected type of body?
+                            // TODO: find expected type for body, maybe
                             let body = self.parse_expr_bp_(l2, None)?;
                             let result =
                                 self.mk_expr_binder_(s, local_offset, body);
@@ -668,7 +700,7 @@ impl<'a> Parser<'a> {
                     self.eat_(RPAREN)?;
                     t
                 }
-                RPAREN | DOT | EOF | COLON | IN => {
+                RPAREN | DOT | EOF | COLON | IN | QUOTED_STR(..) => {
                     return Err(perror!(self, "unexpected token {:?}", t))
                 }
             }
@@ -677,7 +709,7 @@ impl<'a> Parser<'a> {
         loop {
             let (op, l_bp, r_bp) = match self.peek_() {
                 EOF => return Ok(lhs),
-                RPAREN | COLON | DOT | IN | LET => break,
+                RPAREN | COLON | DOT | IN | LET | QUOTED_STR(..) => break,
                 LPAREN => {
                     // TODO: set ty_expected to `lhs`'s first argument's type.
                     self.next_();
@@ -837,13 +869,19 @@ impl<'a> Parser<'a> {
                 ParseOutput::Thm(th)
             }
             SYM("include") => {
-                // FIXME: read one token instead
-                let s = self.lexer.rest_of_line().trim();
-                self.next_tok = None;
-                let n = self.include_(s)?;
-                ParseOutput::Include { n_stmt: n }
+                self.next_();
+                if let QUOTED_STR(s) = self.next_() {
+                    let v = self.include_(s)?;
+                    ParseOutput::Include(v)
+                } else {
+                    return Err(perror!(self, "expected a quoted string"));
+                }
             }
-            // TODO: read file <name>
+            SYM("load_hol") => {
+                self.next_();
+                let v = self.load_str_(PRELUDE_HOL)?;
+                ParseOutput::Include(v)
+            }
             // TODO: show <sym>: print description of that (const or thm)
             // TODO: prove <thm>: print the theorem (from tactics)
             _ => ParseOutput::Expr(self.parse_expr_bp_(0, None)?),
@@ -852,14 +890,20 @@ impl<'a> Parser<'a> {
         Ok(r)
     }
 
+    /// Read string, return how many statements were included.
+    fn load_str_(&mut self, s: &str) -> Result<Vec<ParseOutput>> {
+        // read file to include
+        let mut sub = Parser::new(self.ctx, s);
+        sub.parse_statements()
+    }
+
     /// Include file, return how many statements were included.
-    fn include_(&mut self, s: &str) -> Result<usize> {
+    fn include_(&mut self, s: &str) -> Result<Vec<ParseOutput>> {
         // read file to include
         let content = std::fs::read_to_string(s).map_err(|e| {
             perror!(self, "error when including file {:?}: {}", s, e)
         })?;
-        let mut sub = Parser::new(self.ctx, &content);
-        sub.parse_statements().map(|v| v.len())
+        self.load_str_(&content)
     }
 
     // TODO: parse/execute statements:
@@ -944,6 +988,9 @@ pub fn parse_statements(
     p.parse_statements()
 }
 
+/// Standard prelude for HOL logic
+pub const PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -951,7 +998,7 @@ mod test {
     #[test]
     fn test_lexer1() {
         use Tok::*;
-        let lexer = Lexer::new(" foo + bar13(hello! world) ");
+        let lexer = Lexer::new(" foo + bar13(hello! \" co co\" world) ");
         let toks = lexer.collect::<Vec<_>>();
         assert_eq!(
             toks,
@@ -962,6 +1009,7 @@ mod test {
                 LPAREN,
                 SYM("hello"),
                 SYM("!"),
+                QUOTED_STR(" co co"),
                 SYM("world"),
                 RPAREN,
                 EOF
@@ -972,7 +1020,7 @@ mod test {
     #[test]
     fn test_lexer2() {
         use Tok::*;
-        let lexer = Lexer::new("((12+ f(x, in Y))---let z)wlet)");
+        let lexer = Lexer::new(r#"((12+ f(x, in Y \( ))---let z)wlet)"#);
         let toks = lexer.collect::<Vec<_>>();
         assert_eq!(
             vec![
@@ -986,6 +1034,8 @@ mod test {
                 SYM(","),
                 IN,
                 SYM("Y"),
+                SYM("\\"),
+                LPAREN,
                 RPAREN,
                 RPAREN,
                 SYM("---"),
@@ -1100,7 +1150,7 @@ mod test {
         let mut ctx = k::Ctx::new();
         let d = parse_statement(
             &mut ctx,
-            r#"def true = (let f = (\x: bool. x=x) in f=f)"#,
+            r#"def true = (let f = (\x: bool. x=x) in f=f)."#,
         )?;
         println!("def true: {:?}", d);
         println!("find true? {:?}", ctx.find_const("true"));
@@ -1109,7 +1159,7 @@ mod test {
 
         let d2 = parse_statement(
             &mut ctx,
-            r#"def false = (\x: bool. true) = (\x: bool. x)"#,
+            r#"def false = (\x: bool. true) = (\x: bool. x) ."#,
         )?;
         println!("def false: {:?}", d2);
         println!("find false? {:?}", ctx.find_const("false"));

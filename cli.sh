@@ -1,2 +1,2 @@
 #!/bin/sh
-cargo run --example cli -- $@
+cargo run --release --example cli -- $@
