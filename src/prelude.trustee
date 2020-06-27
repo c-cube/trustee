@@ -1,8 +1,15 @@
 def true = let f = (\x: bool. x=x) in f=f.
-def false = (\x: bool. x=x) = (\x: bool. x=true).
 
 # `|- true`
 defthm true_is_true = (bool_eq (refl (\x: bool. x=x)) (sym def_true)).
+
+def forall = \(a:type) (f:a -> bool). f = \x:a. true.
+
+# TODO: declare as binder
+# TODO: rules to intro/elim forall
+
+# TODO: redefine
+def false = (\x: bool. x=x) = (\x: bool. x=true).
 
 #defthm 
 
@@ -11,13 +18,15 @@ defthm true_is_true = (bool_eq (refl (\x: bool. x=x)) (sym def_true)).
 decl not : bool -> bool.
 decl /\ : bool -> bool -> bool.
 decl \/ : bool -> bool -> bool.
-decl forall : pi a. (a -> bool) -> bool.
 def exists = \(a:type)(f: a->bool). not (forall a (\y:a. not (f y))).
 
 # TODO
 # defthm ax_andintro = axiom (
 
 # TODO: define Peano axioms
-decl nat: type. decl zero: nat. decl succ: nat -> nat.
+decl nat: type.
+decl Zero: nat.
+decl Bit0: nat -> nat.
+decl Bit1: nat -> nat.
 #defthm ax_pean
 

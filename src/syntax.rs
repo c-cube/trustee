@@ -694,7 +694,41 @@ impl<'a> Parser<'a> {
                 }
                 DOLLAR_SYM(s) => self.expr_of_atom_(s)?,
                 QUESTION_MARK => self.interpol_expr_()?,
-                NUM(_s) => todo!("parse number"), // PExpr::var(s, self.loc()),
+                NUM(s) => {
+                    let mut i: i64 = s.parse().map_err(|e| {
+                        perror!(self, "cannot parse integer literal: {}", e)
+                    })?;
+                    if i < 0 {
+                        // TODO: relative numbers
+                        return Err(perror!(
+                            self,
+                            "cannot parse negative numbers yet"
+                        ));
+                    }
+                    let mut t = self.ctx.find_const("Zero")
+                        .ok_or_else(||
+                        perror!(self, "cannot find constant `Zero` to encode number `{}`", i)
+                    )?.clone();
+                    while i > 0 {
+                        let b = i % 2 == 1;
+                        let f = if b { "Bit1" } else { "Bit0" };
+                        let f =
+                            self.ctx.find_const(f)
+                                .ok_or_else(||
+                                    perror!(self, "cannot find constant `{}` to encode number `{}`", f, i)
+                                )?.clone();
+                        t = self.ctx.mk_app(f, t).map_err(|e| {
+                            perror!(
+                                self,
+                                "type error when encoding number `{}`: {}",
+                                i,
+                                e
+                            )
+                        })?;
+                        i = i / 2;
+                    }
+                    t
+                }
                 LPAREN => {
                     let t = self.parse_expr_bp_(0, ty_expected)?;
                     self.eat_(RPAREN)?;
