@@ -1,4 +1,3 @@
-use std::io::{BufRead, Write};
 use trustee::*;
 
 fn main() -> anyhow::Result<()> {
@@ -52,7 +51,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    rl.save_history("history.txt").unwrap();
+    rl.save_history(".history.txt").unwrap();
 
     Ok(())
 }

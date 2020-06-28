@@ -18,6 +18,8 @@ def false = (\x: bool. x=x) = (\x: bool. x=true).
 decl not : bool -> bool.
 decl /\ : bool -> bool -> bool.
 decl \/ : bool -> bool -> bool.
+# TODO: declare /\ and /\ as infix
+
 def exists = \(a:type)(f: a->bool). not (forall a (\y:a. not (f y))).
 
 # TODO
