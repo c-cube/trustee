@@ -12,6 +12,8 @@ edition = "2018"
 log = "*"
 env_logger = { version= "*", default-features=false, features=["termcolor", "atty"] }
 anyhow="1.0"
+pico-args="0.3"
+rustyline = "6.0" { default-features=false }
 
 [[example]]
 name = "parse_ot"

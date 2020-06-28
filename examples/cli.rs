@@ -6,30 +6,53 @@ fn main() -> anyhow::Result<()> {
     log::info!("start cli");
 
     let mut ctx = Ctx::new();
-    let stdin = std::io::stdin();
-    let stdin = &mut stdin.lock();
-    let stdout = std::io::stdout();
-    let stdout = &mut stdout.lock();
-    let mut buf = String::new();
+
+    let mut args = pico_args::Arguments::from_env();
+    if args.contains("--load-hol") {
+        syntax::parse_statement(&mut ctx, "load_hol.")?;
+    }
+    if args.contains("--include") {
+        let x: String = args.value_from_str("--include")?;
+        syntax::parse_statement(&mut ctx, &format!("include {:?}.", x))?;
+    }
+
+    let mut rl = rustyline::Editor::<()>::new();
+    if rl.load_history(".history.txt").is_err() {
+        log::info!("No previous history.");
+    }
     loop {
-        write!(stdout, "> ")?;
-        stdout.flush()?;
-        let n = stdin.read_line(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        log::info!("parse line {:?}", &buf);
-        match syntax::parse_statements(&mut ctx, &buf) {
-            Ok(res) => {
-                for x in res {
-                    println!("got: {:#?}", x)
+        let readline = rl.readline("> ");
+        match readline {
+            Ok(line) => {
+                rl.add_history_entry(line.as_str());
+
+                log::info!("parse line {:?}", &line);
+                match syntax::parse_statements(&mut ctx, &line) {
+                    Ok(res) => {
+                        for x in res {
+                            println!("got: {:#?}", x)
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("err: {}", e);
+                    }
                 }
             }
-            Err(e) => {
-                log::error!("err: {}", e);
+            Err(rustyline::error::ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                break;
+            }
+            Err(rustyline::error::ReadlineError::Eof) => {
+                println!("CTRL-D");
+                break;
+            }
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break;
             }
         }
-        buf.clear();
     }
+    rl.save_history("history.txt").unwrap();
+
     Ok(())
 }
