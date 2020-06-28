@@ -76,7 +76,7 @@ struct Lexer<'a> {
 fn is_ascii_symbol(c: u8) -> bool {
     match c {
         b'=' | b',' | b';' | b'<' | b'>' | b'!' | b'/' | b'\\' | b'+'
-        | b'-' | b'~' | b'*' | b'&' | b'%' | b'@' => true,
+        | b'-' | b'|' | b'^' | b'~' | b'*' | b'&' | b'%' | b'@' => true,
         _ => false,
     }
 }
