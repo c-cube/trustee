@@ -5,20 +5,23 @@ fn main() -> anyhow::Result<()> {
     log::info!("start cli");
 
     let mut ctx = Ctx::new();
+    let mut ml = meta::State::new(&mut ctx);
 
     let mut args = pico_args::Arguments::from_env();
     if args.contains("--load-hol") {
-        syntax::parse_statement(&mut ctx, "load_hol.")?;
+        ml.run(&"prelude_hol load")?;
     }
     if args.contains("--include") {
         let x: String = args.value_from_str("--include")?;
-        syntax::parse_statement(&mut ctx, &format!("include {:?}.", x))?;
+        ml.run(&format!("/{:?} load", x))?;
     }
 
     let mut rl = rustyline::Editor::<()>::new();
     if rl.load_history(".history.txt").is_err() {
         log::info!("No previous history.");
     }
+    // TODO: completion based on dictionary
+
     loop {
         let readline = rl.readline("> ");
         match readline {
@@ -26,12 +29,8 @@ fn main() -> anyhow::Result<()> {
                 rl.add_history_entry(line.as_str());
 
                 log::info!("parse line {:?}", &line);
-                match syntax::parse_statements(&mut ctx, &line) {
-                    Ok(res) => {
-                        for x in res {
-                            println!("got: {:#?}", x)
-                        }
-                    }
+                match ml.run(&line) {
+                    Ok(()) => {}
                     Err(e) => {
                         log::error!("err: {}", e);
                     }

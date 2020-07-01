@@ -1,6 +1,7 @@
 pub mod algo;
 mod fnv;
 pub mod kernel_of_trust;
+pub mod meta;
 pub mod open_theory;
 pub mod syntax;
 
