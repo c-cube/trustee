@@ -37,6 +37,7 @@ pub struct Dict<T>(FnvHashMap<Rc<str>, T>);
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
+    Bool(bool),
     Sym(Rc<str>),
     //Var(Var),
     Expr(k::Expr),
@@ -45,6 +46,20 @@ pub enum Value {
     Array(Rc<Vec<Value>>),
     Dict(Dict<Value>),
     // TODO: Goal? Goals? Tactic?
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Value) -> bool {
+        use Value::*;
+
+        match (self, other) {
+            (Int(i), Int(j)) => i == j,
+            (Bool(i), Bool(j)) => i == j,
+            (Sym(i), Sym(j)) => i == j,
+            (Expr(i), Expr(j)) => i == j,
+            _ => false,
+        }
+    }
 }
 
 /// An instruction of the language.
@@ -68,11 +83,13 @@ enum InstrCore {
     Def,
     For,
     If,
+    IfElse,
     Loop,
     Exit,
     Dup,
     Exch,
-    Pop,
+    Drop,
+    Rot,
     Begin,
     End,
     Eq,
@@ -85,8 +102,9 @@ enum InstrCore {
     Sub,
     Div,
     Mod,
-    Print,
+    PrintPop,
     PrintStack,
+    Clear,
     // TODO: array get, put, push, create
 }
 
@@ -110,23 +128,9 @@ pub trait InstrBuiltin: fmt::Debug {
     }
 }
 
-mod ml {
-    use super::*;
-
-    impl CodeArray {
-        fn new(v: Vec<Instr>) -> Self {
-            CodeArray(Rc::new(v))
-        }
-    }
-
-    impl<T> Dict<T> {
-        fn new() -> Self {
-            Dict(FnvHashMap::default())
-        }
-    }
-
+pub(crate) mod parser {
     /// A parser for RPN-like syntax, inspired from postscript.
-    struct Parser<'b> {
+    pub struct Parser<'b> {
         col: usize,
         line: usize,
         i: usize,
@@ -137,7 +141,7 @@ mod ml {
     // TODO: [ ] for value arrays.
     /// A token for the RPN syntax..
     #[derive(Clone, Copy, Debug, PartialEq)]
-    enum Tok<'b> {
+    pub enum Tok<'b> {
         Eof,
         Id(&'b str),         // identifier
         QuotedId(&'b str),   // '/' identifier
@@ -145,6 +149,7 @@ mod ml {
         Int(i64),
         LBracket,
         RBracket,
+        Invalid(char),
     }
 
     #[inline]
@@ -157,11 +162,11 @@ mod ml {
 
     impl<'b> Parser<'b> {
         #[inline]
-        fn eof(&self) -> bool {
+        pub fn eof(&self) -> bool {
             self.i >= self.bytes.len()
         }
 
-        fn loc(&self) -> (usize, usize) {
+        pub fn loc(&self) -> (usize, usize) {
             (self.line, self.col)
         }
 
@@ -182,7 +187,7 @@ mod ml {
         }
 
         /// Next token.
-        fn next(&mut self) -> Tok {
+        pub fn next(&mut self) -> Tok {
             self.skip_white_();
             if self.eof() {
                 self.cur_ = Some(Tok::Eof);
@@ -213,7 +218,10 @@ mod ml {
                 }
                 b'/' => {
                     let mut j = self.i + 1;
-                    while j < self.bytes.len() && is_id_char(self.bytes[j]) {
+                    while j < self.bytes.len() && {
+                        let c = self.bytes[j];
+                        is_id_char(c) || c.is_ascii_digit()
+                    } {
                         j += 1;
                     }
                     let tok = std::str::from_utf8(&self.bytes[self.i + 1..j])
@@ -224,7 +232,10 @@ mod ml {
                 }
                 c if is_id_char(c) => {
                     let mut j = self.i + 1;
-                    while j < self.bytes.len() && is_id_char(self.bytes[j]) {
+                    while j < self.bytes.len() && {
+                        let c = self.bytes[j];
+                        is_id_char(c) || c.is_ascii_digit()
+                    } {
                         j += 1;
                     }
                     let tok = std::str::from_utf8(&self.bytes[self.i..j])
@@ -246,14 +257,14 @@ mod ml {
                     self.i = j + 1;
                     Tok::Int(n)
                 }
-                c => todo!("handle char {:?}", c),
+                c => Tok::Invalid(std::char::from_u32(c as u32).unwrap()),
             };
             self.cur_ = Some(tok);
             tok
         }
 
         /// Current token.
-        fn cur(&mut self) -> Tok {
+        pub fn cur(&mut self) -> Tok {
             if let Some(c) = self.cur_ {
                 c
             } else {
@@ -262,8 +273,24 @@ mod ml {
         }
 
         /// New parser.
-        fn new(s: &'b str) -> Self {
+        pub fn new(s: &'b str) -> Self {
             Self { col: 1, line: 1, i: 0, bytes: s.as_bytes(), cur_: None }
+        }
+    }
+}
+
+mod ml {
+    use super::*;
+
+    impl CodeArray {
+        fn new(v: Vec<Instr>) -> Self {
+            CodeArray(Rc::new(v))
+        }
+    }
+
+    impl<T> Dict<T> {
+        fn new() -> Self {
+            Dict(FnvHashMap::default())
         }
     }
 
@@ -271,8 +298,9 @@ mod ml {
     const INSTR_CORE: &'static [InstrCore] = {
         use InstrCore::*;
         &[
-            Def, For, If, Loop, Exit, Dup, Exch, Pop, Begin, End, Eq, Lt, Gt,
-            Leq, Geq, Add, Mul, Sub, Div, Mod, Print, PrintStack,
+            Def, For, If, IfElse, Loop, Exit, Dup, Exch, Drop, Rot, Begin, End,
+            Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod, PrintPop,
+            PrintStack, Clear,
         ]
     };
 
@@ -284,11 +312,13 @@ mod ml {
                 Def => "def",
                 For => "for",
                 If => "if",
+                IfElse => "if",
                 Loop => "loop",
                 Exit => "exit",
                 Dup => "dup",
                 Exch => "exch",
-                Pop => "pop",
+                Drop => "drop",
+                Rot => "rot",
                 Begin => "begin",
                 End => "end",
                 Eq => "eq",
@@ -301,47 +331,201 @@ mod ml {
                 Sub => "sub",
                 Div => "div",
                 Mod => "mod",
-                Print => "print",
+                PrintPop => "ppop",
                 PrintStack => "pstack",
+                Clear => "clear",
             }
         }
 
         fn run(&self, st: &mut State) -> Result<()> {
             use InstrCore::*;
+
+            macro_rules! pop1 {
+                () => {
+                    match st.stack.pop() {
+                        Some(v) => v,
+                        _ => return Err(Error::new("stack underflow")),
+                    }
+                };
+            };
+            macro_rules! pop1_of {
+                ($what: literal, $p: pat, $v: ident) => {
+                    match pop1!() {
+                        $p => $v,
+                        _ => {
+                            return Err(Error::new(concat!(
+                                "type error: expected ",
+                                $what
+                            )))
+                        }
+                    };
+                };
+            };
+            macro_rules! pop1_int {
+                () => {
+                    pop1_of!("int", Value::Int(i), i)
+                };
+            };
+            macro_rules! pop1_bool {
+                () => {
+                    pop1_of!("bool", Value::Bool(i), i)
+                };
+            };
+            macro_rules! pop1_codearray {
+                () => {
+                    pop1_of!("code array", Value::CodeArray(i), i)
+                };
+            };
+            macro_rules! pop1_expr {
+                () => {
+                    pop1_of!("expr", Value::Expr(i), i)
+                };
+            };
+            macro_rules! pop1_sym {
+                () => {
+                    pop1_of!("sym", Value::Sym(i), i)
+                };
+            };
+
             match self {
-                Def => todo!("def"),
-                For => todo!("for"),
-                If => todo!("if"),
-                Loop => todo!("loop"),
-                Exit => todo!("exit"),
-                Dup => todo!("dup"),
-                Exch => todo!("exch"),
-                Pop => todo!("pop"),
-                Begin => todo!("begin"),
-                End => todo!("end"),
-                Eq => todo!("eq"),
-                Lt => todo!("lt"),
-                Gt => todo!("gt"),
-                Leq => todo!("leq"),
-                Geq => todo!("geq"),
-                Add => todo!("add"),
-                Mul => todo!("mul"),
-                Sub => todo!("sub"),
-                Div => todo!("div"),
-                Mod => todo!("mod"),
-                Print => {
-                    let x = st
-                        .stack
-                        .pop()
-                        .ok_or_else(|| Error::new("empty stack"))?;
+                Def => {
+                    let c = pop1_codearray!();
+                    let sym = pop1_sym!();
+                    let mut scopes = st.scopes.borrow_mut();
+                    scopes.last_mut().unwrap().0.insert(sym.clone(), c);
+                }
+                For => {
+                    let c = pop1_codearray!();
+                    let stop = pop1_int!();
+                    let step = pop1_int!();
+                    let start = pop1_int!();
+
+                    let mut i = start;
+                    while if step > 0 { i <= stop } else { i >= stop } {
+                        st.stack.push(Value::Int(i));
+                        st.exec_instr_(Instr::Call(c.clone()))?;
+                        i += step;
+                    }
+                }
+                If => {
+                    let c = pop1_codearray!();
+                    let b = pop1_bool!();
+                    if b {
+                        st.exec_codearray_(c);
+                        st.exec_loop_()?;
+                    }
+                }
+                IfElse => {
+                    let else_ = pop1_codearray!();
+                    let then_ = pop1_codearray!();
+                    let b = pop1_bool!();
+                    if b {
+                        st.exec_codearray_(then_);
+                    } else {
+                        st.exec_codearray_(else_);
+                    }
+                    st.exec_loop_()?;
+                }
+                Loop => todo!("loop"), // TODO
+                Exit => todo!("exit"), // TODO
+                Dup => match st.stack.last() {
+                    Some(v) => {
+                        let v = v.clone();
+                        st.stack.push(v)
+                    }
+                    None => return Err(Error::new("stack underflow")),
+                },
+                Rot => {}
+                Exch => {
+                    let y = pop1!();
+                    let x = pop1!();
+                    st.stack.push(y);
+                    st.stack.push(x);
+                }
+                Drop => {
+                    let _ = pop1!();
+                }
+                Begin => {
+                    let dict = Dict::new();
+                    let mut scopes = st.scopes.borrow_mut();
+                    scopes.push(dict)
+                }
+                End => {
+                    let mut scopes = st.scopes.borrow_mut();
+                    if scopes.len() < 2 {
+                        return Err(Error::new(
+                            "`end` does not match a `begin`",
+                        ));
+                    }
+                    scopes.pop();
+                }
+                Eq => {
+                    let y = pop1!();
+                    let x = pop1!();
+                    st.stack.push(Value::Bool(x == y))
+                }
+                Lt => {
+                    let y = pop1_int!();
+                    let x = pop1_int!();
+                    st.stack.push(Value::Bool(x < y))
+                }
+                Gt => {
+                    let y = pop1_int!();
+                    let x = pop1_int!();
+                    st.stack.push(Value::Bool(x > y))
+                }
+                Leq => {
+                    let y = pop1_int!();
+                    let x = pop1_int!();
+                    st.stack.push(Value::Bool(x <= y))
+                }
+                Geq => {
+                    let y = pop1_int!();
+                    let x = pop1_int!();
+                    st.stack.push(Value::Bool(x >= y))
+                }
+                Add => {
+                    let y = pop1_int!();
+                    let x = pop1_int!();
+                    st.stack.push(Value::Int(x + y))
+                }
+                Mul => {
+                    let y = pop1_int!();
+                    let x = pop1_int!();
+                    st.stack.push(Value::Int(x * y))
+                }
+                Sub => {
+                    let y = pop1_int!();
+                    let x = pop1_int!();
+                    st.stack.push(Value::Int(x - y))
+                }
+                Div => {
+                    let y = pop1_int!();
+                    let x = pop1_int!();
+                    if y == 0 {
+                        return Err(Error::new("division by zero"));
+                    }
+                    st.stack.push(Value::Int(x / y))
+                }
+                Mod => {
+                    let y = pop1_int!();
+                    let x = pop1_int!();
+                    if y == 0 {
+                        return Err(Error::new("division by zero"));
+                    }
+                    st.stack.push(Value::Int(x % y))
+                }
+                PrintPop => {
+                    let x = pop1!();
                     println!("  {:?}", x);
                 }
                 PrintStack => {
                     println!("stack:");
-                    for x in st.stack.iter() {
+                    for x in st.stack.iter().rev() {
                         println!("  > {:?}", x);
                     }
                 }
+                Clear => st.stack.clear(),
             }
             Ok(())
         }
@@ -387,11 +571,16 @@ mod ml {
 
         /// Parse an instruction, which is either a word invokation
         /// or the construction of a value to push onto the stack.
-        fn parse_instr_(&mut self, p: &mut Parser) -> Result<Instr> {
+        fn parse_instr_(&mut self, p: &mut parser::Parser) -> Result<Instr> {
+            use parser::*;
+
             let loc = p.loc();
             match p.cur() {
                 Tok::Eof => return Err(Error::new("unexpected EOF")),
                 Tok::RBracket => return Err(Error::new("unexpected '}'")),
+                Tok::Invalid(c) => {
+                    return Err(perror!(loc, "invalid token {:?}", c))
+                }
                 Tok::Int(i) => {
                     p.next();
                     Ok(Instr::Im(Value::Int(i)))
@@ -425,6 +614,14 @@ mod ml {
                     };
                     Ok(Instr::Im(v))
                 }
+                Tok::Id("true") => {
+                    p.next();
+                    Ok(Instr::Im(Value::Bool(true)))
+                }
+                Tok::Id("false") => {
+                    p.next();
+                    Ok(Instr::Im(Value::Bool(false)))
+                }
                 Tok::Id(s) => {
                     // Find definition of symbol `s` in `self.scopes`,
                     // starting from the most recent scope.
@@ -451,14 +648,23 @@ mod ml {
                     b.run(self)?;
                 }
                 Instr::Call(ca) => {
-                    assert!(ca.0.len() > 1);
                     // start execution of this block of code
                     self.cur_i = Some(ca.0[0].clone());
-                    self.ctrl_stack.push((ca.clone(), 1));
+                    if ca.0.len() > 1 {
+                        self.ctrl_stack.push((ca, 1));
+                    }
                 }
                 Instr::Core(c) => c.run(self)?,
             }
             Ok(())
+        }
+
+        fn exec_codearray_(&mut self, ca: CodeArray) {
+            // start execution of this block of code
+            self.cur_i = Some(ca.0[0].clone());
+            if ca.0.len() > 1 {
+                self.ctrl_stack.push((ca, 1));
+            }
         }
 
         fn exec_loop_(&mut self) -> Result<()> {
@@ -492,6 +698,7 @@ mod ml {
 
         /// Parse and execute the given code.
         pub fn run(&mut self, s: &str) -> Result<()> {
+            use parser::*;
             let mut p = Parser::new(s);
 
             loop {
@@ -503,9 +710,10 @@ mod ml {
                 let i = self.parse_instr_(&mut p);
                 match i {
                     Err(e) => {
+                        let (l, c) = p.loc();
                         let e = e.set_source(k::Error::new_string(format!(
                             "at {}:{}",
-                            p.line, p.col
+                            l, c
                         )));
                         return Err(e);
                     }
