@@ -6,7 +6,7 @@
 
 use {
     crate::{
-        fnv::FnvHashMap,
+        fnv::{self, FnvHashMap},
         kernel_of_trust::{self as k, CtxI},
         syntax, Error, Result,
     },
@@ -22,16 +22,22 @@ pub struct State<'a> {
     /// Nested scopes to handle definitions in local dictionaries.
     ///
     /// The toplevel dictionary (at index 0) is the system dictionary.
-    scopes: RefCell<Vec<Dict<CodeArray>>>,
+    scopes: RefCell<Vec<Dict>>,
     /// Control stack, for function call.
     ctrl_stack: Vec<(CodeArray, usize)>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CodeArray(Rc<Vec<Instr>>);
 
+impl fmt::Debug for CodeArray {
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        out.debug_set().entries(self.0.iter()).finish()
+    }
+}
+
 #[derive(Clone, Debug)]
-pub struct Dict<T>(FnvHashMap<Rc<str>, T>);
+pub struct Dict(FnvHashMap<Rc<str>, Value>);
 
 /// A value of the language.
 #[derive(Debug, Clone)]
@@ -44,7 +50,7 @@ pub enum Value {
     Thm(k::Thm),
     CodeArray(CodeArray),
     Array(Rc<Vec<Value>>),
-    Dict(Dict<Value>),
+    Dict(Dict),
     // TODO: Goal? Goals? Tactic?
 }
 
@@ -73,12 +79,14 @@ enum Instr {
     Im(Value),
     /// Call a word defined using this code array.
     Call(CodeArray),
+    /// Call a word by its name. Useful for late binding and recursion.
+    CallDelayed(Rc<str>),
 }
 
 // NOTE: modify `INSTR_CORE` below when modifying this.
 /// Core operations: control flow and arithmetic.
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum InstrCore {
     Def,
     For,
@@ -112,7 +120,7 @@ enum InstrCore {
 ///
 /// This is the most direct way of writing efficient "tactics" directly
 /// in rust.
-pub trait InstrBuiltin: fmt::Debug {
+pub trait InstrBuiltin {
     /// Name of the instruction. The instruction is invoked by its name.
     ///
     /// The name should be consistent with lexical conventions (no whitespaces,
@@ -125,6 +133,12 @@ pub trait InstrBuiltin: fmt::Debug {
     /// A one-line help text for this instruction.
     fn help(&self) -> String {
         self.name().to_string()
+    }
+}
+
+impl fmt::Debug for dyn InstrBuiltin {
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        write!(out, "{}", self.name())
     }
 }
 
@@ -155,7 +169,7 @@ pub(crate) mod parser {
     #[inline]
     fn is_id_char(c: u8) -> bool {
         match c {
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' => true,
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' | b':' => true,
             _ => false,
         }
     }
@@ -187,7 +201,7 @@ pub(crate) mod parser {
         }
 
         /// Next token.
-        pub fn next(&mut self) -> Tok {
+        pub fn next(&mut self) -> Tok<'b> {
             self.skip_white_();
             if self.eof() {
                 self.cur_ = Some(Tok::Eof);
@@ -227,7 +241,7 @@ pub(crate) mod parser {
                     let tok = std::str::from_utf8(&self.bytes[self.i + 1..j])
                         .expect("invalid utf8 slice");
                     self.col += j - self.i + 1;
-                    self.i = j + 1;
+                    self.i = j;
                     Tok::QuotedId(tok)
                 }
                 c if is_id_char(c) => {
@@ -241,7 +255,7 @@ pub(crate) mod parser {
                     let tok = std::str::from_utf8(&self.bytes[self.i..j])
                         .expect("invalid utf8 slice");
                     self.col += j - self.i;
-                    self.i = j + 1;
+                    self.i = j;
                     Tok::Id(tok)
                 }
                 c if c.is_ascii_digit() || c == b'-' => {
@@ -254,7 +268,7 @@ pub(crate) mod parser {
                         .expect("invalid utf8 slice");
                     let n = str::parse(tok).expect("cannot parse int");
                     self.col += j - self.i;
-                    self.i = j + 1;
+                    self.i = j;
                     Tok::Int(n)
                 }
                 c => Tok::Invalid(std::char::from_u32(c as u32).unwrap()),
@@ -264,7 +278,7 @@ pub(crate) mod parser {
         }
 
         /// Current token.
-        pub fn cur(&mut self) -> Tok {
+        pub fn cur(&mut self) -> Tok<'b> {
             if let Some(c) = self.cur_ {
                 c
             } else {
@@ -288,9 +302,9 @@ mod ml {
         }
     }
 
-    impl<T> Dict<T> {
+    impl Dict {
         fn new() -> Self {
-            Dict(FnvHashMap::default())
+            Dict(fnv::new_table_with_cap(8))
         }
     }
 
@@ -340,89 +354,48 @@ mod ml {
         fn run(&self, st: &mut State) -> Result<()> {
             use InstrCore::*;
 
-            macro_rules! pop1 {
-                () => {
-                    match st.stack.pop() {
-                        Some(v) => v,
-                        _ => return Err(Error::new("stack underflow")),
-                    }
-                };
-            };
-            macro_rules! pop1_of {
-                ($what: literal, $p: pat, $v: ident) => {
-                    match pop1!() {
-                        $p => $v,
-                        _ => {
-                            return Err(Error::new(concat!(
-                                "type error: expected ",
-                                $what
-                            )))
-                        }
-                    };
-                };
-            };
-            macro_rules! pop1_int {
-                () => {
-                    pop1_of!("int", Value::Int(i), i)
-                };
-            };
-            macro_rules! pop1_bool {
-                () => {
-                    pop1_of!("bool", Value::Bool(i), i)
-                };
-            };
-            macro_rules! pop1_codearray {
-                () => {
-                    pop1_of!("code array", Value::CodeArray(i), i)
-                };
-            };
-            macro_rules! pop1_expr {
-                () => {
-                    pop1_of!("expr", Value::Expr(i), i)
-                };
-            };
-            macro_rules! pop1_sym {
-                () => {
-                    pop1_of!("sym", Value::Sym(i), i)
-                };
-            };
-
             match self {
                 Def => {
-                    let c = pop1_codearray!();
-                    let sym = pop1_sym!();
+                    let c = st.pop1_codearray()?;
+                    let sym = st.pop1_sym()?;
                     let mut scopes = st.scopes.borrow_mut();
-                    scopes.last_mut().unwrap().0.insert(sym.clone(), c);
+                    scopes
+                        .last_mut()
+                        .unwrap()
+                        .0
+                        .insert(sym.clone(), Value::CodeArray(c));
                 }
                 For => {
-                    let c = pop1_codearray!();
-                    let stop = pop1_int!();
-                    let step = pop1_int!();
-                    let start = pop1_int!();
+                    let c = st.pop1_codearray()?;
+                    let stop = st.pop1_int()?;
+                    let step = st.pop1_int()?;
+                    let start = st.pop1_int()?;
 
                     let mut i = start;
                     while if step > 0 { i <= stop } else { i >= stop } {
                         st.stack.push(Value::Int(i));
-                        st.exec_instr_(Instr::Call(c.clone()))?;
+                        //println!("for: i={}, ca: {:?}", i, &c);
+                        st.exec_codearray_(&c);
+                        st.exec_loop_()?;
                         i += step;
                     }
                 }
                 If => {
-                    let c = pop1_codearray!();
-                    let b = pop1_bool!();
+                    let c = st.pop1_codearray()?;
+                    let b = st.pop1_bool()?;
                     if b {
-                        st.exec_codearray_(c);
+                        st.exec_codearray_(&c);
                         st.exec_loop_()?;
                     }
                 }
                 IfElse => {
-                    let else_ = pop1_codearray!();
-                    let then_ = pop1_codearray!();
-                    let b = pop1_bool!();
+                    let else_ = st.pop1_codearray()?;
+                    let then_ = st.pop1_codearray()?;
+                    let b = st.pop1_bool()?;
                     if b {
-                        st.exec_codearray_(then_);
+                        st.exec_codearray_(&then_);
                     } else {
-                        st.exec_codearray_(else_);
+                        st.exec_codearray_(&else_);
                     }
                     st.exec_loop_()?;
                 }
@@ -437,13 +410,13 @@ mod ml {
                 },
                 Rot => {}
                 Exch => {
-                    let y = pop1!();
-                    let x = pop1!();
+                    let y = st.pop1()?;
+                    let x = st.pop1()?;
                     st.stack.push(y);
                     st.stack.push(x);
                 }
                 Drop => {
-                    let _ = pop1!();
+                    let _ = st.pop1()?;
                 }
                 Begin => {
                     let dict = Dict::new();
@@ -460,63 +433,63 @@ mod ml {
                     scopes.pop();
                 }
                 Eq => {
-                    let y = pop1!();
-                    let x = pop1!();
+                    let y = st.pop1()?;
+                    let x = st.pop1()?;
                     st.stack.push(Value::Bool(x == y))
                 }
                 Lt => {
-                    let y = pop1_int!();
-                    let x = pop1_int!();
+                    let y = st.pop1_int()?;
+                    let x = st.pop1_int()?;
                     st.stack.push(Value::Bool(x < y))
                 }
                 Gt => {
-                    let y = pop1_int!();
-                    let x = pop1_int!();
+                    let y = st.pop1_int()?;
+                    let x = st.pop1_int()?;
                     st.stack.push(Value::Bool(x > y))
                 }
                 Leq => {
-                    let y = pop1_int!();
-                    let x = pop1_int!();
+                    let y = st.pop1_int()?;
+                    let x = st.pop1_int()?;
                     st.stack.push(Value::Bool(x <= y))
                 }
                 Geq => {
-                    let y = pop1_int!();
-                    let x = pop1_int!();
+                    let y = st.pop1_int()?;
+                    let x = st.pop1_int()?;
                     st.stack.push(Value::Bool(x >= y))
                 }
                 Add => {
-                    let y = pop1_int!();
-                    let x = pop1_int!();
+                    let y = st.pop1_int()?;
+                    let x = st.pop1_int()?;
                     st.stack.push(Value::Int(x + y))
                 }
                 Mul => {
-                    let y = pop1_int!();
-                    let x = pop1_int!();
+                    let y = st.pop1_int()?;
+                    let x = st.pop1_int()?;
                     st.stack.push(Value::Int(x * y))
                 }
                 Sub => {
-                    let y = pop1_int!();
-                    let x = pop1_int!();
+                    let y = st.pop1_int()?;
+                    let x = st.pop1_int()?;
                     st.stack.push(Value::Int(x - y))
                 }
                 Div => {
-                    let y = pop1_int!();
-                    let x = pop1_int!();
+                    let y = st.pop1_int()?;
+                    let x = st.pop1_int()?;
                     if y == 0 {
                         return Err(Error::new("division by zero"));
                     }
                     st.stack.push(Value::Int(x / y))
                 }
                 Mod => {
-                    let y = pop1_int!();
-                    let x = pop1_int!();
+                    let y = st.pop1_int()?;
+                    let x = st.pop1_int()?;
                     if y == 0 {
                         return Err(Error::new("division by zero"));
                     }
                     st.stack.push(Value::Int(x % y))
                 }
                 PrintPop => {
-                    let x = pop1!();
+                    let x = st.pop1()?;
                     println!("  {:?}", x);
                 }
                 PrintStack => {
@@ -528,6 +501,12 @@ mod ml {
                 Clear => st.stack.clear(),
             }
             Ok(())
+        }
+    }
+
+    impl fmt::Debug for InstrCore {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            write!(out, "{}", self.name())
         }
     }
 
@@ -543,6 +522,22 @@ mod ml {
         };
     }
 
+    macro_rules! pop1_of {
+        ($f:ident, $what: literal, $p: pat, $v: ident, $ret: ty) => {
+            pub fn $f(&mut self) -> Result<$ret> {
+                match self.pop1()? {
+                    $p => Ok($v),
+                    _ => {
+                        return Err(Error::new(concat!(
+                            "type error: expected ",
+                            $what
+                        )))
+                    }
+                }
+            }
+        };
+    }
+
     impl<'a> State<'a> {
         /// Create a new state.
         pub fn new(ctx: &'a mut dyn CtxI) -> Self {
@@ -552,12 +547,12 @@ mod ml {
                 for ic in INSTR_CORE {
                     let name: Rc<str> = ic.name().into();
                     let ca = CodeArray::new(vec![Instr::Core(*ic)]);
-                    scope0.0.insert(name, ca);
+                    scope0.0.insert(name, Value::CodeArray(ca));
                 }
                 for b in BUILTINS {
                     let name: Rc<str> = b.name().into();
                     let ca = CodeArray::new(vec![Instr::Builtin(*b)]);
-                    scope0.0.insert(name, ca);
+                    scope0.0.insert(name, Value::CodeArray(ca));
                 }
             }
             Self {
@@ -623,16 +618,16 @@ mod ml {
                     Ok(Instr::Im(Value::Bool(false)))
                 }
                 Tok::Id(s) => {
-                    // Find definition of symbol `s` in `self.scopes`,
-                    // starting from the most recent scope.
+                    // Find definition of symbol `s` in `self.scopes[0]`,
+                    // otherwise delay (for user scopes)
                     let scopes = self.scopes.borrow();
-                    let i = match scopes.iter().rev().find_map(|d| d.0.get(&*s))
-                    {
-                        None => {
-                            return Err(perror!(loc, "unknown word: {}", s))
+                    let i = match scopes[0].0.get(&*s) {
+                        None => Instr::CallDelayed(s.into()),
+                        Some(Value::CodeArray(ca)) if ca.0.len() == 1 => {
+                            ca.0[0].clone()
                         }
-                        Some(ca) if ca.0.len() == 1 => ca.0[0].clone(),
-                        Some(ca) => Instr::Call(ca.clone()),
+                        Some(Value::CodeArray(ca)) => Instr::Call(ca.clone()),
+                        Some(v) => Instr::Im(v.clone()),
                     };
                     p.next();
                     Ok(i)
@@ -641,29 +636,40 @@ mod ml {
         }
 
         /// Execute instruction `i`.
+        ///
+        /// This should always be done within or before a `exec_loop_`.
         fn exec_instr_(&mut self, i: Instr) -> Result<()> {
             match i {
                 Instr::Im(v) => self.stack.push(v),
                 Instr::Builtin(b) => {
-                    b.run(self)?;
+                    b.run(self)?; // ask the builtin to eval itself
                 }
-                Instr::Call(ca) => {
-                    // start execution of this block of code
-                    self.cur_i = Some(ca.0[0].clone());
-                    if ca.0.len() > 1 {
-                        self.ctrl_stack.push((ca, 1));
-                    }
+                Instr::Call(ca) => self.exec_codearray_(&ca),
+                Instr::CallDelayed(s) => {
+                    // Find definition of symbol `s` in `self.scopes`,
+                    // starting from the most recent scope.
+                    let scopes = self.scopes.borrow();
+                    match scopes.iter().rev().find_map(|d| d.0.get(&*s)) {
+                        None => return Err(Error::new("symbol not found")),
+                        Some(Value::CodeArray(ca)) => {
+                            self.cur_i = Some(ca.0[0].clone());
+                            if ca.0.len() > 1 {
+                                self.ctrl_stack.push((ca.clone(), 1));
+                            }
+                        }
+                        Some(v) => self.stack.push(v.clone()),
+                    };
                 }
                 Instr::Core(c) => c.run(self)?,
             }
             Ok(())
         }
 
-        fn exec_codearray_(&mut self, ca: CodeArray) {
+        fn exec_codearray_(&mut self, ca: &CodeArray) {
             // start execution of this block of code
             self.cur_i = Some(ca.0[0].clone());
             if ca.0.len() > 1 {
-                self.ctrl_stack.push((ca, 1));
+                self.ctrl_stack.push((ca.clone(), 1));
             }
         }
 
@@ -684,7 +690,7 @@ mod ml {
                                 let i = ca.0[*idx].clone();
                                 self.cur_i = Some(i);
                                 *idx += 1; // point to next instruction in `ca`
-                                if *idx + 1 >= ca.0.len() {
+                                if *idx >= ca.0.len() {
                                     // last instruction: tailcall
                                     self.ctrl_stack.pop();
                                 }
@@ -695,6 +701,25 @@ mod ml {
             }
             Ok(())
         }
+
+        pub fn pop1(&mut self) -> Result<Value> {
+            match self.stack.pop() {
+                Some(v) => Ok(v),
+                _ => return Err(Error::new("stack underflow")),
+            }
+        }
+
+        pop1_of!(pop1_int, "int", Value::Int(i), i, i64);
+        pop1_of!(pop1_bool, "bool", Value::Bool(i), i, bool);
+        pop1_of!(
+            pop1_codearray,
+            "code array",
+            Value::CodeArray(i),
+            i,
+            CodeArray
+        );
+        pop1_of!(pop1_expr, "expr", Value::Expr(i), i, k::Expr);
+        pop1_of!(pop1_sym, "sym", Value::Sym(i), i, Rc<str>);
 
         /// Parse and execute the given code.
         pub fn run(&mut self, s: &str) -> Result<()> {
@@ -930,8 +955,71 @@ pub const PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
 
 #[cfg(test)]
 mod test {
-    /*
     use super::*;
+
+    #[test]
+    fn test_parser() {
+        use parser::Tok as T;
+        let a = vec![(
+            " /a /b{mul 2}/d { 3 } def 2  ",
+            vec![
+                T::QuotedId("a"),
+                T::QuotedId("b"),
+                T::LBracket,
+                T::Id("mul"),
+                T::Int(2),
+                T::RBracket,
+                T::QuotedId("d"),
+                T::LBracket,
+                T::Int(3),
+                T::RBracket,
+                T::Id("def"),
+                T::Int(2),
+                T::Eof,
+            ],
+        )];
+
+        for (s, v) in a {
+            let mut p = parser::Parser::new(s);
+            let mut toks = vec![];
+            loop {
+                let t = p.cur().clone();
+                toks.push(t);
+                if t == T::Eof {
+                    break;
+                }
+                p.next();
+            }
+            assert_eq!(toks, v)
+        }
+    }
+
+    #[test]
+    fn test_basic_ops() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        let mut st = State::new(&mut ctx);
+
+        st.run("1 2 add")?;
+        let v = st.pop1_int()?;
+        assert_eq!(v, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fact() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        let mut st = State::new(&mut ctx);
+
+        st.run("/fact { 1 exch -1 1 { mul } for } def")?;
+        st.run("6 fact")?;
+        let v = st.pop1_int()?;
+        assert_eq!(v, 720);
+
+        Ok(())
+    }
+
+    /*
 
     #[test]
     fn test_parser_statement() -> Result<()> {
