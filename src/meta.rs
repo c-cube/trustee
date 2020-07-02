@@ -39,12 +39,17 @@ impl fmt::Debug for CodeArray {
 #[derive(Clone, Debug)]
 pub struct Dict(FnvHashMap<Rc<str>, Value>);
 
+// TODO: syntax for `Value::Source` (""" string?)
+// TODO: builtins for creating and manipulating arrays
+
 /// A value of the language.
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
     Bool(bool),
     Sym(Rc<str>),
+    /// Source code.
+    Source(Rc<str>),
     //Var(Var),
     Expr(k::Expr),
     Thm(k::Thm),
@@ -113,6 +118,10 @@ enum InstrCore {
     PrintPop,
     PrintStack,
     Clear,
+    /// Load a source string
+    Source,
+    /// Read a file into a source string
+    LoadFile,
     // TODO: array get, put, push, create
 }
 
@@ -187,7 +196,14 @@ pub(crate) mod parser {
         fn skip_white_(&mut self) {
             while self.i < self.bytes.len() {
                 let c = self.bytes[self.i];
-                if c == b' ' || c == b'\t' {
+                if c == b'#' {
+                    // eat rest of line
+                    while self.i < self.bytes.len()
+                        && self.bytes[self.i] != b'\n'
+                    {
+                        self.i += 1
+                    }
+                } else if c == b' ' || c == b'\t' {
                     self.i += 1;
                     self.col += 1;
                 } else if c == b'\n' {
@@ -293,6 +309,7 @@ pub(crate) mod parser {
     }
 }
 
+/// Meta-language.
 mod ml {
     use super::*;
 
@@ -314,7 +331,7 @@ mod ml {
         &[
             Def, For, If, IfElse, Loop, Exit, Dup, Exch, Drop, Rot, Begin, End,
             Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod, PrintPop,
-            PrintStack, Clear,
+            PrintStack, Clear, Source, LoadFile,
         ]
     };
 
@@ -345,9 +362,11 @@ mod ml {
                 Sub => "sub",
                 Div => "div",
                 Mod => "mod",
-                PrintPop => "ppop",
+                PrintPop => "==",
                 PrintStack => "pstack",
                 Clear => "clear",
+                Source => "source",
+                LoadFile => "load_file",
             }
         }
 
@@ -408,7 +427,7 @@ mod ml {
                     }
                     None => return Err(Error::new("stack underflow")),
                 },
-                Rot => {}
+                Rot => todo!("rot"), // TODO
                 Exch => {
                     let y = st.pop1()?;
                     let x = st.pop1()?;
@@ -499,6 +518,21 @@ mod ml {
                     }
                 }
                 Clear => st.stack.clear(),
+                Source => {
+                    let x = st.pop1_source()?;
+                    st.run(&x)?;
+                }
+                LoadFile => {
+                    let s = st.pop1_sym()?;
+                    let content =
+                        std::fs::read_to_string(&*s).map_err(|e| {
+                            Error::new_string(format!(
+                                "cannot load file {:?}: {}",
+                                s, e
+                            ))
+                        })?;
+                    st.push_val(Value::Source(content.into()))
+                }
             }
             Ok(())
         }
@@ -549,7 +583,7 @@ mod ml {
                     let ca = CodeArray::new(vec![Instr::Core(*ic)]);
                     scope0.0.insert(name, Value::CodeArray(ca));
                 }
-                for b in BUILTINS {
+                for b in logic_builtins::BUILTINS {
                     let name: Rc<str> = b.name().into();
                     let ca = CodeArray::new(vec![Instr::Builtin(*b)]);
                     scope0.0.insert(name, Value::CodeArray(ca));
@@ -719,7 +753,15 @@ mod ml {
             CodeArray
         );
         pop1_of!(pop1_expr, "expr", Value::Expr(i), i, k::Expr);
+        pop1_of!(pop1_thm, "thm", Value::Thm(i), i, k::Thm);
         pop1_of!(pop1_sym, "sym", Value::Sym(i), i, Rc<str>);
+        pop1_of!(pop1_source, "source", Value::Source(i), i, Rc<str>);
+
+        /// Push a value onto the value stack.
+        #[inline]
+        pub fn push_val(&mut self, v: Value) {
+            self.stack.push(v);
+        }
 
         /// Parse and execute the given code.
         pub fn run(&mut self, s: &str) -> Result<()> {
@@ -751,207 +793,213 @@ mod ml {
             Ok(())
         }
     }
+}
 
-    /// Builtin functions.
-    const BUILTINS: &'static [&'static dyn InstrBuiltin] = &[
-        // TODO: theorem combinators, "load", "prelude_hol" (which pushes a string)
+/// Primitives of the meta-language related to theorem proving.
+mod logic_builtins {
+    use super::*;
 
+    // TODO: defthm decl defconst findthm
+    // TODO: defty
+
+    #[allow(non_camel_case_types)]
+    #[derive(Debug, Clone)]
+    enum Rule {
+        DEFCONST,
+        DEFTHM,
+        DECL,
+        FINDCONST,
+        FINDTHM,
+        MP,
+        AXIOM,
+        ASSUME,
+        REFL,
+        SYM,
+        TRANS,
+        CONGR,
+        CONGR_TY,
+        CUT,
+        BOOL_EQ,
+        BOOL_EQ_INTRO,
+        BETA_CONV,
+        HOL_PRELUDE,
+        PLEDGE_NO_MORE_AXIOMS,
+    }
+    // TODO: instantiate
+    // TODO: abs (with DB indices?)
+
+    /// Builtin functions for manipulating expressions and theorems.
+    pub(super) const BUILTINS: &'static [&'static dyn InstrBuiltin] = &[
+        &Rule::DEFCONST,
+        &Rule::DEFTHM,
+        &Rule::DECL,
+        &Rule::FINDCONST,
+        &Rule::FINDTHM,
+        &Rule::MP,
+        &Rule::AXIOM,
+        &Rule::ASSUME,
+        &Rule::REFL,
+        &Rule::SYM,
+        &Rule::TRANS,
+        &Rule::CONGR,
+        &Rule::CONGR_TY,
+        &Rule::CUT,
+        &Rule::BOOL_EQ,
+        &Rule::BOOL_EQ_INTRO,
+        &Rule::BETA_CONV,
+        &Rule::HOL_PRELUDE,
+        &Rule::PLEDGE_NO_MORE_AXIOMS,
     ];
 
-    /* TODO
-
-    /// Parse a theorem, from combinators.
-    fn parse_thm_(&mut self) -> Result<k::Thm> {
-        use Tok::*;
-
-        match self.peek_() {
-            SYM(s) => {
-                if let Some(th) = self.ctx.find_lemma(s) {
-                    let th = th.clone();
-                    self.next_();
-                    Ok(th)
-                } else {
-                    Err(perror!(self, "unknown theorem '{}'", s))
-                }
-            }
-            LPAREN => {
-                self.next_();
-                let s = self.parse_sym_()?;
-                let bool = self.ctx.mk_bool();
-                let r = match s {
-                    "axiom" => {
-                        let e = self.parse_expr_bp_(0, Some(bool))?;
-                        let th = self.ctx.thm_axiom(vec![], e)?;
-                        th
-                    }
-                    "assume" => {
-                        let e = self.parse_expr_bp_(0, Some(bool))?;
-                        let th = self.ctx.thm_assume(e)?;
-                        th
-                    }
-                    "refl" => {
-                        let e = self.parse_expr_bp_(0, None)?;
-                        let th = self.ctx.thm_refl(e);
-                        th
-                    }
-                    "sym" => {
-                        let th1 = self.parse_thm_()?;
-                        let th = crate::algo::thm_sym(self.ctx, th1)?;
-                        th
-                    }
-                    "mp" => {
-                        let th1 = self.parse_thm_()?;
-                        let th2 = self.parse_thm_()?;
-                        let th = self.ctx.thm_mp(th1, th2)?;
-                        th
-                    }
-                    "trans" => {
-                        let th1 = self.parse_thm_()?;
-                        let th2 = self.parse_thm_()?;
-                        let th = self.ctx.thm_trans(th1, th2)?;
-                        th
-                    }
-                    "congr" => {
-                        let th1 = self.parse_thm_()?;
-                        let th2 = self.parse_thm_()?;
-                        let th = self.ctx.thm_congr(th1, th2)?;
-                        th
-                    }
-                    "congr_ty" => {
-                        let th1 = self.parse_thm_()?;
-                        let ty_ty = self.ctx.mk_ty();
-                        let ty = self.parse_expr_bp_(0, Some(ty_ty))?;
-                        let th = self.ctx.thm_congr_ty(th1, &ty)?;
-                        th
-                    }
-                    "cut" => {
-                        let th1 = self.parse_thm_()?;
-                        let th2 = self.parse_thm_()?;
-                        let th = self.ctx.thm_cut(th1, th2)?;
-                        th
-                    }
-                    "bool_eq" => {
-                        let th1 = self.parse_thm_()?;
-                        let th2 = self.parse_thm_()?;
-                        let th = self.ctx.thm_bool_eq(th1, th2)?;
-                        th
-                    }
-                    "bool_eq_intro" => {
-                        let th1 = self.parse_thm_()?;
-                        let th2 = self.parse_thm_()?;
-                        let th = self.ctx.thm_bool_eq_intro(th1, th2)?;
-                        th
-                    }
-                    "beta_conv" => {
-                        let e = self.parse_expr_bp_(0, Some(bool))?;
-                        let th = self.ctx.thm_beta_conv(&e)?;
-                        th
-                    }
-                    // TODO: instantiate
-                    // TODO: abs
-                    _ => {
-                        return Err(perror!(
-                            self,
-                            "unknown theorem combinator {:?}",
-                            s
-                        ))
-                    }
-                };
-                self.eat_(RPAREN)?;
-                Ok(r)
-            }
-            t => {
-                Err(perror!(self, "expected theorem, unexpected token {:?}", t))
+    impl InstrBuiltin for Rule {
+        fn name(&self) -> &'static str {
+            use Rule::*;
+            match self {
+                DEFCONST => "defconst",
+                DEFTHM => "defthm",
+                DECL => "decl",
+                FINDCONST => "findconst",
+                FINDTHM => "findthm",
+                MP => "mp",
+                AXIOM => "axiom",
+                ASSUME => "assume",
+                REFL => "refl",
+                SYM => "sym",
+                TRANS => "trans",
+                CONGR => "congr",
+                CONGR_TY => "congr_ty",
+                CUT => "cut",
+                BOOL_EQ => "bool_eq",
+                BOOL_EQ_INTRO => "bool_eq_intro",
+                BETA_CONV => "beta_conv",
+                HOL_PRELUDE => "hol_prelude",
+                PLEDGE_NO_MORE_AXIOMS => "pledge_no_more_axioms",
             }
         }
-    }
 
-    /// Parse a toplevel statement, `.` terminated.
-    fn parse_statement_(&mut self) -> Result<ParseOutput> {
-        use Tok::*;
-
-        let r = match self.peek_() {
-            SYM("def") => {
-                self.next_();
-                let id = self.parse_sym_()?;
-                self.eat_(SYM("="))?;
-                let rhs = self.parse_expr_bp_(0, None)?;
-                let v = self.ctx.mk_var_str(id, rhs.ty().clone());
-                let v_eq_rhs = self.ctx.mk_eq_app(v, rhs)?;
-                let d = self.ctx.thm_new_basic_definition(v_eq_rhs)?;
-                self.ctx.define_lemma(&format!("def_{}", id), d.0.clone());
-                ParseOutput::Def((d.1, d.0))
-            }
-            SYM("decl") => {
-                self.next_();
-                let id = self.parse_sym_()?;
-                self.eat_(COLON)?;
-                let ty_ty = self.ctx.mk_ty();
-                let ty = self.parse_expr_bp_(0, Some(ty_ty))?;
-                let c = self.ctx.mk_new_const(k::Symbol::from_str(id), ty)?;
-                ParseOutput::Expr(c)
-            }
-            SYM("pledge_no_new_axiom") => {
-                self.next_();
-                self.ctx.pledge_no_new_axiom();
-                ParseOutput::SideEffect("pledged no more axioms")
-            }
-            SYM("defthm") => {
-                self.next_();
-                let name = self.parse_sym_()?;
-                self.eat_(SYM("="))?;
-                let th = self.parse_thm_()?;
-                self.ctx.define_lemma(name, th.clone());
-                ParseOutput::Thm(th)
-            }
-            SYM("defty") => todo!("define type"), // TODO
-            SYM("thm") => {
-                self.next_();
-                let th = self.parse_thm_()?;
-                ParseOutput::Thm(th)
-            }
-            SYM("include") => {
-                self.next_();
-                if let QUOTED_STR(s) = self.next_() {
-                    let v = self.include_(s)?;
-                    ParseOutput::Include(v)
-                } else {
-                    return Err(perror!(self, "expected a quoted string"));
+        // th1 th2 -- mp(th1,th2)
+        fn run(&self, st: &mut State) -> Result<()> {
+            use Rule::*;
+            match self {
+                DEFCONST => {
+                    let rhs = st.pop1_expr()?;
+                    let nthm = &st.pop1_sym()?;
+                    let nc = st.pop1_sym()?;
+                    let def =
+                        crate::algo::thm_new_poly_definition(st.ctx, &nc, rhs)?;
+                    st.ctx.define_lemma(nthm, def.thm);
                 }
-            }
-            SYM("load_hol") => {
-                self.next_();
-                let v = self.load_str_(PRELUDE_HOL)?;
-                ParseOutput::Include(v)
-            }
-            // TODO: show <sym>: print description of that (const or thm)
-            // TODO: prove <thm>: print the theorem (from tactics)
-            _ => ParseOutput::Expr(self.parse_expr_bp_(0, None)?),
-        };
-        self.eat_(DOT)?;
-        Ok(r)
+                DEFTHM => {
+                    let th = st.pop1_thm()?;
+                    let name = st.pop1_sym()?;
+                    st.ctx.define_lemma(&name, th);
+                }
+                DECL => {
+                    let ty = st.pop1_expr()?;
+                    let name = st.pop1_sym()?;
+                    let _e = st
+                        .ctx
+                        .mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
+                }
+                FINDCONST => {
+                    let name = st.pop1_sym()?;
+                    let e = st
+                        .ctx
+                        .find_const(&name)
+                        .ok_or_else(|| Error::new("unknown constant"))?
+                        .clone();
+                    st.push_val(Value::Expr(e))
+                }
+                FINDTHM => {
+                    let name = st.pop1_sym()?;
+                    let th = st
+                        .ctx
+                        .find_lemma(&name)
+                        .ok_or_else(|| Error::new("unknown lemma"))?
+                        .clone();
+                    st.push_val(Value::Thm(th))
+                }
+                MP => {
+                    let th2 = st.pop1_thm()?;
+                    let th1 = st.pop1_thm()?;
+                    let th = st.ctx.thm_mp(th1, th2)?;
+                    st.push_val(Value::Thm(th));
+                }
+                AXIOM => {
+                    let e = st.pop1_expr()?;
+                    let th = st.ctx.thm_axiom(vec![], e)?;
+                    st.push_val(Value::Thm(th))
+                }
+                ASSUME => {
+                    let e = st.pop1_expr()?;
+                    let th = st.ctx.thm_assume(e)?;
+                    st.push_val(Value::Thm(th))
+                }
+                REFL => {
+                    let e = st.pop1_expr()?;
+                    let th = st.ctx.thm_refl(e);
+                    st.push_val(Value::Thm(th))
+                }
+                SYM => {
+                    let th1 = st.pop1_thm()?;
+                    let th = crate::algo::thm_sym(st.ctx, th1)?;
+                    st.push_val(Value::Thm(th))
+                }
+                TRANS => {
+                    let th2 = st.pop1_thm()?;
+                    let th1 = st.pop1_thm()?;
+                    let th = st.ctx.thm_trans(th1, th2)?;
+                    st.push_val(Value::Thm(th))
+                }
+                CONGR => {
+                    let th2 = st.pop1_thm()?;
+                    let th1 = st.pop1_thm()?;
+                    let th = st.ctx.thm_congr(th1, th2)?;
+                    st.push_val(Value::Thm(th))
+                }
+                CONGR_TY => {
+                    let ty = st.pop1_expr()?;
+                    let th1 = st.pop1_thm()?;
+                    let th = st.ctx.thm_congr_ty(th1, &ty)?;
+                    st.push_val(Value::Thm(th))
+                }
+                CUT => {
+                    let th2 = st.pop1_thm()?;
+                    let th1 = st.pop1_thm()?;
+                    let th = st.ctx.thm_cut(th1, th2)?;
+                    st.push_val(Value::Thm(th))
+                }
+                BOOL_EQ => {
+                    let th2 = st.pop1_thm()?;
+                    let th1 = st.pop1_thm()?;
+                    let th = st.ctx.thm_bool_eq(th1, th2)?;
+                    st.push_val(Value::Thm(th))
+                }
+                BOOL_EQ_INTRO => {
+                    let th2 = st.pop1_thm()?;
+                    let th1 = st.pop1_thm()?;
+                    let th = st.ctx.thm_bool_eq_intro(th1, th2)?;
+                    st.push_val(Value::Thm(th))
+                }
+                BETA_CONV => {
+                    let e = st.pop1_expr()?;
+                    let th = st.ctx.thm_beta_conv(&e)?;
+                    st.push_val(Value::Thm(th))
+                }
+                HOL_PRELUDE => {
+                    st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into()))
+                }
+                PLEDGE_NO_MORE_AXIOMS => {
+                    st.ctx.pledge_no_new_axiom();
+                }
+            };
+            Ok(())
+        }
     }
-
-    /// Read string, return how many statements were included.
-    fn load_str_(&mut self, s: &str) -> Result<Vec<ParseOutput>> {
-        // read file to include
-        let mut sub = Parser::new(self.ctx, s);
-        sub.parse_statements()
-    }
-
-    /// Include file, return how many statements were included.
-    fn include_(&mut self, s: &str) -> Result<Vec<ParseOutput>> {
-        // read file to include
-        let content = std::fs::read_to_string(s).map_err(|e| {
-            perror!(self, "error when including file {:?}: {}", s, e)
-        })?;
-        self.load_str_(&content)
-    }
-     */
 }
 
 /// Standard prelude for HOL logic
-pub const PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
+pub const SRC_PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
 
 #[cfg(test)]
 mod test {

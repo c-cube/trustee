@@ -1,34 +1,38 @@
-def true = let f = (\x: bool. x=x) in f=f.
+/true /def_true `let f = (\x: bool. x=x) in f=f` defconst
 
 # `|- true`
-defthm true_is_true = (bool_eq (refl (\x: bool. x=x)) (sym def_true)).
+/true_is_true
+  `\x: bool. x=x` refl
+  /def_true findthm
+  bool_eq
+defthm
 
-def forall = \(a:type) (f:a -> bool). f = \x:a. true.
+#def forall = \(a:type) (f:a -> bool). f = \x:a. true.
 
 # TODO: declare as binder
 # TODO: rules to intro/elim forall
 
 # TODO: redefine
-def false = (\x: bool. x=x) = (\x: bool. x=true).
+#def false = (\x: bool. x=x) = (\x: bool. x=true).
 
 #defthm 
 
 
 # TODO: define these instead
-decl not : bool -> bool.
-decl /\ : bool -> bool -> bool.
-decl \/ : bool -> bool -> bool.
+#decl not : bool -> bool.
+#decl /\ : bool -> bool -> bool.
+#decl \/ : bool -> bool -> bool.
 # TODO: declare /\ and /\ as infix
 
-def exists = \(a:type)(f: a->bool). not (forall a (\y:a. not (f y))).
+#def exists = \(a:type)(f: a->bool). not (forall a (\y:a. not (f y))).
 
 # TODO
 # defthm ax_andintro = axiom (
 
 # TODO: define Peano axioms
-decl nat: type.
-decl Zero: nat.
-decl Bit0: nat -> nat.
-decl Bit1: nat -> nat.
+#decl nat: type.
+#decl Zero: nat.
+#decl Bit0: nat -> nat.
+#decl Bit1: nat -> nat.
 #defthm ax_pean
 

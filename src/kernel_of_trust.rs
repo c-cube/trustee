@@ -92,9 +92,9 @@ impl BuiltinSymbol {
         match self {
             BS::Eq => "=",
             BS::Imply => "==>",
-            BS::Select => "select",
+            BS::Select => "select", // TODO: remove
             BS::Bool => "bool",
-            BS::Ind => "ind",
+            BS::Ind => "ind", // TODO: remove
         }
     }
 }
@@ -110,6 +110,11 @@ impl Symbol {
     /// New symbol from this string.
     pub fn from_str(s: &str) -> Self {
         let a = Ref::from(s);
+        Symbol::Named(a)
+    }
+
+    pub fn from_rc_str(s: &std::rc::Rc<str>) -> Self {
+        let a: Ref<str> = Ref::from(s.as_ref());
         Symbol::Named(a)
     }
 

@@ -1,7 +1,7 @@
 set expandtab
 
-syn keyword     trusteeKW        def defthm decl thm let in
-syn keyword     trusteeKW        load_hol pledge_no_new_axiom include
+syn keyword     trusteeKW        def defconst defthm decl findthm findconst
+syn keyword     trusteeKW        hol_prelude pledge_no_new_axiom source
 syn match       trusteeComment "#.*" contains=trusteeTodo
 
 "syn match       trusteeDelim      "("
@@ -9,6 +9,12 @@ syn match       trusteeComment "#.*" contains=trusteeTodo
 syn match       trusteeKW      "\."
 syn match       trusteeKW      ":"
 
+syn match       trusteeSym      +\/[a-zA-Z0-9_]\++
+
+
+" TODO: handle this only within ``
+syn match       trusteeExpr      "let"
+syn match       trusteeExpr      "in"
 syn match       trusteeExpr      "pi"
 syn match       trusteeExpr      "forall"
 syn match       trusteeExpr      "\~"
@@ -32,7 +38,8 @@ if version >= 508 || !exists("did_trustee_syntax_inits")
   HiLink trusteeComment     Comment
   HiLink trusteeKW          Keyword
   HiLink trusteeExpr        Constant
-  HiLink trusteeThm         Constant
+  HiLink trusteeThm         Keyword
+  HiLink trusteeSym         String
   HiLink trusteeTodo        Todo
   HiLink trusteeDelim       Delimiter
   delcommand HiLink
