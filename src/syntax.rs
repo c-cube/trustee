@@ -163,7 +163,7 @@ impl<'a> Lexer<'a> {
             let mut j = self.i + 1;
             while j < bytes.len() {
                 let c2 = bytes[j];
-                if is_ascii_symbol(c2) {
+                if c2.is_ascii_alphanumeric() || is_ascii_symbol(c2) {
                     j += 1
                 } else {
                     break;
@@ -376,9 +376,15 @@ impl<'a> Parser<'a> {
             "->" => Fixity::Infix((81, 80)),
             "with" => Fixity::Binder((1, 2)),
             "\\" => Fixity::Binder((20, 21)),
-            "select" => Fixity::Binder((22, 23)),
             "pi" => Fixity::Binder((24, 25)),
-            _ => Fixity::Nullary,
+            _ => {
+                // lookup in context
+                if let Some((_, f)) = self.ctx.find_const(s) {
+                    f
+                } else {
+                    Fixity::Nullary
+                }
+            }
         }
     }
 
@@ -539,14 +545,13 @@ impl<'a> Parser<'a> {
         Ok(match s {
             "=" => self.ctx.mk_eq(),
             "==>" => self.ctx.mk_imply(),
-            "select" => self.ctx.mk_select(),
-            "ind" => self.ctx.mk_ind(),
             "bool" => self.ctx.mk_bool(),
             "type" => self.ctx.mk_ty(),
             _ => self
                 .ctx
                 .find_const(s)
                 .ok_or_else(|| perror!(self, "unknown constant {:?}", s))?
+                .0
                 .clone(),
         })
     }
@@ -594,19 +599,22 @@ impl<'a> Parser<'a> {
             }
             "\\" => self.ctx.mk_lambda_l(vars, body)?,
             "pi" => self.ctx.mk_pi_l(vars, body)?,
-            "select" => {
-                // turn `select x. p` into `select (λx. p)`
-                let mut t = body;
-                for v in vars {
-                    let ty_v = v.ty();
-                    let sel = self.ctx.mk_select();
-                    let sel = self.ctx.mk_app(sel, ty_v.clone())?;
-                    let lam = self.ctx.mk_lambda(v.clone(), t)?;
-                    t = self.ctx.mk_app(sel, lam)?;
+            _ => {
+                if let Some((c, Fixity::Binder(..))) = self.ctx.find_const(b) {
+                    // turn `b x:ty. p` into `b ty (λx:ty. p)`
+                    let c = c.clone();
+                    let mut t = body;
+                    for v in vars {
+                        let ty = v.ty().clone();
+                        let c = self.ctx.mk_app(c.clone(), ty)?;
+                        let lam = self.ctx.mk_lambda(v.clone(), t)?;
+                        t = self.ctx.mk_app(c, lam)?;
+                    }
+                    t
+                } else {
+                    return Err(perror!(self, "unknown binder {:?}", b));
                 }
-                t
             }
-            _ => return Err(perror!(self, "TODO: mk binder {}", b)),
         })
     }
 
@@ -656,7 +664,6 @@ impl<'a> Parser<'a> {
                     body?
                 }
                 SYM(s) => {
-                    // TODO: get a constant for that, fail if undefined
                     match self.fixity_(s) {
                         Fixity::Prefix((_, r_bp)) => {
                             let arg = self.parse_expr_bp_(r_bp, None)?;
@@ -708,7 +715,7 @@ impl<'a> Parser<'a> {
                     let mut t = self.ctx.find_const("Zero")
                         .ok_or_else(||
                         perror!(self, "cannot find constant `Zero` to encode number `{}`", i)
-                    )?.clone();
+                    )?.0.clone();
                     while i > 0 {
                         let b = i % 2 == 1;
                         let f = if b { "Bit1" } else { "Bit0" };
@@ -716,7 +723,7 @@ impl<'a> Parser<'a> {
                             self.ctx.find_const(f)
                                 .ok_or_else(||
                                     perror!(self, "cannot find constant `{}` to encode number `{}`", f, i)
-                                )?.clone();
+                                )?.0.clone();
                         t = self.ctx.mk_app(f, t).map_err(|e| {
                             perror!(
                                 self,
@@ -824,9 +831,6 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
-    // TODO: parse/execute statements:
-    // - `tydef tau := thm, abs, repr; …`
-
     /// Parse an expression, up to EOF.
     pub fn parse_expr(&mut self) -> Result<k::Expr> {
         let e = self.parse_expr_bp_(0, None)?;
@@ -925,12 +929,27 @@ mod test {
         assert_eq!(vec![Tok::EOF], toks);
     }
 
+    fn mkctx() -> Result<k::Ctx> {
+        let mut ctx = k::Ctx::new();
+        {
+            // declare a binder
+            let ty = parse_expr(&mut ctx, "pi a. (a -> bool) -> a")?;
+            ctx.mk_new_const(k::Symbol::from_str("myb"), ty)?;
+            ctx.set_fixity("myb", Fixity::Binder((20, 21)));
+        }
+        Ok(ctx)
+    }
+
     #[test]
     fn test_parser_expr() -> Result<()> {
         let pairs = [
             (
-                "with a:bool. select x:bool. x=a",
-                "(select bool (λx0 : bool. (= bool x0 a)))",
+                "with a:bool. myb x:bool. x=a",
+                "(myb bool (λx0 : bool. (= bool x0 a)))",
+            ),
+            (
+                r#"with a:bool. $myb bool (\x:bool. x=a)"#,
+                "(myb bool (λx0 : bool. (= bool x0 a)))",
             ),
             (r#"(\x:bool. x= x) "#, "(λx0 : bool. (= bool x0 x0))"),
             (
@@ -952,7 +971,7 @@ mod test {
         ];
 
         for (x, y) in &pairs {
-            let mut ctx = k::Ctx::new();
+            let mut ctx = mkctx()?;
             let r = parse_expr(&mut ctx, x).map_err(|e| {
                 e.set_source(Error::new_string(format!("parsing {:?}", x)))
             })?;
@@ -970,8 +989,8 @@ mod test {
             &'static dyn Fn(&mut dyn CtxI) -> Result<Vec<k::Expr>>,
         )> = vec![
             (
-                "with a:?. select x:?. x=a",
-                "(select bool (λx0 : bool. (= bool x0 a)))",
+                "with a:?. myb x:?. x=a",
+                "(myb bool (λx0 : bool. (= bool x0 a)))",
                 &|ctx: &mut dyn CtxI| Ok(vec![ctx.mk_bool(), ctx.mk_bool()]),
             ),
             (
@@ -999,7 +1018,7 @@ mod test {
         ];
 
         for (x, y, f) in &cases {
-            let mut ctx = k::Ctx::new();
+            let mut ctx = mkctx()?;
             let args: Vec<_> = f(&mut ctx)?;
             let qargs: Vec<InterpolationArg> =
                 args.iter().map(|x| x.into()).collect();

@@ -546,7 +546,13 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let oc = if n.len_pre() == 0 && n.base() == "bool" {
                 Rc::new(TyOpConst(vm.ctx.mk_bool()))
             } else if n.len_pre() == 0 && n.base() == "ind" {
-                Rc::new(TyOpConst(vm.ctx.mk_ind()))
+                let e = vm
+                    .ctx
+                    .find_const("ind")
+                    .ok_or_else(|| Error::new("cannot find ind"))?
+                    .0
+                    .clone();
+                Rc::new(TyOpConst(e))
             } else if n.len_pre() == 0 && n.base() == "->" {
                 Rc::new(TyOpArrow)
             } else {
@@ -676,7 +682,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         struct ConstSelect;
         impl OConst for ConstSelect {
             fn expr(&self, em: &mut dyn k::CtxI) -> Expr {
-                em.mk_select()
+                em.find_const("select").expect("cannot find select").0.clone()
             }
             fn apply(&self, em: &mut dyn k::CtxI, ty: Expr) -> Result<Expr> {
                 let a = ty
@@ -688,7 +694,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                         ))
                     })?
                     .1;
-                let e = em.mk_select();
+                let e = em
+                    .find_const("select")
+                    .ok_or_else(|| Error::new("cannot find select"))?
+                    .0
+                    .clone();
                 em.mk_app(e, a.clone())
             }
         }

@@ -10,7 +10,7 @@ use {
         kernel_of_trust::{self as k, CtxI},
         syntax, Error, Result,
     },
-    std::{cell::RefCell, fmt, rc::Rc},
+    std::{fmt, rc::Rc},
 };
 
 /// The state of the meta-language interpreter.
@@ -22,11 +22,20 @@ pub struct State<'a> {
     /// Nested scopes to handle definitions in local dictionaries.
     ///
     /// The toplevel dictionary (at index 0) is the system dictionary.
-    scopes: RefCell<Vec<Dict>>,
+    scopes: Vec<Dict>,
+    /// Used for `loop`/`exit`.
+    ///
+    /// Each pair `(offset, continue)` is interpreted as follows:
+    /// - `continue` is set to `false` to interrupt the loop.
+    /// - `offset` is the index in `ctrl_stack` to backtrack to.
+    loop_stack: Vec<(u32, bool)>,
     /// Control stack, for function call.
     ctrl_stack: Vec<(CodeArray, usize)>,
 }
 
+/// An array of instructions.
+///
+/// Syntax: `{a b c d}`
 #[derive(Clone)]
 pub struct CodeArray(Rc<Vec<Instr>>);
 
@@ -36,6 +45,10 @@ impl fmt::Debug for CodeArray {
     }
 }
 
+/// A dictionary from symbols to values.
+///
+/// Syntax: TODO
+/// Syntax: `begin … end` to create a dictionary and use it in a temporary scope.
 #[derive(Clone, Debug)]
 pub struct Dict(FnvHashMap<Rc<str>, Value>);
 
@@ -100,7 +113,7 @@ enum InstrCore {
     Loop,
     Exit,
     Dup,
-    Exch,
+    Swap,
     Drop,
     Rot,
     Begin,
@@ -178,7 +191,22 @@ pub(crate) mod parser {
     #[inline]
     fn is_id_char(c: u8) -> bool {
         match c {
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' | b':' => true,
+            b'a'..=b'z'
+            | b'A'..=b'Z'
+            | b'_'
+            | b':'
+            | b'='
+            | b'+'
+            | b'-'
+            | b'@'
+            | b'!'
+            | b'$'
+            | b'%'
+            | b'^'
+            | b'&'
+            | b'*'
+            | b'|'
+            | b';' => true,
             _ => false,
         }
     }
@@ -246,6 +274,19 @@ pub(crate) mod parser {
                     self.i = j + 1;
                     Tok::QuotedExpr(src_expr)
                 }
+                c if c.is_ascii_digit() || c == b'-' => {
+                    let mut j = self.i + 1;
+                    while j < self.bytes.len() && self.bytes[j].is_ascii_digit()
+                    {
+                        j += 1;
+                    }
+                    let tok = std::str::from_utf8(&self.bytes[self.i..j])
+                        .expect("invalid utf8 slice");
+                    let n = str::parse(tok).expect("cannot parse int");
+                    self.col += j - self.i;
+                    self.i = j;
+                    Tok::Int(n)
+                }
                 b'/' => {
                     let mut j = self.i + 1;
                     while j < self.bytes.len() && {
@@ -261,6 +302,7 @@ pub(crate) mod parser {
                     Tok::QuotedId(tok)
                 }
                 c if is_id_char(c) => {
+                    assert!(c != b'-'); // number, dealt with above
                     let mut j = self.i + 1;
                     while j < self.bytes.len() && {
                         let c = self.bytes[j];
@@ -273,19 +315,6 @@ pub(crate) mod parser {
                     self.col += j - self.i;
                     self.i = j;
                     Tok::Id(tok)
-                }
-                c if c.is_ascii_digit() || c == b'-' => {
-                    let mut j = self.i + 1;
-                    while j < self.bytes.len() && self.bytes[j].is_ascii_digit()
-                    {
-                        j += 1;
-                    }
-                    let tok = std::str::from_utf8(&self.bytes[self.i..j])
-                        .expect("invalid utf8 slice");
-                    let n = str::parse(tok).expect("cannot parse int");
-                    self.col += j - self.i;
-                    self.i = j;
-                    Tok::Int(n)
                 }
                 c => Tok::Invalid(std::char::from_u32(c as u32).unwrap()),
             };
@@ -329,7 +358,7 @@ mod ml {
     const INSTR_CORE: &'static [InstrCore] = {
         use InstrCore::*;
         &[
-            Def, For, If, IfElse, Loop, Exit, Dup, Exch, Drop, Rot, Begin, End,
+            Def, For, If, IfElse, Loop, Exit, Dup, Swap, Drop, Rot, Begin, End,
             Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod, PrintPop,
             PrintStack, Clear, Source, LoadFile,
         ]
@@ -343,11 +372,11 @@ mod ml {
                 Def => "def",
                 For => "for",
                 If => "if",
-                IfElse => "if",
+                IfElse => "ifelse",
                 Loop => "loop",
                 Exit => "exit",
                 Dup => "dup",
-                Exch => "exch",
+                Swap => "swap",
                 Drop => "drop",
                 Rot => "rot",
                 Begin => "begin",
@@ -375,14 +404,9 @@ mod ml {
 
             match self {
                 Def => {
-                    let c = st.pop1_codearray()?;
+                    let c = st.pop1()?;
                     let sym = st.pop1_sym()?;
-                    let mut scopes = st.scopes.borrow_mut();
-                    scopes
-                        .last_mut()
-                        .unwrap()
-                        .0
-                        .insert(sym.clone(), Value::CodeArray(c));
+                    st.scopes.last_mut().unwrap().0.insert(sym.clone(), c);
                 }
                 For => {
                     let c = st.pop1_codearray()?;
@@ -390,14 +414,22 @@ mod ml {
                     let step = st.pop1_int()?;
                     let start = st.pop1_int()?;
 
+                    let offset = st.ctrl_stack.len();
+                    st.loop_stack.push((offset as u32, true)); // in case of `exit`
+
                     let mut i = start;
                     while if step > 0 { i <= stop } else { i >= stop } {
+                        if !st.loop_stack.last().unwrap().1 {
+                            break; // `exit` was called.
+                        }
+
                         st.stack.push(Value::Int(i));
                         //println!("for: i={}, ca: {:?}", i, &c);
                         st.exec_codearray_(&c);
                         st.exec_loop_()?;
                         i += step;
                     }
+                    st.loop_stack.pop().expect("loop_stack mismatch in `for`");
                 }
                 If => {
                     let c = st.pop1_codearray()?;
@@ -418,8 +450,34 @@ mod ml {
                     }
                     st.exec_loop_()?;
                 }
-                Loop => todo!("loop"), // TODO
-                Exit => todo!("exit"), // TODO
+                Loop => {
+                    let c = st.pop1_codearray()?;
+                    let offset = st.ctrl_stack.len();
+                    st.loop_stack.push((offset as u32, true));
+
+                    loop {
+                        if !st.loop_stack.last().unwrap().1 {
+                            break; // `exit` was called.
+                        }
+
+                        st.exec_codearray_(&c);
+                        st.exec_loop_()?;
+                    }
+
+                    st.loop_stack.pop().expect("loop_stack mismatch in `loop`");
+                }
+                Exit => match st.loop_stack.last_mut() {
+                    None => {
+                        return Err(Error::new("`exit` called outside a loop"))
+                    }
+                    Some((offset, v)) => {
+                        // signal exit to the loop
+                        *v = false;
+                        // now interrupt current computation
+                        st.cur_i = None;
+                        st.ctrl_stack.truncate(*offset as usize);
+                    }
+                },
                 Dup => match st.stack.last() {
                     Some(v) => {
                         let v = v.clone();
@@ -427,8 +485,8 @@ mod ml {
                     }
                     None => return Err(Error::new("stack underflow")),
                 },
-                Rot => todo!("rot"), // TODO
-                Exch => {
+                Rot => return Err(Error::new("todo: rot")), // TODO
+                Swap => {
                     let y = st.pop1()?;
                     let x = st.pop1()?;
                     st.stack.push(y);
@@ -439,17 +497,15 @@ mod ml {
                 }
                 Begin => {
                     let dict = Dict::new();
-                    let mut scopes = st.scopes.borrow_mut();
-                    scopes.push(dict)
+                    st.scopes.push(dict)
                 }
                 End => {
-                    let mut scopes = st.scopes.borrow_mut();
-                    if scopes.len() < 2 {
+                    if st.scopes.len() < 2 {
                         return Err(Error::new(
                             "`end` does not match a `begin`",
                         ));
                     }
-                    scopes.pop();
+                    st.scopes.pop();
                 }
                 Eq => {
                     let y = st.pop1()?;
@@ -593,7 +649,8 @@ mod ml {
                 ctx,
                 cur_i: None,
                 stack: vec![],
-                scopes: RefCell::new(vec![scope0]),
+                scopes: vec![scope0],
+                loop_stack: vec![],
                 ctrl_stack: vec![],
             }
         }
@@ -654,8 +711,7 @@ mod ml {
                 Tok::Id(s) => {
                     // Find definition of symbol `s` in `self.scopes[0]`,
                     // otherwise delay (for user scopes)
-                    let scopes = self.scopes.borrow();
-                    let i = match scopes[0].0.get(&*s) {
+                    let i = match self.scopes[0].0.get(&*s) {
                         None => Instr::CallDelayed(s.into()),
                         Some(Value::CodeArray(ca)) if ca.0.len() == 1 => {
                             ca.0[0].clone()
@@ -682,17 +738,24 @@ mod ml {
                 Instr::CallDelayed(s) => {
                     // Find definition of symbol `s` in `self.scopes`,
                     // starting from the most recent scope.
-                    let scopes = self.scopes.borrow();
-                    match scopes.iter().rev().find_map(|d| d.0.get(&*s)) {
-                        None => return Err(Error::new("symbol not found")),
-                        Some(Value::CodeArray(ca)) => {
+                    if let Some(v) =
+                        self.scopes.iter().rev().find_map(|d| d.0.get(&*s))
+                    {
+                        if let Value::CodeArray(ca) = v {
                             self.cur_i = Some(ca.0[0].clone());
                             if ca.0.len() > 1 {
                                 self.ctrl_stack.push((ca.clone(), 1));
                             }
+                        } else {
+                            self.stack.push(v.clone())
                         }
-                        Some(v) => self.stack.push(v.clone()),
-                    };
+                    } else if let Some(c) = self.ctx.find_const(&*s) {
+                        self.stack.push(Value::Expr(c.0.clone()))
+                    } else if let Some(th) = self.ctx.find_lemma(&*s) {
+                        self.stack.push(Value::Thm(th.clone()))
+                    } else {
+                        return Err(Error::new("symbol not found"));
+                    }
                 }
                 Instr::Core(c) => c.run(self)?,
             }
@@ -799,81 +862,88 @@ mod ml {
 mod logic_builtins {
     use super::*;
 
-    // TODO: defthm decl defconst findthm
     // TODO: defty
 
-    #[allow(non_camel_case_types)]
     #[derive(Debug, Clone)]
     enum Rule {
-        DEFCONST,
-        DEFTHM,
-        DECL,
-        FINDCONST,
-        FINDTHM,
+        Defconst,
+        Defthm,
+        Decl,
+        SetInfix,
+        SetBinder,
+        Findconst,
+        Findthm,
+        ExprTy,
         MP,
-        AXIOM,
-        ASSUME,
-        REFL,
-        SYM,
-        TRANS,
-        CONGR,
-        CONGR_TY,
-        CUT,
-        BOOL_EQ,
-        BOOL_EQ_INTRO,
-        BETA_CONV,
-        HOL_PRELUDE,
-        PLEDGE_NO_MORE_AXIOMS,
+        Axiom,
+        Assume,
+        Refl,
+        Sym,
+        Trans,
+        Congr,
+        CongrTy,
+        Cut,
+        BoolEq,
+        BoolEqIntro,
+        BetaConv,
+        HolPrelude,
+        PledgeNoMoreAxioms,
     }
     // TODO: instantiate
     // TODO: abs (with DB indices?)
 
     /// Builtin functions for manipulating expressions and theorems.
     pub(super) const BUILTINS: &'static [&'static dyn InstrBuiltin] = &[
-        &Rule::DEFCONST,
-        &Rule::DEFTHM,
-        &Rule::DECL,
-        &Rule::FINDCONST,
-        &Rule::FINDTHM,
+        &Rule::Defconst,
+        &Rule::Defthm,
+        &Rule::Decl,
+        &Rule::SetInfix,
+        &Rule::SetBinder,
+        &Rule::ExprTy,
+        &Rule::Findconst,
+        &Rule::Findthm,
         &Rule::MP,
-        &Rule::AXIOM,
-        &Rule::ASSUME,
-        &Rule::REFL,
-        &Rule::SYM,
-        &Rule::TRANS,
-        &Rule::CONGR,
-        &Rule::CONGR_TY,
-        &Rule::CUT,
-        &Rule::BOOL_EQ,
-        &Rule::BOOL_EQ_INTRO,
-        &Rule::BETA_CONV,
-        &Rule::HOL_PRELUDE,
-        &Rule::PLEDGE_NO_MORE_AXIOMS,
+        &Rule::Axiom,
+        &Rule::Assume,
+        &Rule::Refl,
+        &Rule::Sym,
+        &Rule::Trans,
+        &Rule::Congr,
+        &Rule::CongrTy,
+        &Rule::Cut,
+        &Rule::BoolEq,
+        &Rule::BoolEqIntro,
+        &Rule::BetaConv,
+        &Rule::HolPrelude,
+        &Rule::PledgeNoMoreAxioms,
     ];
 
     impl InstrBuiltin for Rule {
         fn name(&self) -> &'static str {
             use Rule::*;
             match self {
-                DEFCONST => "defconst",
-                DEFTHM => "defthm",
-                DECL => "decl",
-                FINDCONST => "findconst",
-                FINDTHM => "findthm",
+                Defconst => "defconst",
+                Defthm => "defthm",
+                Decl => "decl",
+                SetInfix => "set_infix",
+                SetBinder => "set_binder",
+                ExprTy => "expr_ty",
+                Findconst => "findconst",
+                Findthm => "findthm",
                 MP => "mp",
-                AXIOM => "axiom",
-                ASSUME => "assume",
-                REFL => "refl",
-                SYM => "sym",
-                TRANS => "trans",
-                CONGR => "congr",
-                CONGR_TY => "congr_ty",
-                CUT => "cut",
-                BOOL_EQ => "bool_eq",
-                BOOL_EQ_INTRO => "bool_eq_intro",
-                BETA_CONV => "beta_conv",
-                HOL_PRELUDE => "hol_prelude",
-                PLEDGE_NO_MORE_AXIOMS => "pledge_no_more_axioms",
+                Axiom => "axiom",
+                Assume => "assume",
+                Refl => "refl",
+                Sym => "sym",
+                Trans => "trans",
+                Congr => "congr",
+                CongrTy => "congr_ty",
+                Cut => "cut",
+                BoolEq => "bool_eq",
+                BoolEqIntro => "bool_eq_intro",
+                BetaConv => "beta_conv",
+                HolPrelude => "hol_prelude",
+                PledgeNoMoreAxioms => "pledge_no_more_axioms",
             }
         }
 
@@ -881,7 +951,7 @@ mod logic_builtins {
         fn run(&self, st: &mut State) -> Result<()> {
             use Rule::*;
             match self {
-                DEFCONST => {
+                Defconst => {
                     let rhs = st.pop1_expr()?;
                     let nthm = &st.pop1_sym()?;
                     let nc = st.pop1_sym()?;
@@ -889,33 +959,54 @@ mod logic_builtins {
                         crate::algo::thm_new_poly_definition(st.ctx, &nc, rhs)?;
                     st.ctx.define_lemma(nthm, def.thm);
                 }
-                DEFTHM => {
+                Defthm => {
                     let th = st.pop1_thm()?;
                     let name = st.pop1_sym()?;
                     st.ctx.define_lemma(&name, th);
                 }
-                DECL => {
+                Decl => {
                     let ty = st.pop1_expr()?;
                     let name = st.pop1_sym()?;
                     let _e = st
                         .ctx
                         .mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
                 }
-                FINDCONST => {
+                ExprTy => {
+                    let e = st.pop1_expr()?;
+                    if e.is_kind() {
+                        return Err(Error::new("cannot get type of `kind`"));
+                    }
+                    st.stack.push(Value::Expr(e.ty().clone()))
+                }
+                SetInfix => {
+                    let j = st.pop1_int()?;
+                    let i = st.pop1_int()?;
+                    let c = st.pop1_sym()?;
+                    let f = syntax::Fixity::Infix((i as u16, j as u16));
+                    st.ctx.set_fixity(&*c, f);
+                }
+                SetBinder => {
+                    let i = st.pop1_int()?;
+                    let c = st.pop1_sym()?;
+                    let f = syntax::Fixity::Binder((0, i as u16));
+                    st.ctx.set_fixity(&*c, f);
+                }
+                Findconst => {
                     let name = st.pop1_sym()?;
                     let e = st
                         .ctx
                         .find_const(&name)
                         .ok_or_else(|| Error::new("unknown constant"))?
+                        .0
                         .clone();
                     st.push_val(Value::Expr(e))
                 }
-                FINDTHM => {
+                Findthm => {
                     let name = st.pop1_sym()?;
                     let th = st
                         .ctx
                         .find_lemma(&name)
-                        .ok_or_else(|| Error::new("unknown lemma"))?
+                        .ok_or_else(|| Error::new("unknown theorem"))?
                         .clone();
                     st.push_val(Value::Thm(th))
                 }
@@ -925,71 +1016,71 @@ mod logic_builtins {
                     let th = st.ctx.thm_mp(th1, th2)?;
                     st.push_val(Value::Thm(th));
                 }
-                AXIOM => {
+                Axiom => {
                     let e = st.pop1_expr()?;
                     let th = st.ctx.thm_axiom(vec![], e)?;
                     st.push_val(Value::Thm(th))
                 }
-                ASSUME => {
+                Assume => {
                     let e = st.pop1_expr()?;
                     let th = st.ctx.thm_assume(e)?;
                     st.push_val(Value::Thm(th))
                 }
-                REFL => {
+                Refl => {
                     let e = st.pop1_expr()?;
                     let th = st.ctx.thm_refl(e);
                     st.push_val(Value::Thm(th))
                 }
-                SYM => {
+                Sym => {
                     let th1 = st.pop1_thm()?;
                     let th = crate::algo::thm_sym(st.ctx, th1)?;
                     st.push_val(Value::Thm(th))
                 }
-                TRANS => {
+                Trans => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_trans(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
-                CONGR => {
+                Congr => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_congr(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
-                CONGR_TY => {
+                CongrTy => {
                     let ty = st.pop1_expr()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_congr_ty(th1, &ty)?;
                     st.push_val(Value::Thm(th))
                 }
-                CUT => {
+                Cut => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_cut(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
-                BOOL_EQ => {
+                BoolEq => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_bool_eq(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
-                BOOL_EQ_INTRO => {
+                BoolEqIntro => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_bool_eq_intro(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
-                BETA_CONV => {
+                BetaConv => {
                     let e = st.pop1_expr()?;
                     let th = st.ctx.thm_beta_conv(&e)?;
                     st.push_val(Value::Thm(th))
                 }
-                HOL_PRELUDE => {
+                HolPrelude => {
                     st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into()))
                 }
-                PLEDGE_NO_MORE_AXIOMS => {
+                PledgeNoMoreAxioms => {
                     st.ctx.pledge_no_new_axiom();
                 }
             };
@@ -1059,10 +1150,42 @@ mod test {
         let mut ctx = k::Ctx::new();
         let mut st = State::new(&mut ctx);
 
-        st.run("/fact { 1 exch -1 1 { mul } for } def")?;
+        st.run("/fact { 1 swap -1 1 { mul } for } def")?;
         st.run("6 fact")?;
         let v = st.pop1_int()?;
         assert_eq!(v, 720);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_loop() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        let mut st = State::new(&mut ctx);
+
+        st.run("1 { dup 10 eq { exit } if 1 add } loop")?;
+        let v = st.pop1_int()?;
+        assert_eq!(v, 10);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_prelude_and_forall() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        let mut st = State::new(&mut ctx);
+
+        st.run(
+            r#"
+        /T /def_true `let f = (\x: bool. x=x) in f=f` defconst
+        /forall /def_forall `\(a:type) (f:a -> bool). f = (\x:a. T)` defconst
+        /forall 30 set_binder
+        "#,
+        )?;
+        st.run("`forall x:bool. x=T`")?;
+        let e = st.pop1_expr()?;
+        let b = st.ctx.mk_bool();
+        assert_eq!(e.ty().clone(), b);
 
         Ok(())
     }

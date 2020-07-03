@@ -1,10 +1,16 @@
-/true /def_true `let f = (\x: bool. x=x) in f=f` defconst
+# vim:ft=trustee:
 
-# `|- true`
+### The HOL prelude for Trustee.
+
+/T /def_true
+  `let f = (\x: bool. x=x) in f=f`
+defconst
+
+# `|- T`
 /true_is_true
   `\x: bool. x=x` refl
-  /def_true findthm
-  bool_eq
+  def_true sym
+    bool_eq
 defthm
 
 #def forall = \(a:type) (f:a -> bool). f = \x:a. true.
