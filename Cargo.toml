@@ -19,3 +19,6 @@ rustyline = "6.0"
 name = "parse_ot"
 [[example]]
 name = "cli"
+
+[features]
+arc=[]

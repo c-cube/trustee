@@ -3,19 +3,22 @@
 use crate::fnv;
 use std::{fmt, ops::Deref, sync::atomic};
 
-#[cfg(features = "noarc")]
+#[cfg(not(features = "arc"))]
 pub type Ref<T> = std::rc::Rc<T>;
-#[cfg(features = "noarc")]
+#[cfg(not(features = "arc"))]
 pub type WeakRef<T> = std::rc::Weak<T>;
-#[cfg(features = "noarc")]
+#[cfg(not(features = "arc"))]
 pub type Lock<T> = std::cell::RefCell<T>;
 
-#[cfg(not(features = "noarc"))]
+#[cfg(features = "arc")]
 pub type Ref<T> = std::sync::Arc<T>;
-#[cfg(not(features = "noarc"))]
+#[cfg(features = "arc")]
 pub type WeakRef<T> = std::sync::Weak<T>;
-#[cfg(not(features = "noarc"))]
+#[cfg(features = "arc")]
 pub type Lock<T> = std::sync::Mutex<T>;
+
+/// For infix/prefix/postfix constants.
+pub type Fixity = crate::syntax::Fixity;
 
 /// Errors that can be returned from the Kernel.
 #[derive(Debug)]
@@ -80,10 +83,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum BuiltinSymbol {
     Eq,
     Imply,
-    Select,
     Bool,
-    /// An arbitrary type that is used in the axiom of infinity
-    Ind,
 }
 use BuiltinSymbol as BS;
 
@@ -92,9 +92,7 @@ impl BuiltinSymbol {
         match self {
             BS::Eq => "=",
             BS::Imply => "==>",
-            BS::Select => "select", // TODO: remove
             BS::Bool => "bool",
-            BS::Ind => "ind", // TODO: remove
         }
     }
 }
@@ -757,9 +755,6 @@ pub trait CtxI: fmt::Debug {
     /// Get the `==>` constant.
     fn mk_imply(&mut self) -> Expr;
 
-    /// Get the `select` constant.
-    fn mk_select(&mut self) -> Expr;
-
     /// For each pair `(x,u)` in `subst`, replace instances of the free
     /// variable `x` by `u` in `t`.
     fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr>;
@@ -774,9 +769,6 @@ pub trait CtxI: fmt::Debug {
 
     /// The type of booleans.
     fn mk_bool(&self) -> Expr;
-
-    /// The witness type for the axiom of infinity.
-    fn mk_ind(&self) -> Expr;
 
     /// Apply `a` to `b`.
     fn mk_app(&mut self, a: Expr, b: Expr) -> Result<Expr>;
@@ -848,8 +840,13 @@ pub trait CtxI: fmt::Debug {
     /// This constant has no axiom associated to it, it is entirely opaque.
     fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr>;
 
+    /// Change the fixity of a given constant.
+    ///
+    /// Does nothing if the constant is not defined.
+    fn set_fixity(&mut self, s: &str, f: Fixity);
+
     /// Find a constant by name. Returns `None` if no such constant exists.
-    fn find_const(&self, s: &str) -> Option<&Expr>;
+    fn find_const(&self, s: &str) -> Option<(&Expr, Fixity)>;
 
     /// Define a named lemma.
     ///
@@ -986,11 +983,10 @@ pub struct Ctx {
     /// Hashconsing table, with weak semantics.
     tbl: fnv::FnvHashMap<ExprView, WExpr>,
     builtins: Option<ExprBuiltins>,
-    consts: fnv::FnvHashMap<Ref<str>, Expr>,
+    consts: fnv::FnvHashMap<Ref<str>, (Expr, Fixity)>,
     lemmas: fnv::FnvHashMap<Ref<str>, Thm>,
     eq: Option<Expr>,
     imply: Option<Expr>,
-    select: Option<Expr>,
     next_cleanup: usize,
     axioms: Vec<Thm>,
     uid: u32, // Unique to this ctx
@@ -1011,7 +1007,6 @@ struct ExprBuiltins {
     kind: Expr,
     ty: Expr,
     bool: Expr,
-    ind: Expr,
 }
 
 fn hyps_merge(th1: &mut Thm, th2: &mut Thm) -> Vec<Expr> {
@@ -1065,7 +1060,6 @@ impl Ctx {
             lemmas: fnv::new_table_with_cap(n),
             eq: None,
             imply: None,
-            select: None,
             next_cleanup: CLEANUP_PERIOD,
             axioms: vec![],
             uid: uid as u32,
@@ -1084,15 +1078,7 @@ impl Ctx {
             )
         };
         ctx.add_const_(bool.clone());
-        let ind = {
-            let name = Symbol::Builtin(BS::Ind);
-            ctx.hashcons_builtin_(
-                EConst(ConstContent { name, ty: ty.clone() }),
-                Some(ty.clone()),
-            )
-        };
-        ctx.add_const_(ind.clone());
-        let builtins = ExprBuiltins { bool, kind, ty, ind };
+        let builtins = ExprBuiltins { bool, kind, ty };
         ctx.builtins = Some(builtins);
         ctx
     }
@@ -1152,7 +1138,7 @@ impl Ctx {
             unreachable!("not a constant: {:?}", e);
         };
         self.tbl.insert(e.view().clone(), e.weak());
-        consts.insert(name, e);
+        consts.insert(name, (e, Fixity::Nullary));
     }
 
     fn hashcons_builtin_(&mut self, ev: ExprView, ty: Option<Expr>) -> Expr {
@@ -1217,26 +1203,6 @@ impl Ctx {
                 let i = self.mk_new_const(name, arr).unwrap();
                 self.imply = Some(i.clone());
                 i
-            }
-        }
-    }
-
-    /// Get the `select` constant.
-    pub fn mk_select(&mut self) -> Expr {
-        match self.select {
-            Some(ref c) => c.clone(),
-            None => {
-                let ty = self.mk_ty();
-                // build type `Πa. (a->bool)->a`
-                let db0 = self.mk_bound_var(0, ty.clone());
-                let bool = self.mk_bool();
-                let arr = self.mk_arrow(db0.clone(), bool.clone()).unwrap();
-                let arr = self.mk_arrow(arr, db0.clone()).unwrap();
-                let ty = self.mk_pi_(ty, arr).unwrap();
-                let name = Symbol::Builtin(BS::Select);
-                let res = self.mk_new_const(name, ty).unwrap();
-                self.select = Some(res.clone());
-                res
             }
         }
     }
@@ -1481,11 +1447,6 @@ impl Ctx {
         self.builtins_().bool.clone()
     }
 
-    /// The witness type for the axiom of infinity.
-    pub fn mk_ind(&self) -> Expr {
-        self.builtins_().ind.clone()
-    }
-
     /// Apply `a` to `b`.
     pub fn mk_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
         self.check_uid_(&a);
@@ -1591,25 +1552,6 @@ impl CtxI for Ctx {
         }
     }
 
-    fn mk_select(&mut self) -> Expr {
-        match self.select {
-            Some(ref c) => c.clone(),
-            None => {
-                let ty = self.mk_ty();
-                // build type `Πa. (a->bool)->a`
-                let db0 = self.mk_bound_var(0, ty.clone());
-                let bool = self.mk_bool();
-                let arr = self.mk_arrow(db0.clone(), bool.clone()).unwrap();
-                let arr = self.mk_arrow(arr, db0.clone()).unwrap();
-                let ty = self.mk_pi_(ty, arr).unwrap();
-                let name = Symbol::Builtin(BS::Select);
-                let res = self.mk_new_const(name, ty).unwrap();
-                self.select = Some(res.clone());
-                res
-            }
-        }
-    }
-
     fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr> {
         self.check_uid_(&t);
         struct Replace<'a> {
@@ -1678,10 +1620,6 @@ impl CtxI for Ctx {
         self.builtins_().bool.clone()
     }
 
-    fn mk_ind(&self) -> Expr {
-        self.builtins_().ind.clone()
-    }
-
     fn mk_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
         self.check_uid_(&a);
         self.check_uid_(&b);
@@ -1748,8 +1686,14 @@ impl CtxI for Ctx {
         Ok(c)
     }
 
-    fn find_const(&self, s: &str) -> Option<&Expr> {
-        self.consts.get(s)
+    fn find_const(&self, s: &str) -> Option<(&Expr, Fixity)> {
+        self.consts.get(s).map(|t| (&t.0, t.1))
+    }
+
+    fn set_fixity(&mut self, s: &str, f: Fixity) {
+        if let Some(t) = self.consts.get_mut(s) {
+            t.1 = f
+        }
     }
 
     fn define_lemma(&mut self, name: &str, th: Thm) {
