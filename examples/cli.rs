@@ -8,12 +8,11 @@ fn main() -> anyhow::Result<()> {
     let mut ml = meta::State::new(&mut ctx);
 
     let mut args = pico_args::Arguments::from_env();
-    if args.contains("--load-hol") {
-        ml.run(&"prelude_hol load")?;
+    if args.contains("--hol") {
+        ml.run(&"hol_prelude source")?;
     }
-    if args.contains("--include") {
-        let x: String = args.value_from_str("--include")?;
-        ml.run(&format!("/{:?} load", x))?;
+    if let Some(x) = args.opt_value_from_str::<&str, String>("--include")? {
+        ml.run(&format!("/{} load_file source", &x))?;
     }
 
     let mut rl = rustyline::Editor::<()>::new();
