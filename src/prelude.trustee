@@ -13,6 +13,22 @@ defconst
     bool_eq
 defthm
 
+# prove `(x=T) = x`
+/eq_true_elim
+  true_is_true `with x:bool. x=T` assume sym bool_eq
+  true_is_true `with x:bool. x` assume bool_eq_intro
+  bool_eq_intro
+def
+
+/forall /def_forall
+  `\(a:type) (f:a -> bool). f = (\x:a. T)`
+defconst
+
+/forall 20 set_binder
+
+//\ /def_and `\a b: bool. a ==> b ==> T` defconst
+//\ 60 59 set_infix
+
 #def forall = \(a:type) (f:a -> bool). f = \x:a. true.
 
 # TODO: declare as binder
