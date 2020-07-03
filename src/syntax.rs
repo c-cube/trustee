@@ -566,7 +566,14 @@ impl<'a> Parser<'a> {
                 self.ctx.mk_app_l(i, &[e1, e2])
             }
             "->" => self.ctx.mk_arrow(e1, e2),
-            _ => Err(perror!(self, "todo: handle infix '{:?}'", s)),
+            _ => {
+                if let Some((c, _)) = self.ctx.find_const(s) {
+                    let c = c.clone();
+                    self.ctx.mk_app_l(c, &[e1, e2])
+                } else {
+                    return Err(perror!(self, "unknown infix '{:?}'", s));
+                }
+            }
         }
     }
 

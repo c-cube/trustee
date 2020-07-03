@@ -139,6 +139,7 @@ enum InstrCore {
     Mod,
     PrintPop,
     PrintStack,
+    Inspect,
     Clear,
     /// Load a source string
     Source,
@@ -146,6 +147,7 @@ enum InstrCore {
     LoadFile,
     ArrGet,
     ArrSet,
+    ArrLen,
     ArrLoad,
     ArrDump,
     // TODO: make an array of a given size? what to fill it with?
@@ -220,6 +222,8 @@ pub(crate) mod parser {
             | b'&'
             | b'*'
             | b'|'
+            | b'/'
+            | b'\\'
             | b';' => true,
             _ => false,
         }
@@ -384,8 +388,8 @@ mod ml {
         &[
             Def, For, If, IfElse, Loop, Exit, Dup, Swap, Drop, Rot, Begin, End,
             Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod, PrintPop,
-            PrintStack, Clear, Source, LoadFile, ArrGet, ArrSet, ArrLoad,
-            ArrDump,
+            PrintStack, Inspect, Clear, Source, LoadFile, ArrGet, ArrSet,
+            ArrLen, ArrLoad, ArrDump,
         ]
     };
 
@@ -418,26 +422,28 @@ mod ml {
                 I::Mod => "mod",
                 I::PrintPop => "==",
                 I::PrintStack => "pstack",
+                I::Inspect => "inspect",
                 I::Clear => "clear",
                 I::Source => "source",
                 I::LoadFile => "load_file",
                 I::ArrGet => "a_get",
                 I::ArrSet => "a_set",
+                I::ArrLen => "a_len",
                 I::ArrLoad => "a_load",
                 I::ArrDump => "a_dump",
             }
         }
 
         fn run(&self, st: &mut State) -> Result<()> {
-            use InstrCore::*;
+            use InstrCore as I;
 
             match self {
-                Def => {
+                I::Def => {
                     let c = st.pop1()?;
                     let sym = st.pop1_sym()?;
                     st.scopes.last_mut().unwrap().0.insert(sym.clone(), c);
                 }
-                For => {
+                I::For => {
                     let c = st.pop1_codearray()?;
                     let stop = st.pop1_int()?;
                     let step = st.pop1_int()?;
@@ -453,14 +459,15 @@ mod ml {
                         }
 
                         st.stack.push(Value::Int(i));
-                        //println!("for: i={}, ca: {:?}", i, &c);
+                        // println!("for: i={}, ca: {:?}", i, &c);
+                        // println!("scopes: {:?}", &st.scopes[1..]);
                         st.exec_codearray_(&c);
                         st.exec_loop_()?;
                         i += step;
                     }
                     st.loop_stack.pop().expect("loop_stack mismatch in `for`");
                 }
-                If => {
+                I::If => {
                     let c = st.pop1_codearray()?;
                     let b = st.pop1_bool()?;
                     if b {
@@ -468,7 +475,7 @@ mod ml {
                         st.exec_loop_()?;
                     }
                 }
-                IfElse => {
+                I::IfElse => {
                     let else_ = st.pop1_codearray()?;
                     let then_ = st.pop1_codearray()?;
                     let b = st.pop1_bool()?;
@@ -479,7 +486,7 @@ mod ml {
                     }
                     st.exec_loop_()?;
                 }
-                Loop => {
+                I::Loop => {
                     let c = st.pop1_codearray()?;
                     let offset = st.ctrl_stack.len();
                     st.loop_stack.push((offset as u32, true));
@@ -495,7 +502,7 @@ mod ml {
 
                     st.loop_stack.pop().expect("loop_stack mismatch in `loop`");
                 }
-                Exit => match st.loop_stack.last_mut() {
+                I::Exit => match st.loop_stack.last_mut() {
                     None => {
                         return Err(Error::new("`exit` called outside a loop"))
                     }
@@ -507,28 +514,28 @@ mod ml {
                         st.ctrl_stack.truncate(*offset as usize);
                     }
                 },
-                Dup => match st.stack.last() {
+                I::Dup => match st.stack.last() {
                     Some(v) => {
                         let v = v.clone();
                         st.stack.push(v)
                     }
                     None => return Err(Error::new("stack underflow")),
                 },
-                Rot => return Err(Error::new("todo: rot")), // TODO
-                Swap => {
+                I::Rot => return Err(Error::new("todo: rot")), // TODO
+                I::Swap => {
                     let y = st.pop1()?;
                     let x = st.pop1()?;
                     st.stack.push(y);
                     st.stack.push(x);
                 }
-                Drop => {
+                I::Drop => {
                     let _ = st.pop1()?;
                 }
-                Begin => {
+                I::Begin => {
                     let dict = Dict::new();
                     st.scopes.push(dict)
                 }
-                End => {
+                I::End => {
                     if st.scopes.len() < 2 {
                         return Err(Error::new(
                             "`end` does not match a `begin`",
@@ -536,47 +543,47 @@ mod ml {
                     }
                     st.scopes.pop();
                 }
-                Eq => {
+                I::Eq => {
                     let y = st.pop1()?;
                     let x = st.pop1()?;
                     st.stack.push(Value::Bool(x == y))
                 }
-                Lt => {
+                I::Lt => {
                     let y = st.pop1_int()?;
                     let x = st.pop1_int()?;
                     st.stack.push(Value::Bool(x < y))
                 }
-                Gt => {
+                I::Gt => {
                     let y = st.pop1_int()?;
                     let x = st.pop1_int()?;
                     st.stack.push(Value::Bool(x > y))
                 }
-                Leq => {
+                I::Leq => {
                     let y = st.pop1_int()?;
                     let x = st.pop1_int()?;
                     st.stack.push(Value::Bool(x <= y))
                 }
-                Geq => {
+                I::Geq => {
                     let y = st.pop1_int()?;
                     let x = st.pop1_int()?;
                     st.stack.push(Value::Bool(x >= y))
                 }
-                Add => {
+                I::Add => {
                     let y = st.pop1_int()?;
                     let x = st.pop1_int()?;
                     st.stack.push(Value::Int(x + y))
                 }
-                Mul => {
+                I::Mul => {
                     let y = st.pop1_int()?;
                     let x = st.pop1_int()?;
                     st.stack.push(Value::Int(x * y))
                 }
-                Sub => {
+                I::Sub => {
                     let y = st.pop1_int()?;
                     let x = st.pop1_int()?;
                     st.stack.push(Value::Int(x - y))
                 }
-                Div => {
+                I::Div => {
                     let y = st.pop1_int()?;
                     let x = st.pop1_int()?;
                     if y == 0 {
@@ -584,7 +591,7 @@ mod ml {
                     }
                     st.stack.push(Value::Int(x / y))
                 }
-                Mod => {
+                I::Mod => {
                     let y = st.pop1_int()?;
                     let x = st.pop1_int()?;
                     if y == 0 {
@@ -592,22 +599,46 @@ mod ml {
                     }
                     st.stack.push(Value::Int(x % y))
                 }
-                PrintPop => {
+                I::PrintPop => {
                     let x = st.pop1()?;
                     println!("  {:?}", x);
                 }
-                PrintStack => {
+                I::PrintStack => {
                     println!("stack:");
                     for x in st.stack.iter().rev() {
                         println!("  > {:?}", x);
                     }
                 }
-                Clear => st.stack.clear(),
-                Source => {
+                I::Inspect => {
+                    let s = st.pop1_sym()?;
+
+                    // Find definition of symbol `s` in `self.scopes`,
+                    // starting from the most recent scope.
+                    let v = {
+                        if let Some(v) =
+                            st.scopes.iter().rev().find_map(|d| d.0.get(&*s))
+                        {
+                            v.clone()
+                        } else if let Some(c) = st.ctx.find_const(&*s) {
+                            Value::Expr(c.0.clone())
+                        } else if let Some(th) = st.ctx.find_lemma(&*s) {
+                            Value::Thm(th.clone())
+                        } else {
+                            return Err(Error::new_string(format!(
+                                "symbol {:?} not found",
+                                s
+                            )));
+                        }
+                    };
+
+                    println!(">>  {:?}", v);
+                }
+                I::Clear => st.stack.clear(),
+                I::Source => {
                     let x = st.pop1_source()?;
                     st.run(&x)?;
                 }
-                LoadFile => {
+                I::LoadFile => {
                     let s = st.pop1_sym()?;
                     let content =
                         std::fs::read_to_string(&*s).map_err(|e| {
@@ -618,7 +649,7 @@ mod ml {
                         })?;
                     st.push_val(Value::Source(content.into()))
                 }
-                ArrGet => {
+                I::ArrGet => {
                     let i = st.pop1_int()?;
                     let a = st.pop1_array()?;
                     let a = a.0.borrow();
@@ -627,7 +658,7 @@ mod ml {
                     }
                     st.push_val(a[i as usize].clone())
                 }
-                ArrSet => {
+                I::ArrSet => {
                     let v = st.pop1()?;
                     let i = st.pop1_int()?;
                     let a = st.pop1_array()?;
@@ -637,7 +668,12 @@ mod ml {
                     }
                     a[i as usize] = v
                 }
-                ArrLoad => {
+                I::ArrLen => {
+                    let a = st.pop1_array()?;
+                    let a = a.0.borrow();
+                    st.push_val(Value::Int(a.len() as i64))
+                }
+                I::ArrLoad => {
                     let i = st.pop1_int()?;
                     let n = st.stack.len();
                     if i < 0 || n < i as usize {
@@ -650,7 +686,7 @@ mod ml {
                     let va = ValueArray(Rc::new(RefCell::new(v)));
                     st.push_val(Value::Array(va))
                 }
-                ArrDump => {
+                I::ArrDump => {
                     let a = st.pop1_array()?;
                     let a = a.0.borrow();
                     st.stack.extend(a.iter().cloned());
@@ -846,7 +882,10 @@ mod ml {
                     } else if let Some(th) = self.ctx.find_lemma(&*s) {
                         self.stack.push(Value::Thm(th.clone()))
                     } else {
-                        return Err(Error::new("symbol not found"));
+                        return Err(Error::new_string(format!(
+                            "symbol {:?} not found",
+                            s
+                        )));
                     }
                 }
                 Instr::Core(c) => c.run(self)?,
