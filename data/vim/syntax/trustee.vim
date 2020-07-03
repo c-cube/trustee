@@ -2,7 +2,7 @@ set expandtab
 
 syn keyword     trusteeKW        def defconst defthm decl findthm
 syn keyword     trusteeKW        findconst set_infix set_binder
-syn keyword     trusteeKW        hol_prelude pledge_no_new_axiom source
+syn keyword     trusteeKW        hol_prelude pledge_no_more_axioms source
 syn match       trusteeComment "#.*" contains=trusteeTodo
 
 syn match       trusteeSym      +\/[a-zA-Z0-9_]\++
@@ -26,8 +26,9 @@ syn match       trusteeExpr      "==>"
 "syn match       trusteeDelim      "("
 "syn match       trusteeDelim      ")"
 
-syn keyword trusteeThm          assume axiom mp bool_eq bool_eq_intro congr
-syn keyword trusteeThm          trans refl abs congr_ty beta_conv sym
+syn keyword trusteeThm   assume axiom mp bool_eq bool_eq_intro congr
+syn keyword trusteeThm   trans refl abs congr_ty beta_conv sym
+syn keyword trusteeThm   subst abs
 
 syn keyword  trusteeTodo  contained TODO BUG FIX FIXME NOTE
 

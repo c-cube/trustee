@@ -304,10 +304,6 @@ pub struct Parser<'a> {
     qargs_idx: usize,
 }
 
-// TODO: binders: select, with, \\, pi
-// TODO: infix: =, ==>
-// TODO: normal names: Bool, $=, $==>, $select, type, defined constants
-
 macro_rules! perror {
     ($self: ident, $fmt: literal) => {
         Error::new_string(format!(
@@ -861,6 +857,8 @@ pub fn parse_expr_with_args(
     let mut p = Parser::new_with_args(ctx, s, qargs);
     p.parse_expr()
 }
+
+// TODO: pretty printer.
 
 #[cfg(test)]
 mod test {

@@ -10,7 +10,7 @@ use {
         kernel_of_trust::{self as k, CtxI},
         syntax, Error, Result,
     },
-    std::{fmt, rc::Rc},
+    std::{cell::RefCell, fmt, rc::Rc},
 };
 
 /// The state of the meta-language interpreter.
@@ -45,6 +45,15 @@ impl fmt::Debug for CodeArray {
     }
 }
 
+#[derive(Clone)]
+pub struct ValueArray(Rc<RefCell<Vec<Value>>>);
+
+impl fmt::Debug for ValueArray {
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        out.debug_list().entries(self.0.borrow().iter()).finish()
+    }
+}
+
 /// A dictionary from symbols to values.
 ///
 /// Syntax: TODO
@@ -67,7 +76,7 @@ pub enum Value {
     Expr(k::Expr),
     Thm(k::Thm),
     CodeArray(CodeArray),
-    Array(Rc<Vec<Value>>),
+    Array(ValueArray),
     Dict(Dict),
     // TODO: Goal? Goals? Tactic?
 }
@@ -135,7 +144,11 @@ enum InstrCore {
     Source,
     /// Read a file into a source string
     LoadFile,
-    // TODO: array get, put, push, create
+    ArrGet,
+    ArrSet,
+    ArrLoad,
+    ArrDump,
+    // TODO: make an array of a given size? what to fill it with?
 }
 
 /// A custom instruction implemented in rust.
@@ -174,7 +187,6 @@ pub(crate) mod parser {
         cur_: Option<Tok<'b>>,
     }
 
-    // TODO: [ ] for value arrays.
     /// A token for the RPN syntax..
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum Tok<'b> {
@@ -185,6 +197,8 @@ pub(crate) mod parser {
         Int(i64),
         LBracket,
         RBracket,
+        LBrace,
+        RBrace,
         Invalid(char),
     }
 
@@ -257,10 +271,20 @@ pub(crate) mod parser {
                     self.col += 1;
                     Tok::LBracket
                 }
+                b'[' => {
+                    self.i += 1;
+                    self.col += 1;
+                    Tok::LBrace
+                }
                 b'}' => {
                     self.i += 1;
                     self.col += 1;
                     Tok::RBracket
+                }
+                b']' => {
+                    self.i += 1;
+                    self.col += 1;
+                    Tok::RBrace
                 }
                 b'`' => {
                     let mut j = self.i + 1;
@@ -360,42 +384,47 @@ mod ml {
         &[
             Def, For, If, IfElse, Loop, Exit, Dup, Swap, Drop, Rot, Begin, End,
             Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod, PrintPop,
-            PrintStack, Clear, Source, LoadFile,
+            PrintStack, Clear, Source, LoadFile, ArrGet, ArrSet, ArrLoad,
+            ArrDump,
         ]
     };
 
     impl InstrBuiltin for InstrCore {
         fn name(&self) -> &'static str {
-            use InstrCore::*;
+            use InstrCore as I;
 
             match self {
-                Def => "def",
-                For => "for",
-                If => "if",
-                IfElse => "ifelse",
-                Loop => "loop",
-                Exit => "exit",
-                Dup => "dup",
-                Swap => "swap",
-                Drop => "drop",
-                Rot => "rot",
-                Begin => "begin",
-                End => "end",
-                Eq => "eq",
-                Lt => "lt",
-                Gt => "gt",
-                Leq => "leq",
-                Geq => "geq",
-                Add => "add",
-                Mul => "mul",
-                Sub => "sub",
-                Div => "div",
-                Mod => "mod",
-                PrintPop => "==",
-                PrintStack => "pstack",
-                Clear => "clear",
-                Source => "source",
-                LoadFile => "load_file",
+                I::Def => "def",
+                I::For => "for",
+                I::If => "if",
+                I::IfElse => "ifelse",
+                I::Loop => "loop",
+                I::Exit => "exit",
+                I::Dup => "dup",
+                I::Swap => "swap",
+                I::Drop => "drop",
+                I::Rot => "rot",
+                I::Begin => "begin",
+                I::End => "end",
+                I::Eq => "eq",
+                I::Lt => "lt",
+                I::Gt => "gt",
+                I::Leq => "leq",
+                I::Geq => "geq",
+                I::Add => "add",
+                I::Mul => "mul",
+                I::Sub => "sub",
+                I::Div => "div",
+                I::Mod => "mod",
+                I::PrintPop => "==",
+                I::PrintStack => "pstack",
+                I::Clear => "clear",
+                I::Source => "source",
+                I::LoadFile => "load_file",
+                I::ArrGet => "a_get",
+                I::ArrSet => "a_set",
+                I::ArrLoad => "a_load",
+                I::ArrDump => "a_dump",
             }
         }
 
@@ -589,6 +618,43 @@ mod ml {
                         })?;
                     st.push_val(Value::Source(content.into()))
                 }
+                ArrGet => {
+                    let i = st.pop1_int()?;
+                    let a = st.pop1_array()?;
+                    let a = a.0.borrow();
+                    if i < 0 || i as usize >= a.len() {
+                        return Err(Error::new("invalid index"));
+                    }
+                    st.push_val(a[i as usize].clone())
+                }
+                ArrSet => {
+                    let v = st.pop1()?;
+                    let i = st.pop1_int()?;
+                    let a = st.pop1_array()?;
+                    let mut a = a.0.borrow_mut();
+                    if i < 0 || i as usize >= a.len() {
+                        return Err(Error::new("invalid index"));
+                    }
+                    a[i as usize] = v
+                }
+                ArrLoad => {
+                    let i = st.pop1_int()?;
+                    let n = st.stack.len();
+                    if i < 0 || n < i as usize {
+                        return Err(Error::new_string(format!(
+                            "cannot pop {} values off the stack",
+                            i
+                        )));
+                    }
+                    let v = st.stack.drain(n - (i as usize)..).collect();
+                    let va = ValueArray(Rc::new(RefCell::new(v)));
+                    st.push_val(Value::Array(va))
+                }
+                ArrDump => {
+                    let a = st.pop1_array()?;
+                    let a = a.0.borrow();
+                    st.stack.extend(a.iter().cloned());
+                }
             }
             Ok(())
         }
@@ -664,6 +730,7 @@ mod ml {
             match p.cur() {
                 Tok::Eof => return Err(Error::new("unexpected EOF")),
                 Tok::RBracket => return Err(Error::new("unexpected '}'")),
+                Tok::RBrace => return Err(Error::new("unexpected ']'")),
                 Tok::Invalid(c) => {
                     return Err(perror!(loc, "invalid token {:?}", c))
                 }
@@ -696,6 +763,31 @@ mod ml {
                                 let instr = self.parse_instr_(p)?;
                                 ca.push(instr);
                             }
+                        }
+                    };
+                    Ok(Instr::Im(v))
+                }
+                Tok::LBrace => {
+                    // parse an array of values.
+                    p.next();
+                    let mut arr = vec![];
+                    let v = loop {
+                        match p.cur() {
+                            Tok::RBrace => {
+                                p.next();
+                                let va = ValueArray(Rc::new(RefCell::new(arr)));
+                                break Value::Array(va);
+                            }
+                            _ => match self.parse_instr_(p)? {
+                                Instr::Im(v) => {
+                                    arr.push(v); // only accept values
+                                }
+                                _ => {
+                                    return Err(Error::new(
+                                        "expect a value in an array",
+                                    ))
+                                }
+                            },
                         }
                     };
                     Ok(Instr::Im(v))
@@ -815,6 +907,7 @@ mod ml {
             i,
             CodeArray
         );
+        pop1_of!(pop1_array, "array", Value::Array(v), v, ValueArray);
         pop1_of!(pop1_expr, "expr", Value::Expr(i), i, k::Expr);
         pop1_of!(pop1_thm, "thm", Value::Thm(i), i, k::Thm);
         pop1_of!(pop1_sym, "sym", Value::Sym(i), i, Rc<str>);
@@ -886,72 +979,76 @@ mod logic_builtins {
         BoolEq,
         BoolEqIntro,
         BetaConv,
+        Instantiate,
+        Abs,
         HolPrelude,
         PledgeNoMoreAxioms,
     }
-    // TODO: instantiate
-    // TODO: abs (with DB indices?)
+
+    use Rule as R;
 
     /// Builtin functions for manipulating expressions and theorems.
     pub(super) const BUILTINS: &'static [&'static dyn InstrBuiltin] = &[
-        &Rule::Defconst,
-        &Rule::Defthm,
-        &Rule::Decl,
-        &Rule::SetInfix,
-        &Rule::SetBinder,
-        &Rule::ExprTy,
-        &Rule::Findconst,
-        &Rule::Findthm,
-        &Rule::MP,
-        &Rule::Axiom,
-        &Rule::Assume,
-        &Rule::Refl,
-        &Rule::Sym,
-        &Rule::Trans,
-        &Rule::Congr,
-        &Rule::CongrTy,
-        &Rule::Cut,
-        &Rule::BoolEq,
-        &Rule::BoolEqIntro,
-        &Rule::BetaConv,
-        &Rule::HolPrelude,
-        &Rule::PledgeNoMoreAxioms,
+        &R::Defconst,
+        &R::Defthm,
+        &R::Decl,
+        &R::SetInfix,
+        &R::SetBinder,
+        &R::ExprTy,
+        &R::Findconst,
+        &R::Findthm,
+        &R::MP,
+        &R::Axiom,
+        &R::Assume,
+        &R::Refl,
+        &R::Sym,
+        &R::Trans,
+        &R::Congr,
+        &R::CongrTy,
+        &R::Cut,
+        &R::BoolEq,
+        &R::BoolEqIntro,
+        &R::BetaConv,
+        &R::Instantiate,
+        &R::Abs,
+        &R::HolPrelude,
+        &R::PledgeNoMoreAxioms,
     ];
 
     impl InstrBuiltin for Rule {
         fn name(&self) -> &'static str {
-            use Rule::*;
             match self {
-                Defconst => "defconst",
-                Defthm => "defthm",
-                Decl => "decl",
-                SetInfix => "set_infix",
-                SetBinder => "set_binder",
-                ExprTy => "expr_ty",
-                Findconst => "findconst",
-                Findthm => "findthm",
-                MP => "mp",
-                Axiom => "axiom",
-                Assume => "assume",
-                Refl => "refl",
-                Sym => "sym",
-                Trans => "trans",
-                Congr => "congr",
-                CongrTy => "congr_ty",
-                Cut => "cut",
-                BoolEq => "bool_eq",
-                BoolEqIntro => "bool_eq_intro",
-                BetaConv => "beta_conv",
-                HolPrelude => "hol_prelude",
-                PledgeNoMoreAxioms => "pledge_no_more_axioms",
+                R::Defconst => "defconst",
+                R::Defthm => "defthm",
+                R::Decl => "decl",
+                R::SetInfix => "set_infix",
+                R::SetBinder => "set_binder",
+                R::ExprTy => "expr_ty",
+                R::Findconst => "findconst",
+                R::Findthm => "findthm",
+                R::MP => "mp",
+                R::Axiom => "axiom",
+                R::Assume => "assume",
+                R::Refl => "refl",
+                R::Sym => "sym",
+                R::Trans => "trans",
+                R::Congr => "congr",
+                R::CongrTy => "congr_ty",
+                R::Cut => "cut",
+                R::BoolEq => "bool_eq",
+                R::BoolEqIntro => "bool_eq_intro",
+                R::BetaConv => "beta_conv",
+                R::Instantiate => "subst",
+                R::Abs => "abs",
+                R::HolPrelude => "hol_prelude",
+                R::PledgeNoMoreAxioms => "pledge_no_more_axioms",
             }
         }
 
         // th1 th2 -- mp(th1,th2)
         fn run(&self, st: &mut State) -> Result<()> {
-            use Rule::*;
             match self {
-                Defconst => {
+                R::Defconst => {
                     let rhs = st.pop1_expr()?;
                     let nthm = &st.pop1_sym()?;
                     let nc = st.pop1_sym()?;
@@ -959,39 +1056,39 @@ mod logic_builtins {
                         crate::algo::thm_new_poly_definition(st.ctx, &nc, rhs)?;
                     st.ctx.define_lemma(nthm, def.thm);
                 }
-                Defthm => {
+                R::Defthm => {
                     let th = st.pop1_thm()?;
                     let name = st.pop1_sym()?;
                     st.ctx.define_lemma(&name, th);
                 }
-                Decl => {
+                R::Decl => {
                     let ty = st.pop1_expr()?;
                     let name = st.pop1_sym()?;
                     let _e = st
                         .ctx
                         .mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
                 }
-                ExprTy => {
+                R::ExprTy => {
                     let e = st.pop1_expr()?;
                     if e.is_kind() {
                         return Err(Error::new("cannot get type of `kind`"));
                     }
                     st.stack.push(Value::Expr(e.ty().clone()))
                 }
-                SetInfix => {
+                R::SetInfix => {
                     let j = st.pop1_int()?;
                     let i = st.pop1_int()?;
                     let c = st.pop1_sym()?;
                     let f = syntax::Fixity::Infix((i as u16, j as u16));
                     st.ctx.set_fixity(&*c, f);
                 }
-                SetBinder => {
+                R::SetBinder => {
                     let i = st.pop1_int()?;
                     let c = st.pop1_sym()?;
                     let f = syntax::Fixity::Binder((0, i as u16));
                     st.ctx.set_fixity(&*c, f);
                 }
-                Findconst => {
+                R::Findconst => {
                     let name = st.pop1_sym()?;
                     let e = st
                         .ctx
@@ -1001,7 +1098,7 @@ mod logic_builtins {
                         .clone();
                     st.push_val(Value::Expr(e))
                 }
-                Findthm => {
+                R::Findthm => {
                     let name = st.pop1_sym()?;
                     let th = st
                         .ctx
@@ -1010,77 +1107,110 @@ mod logic_builtins {
                         .clone();
                     st.push_val(Value::Thm(th))
                 }
-                MP => {
+                R::MP => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_mp(th1, th2)?;
                     st.push_val(Value::Thm(th));
                 }
-                Axiom => {
+                R::Axiom => {
                     let e = st.pop1_expr()?;
                     let th = st.ctx.thm_axiom(vec![], e)?;
                     st.push_val(Value::Thm(th))
                 }
-                Assume => {
+                R::Assume => {
                     let e = st.pop1_expr()?;
                     let th = st.ctx.thm_assume(e)?;
                     st.push_val(Value::Thm(th))
                 }
-                Refl => {
+                R::Refl => {
                     let e = st.pop1_expr()?;
                     let th = st.ctx.thm_refl(e);
                     st.push_val(Value::Thm(th))
                 }
-                Sym => {
+                R::Sym => {
                     let th1 = st.pop1_thm()?;
                     let th = crate::algo::thm_sym(st.ctx, th1)?;
                     st.push_val(Value::Thm(th))
                 }
-                Trans => {
+                R::Trans => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_trans(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
-                Congr => {
+                R::Congr => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_congr(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
-                CongrTy => {
+                R::CongrTy => {
                     let ty = st.pop1_expr()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_congr_ty(th1, &ty)?;
                     st.push_val(Value::Thm(th))
                 }
-                Cut => {
+                R::Cut => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_cut(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
-                BoolEq => {
+                R::BoolEq => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_bool_eq(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
-                BoolEqIntro => {
+                R::BoolEqIntro => {
                     let th2 = st.pop1_thm()?;
                     let th1 = st.pop1_thm()?;
                     let th = st.ctx.thm_bool_eq_intro(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
-                BetaConv => {
+                R::BetaConv => {
                     let e = st.pop1_expr()?;
                     let th = st.ctx.thm_beta_conv(&e)?;
                     st.push_val(Value::Thm(th))
                 }
-                HolPrelude => {
+                R::Instantiate => {
+                    let a = st.pop1_array()?;
+                    let th = st.pop1_thm()?;
+
+                    // build substitution
+                    let a = a.0.borrow();
+                    if a.len() % 2 != 0 {
+                        return Err(Error::new("invalid subst (odd length)"));
+                    }
+                    let mut subst = vec![];
+                    for ch in a.as_slice().chunks(2) {
+                        match &ch {
+                            &[Value::Sym(x), Value::Expr(e)] => {
+                                let v = k::Var::from_str(&*x, e.ty().clone());
+                                subst.push((v, e.clone()))
+                            }
+                            _ => {
+                                return Err(Error::new("invalid subst binding"))
+                            }
+                        }
+                    }
+
+                    let th = st.ctx.thm_instantiate(th, &subst)?;
+                    st.push_val(Value::Thm(th))
+                }
+                R::Abs => {
+                    let ty = st.pop1_expr()?;
+                    let v = st.pop1_sym()?;
+                    let th = st.pop1_thm()?;
+                    let v = k::Var::from_str(&*v, ty);
+                    let th = st.ctx.thm_abs(&v, th)?;
+                    st.push_val(Value::Thm(th))
+                }
+                R::HolPrelude => {
                     st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into()))
                 }
-                PledgeNoMoreAxioms => {
+                R::PledgeNoMoreAxioms => {
                     st.ctx.pledge_no_new_axiom();
                 }
             };
