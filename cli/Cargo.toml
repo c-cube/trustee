@@ -1,0 +1,15 @@
+[package]
+name = "trustee_cli"
+version = "0.1.0"
+authors = ["Simon Cruanes <simon.cruanes.2007@m4x.org>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+trustee = {path="../core", features=["logging"]}
+log = "*"
+env_logger = { version= "*", default-features=false, features=["termcolor", "atty"] }
+anyhow="1.0"
+pico-args="0.3"
+rustyline = "6.0"

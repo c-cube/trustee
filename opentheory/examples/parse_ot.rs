@@ -2,6 +2,7 @@
 extern crate log;
 use std::{env::args, fs::File, io::BufReader};
 use trustee::*;
+use trustee_opentheory as open_theory;
 
 struct LogCB;
 

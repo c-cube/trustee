@@ -13,6 +13,13 @@ use {
     std::{cell::RefCell, fmt, rc::Rc},
 };
 
+macro_rules! logdebug {
+    ($($t:expr),*) => {
+        #[cfg(feature="logging")]
+        log::debug!($($t),*)
+    }
+}
+
 /// The state of the meta-language interpreter.
 pub struct State<'a> {
     pub ctx: &'a mut dyn CtxI,
@@ -962,6 +969,8 @@ mod ml {
         pub fn run(&mut self, s: &str) -> Result<()> {
             use parser::*;
             let mut p = Parser::new(s);
+
+            logdebug!("meta.run {}", s);
 
             loop {
                 if p.cur() == Tok::Eof {

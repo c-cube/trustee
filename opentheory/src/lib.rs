@@ -1,8 +1,10 @@
 //! Parser and interpreter for [OpenTheory](http://www.gilith.com/opentheory/article.html)
 
 use {
-    crate::kernel_of_trust as k, crate::*, std::fmt, std::io::BufRead,
-    std::rc::Rc,
+    std::{collections::HashMap, fmt, io::BufRead, rc::Rc},
+    trustee::kernel_of_trust as k,
+    trustee::*,
+    trustee::{Error, Expr, Symbol, Thm, Var},
 };
 
 #[derive(Clone, Eq, PartialEq, Hash)]
@@ -180,7 +182,7 @@ impl ThmKey {
 /// OT files without introducing intermediate axioms.
 #[derive(Debug, Clone)]
 pub struct Article {
-    pub defs: fnv::FnvHashMap<String, Expr>,
+    pub defs: HashMap<String, Expr>,
     pub assumptions: Vec<Thm>,
     pub theorems: Vec<Thm>,
 }
@@ -221,14 +223,14 @@ impl Callbacks for () {}
 pub struct VM<'a, CB: Callbacks> {
     ctx: &'a mut dyn k::CtxI,
     cb: CB,
-    ty_vars: fnv::FnvHashMap<String, Var>,
-    vars: fnv::FnvHashMap<String, (Var, Var)>, // "x" -> (x, α)
-    defs: fnv::FnvHashMap<Name, Rc<dyn OConst>>,
-    ty_defs: fnv::FnvHashMap<Name, Rc<dyn OTypeOp>>,
+    ty_vars: HashMap<String, Var>,
+    vars: HashMap<String, (Var, Var)>, // "x" -> (x, α)
+    defs: HashMap<Name, Rc<dyn OConst>>,
+    ty_defs: HashMap<Name, Rc<dyn OTypeOp>>,
     stack: Vec<Obj>,
-    dict: fnv::FnvHashMap<usize, Obj>,
+    dict: HashMap<usize, Obj>,
     assumptions: Vec<Thm>,
-    theorems: fnv::FnvHashMap<ThmKey, Thm>,
+    theorems: HashMap<ThmKey, Thm>,
 }
 
 #[derive(Debug)]
@@ -314,14 +316,14 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         VM {
             ctx,
             cb,
-            ty_vars: fnv::new_table_with_cap(32),
-            vars: fnv::new_table_with_cap(32),
-            defs: fnv::new_table_with_cap(32),
-            ty_defs: fnv::new_table_with_cap(8),
+            ty_vars: HashMap::with_capacity(32),
+            vars: HashMap::with_capacity(32),
+            defs: HashMap::with_capacity(32),
+            ty_defs: HashMap::with_capacity(8),
             stack: vec![],
-            dict: fnv::new_table_with_cap(32),
+            dict: HashMap::with_capacity(32),
             assumptions: vec![],
-            theorems: fnv::new_table_with_cap(32),
+            theorems: HashMap::with_capacity(32),
         }
     }
 

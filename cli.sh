@@ -1,2 +1,2 @@
 #!/bin/sh
-cargo run --release --example cli -- $@
+cargo run --release --bin trustee_cli -- $@
