@@ -6,6 +6,7 @@
 
 use {
     crate::{
+        algo,
         fnv::{self, FnvHashMap},
         kernel_of_trust::{self as k, CtxI},
         syntax, Error, Result,
@@ -1031,6 +1032,7 @@ mod logic_builtins {
         Abs,
         HolPrelude,
         PledgeNoMoreAxioms,
+        RwBetaConv,
     }
 
     use Rule as R;
@@ -1061,6 +1063,7 @@ mod logic_builtins {
         &R::Abs,
         &R::HolPrelude,
         &R::PledgeNoMoreAxioms,
+        &R::RwBetaConv,
     ];
 
     impl InstrBuiltin for Rule {
@@ -1090,6 +1093,7 @@ mod logic_builtins {
                 R::Abs => "abs",
                 R::HolPrelude => "hol_prelude",
                 R::PledgeNoMoreAxioms => "pledge_no_more_axioms",
+                R::RwBetaConv => "rw_beta_conv",
             }
         }
 
@@ -1260,6 +1264,11 @@ mod logic_builtins {
                 }
                 R::PledgeNoMoreAxioms => {
                     st.ctx.pledge_no_new_axiom();
+                }
+                R::RwBetaConv => {
+                    let th = st.pop1_thm()?;
+                    let th = algo::thm_rw_beta_conv(st.ctx, th)?;
+                    st.push_val(Value::Thm(th))
                 }
             };
             Ok(())

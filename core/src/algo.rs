@@ -820,14 +820,14 @@ pub mod rw {
     use super::*;
 
     /// Result of a rewrite step.
-    pub enum RewriteResult {
+    pub enum Res {
         /// No rewrite step.
         RwSame,
         /// A theorem `A |- a=b` where `a` is the initial term, and `b` the result.
         RwStep(Thm),
     }
 
-    use RewriteResult::*;
+    use Res::*;
 
     /// A term rewriter that operates at the root of a term.
     pub trait Rewriter {
@@ -841,65 +841,79 @@ pub mod rw {
     /// Rewrite `e` using the rewriter `rw`.
     ///
     /// The rewriter is called on every non-type subterm, starting from the leaves.
-    pub fn rewrite_bottom_up<RW>(
+    pub fn rewrite_bottom_up(
         ctx: &mut dyn CtxI,
-        rw: &mut RW,
-        e: Expr,
-    ) -> Result<RewriteResult>
-    where
-        RW: Rewriter,
-    {
-        let r = match e.view() {
-            EType | EKind | EVar(..) | EBoundVar(..) | EPi(..) => RwSame,
-            _ if e.ty().is_type() => RwSame,
-            EConst(..) => {
-                match rw.step(ctx, &e) {
-                    None => RwSame,
+        rw: &mut dyn Rewriter,
+        e0: Expr,
+    ) -> Result<Res> {
+        let mut th_eq = None; // stores proof for `e0 = e`
+        let mut e = e0;
+
+        macro_rules! update_th {
+            ($res: expr, $els: block) => {
+                match $res {
+                    None => $els,
                     Some(th2) => {
-                        let e2 = {
+                        e = {
                             let (_, b) = th2.concl().unfold_eq().ok_or_else(|| {
-                            Error::new("rewrite function must return an equation")
-                        })?;
+                                Error::new("rewrite function must return an equation")
+                            })?;
                             b.clone()
                         };
-                        match rewrite_bottom_up(ctx, rw, e2)? {
-                            RwSame => RwStep(th2),
-                            RwStep(th3) => RwStep(ctx.thm_trans(th2, th3)?),
+                        th_eq = match th_eq {
+                            None => Some(th2),
+                            Some(th1) => Some(ctx.thm_trans(th1, th2)?),
                         }
                     }
                 }
             }
-            EApp(hd, a) => {
-                let r1 = rewrite_bottom_up(ctx, rw, hd.clone())?;
-                let r2 = rewrite_bottom_up(ctx, rw, a.clone())?;
-                match (r1, r2) {
-                    (RwSame, RwSame) => RwSame,
-                    (RwStep(th), RwSame) => {
-                        if a.ty().is_type() {
-                            RwStep(ctx.thm_congr_ty(th, a)?)
-                        } else {
-                            let th2 = ctx.thm_refl(a.clone());
-                            RwStep(ctx.thm_congr(th, th2)?)
-                        }
-                    }
-                    (RwSame, RwStep(th)) => {
-                        let th_hd = ctx.thm_refl(hd.clone());
-                        RwStep(ctx.thm_congr(th_hd, th)?)
-                    }
-                    (RwStep(th1), RwStep(th2)) => {
-                        RwStep(ctx.thm_congr(th1, th2)?)
-                    }
-                }
-            }
-            // TODO: rewrite under lambdas?
-            //
-            // But then we need either:
-            // - introduce variable `x`, turn `λbody` into `x, body[0\x]`,
-            //   rewrite
-            //   then use `abs(x,
-            ELambda(..) => RwSame,
         };
-        Ok(r)
+
+        loop {
+            match e.view() {
+                EType | EKind | EVar(..) | EBoundVar(..) | EPi(..) => break,
+                _ if e.ty().is_type() => break,
+                EConst(..) => {
+                    let r = rw.step(ctx, &e);
+                    update_th!(r, { break });
+                }
+                EApp(hd, a) => {
+                    let r1 = rewrite_bottom_up(ctx, rw, hd.clone())?;
+                    let r2 = rewrite_bottom_up(ctx, rw, a.clone())?;
+                    let step = match (r1, r2) {
+                        (RwSame, RwSame) => None,
+                        (RwStep(th), RwSame) => {
+                            if a.ty().is_type() {
+                                Some(ctx.thm_congr_ty(th, a)?)
+                            } else {
+                                let th2 = ctx.thm_refl(a.clone());
+                                Some(ctx.thm_congr(th, th2)?)
+                            }
+                        }
+                        (RwSame, RwStep(th)) => {
+                            let th_hd = ctx.thm_refl(hd.clone());
+                            Some(ctx.thm_congr(th_hd, th)?)
+                        }
+                        (RwStep(th1), RwStep(th2)) => {
+                            Some(ctx.thm_congr(th1, th2)?)
+                        }
+                    };
+                    update_th!(step, {});
+                    let step2 = rw.step(ctx, &e);
+                    update_th!(step2, { break });
+                }
+                // TODO: rewrite under lambdas?
+                //
+                // But then we need either:
+                // - introduce variable `x`, turn `λbody` into `x, body[0\x]`,
+                //   rewrite, then use `thm_abs(x, norm(body))`
+                ELambda(..) => break,
+            };
+        }
+        Ok(match th_eq {
+            Some(th) => RwStep(th),
+            None => RwSame,
+        })
     }
 
     /// A rewrite rule.
@@ -1027,7 +1041,33 @@ pub mod rw {
     }
 }
 
-pub use rw::{RewriteRule, RewriteRuleSet, Rewriter};
+pub use rw::{rewrite_bottom_up, Rewriter};
+
+/// Rewriter implementation using the `beta_conv` rule.
+#[derive(Clone, Copy)]
+pub struct BetaConvRW;
+
+impl Rewriter for BetaConvRW {
+    fn step(&mut self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm> {
+        match ctx.thm_beta_conv(&e) {
+            Ok(th) => Some(th),
+            Err(..) => None,
+        }
+    }
+}
+
+/// Normalize the conclusion of `th` using beta-reduction.
+pub fn thm_rw_beta_conv(ctx: &mut dyn CtxI, th: Thm) -> Result<Thm> {
+    let c = th.concl().clone();
+    match rewrite_bottom_up(ctx, &mut BetaConvRW, c)? {
+        rw::Res::RwSame => Ok(th.clone()),
+        rw::Res::RwStep(th2) => {
+            dbg!(&th, &th2);
+            let th3 = ctx.thm_bool_eq(th, th2)?;
+            Ok(th3)
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -1057,5 +1097,23 @@ mod test {
         let eq_b = ctx.mk_eq_app(x_eq_y.clone(), y_eq_x.clone()).unwrap();
         let th = thm_sym_conv(&mut ctx, x_eq_y.clone()).unwrap();
         assert_eq!(th.concl(), &eq_b);
+    }
+
+    #[test]
+    fn test_rw_beta_conv() -> Result<()> {
+        let mut ctx = Ctx::new();
+        let e = syntax::parse_expr(
+            &mut ctx,
+            r#"with (tau:type) (g1 h:tau->tau) (a:tau). let f2 = \(f:tau->tau) (x:tau). f (f x) in h (f2 g1 a) = f2 (f2 g1) a"#,
+        )?;
+
+        let th1 = ctx.thm_assume(e)?;
+        let th2 = thm_rw_beta_conv(&mut ctx, th1)?;
+        let exp = syntax::parse_expr(
+            &mut ctx,
+            r#"with (tau:type) (h g1:tau->tau) (a:tau). h (g1 (g1 a)) = (g1 (g1 (g1 (g1 a))))"#,
+        )?;
+        assert_eq!(exp, th2.concl().clone());
+        Ok(())
     }
 }
