@@ -641,6 +641,22 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_nullary_(&mut self, s: &str) -> Result<k::Expr> {
+        use Tok::*;
+
+        if let COLON = self.peek_() {
+            // inline variable decl, parse type with high precedence.
+            self.eat_(COLON)?;
+            let ty_ty = self.ctx.mk_ty();
+            let ty = self.parse_expr_bp_(u16::MAX, Some(ty_ty))?;
+            let v = k::Var::new(k::Symbol::from_str(s), ty);
+            self.local.push(v.clone());
+            Ok(self.ctx.mk_var(v))
+        } else {
+            self.expr_of_atom_(s)
+        }
+    }
+
     /// Parse an expression.
     ///
     /// `bp` is the current binding power for this Pratt parser.
@@ -699,7 +715,7 @@ impl<'a> Parser<'a> {
                             self.local.truncate(local_offset);
                             result?
                         }
-                        _ => self.expr_of_atom_(s)?,
+                        Fixity::Nullary => self.parse_nullary_(s)?,
                     }
                 }
                 DOLLAR_SYM(s) => self.expr_of_atom_(s)?,
@@ -784,7 +800,7 @@ impl<'a> Parser<'a> {
                         Fixity::Infix((l1, l2)) => (s, l1, l2),
                         Fixity::Nullary => {
                             // simple application
-                            let arg = self.expr_of_atom_(s)?;
+                            let arg = self.parse_nullary_(s)?;
                             lhs = self.ctx.mk_app(lhs, arg)?;
                             self.next_();
                             continue;

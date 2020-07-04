@@ -908,7 +908,7 @@ pub trait CtxI: fmt::Debug {
 
     /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
     /// This is a way of building a boolean `a=b` from proofs of
-    /// `a==>b` and `b==>a` (or `a|-b` and [b|-a`).
+    /// `a==>b` and `b==>a` (or `a|-b` and `b|-a`).
     fn thm_bool_eq_intro(&mut self, th1: Thm, th2: Thm) -> Result<Thm>;
 
     /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
