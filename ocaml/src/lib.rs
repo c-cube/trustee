@@ -82,7 +82,7 @@ ocaml::custom_finalize!(Ctx, trustee_finalize_ctx);
 /// Allocate a new context.
 #[ocaml::func]
 pub fn trustee_new_ctx() -> Pointer<Ctx> {
-    let ctx = Ctx(Arc::new(Mutex::new(k::ExprManager::new())));
+    let ctx = Ctx(Arc::new(Mutex::new(k::Ctx::new())));
     let ptr = Pointer::alloc_custom(ctx);
     ptr
 }
