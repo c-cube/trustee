@@ -1,4 +1,7 @@
 
+all:
+	@dune build @all --profile=release
+
 
 # must create this manually, since dune won't take it as a dependency
 # see https://github.com/ocaml/dune/issues/1407

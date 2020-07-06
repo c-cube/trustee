@@ -8,5 +8,7 @@ crate-type = ["staticlib", "cdylib"]
 
 
 [dependencies]
-trustee = {path = "/home/simon/w/trustee/", version = "*"}
+trustee = {path = "../../../core", version = "*"}
 ocaml = "^0.12.4"
+
+[workspace]
