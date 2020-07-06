@@ -2,59 +2,29 @@
 
 ### The HOL prelude for Trustee.
 
-/T /def_true
+"T" "def_true"
   `let f = (\x: bool. x=x) in f=f`
 defconst
 
 # `|- T`
-/true_is_true
+"true_is_true"
   `\x: bool. x=x` refl
   def_true sym
     bool_eq
 defthm
 
 # prove `(x=T) = x`
-/eq_true_elim
+"eq_true_elim"
   true_is_true `with x:bool. x=T` assume sym bool_eq
   true_is_true `with x:bool. x` assume bool_eq_intro
   bool_eq_intro
 def
 
-/forall /def_forall
+"forall" "def_forall"
   `\(a:type) (f:a -> bool). f = (\x:a. T)`
 defconst
 
-/forall 20 set_binder
+"forall" 20 set_binder
 
-//\ /def_and `\a b: bool. a ==> b ==> T` defconst
-//\ 60 59 set_infix
-
-#def forall = \(a:type) (f:a -> bool). f = \x:a. true.
-
-# TODO: declare as binder
-# TODO: rules to intro/elim forall
-
-# TODO: redefine
-#def false = (\x: bool. x=x) = (\x: bool. x=true).
-
-#defthm 
-
-
-# TODO: define these instead
-#decl not : bool -> bool.
-#decl /\ : bool -> bool -> bool.
-#decl \/ : bool -> bool -> bool.
-# TODO: declare /\ and /\ as infix
-
-#def exists = \(a:type)(f: a->bool). not (forall a (\y:a. not (f y))).
-
-# TODO
-# defthm ax_andintro = axiom (
-
-# TODO: define Peano axioms
-#decl nat: type.
-#decl Zero: nat.
-#decl Bit0: nat -> nat.
-#decl Bit1: nat -> nat.
-#defthm ax_pean
-
+"/\" "def_and" `\a b: bool. forall x:bool. (a ==> b ==> x) ==> x` defconst
+"/\" 60 59 set_infix

@@ -31,12 +31,6 @@ pub struct State<'a> {
     ///
     /// The toplevel dictionary (at index 0) is the system dictionary.
     scopes: Vec<Dict>,
-    /// Used for `loop`/`exit`.
-    ///
-    /// Each pair `(offset, continue)` is interpreted as follows:
-    /// - `continue` is set to `false` to interrupt the loop.
-    /// - `offset` is the index in `ctrl_stack` to backtrack to.
-    loop_stack: Vec<(u32, bool)>,
     /// Control stack, for function call.
     ctrl_stack: Vec<(CodeArray, usize)>,
 }
@@ -78,15 +72,13 @@ pub enum Value {
     Int(i64),
     Bool(bool),
     Sym(Rc<str>),
-    /// Source code.
+    /// Source code. Obtained only by parsing a file.
     Source(Rc<str>),
     //Var(Var),
     Expr(k::Expr),
     Thm(k::Thm),
     CodeArray(CodeArray),
     Array(ValueArray),
-    Dict(Dict),
-    // TODO: Goal? Goals? Tactic?
 }
 
 impl PartialEq for Value {
@@ -115,7 +107,7 @@ enum Instr {
     /// Call a word defined using this code array.
     Call(CodeArray),
     /// Call a word by its name. Useful for late binding and recursion.
-    CallDelayed(Rc<str>),
+    Get(Rc<str>),
 }
 
 // NOTE: modify `INSTR_CORE` below when modifying this.
@@ -124,11 +116,8 @@ enum Instr {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InstrCore {
     Def,
-    For,
     If,
     IfElse,
-    Loop,
-    Exit,
     Dup,
     Swap,
     Drop,
@@ -153,12 +142,6 @@ enum InstrCore {
     Source,
     /// Read a file into a source string
     LoadFile,
-    ArrGet,
-    ArrSet,
-    ArrLen,
-    ArrLoad,
-    ArrDump,
-    // TODO: make an array of a given size? what to fill it with?
 }
 
 /// A custom instruction implemented in rust.
@@ -323,18 +306,18 @@ pub(crate) mod parser {
                     self.i = j;
                     Tok::Int(n)
                 }
-                b'/' => {
+                b'"' => {
                     let mut j = self.i + 1;
                     while j < self.bytes.len() && {
                         let c = self.bytes[j];
-                        is_id_char(c) || c.is_ascii_digit()
+                        c != b'"'
                     } {
                         j += 1;
                     }
                     let tok = std::str::from_utf8(&self.bytes[self.i + 1..j])
                         .expect("invalid utf8 slice");
                     self.col += j - self.i + 1;
-                    self.i = j;
+                    self.i = j + 1;
                     Tok::QuotedId(tok)
                 }
                 c if is_id_char(c) => {
@@ -394,10 +377,9 @@ mod ml {
     const INSTR_CORE: &'static [InstrCore] = {
         use InstrCore::*;
         &[
-            Def, For, If, IfElse, Loop, Exit, Dup, Swap, Drop, Rot, Begin, End,
-            Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod, PrintPop,
-            PrintStack, Inspect, Clear, Source, LoadFile, ArrGet, ArrSet,
-            ArrLen, ArrLoad, ArrDump,
+            Def, If, IfElse, Dup, Swap, Drop, Rot, Eq, Lt, Gt, Leq, Geq, Add,
+            Mul, Sub, Div, Mod, PrintStack, Clear, PrintPop, Inspect, Source,
+            LoadFile, Begin, End,
         ]
     };
 
@@ -407,11 +389,8 @@ mod ml {
 
             match self {
                 I::Def => "def",
-                I::For => "for",
                 I::If => "if",
                 I::IfElse => "ifelse",
-                I::Loop => "loop",
-                I::Exit => "exit",
                 I::Dup => "dup",
                 I::Swap => "swap",
                 I::Drop => "drop",
@@ -434,11 +413,6 @@ mod ml {
                 I::Clear => "clear",
                 I::Source => "source",
                 I::LoadFile => "load_file",
-                I::ArrGet => "a_get",
-                I::ArrSet => "a_set",
-                I::ArrLen => "a_len",
-                I::ArrLoad => "a_load",
-                I::ArrDump => "a_dump",
             }
         }
 
@@ -449,31 +423,7 @@ mod ml {
                 I::Def => {
                     let c = st.pop1()?;
                     let sym = st.pop1_sym()?;
-                    st.scopes.last_mut().unwrap().0.insert(sym.clone(), c);
-                }
-                I::For => {
-                    let c = st.pop1_codearray()?;
-                    let stop = st.pop1_int()?;
-                    let step = st.pop1_int()?;
-                    let start = st.pop1_int()?;
-
-                    let offset = st.ctrl_stack.len();
-                    st.loop_stack.push((offset as u32, true)); // in case of `exit`
-
-                    let mut i = start;
-                    while if step > 0 { i <= stop } else { i >= stop } {
-                        if !st.loop_stack.last().unwrap().1 {
-                            break; // `exit` was called.
-                        }
-
-                        st.stack.push(Value::Int(i));
-                        // println!("for: i={}, ca: {:?}", i, &c);
-                        // println!("scopes: {:?}", &st.scopes[1..]);
-                        st.exec_codearray_(&c);
-                        st.exec_loop_()?;
-                        i += step;
-                    }
-                    st.loop_stack.pop().expect("loop_stack mismatch in `for`");
+                    st.scopes[0].0.insert(sym.clone(), c);
                 }
                 I::If => {
                     let c = st.pop1_codearray()?;
@@ -494,34 +444,6 @@ mod ml {
                     }
                     st.exec_loop_()?;
                 }
-                I::Loop => {
-                    let c = st.pop1_codearray()?;
-                    let offset = st.ctrl_stack.len();
-                    st.loop_stack.push((offset as u32, true));
-
-                    loop {
-                        if !st.loop_stack.last().unwrap().1 {
-                            break; // `exit` was called.
-                        }
-
-                        st.exec_codearray_(&c);
-                        st.exec_loop_()?;
-                    }
-
-                    st.loop_stack.pop().expect("loop_stack mismatch in `loop`");
-                }
-                I::Exit => match st.loop_stack.last_mut() {
-                    None => {
-                        return Err(Error::new("`exit` called outside a loop"))
-                    }
-                    Some((offset, v)) => {
-                        // signal exit to the loop
-                        *v = false;
-                        // now interrupt current computation
-                        st.cur_i = None;
-                        st.ctrl_stack.truncate(*offset as usize);
-                    }
-                },
                 I::Dup => match st.stack.last() {
                     Some(v) => {
                         let v = v.clone();
@@ -657,48 +579,6 @@ mod ml {
                         })?;
                     st.push_val(Value::Source(content.into()))
                 }
-                I::ArrGet => {
-                    let i = st.pop1_int()?;
-                    let a = st.pop1_array()?;
-                    let a = a.0.borrow();
-                    if i < 0 || i as usize >= a.len() {
-                        return Err(Error::new("invalid index"));
-                    }
-                    st.push_val(a[i as usize].clone())
-                }
-                I::ArrSet => {
-                    let v = st.pop1()?;
-                    let i = st.pop1_int()?;
-                    let a = st.pop1_array()?;
-                    let mut a = a.0.borrow_mut();
-                    if i < 0 || i as usize >= a.len() {
-                        return Err(Error::new("invalid index"));
-                    }
-                    a[i as usize] = v
-                }
-                I::ArrLen => {
-                    let a = st.pop1_array()?;
-                    let a = a.0.borrow();
-                    st.push_val(Value::Int(a.len() as i64))
-                }
-                I::ArrLoad => {
-                    let i = st.pop1_int()?;
-                    let n = st.stack.len();
-                    if i < 0 || n < i as usize {
-                        return Err(Error::new_string(format!(
-                            "cannot pop {} values off the stack",
-                            i
-                        )));
-                    }
-                    let v = st.stack.drain(n - (i as usize)..).collect();
-                    let va = ValueArray(Rc::new(RefCell::new(v)));
-                    st.push_val(Value::Array(va))
-                }
-                I::ArrDump => {
-                    let a = st.pop1_array()?;
-                    let a = a.0.borrow();
-                    st.stack.extend(a.iter().cloned());
-                }
             }
             Ok(())
         }
@@ -760,7 +640,6 @@ mod ml {
                 cur_i: None,
                 stack: vec![],
                 scopes: vec![scope0],
-                loop_stack: vec![],
                 ctrl_stack: vec![],
             }
         }
@@ -846,14 +725,14 @@ mod ml {
                 }
                 Tok::Id(s) => {
                     // Find definition of symbol `s` in `self.scopes[0]`,
-                    // otherwise delay (for user scopes)
+                    // otherwise emit a dynamic get (for user scopes)
                     let i = match self.scopes[0].0.get(&*s) {
-                        None => Instr::CallDelayed(s.into()),
                         Some(Value::CodeArray(ca)) if ca.0.len() == 1 => {
                             ca.0[0].clone()
                         }
                         Some(Value::CodeArray(ca)) => Instr::Call(ca.clone()),
                         Some(v) => Instr::Im(v.clone()),
+                        None => Instr::Get(s.into()),
                     };
                     p.next();
                     Ok(i)
@@ -871,7 +750,7 @@ mod ml {
                     b.run(self)?; // ask the builtin to eval itself
                 }
                 Instr::Call(ca) => self.exec_codearray_(&ca),
-                Instr::CallDelayed(s) => {
+                Instr::Get(s) => {
                     // Find definition of symbol `s` in `self.scopes`,
                     // starting from the most recent scope.
                     if let Some(v) =
@@ -1333,31 +1212,6 @@ mod test {
     }
 
     #[test]
-    fn test_fact() -> Result<()> {
-        let mut ctx = k::Ctx::new();
-        let mut st = State::new(&mut ctx);
-
-        st.run("/fact { 1 swap -1 1 { mul } for } def")?;
-        st.run("6 fact")?;
-        let v = st.pop1_int()?;
-        assert_eq!(v, 720);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_loop() -> Result<()> {
-        let mut ctx = k::Ctx::new();
-        let mut st = State::new(&mut ctx);
-
-        st.run("1 { dup 10 eq { exit } if 1 add } loop")?;
-        let v = st.pop1_int()?;
-        assert_eq!(v, 10);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_parse_prelude_and_forall() -> Result<()> {
         let mut ctx = k::Ctx::new();
         let mut st = State::new(&mut ctx);
@@ -1376,31 +1230,4 @@ mod test {
 
         Ok(())
     }
-
-    /*
-
-    #[test]
-    fn test_parser_statement() -> Result<()> {
-        let mut ctx = k::Ctx::new();
-        let d = parse_statement(
-            &mut ctx,
-            r#"def true = (let f = (\x: bool. x=x) in f=f)."#,
-        )?;
-        println!("def true: {:?}", d);
-        println!("find true? {:?}", ctx.find_const("true"));
-        let e = parse_expr(&mut ctx, r#"true"#)?;
-        println!("parse true: {:?}", e);
-
-        let d2 = parse_statement(
-            &mut ctx,
-            r#"def false = (\x: bool. true) = (\x: bool. x) ."#,
-        )?;
-        println!("def false: {:?}", d2);
-        println!("find false? {:?}", ctx.find_const("false"));
-        let e = parse_expr(&mut ctx, r#"false"#)?;
-        println!("parse false: {:?}", e);
-
-        Ok(())
-    }
-    */
 }

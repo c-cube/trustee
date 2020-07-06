@@ -6,7 +6,7 @@ syn keyword     trusteeKW        hol_prelude pledge_no_more_axioms source
 syn keyword     trusteeKW        pstack clear swap rot begin end
 syn match       trusteeComment "#.*" contains=trusteeTodo
 
-syn match       trusteeSym      +\/[a-zA-Z0-9_]\++
+syn match       trusteeSym      +"[^"]\+"+
 
 
 " TODO: handle this only within ``

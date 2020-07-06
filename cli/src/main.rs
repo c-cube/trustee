@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
         ml.run(&"hol_prelude source")?;
     }
     if let Some(x) = args.opt_value_from_str::<&str, String>("--include")? {
-        ml.run(&format!("/{} load_file source", &x))?;
+        ml.run(&format!(r#""{}" load_file source"#, &x))?;
     }
 
     let mut rl = rustyline::Editor::<()>::new();
