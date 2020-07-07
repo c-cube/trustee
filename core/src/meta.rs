@@ -705,10 +705,14 @@ mod ml {
                                 Instr::Im(v) => {
                                     arr.push(v); // only accept values
                                 }
-                                _ => {
-                                    return Err(Error::new(
-                                        "expect a value in an array",
-                                    ))
+                                i => {
+                                    self.exec_instr_(i)?;
+                                    let v = self.pop1().map_err(|e| {
+                                        e.set_source(Error::new(
+                                            "evaluate element of an array",
+                                        ))
+                                    })?;
+                                    arr.push(v)
                                 }
                             },
                         }
@@ -911,7 +915,7 @@ mod logic_builtins {
         Abs,
         HolPrelude,
         PledgeNoMoreAxioms,
-        RwBetaConv,
+        Rewrite,
     }
 
     use Rule as R;
@@ -942,7 +946,7 @@ mod logic_builtins {
         &R::Abs,
         &R::HolPrelude,
         &R::PledgeNoMoreAxioms,
-        &R::RwBetaConv,
+        &R::Rewrite,
     ];
 
     impl InstrBuiltin for Rule {
@@ -972,7 +976,7 @@ mod logic_builtins {
                 R::Abs => "abs",
                 R::HolPrelude => "hol_prelude",
                 R::PledgeNoMoreAxioms => "pledge_no_more_axioms",
-                R::RwBetaConv => "rw_beta_conv",
+                R::Rewrite => "rw",
             }
         }
 
@@ -1144,9 +1148,53 @@ mod logic_builtins {
                 R::PledgeNoMoreAxioms => {
                     st.ctx.pledge_no_new_axiom();
                 }
-                R::RwBetaConv => {
+                R::Rewrite => {
+                    let rw = st.pop1()?;
                     let th = st.pop1_thm()?;
-                    let th = algo::thm_rw_beta_conv(st.ctx, th)?;
+
+                    let fail = || {
+                        Err(Error::new(
+                            r#"rw: expect a theorem, "beta", or an array thereof as second parameter"#,
+                        ))
+                    };
+                    let mut beta = false;
+                    let mut rw_rules = algo::RewriteRuleSet::new();
+                    match rw {
+                        Value::Sym(s) if &*s == "beta" => {
+                            beta = true;
+                        }
+                        Value::Array(a) => {
+                            let a = a.0.borrow();
+                            for x in a.iter() {
+                                match x {
+                                    Value::Sym(s) if &**s == "beta" => {
+                                        beta = true;
+                                    }
+                                    Value::Thm(th) => {
+                                        let rule = algo::RewriteRule::new(&th)?;
+                                        rw_rules.add_rule(rule)
+                                    }
+                                    _ => return fail(),
+                                }
+                            }
+                        }
+                        _ => return fail(),
+                    }
+
+                    let rw: Box<dyn algo::Rewriter> =
+                        if beta && !rw_rules.is_empty() {
+                            let mut rw = algo::RewriteCombine::new();
+                            rw.add(&algo::RewriterBetaConv);
+                            rw.add(&rw_rules);
+                            Box::new(rw)
+                        } else if beta {
+                            Box::new(algo::RewriterBetaConv)
+                        } else if !rw_rules.is_empty() {
+                            Box::new(rw_rules)
+                        } else {
+                            return fail();
+                        };
+                    let th = algo::thm_rw_concl(st.ctx, th, &*rw)?;
                     st.push_val(Value::Thm(th))
                 }
             };

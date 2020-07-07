@@ -835,7 +835,7 @@ pub mod rw {
         ///
         /// If it returns `Some(A |- e=e2)`, then the term rewrites into `e2`
         /// with the given proof.
-        fn step(&mut self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm>;
+        fn step(&self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm>;
     }
 
     /// Rewrite `e` using the rewriter `rw`.
@@ -843,7 +843,7 @@ pub mod rw {
     /// The rewriter is called on every non-type subterm, starting from the leaves.
     pub fn rewrite_bottom_up(
         ctx: &mut dyn CtxI,
-        rw: &mut dyn Rewriter,
+        rw: &dyn Rewriter,
         e0: Expr,
     ) -> Result<Res> {
         let mut th_eq = None; // stores proof for `e0 = e`
@@ -981,6 +981,52 @@ pub mod rw {
         }
     }
 
+    /// A combinator of rewriters.
+    pub struct RewriteCombine<'a> {
+        rw: Vec<&'a dyn Rewriter>,
+    }
+
+    impl<'a> RewriteCombine<'a> {
+        /// New combinator of rewriters.
+        pub fn new() -> Self {
+            RewriteCombine { rw: vec![] }
+        }
+
+        /// Add a sub-rewriter.
+        pub fn add(&mut self, rw: &'a dyn Rewriter) {
+            self.rw.push(rw);
+        }
+
+        /// Add a slice of sub-rewriters.
+        pub fn add_slice(&mut self, rw: &[&'a dyn Rewriter]) {
+            for x in rw.iter().copied() {
+                self.rw.push(x)
+            }
+        }
+
+        /// Add a list of sub-rewriters.
+        pub fn extend<I>(&mut self, rw: I)
+        where
+            I: IntoIterator<Item = &'a dyn Rewriter>,
+        {
+            for x in rw {
+                self.rw.push(x)
+            }
+        }
+    }
+
+    impl<'a> Rewriter for RewriteCombine<'a> {
+        fn step(&self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm> {
+            for rw in self.rw.iter() {
+                match rw.step(ctx, e) {
+                    x @ Some(..) => return x,
+                    None => (),
+                }
+            }
+            None
+        }
+    }
+
     /// A set of rewrite rules.
     ///
     /// Implementation details are hidden, but this implements `Rewriter`.
@@ -990,7 +1036,7 @@ pub mod rw {
     }
 
     impl Rewriter for RewriteRuleSet {
-        fn step(&mut self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm> {
+        fn step(&self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm> {
             for r in &self.rules {
                 match match_(&r.lhs, e) {
                     None => (),
@@ -1027,6 +1073,14 @@ pub mod rw {
                 self.rules.push(r)
             }
         }
+
+        pub fn is_empty(&self) -> bool {
+            self.rules.is_empty()
+        }
+
+        pub fn size(&self) -> usize {
+            self.rules.len()
+        }
     }
 
     impl std::iter::FromIterator<RewriteRule> for RewriteRuleSet {
@@ -1041,14 +1095,16 @@ pub mod rw {
     }
 }
 
-pub use rw::{rewrite_bottom_up, Rewriter};
+pub use rw::{
+    rewrite_bottom_up, RewriteCombine, RewriteRule, RewriteRuleSet, Rewriter,
+};
 
 /// Rewriter implementation using the `beta_conv` rule.
 #[derive(Clone, Copy)]
-pub struct BetaConvRW;
+pub struct RewriterBetaConv;
 
-impl Rewriter for BetaConvRW {
-    fn step(&mut self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm> {
+impl Rewriter for RewriterBetaConv {
+    fn step(&self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm> {
         match ctx.thm_beta_conv(&e) {
             Ok(th) => Some(th),
             Err(..) => None,
@@ -1056,13 +1112,16 @@ impl Rewriter for BetaConvRW {
     }
 }
 
-/// Normalize the conclusion of `th` using beta-reduction.
-pub fn thm_rw_beta_conv(ctx: &mut dyn CtxI, th: Thm) -> Result<Thm> {
+/// Normalize the conclusion of `th` using the given rewriter.
+pub fn thm_rw_concl(
+    ctx: &mut dyn CtxI,
+    th: Thm,
+    rw: &dyn Rewriter,
+) -> Result<Thm> {
     let c = th.concl().clone();
-    match rewrite_bottom_up(ctx, &mut BetaConvRW, c)? {
+    match rewrite_bottom_up(ctx, rw, c)? {
         rw::Res::RwSame => Ok(th.clone()),
         rw::Res::RwStep(th2) => {
-            dbg!(&th, &th2);
             let th3 = ctx.thm_bool_eq(th, th2)?;
             Ok(th3)
         }
@@ -1108,7 +1167,7 @@ mod test {
         )?;
 
         let th1 = ctx.thm_assume(e)?;
-        let th2 = thm_rw_beta_conv(&mut ctx, th1)?;
+        let th2 = thm_rw_concl(&mut ctx, th1, &RewriterBetaConv)?;
         let exp = syntax::parse_expr(
             &mut ctx,
             r#"with (tau:type) (h g1:tau->tau) (a:tau). h (g1 (g1 a)) = (g1 (g1 (g1 (g1 a))))"#,
