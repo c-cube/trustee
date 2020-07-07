@@ -749,217 +749,24 @@ impl fmt::Debug for Thm {
 /// A substitution.
 pub type Subst = Vec<(Var, Expr)>;
 
-///! # Interface for a proof context.
+///! # Context for Expressions and Theorem.
 ///
 /// The proof context is responsible for creating new terms and new theorems,
 /// in a way that ensures theorems are valid.
-pub trait CtxI: fmt::Debug {
-    /// Get the `=` constant
-    fn mk_eq(&mut self) -> Expr;
 
-    /// Make `a = b`.
-    ///
-    /// Fails if `a` and `b` do not have the same type.
-    fn mk_eq_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
-        let eq = self.mk_eq();
-        self.mk_app_l(eq, &[a.ty().clone(), a, b])
-    }
-
-    /// For each pair `(x,u)` in `subst`, replace instances of the free
-    /// variable `x` by `u` in `t`.
-    fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr>;
-
-    /// The type of types. This has type `self.mk_kind()`.
-    fn mk_ty(&self) -> Expr;
-
-    /// The "type" of `type`. This is the only typeless expression.
-    ///
-    /// Trying to compute this expression's type will panic.
-    fn mk_kind(&self) -> Expr;
-
-    /// The type of booleans.
-    fn mk_bool(&self) -> Expr;
-
-    /// Apply `a` to `b`.
-    fn mk_app(&mut self, a: Expr, b: Expr) -> Result<Expr>;
-
-    /// Apply `f` to the given arguments.
-    fn mk_app_l(&mut self, f: Expr, args: &[Expr]) -> Result<Expr> {
-        let mut e = f;
-        for x in args {
-            let e2 = e.clone();
-            e = self.mk_app(e2, x.clone())?;
-        }
-        Ok(e)
-    }
-
-    /// Make a free variable.
-    fn mk_var(&mut self, v: Var) -> Expr;
-
-    /// Make a free variable.
-    fn mk_var_str(&mut self, name: &str, ty_var: Type) -> Expr {
-        self.mk_var(Var::from_str(name, ty_var))
-    }
-
-    /// Make a free type variable.
-    fn mk_ty_var_str(&mut self, name: &str) -> Expr {
-        let ty = self.mk_ty();
-        self.mk_var_str(name, ty)
-    }
-
-    /// Make a bound variable with given type and index.
-    fn mk_bound_var(&mut self, idx: DbIndex, ty_var: Type) -> Expr;
-
-    /// Make a lambda term by abstracting on `v`.
-    fn mk_lambda(&mut self, v: Var, body: Expr) -> Result<Expr>;
-
-    /// Bind several variables at once.
-    fn mk_lambda_l(&mut self, vars: &[Var], body: Expr) -> Result<Expr> {
-        let mut e = body;
-        // TODO: substitute more efficiently (with a stack, rather than one by one)?
-        // right-assoc
-        for v in vars.iter().rev() {
-            e = self.mk_lambda(v.clone(), e)?;
-        }
-        Ok(e)
-    }
-
-    /// Make a pi term by absracting on `v`.
-    fn mk_pi(&mut self, v: Var, body: Expr) -> Result<Expr>;
-
-    /// Bind several variables at once.
-    fn mk_pi_l(&mut self, vars: &[Var], body: Expr) -> Result<Expr> {
-        let mut e = body;
-        // TODO: substitute more efficiently (with a stack, rather than one by one)?
-        // right-assoc
-        for v in vars.iter().rev() {
-            e = self.mk_pi(v.clone(), e)?;
-        }
-        Ok(e)
-    }
-
-    /// Make an arrow `a -> b` term.
-    ///
-    /// This builds `Π_:a. b`.
-    fn mk_arrow(&mut self, ty1: Expr, ty2: Expr) -> Result<Expr>;
-
-    /// Declare a new constant with given name and type.
-    ///
-    /// Fails if some constant with the same name exists, or if
-    /// the type is not closed.
-    /// This constant has no axiom associated to it, it is entirely opaque.
-    fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr>;
-
-    /// Change the fixity of a given constant.
-    ///
-    /// Does nothing if the constant is not defined.
-    fn set_fixity(&mut self, s: &str, f: Fixity);
-
-    /// Find a constant by name. Returns `None` if no such constant exists.
-    ///
-    /// Use `as_const` on the expression to get its content.
-    fn find_const(&self, s: &str) -> Option<(&Expr, Fixity)>;
-
-    /// Define a named lemma.
-    ///
-    /// If another lemma with the same name exists, it will be replaced.
-    fn define_lemma(&mut self, s: &str, th: Thm);
-
-    /// Find a lemma by name. Returns `None` if no such theorem exists.
-    fn find_lemma(&self, s: &str) -> Option<&Thm>;
-
-    /// `assume F` is `F |- F`.
-    ///
-    /// This fails if `F` is not a boolean.
-    fn thm_assume(&mut self, e: Expr) -> Result<Thm>;
-
-    /// `refl t` is `|- t=t`
-    fn thm_refl(&mut self, e: Expr) -> Thm;
-
-    /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
-    ///
-    /// Can fail if the conclusions don't match properly.
-    fn thm_trans(&mut self, th1: Thm, th2: Thm) -> Result<Thm>;
-
-    /// `congr (F1 |- f=g) (F2 |- t=u)` is `F1, F2 |- f t=g u`
-    fn thm_congr(&mut self, th1: Thm, th2: Thm) -> Result<Thm>;
-
-    /// `congr_ty (F1 |- f=g) ty` is `F1 |- f ty=g ty`
-    fn thm_congr_ty(&mut self, th: Thm, ty: &Expr) -> Result<Thm>;
-
-    /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
-    ///
-    /// Returns an error if the substitution is not closed.
-    fn thm_instantiate(
-        &mut self,
-        th: Thm,
-        subst: &[(Var, Expr)],
-    ) -> Result<Thm>;
-
-    /// `abs x (F |- t=u)` is `F |- (λx.t)=(λx.u)`
-    ///
-    /// Fails if `x` occurs freely in `F`.
-    fn thm_abs(&mut self, v: &Var, thm: Thm) -> Result<Thm>;
-
-    /// `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`
-    ///
-    /// This fails if `b` does not occur _syntactically_ in the hypothesis
-    /// of the second theorem.
-    ///
-    /// NOTE: this is not strictly necessary, as it's not an axiom in HOL light,
-    /// but we include it here anyway.
-    fn thm_cut(&mut self, th1: Thm, th2: Thm) -> Result<Thm>;
-
-    /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
-    /// This is the boolean equivalent of transitivity.
-    fn thm_bool_eq(&mut self, th1: Thm, th2: Thm) -> Result<Thm>;
-
-    /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
-    /// This is a way of building a boolean `a=b` from proofs of
-    ///  `a|-b` and `b|-a`.
-    fn thm_bool_eq_intro(&mut self, th1: Thm, th2: Thm) -> Result<Thm>;
-
-    /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
-    /// Fails if the term is not a beta-redex.
-    fn thm_beta_conv(&mut self, e: &Expr) -> Result<Thm>;
-
-    /// `new_basic_definition (x=t)` where `x` is a variable and `t` a term
-    /// with a closed type,
-    /// returns a theorem `|- x=t` where `x` is now a constant, along with
-    /// the constant `x`.
-    fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Expr)>;
-
-    /// Create a new axiom `assumptions |- concl`.
-    /// **use with caution**
-    ///
-    /// Fails if `pledge_no_new_axiom` was called earlier on this context.
-    fn thm_axiom(&mut self, hyps: Vec<Expr>, concl: Expr) -> Result<Thm>;
-
-    /// Pledge that no new call to `thm_axiom` will occur.
-    ///
-    /// This freezes the logical theory to the consequences of the builtin
-    /// rules and the already created axioms.
-    fn pledge_no_new_axiom(&mut self);
-
-    /// Introduce a new type operator.
-    ///
-    /// Here, too, we follow HOL light:
-    /// `new_basic_type_definition(tau, abs, repr, inhabited)`
-    /// where `inhabited` is the theorem `|- Phi x` with `x : ty`,
-    /// defines a new type operator named `tau` and two functions,
-    /// `abs : ty -> tau` and `repr: tau -> ty`.
-    ///
-    /// It returns a struct `NewTypeDef` containing `tau, absthm, reprthm`, where:
-    /// - `tau` is the new (possibly parametrized) type operator
-    /// - `absthm` is `|- abs (repr x) = x`
-    /// - `reprthm` is `|- Phi x <=> repr (abs x) = x`
-    fn thm_new_basic_type_definition(
-        &mut self,
-        name_tau: Symbol,
-        abs: Symbol,
-        repr: Symbol,
-        thm_inhabited: Thm,
-    ) -> Result<NewTypeDef>;
+/// Global manager for expressions, used to implement perfect sharing, allocating
+/// new terms, etc.
+pub struct Ctx {
+    /// Hashconsing table, with weak semantics.
+    tbl: fnv::FnvHashMap<ExprView, WExpr>,
+    builtins: Option<ExprBuiltins>,
+    consts: fnv::FnvHashMap<Ref<str>, Expr>,
+    lemmas: fnv::FnvHashMap<Ref<str>, Thm>,
+    eq: Option<Expr>,
+    next_cleanup: usize,
+    axioms: Vec<Thm>,
+    uid: u32, // Unique to this ctx
+    allow_new_axioms: bool,
 }
 
 /// Helper for defining new type.
@@ -980,26 +787,6 @@ pub struct NewTypeDef {
     pub repr_x: Var,
 }
 
-///! # Context for Expressions and Theorem.
-///
-/// The state used to ensure proper hashconsing of terms and to build terms
-/// and theorems. This implements `CtxI`.
-
-/// Global manager for expressions, used to implement perfect sharing, allocating
-/// new terms, etc.
-pub struct Ctx {
-    /// Hashconsing table, with weak semantics.
-    tbl: fnv::FnvHashMap<ExprView, WExpr>,
-    builtins: Option<ExprBuiltins>,
-    consts: fnv::FnvHashMap<Ref<str>, Expr>,
-    lemmas: fnv::FnvHashMap<Ref<str>, Thm>,
-    eq: Option<Expr>,
-    next_cleanup: usize,
-    axioms: Vec<Thm>,
-    uid: u32, // Unique to this ctx
-    allow_new_axioms: bool,
-}
-
 impl fmt::Debug for Ctx {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "<expr manager>")
@@ -1011,7 +798,6 @@ const CLEANUP_PERIOD: usize = 5000;
 
 /// A set of builtin symbols.
 struct ExprBuiltins {
-    kind: Expr,
     ty: Expr,
     bool: Expr,
 }
@@ -1051,6 +837,7 @@ fn hyps_merge(th1: &mut Thm, th2: &mut Thm) -> Vec<Expr> {
 // used to allocate unique ExprManager IDs
 static EM_ID: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
 
+// helpers
 impl Ctx {
     /// Create a new term manager with given initial capacity.
     pub fn with_capacity(n: usize) -> Self {
@@ -1088,7 +875,7 @@ impl Ctx {
             )
         };
         ctx.add_const_(bool.clone());
-        let builtins = ExprBuiltins { bool, kind, ty };
+        let builtins = ExprBuiltins { bool, ty };
         ctx.builtins = Some(builtins);
         ctx
     }
@@ -1392,9 +1179,10 @@ pub(crate) const FIXITY_LAM: Fixity = Fixity::Binder((20, 21));
 pub(crate) const FIXITY_PI: Fixity = Fixity::Binder((24, 25));
 pub(crate) const FIXITY_ARROW: Fixity = Fixity::Infix((81, 80));
 
-impl CtxI for Ctx {
+// public interface
+impl Ctx {
     /// Get the `=` constant
-    fn mk_eq(&mut self) -> Expr {
+    pub fn mk_eq(&mut self) -> Expr {
         match self.eq {
             Some(ref c) => c.clone(),
             None => {
@@ -1413,7 +1201,10 @@ impl CtxI for Ctx {
         }
     }
 
-    fn mk_eq_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
+    /// Make `a = b`.
+    ///
+    /// Fails if `a` and `b` do not have the same type.
+    pub fn mk_eq_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
         self.check_uid_(&a);
         self.check_uid_(&b);
         if a.ty() != b.ty() {
@@ -1423,7 +1214,9 @@ impl CtxI for Ctx {
         self.mk_app_l(eq, &[a.ty().clone(), a, b])
     }
 
-    fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr> {
+    /// For each pair `(x,u)` in `subst`, replace instances of the free
+    /// variable `x` by `u` in `t`.
+    pub fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr> {
         self.check_uid_(&t);
         struct Replace<'a> {
             // cache, relative to depth
@@ -1479,46 +1272,60 @@ impl CtxI for Ctx {
         replace.replace(t, 0)
     }
 
-    fn mk_ty(&self) -> Expr {
+    /// The type of types. This has type `self.mk_kind()`.
+    pub fn mk_ty(&self) -> Expr {
         self.builtins_().ty.clone()
     }
 
-    fn mk_kind(&self) -> Expr {
-        self.builtins_().kind.clone()
-    }
-
-    fn mk_bool(&self) -> Expr {
+    /// The type of booleans.
+    pub fn mk_bool(&self) -> Expr {
         self.builtins_().bool.clone()
     }
 
-    fn mk_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
+    /// Apply `a` to `b`.
+    pub fn mk_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
         self.check_uid_(&a);
         self.check_uid_(&b);
         self.hashcons_(EApp(a, b))
     }
 
-    fn mk_var(&mut self, v: Var) -> Expr {
+    /// Apply `f` to the given arguments.
+    pub fn mk_app_l(&mut self, f: Expr, args: &[Expr]) -> Result<Expr> {
+        let mut e = f;
+        for x in args {
+            let e2 = e.clone();
+            e = self.mk_app(e2, x.clone())?;
+        }
+        Ok(e)
+    }
+
+    /// Make a free variable.
+    pub fn mk_var(&mut self, v: Var) -> Expr {
         self.check_uid_(&v.ty);
         self.hashcons_(EVar(v)).expect("mk_var can't fail")
     }
 
-    fn mk_var_str(&mut self, name: &str, ty_var: Type) -> Expr {
+    /// Make a free variable.
+    pub fn mk_var_str(&mut self, name: &str, ty_var: Type) -> Expr {
         self.check_uid_(&ty_var);
         self.mk_var(Var::from_str(name, ty_var))
     }
 
-    fn mk_ty_var_str(&mut self, name: &str) -> Expr {
+    /// Make a free type variable.
+    pub fn mk_ty_var_str(&mut self, name: &str) -> Expr {
         let ty = self.mk_ty();
         self.mk_var_str(name, ty)
     }
 
-    fn mk_bound_var(&mut self, idx: DbIndex, ty_var: Type) -> Expr {
+    /// Make a bound variable with given type and index.
+    pub fn mk_bound_var(&mut self, idx: DbIndex, ty_var: Type) -> Expr {
         self.check_uid_(&ty_var);
         self.hashcons_(EBoundVar(BoundVarContent { idx, ty: ty_var }))
             .expect("mk_bound_var cannot fail")
     }
 
-    fn mk_lambda(&mut self, v: Var, body: Expr) -> Result<Expr> {
+    /// Make a lambda term by abstracting on `v`.
+    pub fn mk_lambda(&mut self, v: Var, body: Expr) -> Result<Expr> {
         self.check_uid_(&v.ty);
         self.check_uid_(&body);
         let v_ty = v.ty.clone();
@@ -1526,7 +1333,19 @@ impl CtxI for Ctx {
         self.mk_lambda_(v_ty, body)
     }
 
-    fn mk_pi(&mut self, v: Var, body: Expr) -> Result<Expr> {
+    /// Bind several variables at once.
+    pub fn mk_lambda_l(&mut self, vars: &[Var], body: Expr) -> Result<Expr> {
+        let mut e = body;
+        // TODO: substitute more efficiently (with a stack, rather than one by one)?
+        // right-assoc
+        for v in vars.iter().rev() {
+            e = self.mk_lambda(v.clone(), e)?;
+        }
+        Ok(e)
+    }
+
+    /// Make a pi term by absracting on `v`.
+    pub fn mk_pi(&mut self, v: Var, body: Expr) -> Result<Expr> {
         self.check_uid_(&v.ty);
         self.check_uid_(&body);
         let v_ty = v.ty.clone();
@@ -1534,7 +1353,21 @@ impl CtxI for Ctx {
         self.mk_pi_(v_ty, body)
     }
 
-    fn mk_arrow(&mut self, ty1: Expr, ty2: Expr) -> Result<Expr> {
+    /// Bind several variables at once.
+    pub fn mk_pi_l(&mut self, vars: &[Var], body: Expr) -> Result<Expr> {
+        let mut e = body;
+        // TODO: substitute more efficiently (with a stack, rather than one by one)?
+        // right-assoc
+        for v in vars.iter().rev() {
+            e = self.mk_pi(v.clone(), e)?;
+        }
+        Ok(e)
+    }
+
+    /// Make an arrow `a -> b` term.
+    ///
+    /// This builds `Π_:a. b`.
+    pub fn mk_arrow(&mut self, ty1: Expr, ty2: Expr) -> Result<Expr> {
         // need to shift ty2 by 1 to account for the Π binder.
         self.check_uid_(&ty1);
         self.check_uid_(&ty2);
@@ -1542,18 +1375,20 @@ impl CtxI for Ctx {
         self.mk_pi_(ty1, ty2)
     }
 
-    fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
+    /// Declare a new constant with given name and type.
+    ///
+    /// Fails if some constant with the same name exists, or if
+    /// the type is not closed.
+    /// This constant has no axiom associated to it, it is entirely opaque.
+    pub fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
         self.mk_const_with_(s, ty, Fixity::Nullary)
     }
 
-    fn find_const(&self, s: &str) -> Option<(&Expr, Fixity)> {
-        self.consts.get(s).map(|e| {
-            let f = e.as_const().unwrap().fixity();
-            (e, f)
-        })
-    }
-
-    fn set_fixity(&mut self, s: &str, f: Fixity) {
+    // TODO: return a result, and only allow infix/binder if type is inferrable
+    /// Change the fixity of a given constant.
+    ///
+    /// Does nothing if the constant is not defined.
+    pub fn set_fixity(&mut self, s: &str, f: Fixity) {
         if let Some(t) = self.consts.get_mut(s) {
             match t.view() {
                 EConst(c) => c.fix.set(f),
@@ -1562,15 +1397,32 @@ impl CtxI for Ctx {
         }
     }
 
-    fn define_lemma(&mut self, name: &str, th: Thm) {
+    /// Find a constant by name. Returns `None` if no such constant exists.
+    ///
+    /// Use `as_const` on the expression to get its content.
+    pub fn find_const(&self, s: &str) -> Option<(&Expr, Fixity)> {
+        self.consts.get(s).map(|e| {
+            let f = e.as_const().unwrap().fixity();
+            (e, f)
+        })
+    }
+
+    /// Define a named lemma.
+    ///
+    /// If another lemma with the same name exists, it will be replaced.
+    pub fn define_lemma(&mut self, name: &str, th: Thm) {
         self.lemmas.insert(name.into(), th);
     }
 
-    fn find_lemma(&self, s: &str) -> Option<&Thm> {
+    /// Find a lemma by name. Returns `None` if no such theorem exists.
+    pub fn find_lemma(&self, s: &str) -> Option<&Thm> {
         self.lemmas.get(s)
     }
 
-    fn thm_assume(&mut self, e: Expr) -> Result<Thm> {
+    /// `assume F` is `F |- F`.
+    ///
+    /// This fails if `F` is not a boolean.
+    pub fn thm_assume(&mut self, e: Expr) -> Result<Thm> {
         self.check_uid_(&e);
         if e.ty() != &self.builtins_().bool {
             return Err(Error::new("cannot assume non-boolean expression"));
@@ -1578,13 +1430,17 @@ impl CtxI for Ctx {
         Ok(Thm::make_(e.clone(), self.uid, vec![e.clone()]))
     }
 
-    fn thm_refl(&mut self, e: Expr) -> Thm {
+    /// `refl t` is `|- t=t`
+    pub fn thm_refl(&mut self, e: Expr) -> Thm {
         self.check_uid_(&e);
         let t = self.mk_eq_app(e.clone(), e.clone()).expect("refl");
         Thm::make_(t, self.uid, vec![])
     }
 
-    fn thm_trans(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+    /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
+    ///
+    /// Can fail if the conclusions don't match properly.
+    pub fn thm_trans(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let (a, b) = th1
@@ -1607,7 +1463,8 @@ impl CtxI for Ctx {
         Ok(th)
     }
 
-    fn thm_congr(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+    /// `congr (F1 |- f=g) (F2 |- t=u)` is `F1, F2 |- f t=g u`
+    pub fn thm_congr(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let (f, g) = th1.concl().unfold_eq().ok_or_else(|| {
@@ -1623,7 +1480,8 @@ impl CtxI for Ctx {
         Ok(Thm::make_(eq, self.uid, hyps))
     }
 
-    fn thm_congr_ty(&mut self, mut th: Thm, ty: &Expr) -> Result<Thm> {
+    /// `congr_ty (F1 |- f=g) ty` is `F1 |- f ty=g ty`
+    pub fn thm_congr_ty(&mut self, mut th: Thm, ty: &Expr) -> Result<Thm> {
         self.check_thm_uid_(&th);
         self.check_uid_(ty);
         let (f, g) = th.0.concl.unfold_eq().ok_or_else(|| {
@@ -1642,7 +1500,10 @@ impl CtxI for Ctx {
         Ok(th)
     }
 
-    fn thm_instantiate(
+    /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
+    ///
+    /// Returns an error if the substitution is not closed.
+    pub fn thm_instantiate(
         &mut self,
         mut th: Thm,
         subst: &[(Var, Expr)],
@@ -1664,7 +1525,10 @@ impl CtxI for Ctx {
         Ok(th)
     }
 
-    fn thm_abs(&mut self, v: &Var, mut thm: Thm) -> Result<Thm> {
+    /// `abs x (F |- t=u)` is `F |- (λx.t)=(λx.u)`
+    ///
+    /// Fails if `x` occurs freely in `F`.
+    pub fn thm_abs(&mut self, v: &Var, mut thm: Thm) -> Result<Thm> {
         self.check_uid_(&v.ty);
         self.check_thm_uid_(&thm);
         if free_vars_iter(thm.0.hyps.iter()).any(|v2| v == v2) {
@@ -1687,7 +1551,14 @@ impl CtxI for Ctx {
         Ok(thm)
     }
 
-    fn thm_cut(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+    /// `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`
+    ///
+    /// This fails if `b` does not occur _syntactically_ in the hypothesis
+    /// of the second theorem.
+    ///
+    /// NOTE: this is not strictly necessary, as it's not an axiom in HOL light,
+    /// but we include it here anyway.
+    pub fn thm_cut(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let th1_c = th1.0.concl.clone();
@@ -1717,7 +1588,9 @@ impl CtxI for Ctx {
         Ok(th1)
     }
 
-    fn thm_bool_eq(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+    /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
+    /// This is the boolean equivalent of transitivity.
+    pub fn thm_bool_eq(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let th2_c = &th2.0.concl;
@@ -1741,7 +1614,14 @@ impl CtxI for Ctx {
         Ok(Thm::make_(b, self.uid, hyps))
     }
 
-    fn thm_bool_eq_intro(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+    /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
+    /// This is a way of building a boolean `a=b` from proofs of
+    ///  `a|-b` and `b|-a`.
+    pub fn thm_bool_eq_intro(
+        &mut self,
+        mut th1: Thm,
+        mut th2: Thm,
+    ) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
@@ -1766,7 +1646,9 @@ impl CtxI for Ctx {
         Ok(th1)
     }
 
-    fn thm_beta_conv(&mut self, e: &Expr) -> Result<Thm> {
+    /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
+    /// Fails if the term is not a beta-redex.
+    pub fn thm_beta_conv(&mut self, e: &Expr) -> Result<Thm> {
         self.check_uid_(e);
         let (f, arg) = e
             .as_app()
@@ -1782,7 +1664,11 @@ impl CtxI for Ctx {
         Ok(Thm::make_(eq, self.uid, vec![]))
     }
 
-    fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Expr)> {
+    /// `new_basic_definition (x=t)` where `x` is a variable and `t` a term
+    /// with a closed type,
+    /// returns a theorem `|- x=t` where `x` is now a constant, along with
+    /// the constant `x`.
+    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Expr)> {
         self.check_uid_(&e);
         let (x, rhs) = e
             .unfold_eq()
@@ -1808,7 +1694,11 @@ impl CtxI for Ctx {
         Ok((thm, c))
     }
 
-    fn thm_axiom(&mut self, hyps: Vec<Expr>, concl: Expr) -> Result<Thm> {
+    /// Create a new axiom `assumptions |- concl`.
+    /// **use with caution**
+    ///
+    /// Fails if `pledge_no_new_axiom` was called earlier on this context.
+    pub fn thm_axiom(&mut self, hyps: Vec<Expr>, concl: Expr) -> Result<Thm> {
         if !self.allow_new_axioms {
             return Err(Error::new(
                 "this context has pledge to not take new axioms",
@@ -1822,11 +1712,27 @@ impl CtxI for Ctx {
         Ok(thm)
     }
 
-    fn pledge_no_new_axiom(&mut self) {
+    /// Pledge that no new call to `thm_axiom` will occur.
+    ///
+    /// This freezes the logical theory to the consequences of the builtin
+    /// rules and the already created axioms.
+    pub fn pledge_no_new_axiom(&mut self) {
         self.allow_new_axioms = false;
     }
 
-    fn thm_new_basic_type_definition(
+    /// Introduce a new type operator.
+    ///
+    /// Here, too, we follow HOL light:
+    /// `new_basic_type_definition(tau, abs, repr, inhabited)`
+    /// where `inhabited` is the theorem `|- Phi x` with `x : ty`,
+    /// defines a new type operator named `tau` and two functions,
+    /// `abs : ty -> tau` and `repr: tau -> ty`.
+    ///
+    /// It returns a struct `NewTypeDef` containing `tau, absthm, reprthm`, where:
+    /// - `tau` is the new (possibly parametrized) type operator
+    /// - `absthm` is `|- abs (repr x) = x`
+    /// - `reprthm` is `|- Phi x <=> repr (abs x) = x`
+    pub fn thm_new_basic_type_definition(
         &mut self,
         name_tau: Symbol,
         abs: Symbol,
@@ -1943,18 +1849,10 @@ mod test {
     }
 
     #[test]
-    fn test_kind() {
-        let em = Ctx::new();
-        let ty = em.mk_ty();
-        let k = em.mk_kind();
-        assert_eq!(&k, ty.ty());
-    }
-
-    #[test]
     #[should_panic]
     fn test_type_of_kind() {
         let em = Ctx::new();
-        let k = em.mk_kind();
+        let k = em.mk_ty().ty().clone();
         let _ = k.ty();
     }
 

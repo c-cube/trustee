@@ -20,16 +20,19 @@ defthm
   bool_eq_intro
 def
 
+# `x = (x=T)`
+"eq_true_intro" eq_true_elim sym def
+
 "forall" "def_forall"
   `\(a:type) (f:a -> bool). f = (\x:a. T)`
 defconst
 
 "forall" 20 set_binder
 
-"/\" "def_and" `\a b: bool. forall x:bool. (a ==> b ==> x) ==> x` defconst
+"/\" "def_and" `\a b: bool. forall (f:bool->bool->bool). (f a b = f T T)` defconst
 "/\" 60 59 set_infix
 
-# boolean theorems
+# theorems on `/\`
 begin
   # build `a/\b = …` from definition
   "ab_def"
@@ -73,3 +76,17 @@ begin
    "bool_elim2" swap defthm
   end
 end
+
+# define `==>`
+"==>" "def_imply" `\a b:bool. (a /\ b) = b` defconst
+"==>" 20 19 set_infix
+
+# declare `select`
+"select" `pi a. (a -> bool) -> a` decl
+"select" 41 set_binder
+
+
+
+# END OF FILE
+# avoid double include
+"hol_prelude_loaded" `bool` decl

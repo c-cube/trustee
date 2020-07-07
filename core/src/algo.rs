@@ -26,7 +26,7 @@ pub struct NewPolyDef {
 /// defining the new constant `c`, and `vars` is the set of type variables
 /// closed over.
 pub fn thm_new_poly_definition(
-    ctx: &mut dyn CtxI,
+    ctx: &mut Ctx,
     c: &str,
     rhs: Expr,
 ) -> Result<NewPolyDef> {
@@ -352,7 +352,7 @@ pub fn match_<'a>(e1: &'a Expr, e2: &'a Expr) -> Option<UnifySubst<'a>> {
 /// Prove symmetry of equality.
 ///
 /// Goes from `A |- t=u` to `A |- u=t`.
-pub fn thm_sym(em: &mut dyn CtxI, th: Thm) -> Result<Thm> {
+pub fn thm_sym(em: &mut Ctx, th: Thm) -> Result<Thm> {
     // start with `F |- t=u`.
     // now by left-congruence with `refl(=)`, `F |- ((=) t) = ((=) u)`.
     // by right-congruence with `refl(t)`, `F |- (((=) t) t) = (((=) u) t)`.
@@ -373,10 +373,17 @@ pub fn thm_sym(em: &mut dyn CtxI, th: Thm) -> Result<Thm> {
     em.thm_bool_eq(refl_t, th_tequ_eq_ueqt)
 }
 
+/* TODO?
+/// Prove modus ponens, assuming `==>` and `def_imply` are in the context.
+pub fn thm_mp(ctx: &mut Ctx, th1: Thm, th2: Thm) -> Result<Thm> {
+    todo!()
+}
+*/
+
 /// Prove symmetry of equality as an equation.
 ///
 /// Goes from `t=u` to `|- (t=u) = (u=t)`.
-pub fn thm_sym_conv(ctx: &mut dyn CtxI, e: Expr) -> Result<Thm> {
+pub fn thm_sym_conv(ctx: &mut Ctx, e: Expr) -> Result<Thm> {
     // start with `t=u |- t=u`.
     // apply thm_sym to get `t=u |- u=t`.
     let (t, u) =
@@ -402,7 +409,7 @@ pub mod cc {
 
     /// congruence closure state.
     pub struct CC<'a> {
-        ctx: &'a mut dyn CtxI,
+        ctx: &'a mut Ctx,
         tbl: HashMap<Expr, NodeIdx>,
         nodes: Vec<Node>,
         sigs: HashMap<Signature, NodeIdx>,
@@ -453,7 +460,7 @@ pub mod cc {
 
     impl<'a> CC<'a> {
         /// New congruence closure.
-        pub fn new(ctx: &'a mut dyn CtxI) -> Self {
+        pub fn new(ctx: &'a mut Ctx) -> Self {
             Self {
                 ctx,
                 tbl: HashMap::new(),
@@ -782,7 +789,7 @@ pub mod cc {
 
     /// prove
     pub fn prove_cc(
-        ctx: &mut dyn CtxI,
+        ctx: &mut Ctx,
         hyps: &[Thm],
         goal: &Expr,
     ) -> Result<Option<Thm>> {
@@ -835,14 +842,14 @@ pub mod rw {
         ///
         /// If it returns `Some(A |- e=e2)`, then the term rewrites into `e2`
         /// with the given proof.
-        fn step(&self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm>;
+        fn step(&self, ctx: &mut Ctx, e: &Expr) -> Option<Thm>;
     }
 
     /// Rewrite `e` using the rewriter `rw`.
     ///
     /// The rewriter is called on every non-type subterm, starting from the leaves.
     pub fn rewrite_bottom_up(
-        ctx: &mut dyn CtxI,
+        ctx: &mut Ctx,
         rw: &dyn Rewriter,
         e0: Expr,
     ) -> Result<Res> {
@@ -1016,7 +1023,7 @@ pub mod rw {
     }
 
     impl<'a> Rewriter for RewriteCombine<'a> {
-        fn step(&self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm> {
+        fn step(&self, ctx: &mut Ctx, e: &Expr) -> Option<Thm> {
             for rw in self.rw.iter() {
                 match rw.step(ctx, e) {
                     x @ Some(..) => return x,
@@ -1036,7 +1043,7 @@ pub mod rw {
     }
 
     impl Rewriter for RewriteRuleSet {
-        fn step(&self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm> {
+        fn step(&self, ctx: &mut Ctx, e: &Expr) -> Option<Thm> {
             for r in &self.rules {
                 match match_(&r.lhs, e) {
                     None => (),
@@ -1104,7 +1111,7 @@ pub use rw::{
 pub struct RewriterBetaConv;
 
 impl Rewriter for RewriterBetaConv {
-    fn step(&self, ctx: &mut dyn CtxI, e: &Expr) -> Option<Thm> {
+    fn step(&self, ctx: &mut Ctx, e: &Expr) -> Option<Thm> {
         match ctx.thm_beta_conv(&e) {
             Ok(th) => Some(th),
             Err(..) => None,
@@ -1113,11 +1120,7 @@ impl Rewriter for RewriterBetaConv {
 }
 
 /// Normalize the conclusion of `th` using the given rewriter.
-pub fn thm_rw_concl(
-    ctx: &mut dyn CtxI,
-    th: Thm,
-    rw: &dyn Rewriter,
-) -> Result<Thm> {
+pub fn thm_rw_concl(ctx: &mut Ctx, th: Thm, rw: &dyn Rewriter) -> Result<Thm> {
     let c = th.concl().clone();
     match rewrite_bottom_up(ctx, rw, c)? {
         rw::Res::RwSame => Ok(th.clone()),

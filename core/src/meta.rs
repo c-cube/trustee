@@ -8,7 +8,7 @@ use {
     crate::{
         algo,
         fnv::{self, FnvHashMap},
-        kernel_of_trust::{self as k, CtxI},
+        kernel_of_trust::{self as k, Ctx},
         syntax, Error, Result,
     },
     std::{cell::RefCell, fmt, rc::Rc},
@@ -23,7 +23,7 @@ macro_rules! logdebug {
 
 /// The state of the meta-language interpreter.
 pub struct State<'a> {
-    pub ctx: &'a mut dyn CtxI,
+    pub ctx: &'a mut Ctx,
     pub stack: Vec<Value>,
     /// Current instruction.
     cur_i: Option<Instr>,
@@ -617,7 +617,7 @@ mod ml {
 
     impl<'a> State<'a> {
         /// Create a new state.
-        pub fn new(ctx: &'a mut dyn CtxI) -> Self {
+        pub fn new(ctx: &'a mut Ctx) -> Self {
             // system-level dictionary
             let mut scope0 = Dict::new();
             {
@@ -1213,6 +1213,24 @@ mod logic_builtins {
 /// Standard prelude for HOL logic
 pub const SRC_PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
 
+/// Load the HOL prelude into this context.
+pub fn load_prelude_hol(ctx: &mut Ctx) -> Result<()> {
+    if ctx.find_const("hol_prelude_loaded").is_none() {
+        let mut st = State::new(ctx);
+        st.run("hol_prelude source")?;
+    }
+    Ok(())
+}
+
+/// Run the given code in a fresh VM.
+///
+/// This has some overhead, if you want to execute a lot of code efficienty
+/// consider creating a `State` and re-using it.
+pub fn run_code(ctx: &mut Ctx, s: &str) -> Result<()> {
+    let mut st = State::new(ctx);
+    st.run(s)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1283,6 +1301,14 @@ mod test {
         let b = st.ctx.mk_bool();
         assert_eq!(e.ty().clone(), b);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_hol_prelude() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        load_prelude_hol(&mut ctx)?;
+        load_prelude_hol(&mut ctx)?; // can we load it twice?
         Ok(())
     }
 }

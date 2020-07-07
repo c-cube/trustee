@@ -33,7 +33,7 @@ use ObjImpl as O;
 
 /// A type operator, i.e. a type builder.
 trait OTypeOp: fmt::Debug {
-    fn apply(&self, ctx: &mut dyn k::CtxI, args: Vec<Expr>) -> Result<Expr>;
+    fn apply(&self, ctx: &mut k::Ctx, args: Vec<Expr>) -> Result<Expr>;
 }
 
 impl fmt::Debug for Obj {
@@ -52,8 +52,8 @@ impl fmt::Debug for OTypeOp {
 
 /// A constant, parametrized by its type.
 trait OConst: fmt::Debug {
-    fn expr(&self, ctx: &mut dyn k::CtxI) -> Expr;
-    fn apply(&self, ctx: &mut dyn k::CtxI, e: Expr) -> Result<Expr>;
+    fn expr(&self, ctx: &mut k::Ctx) -> Expr;
+    fn apply(&self, ctx: &mut k::Ctx, e: Expr) -> Result<Expr>;
 }
 
 impl std::ops::Deref for Obj {
@@ -221,7 +221,7 @@ impl Callbacks for () {}
 /// This is used to parse and interpret an OpenTheory file.
 #[derive(Debug)]
 pub struct VM<'a, CB: Callbacks> {
-    ctx: &'a mut dyn k::CtxI,
+    ctx: &'a mut k::Ctx,
     cb: CB,
     ty_vars: HashMap<String, Var>,
     vars: HashMap<String, (Var, Var)>, // "x" -> (x, α)
@@ -243,10 +243,10 @@ struct CustomConst {
 }
 
 impl OConst for CustomConst {
-    fn expr(&self, _: &mut dyn k::CtxI) -> Expr {
+    fn expr(&self, _: &mut k::Ctx) -> Expr {
         self.c.clone()
     }
-    fn apply(&self, em: &mut dyn k::CtxI, ty: Expr) -> Result<Expr> {
+    fn apply(&self, em: &mut k::Ctx, ty: Expr) -> Result<Expr> {
         use std::borrow::Cow;
 
         if self.c_ty_vars == ty {
@@ -312,7 +312,15 @@ impl OConst for CustomConst {
 
 impl<'a, CB: Callbacks> VM<'a, CB> {
     /// Create a new VM using the given expression manager.
-    pub fn new_with(ctx: &'a mut dyn k::CtxI, cb: CB) -> Self {
+    pub fn new_with(ctx: &'a mut k::Ctx, cb: CB) -> Self {
+        // try to load the HOL prelude, so we have the basic operators
+        if let Err(e) = meta::load_prelude_hol(ctx) {
+            eprintln!("cannot load HOL prelude into the context: {}", e)
+        }
+        // declare `ind`
+        if let Err(e) = meta::run_code(ctx, r#" "ind" `type` decl "#) {
+            eprintln!("cannot declare `ind`: {}", e)
+        }
         VM {
             ctx,
             cb,
@@ -508,11 +516,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         #[derive(Debug, Clone)]
         struct TyOpConst(Expr);
         impl OTypeOp for TyOpConst {
-            fn apply(
-                &self,
-                _em: &mut dyn k::CtxI,
-                args: Vec<Expr>,
-            ) -> Result<Expr> {
+            fn apply(&self, _em: &mut k::Ctx, args: Vec<Expr>) -> Result<Expr> {
                 if args.len() != 0 {
                     Err(Error::new_string(format!(
                         "{:?} takes no arguments",
@@ -530,7 +534,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         impl OTypeOp for TyOpArrow {
             fn apply(
                 &self,
-                em: &mut dyn k::CtxI,
+                em: &mut k::Ctx,
                 mut args: Vec<Expr>,
             ) -> Result<Expr> {
                 if args.len() != 2 {
@@ -665,10 +669,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         #[derive(Debug)]
         struct ConstEq;
         impl OConst for ConstEq {
-            fn expr(&self, em: &mut dyn k::CtxI) -> Expr {
+            fn expr(&self, em: &mut k::Ctx) -> Expr {
                 em.mk_eq()
             }
-            fn apply(&self, em: &mut dyn k::CtxI, ty: Expr) -> Result<Expr> {
+            fn apply(&self, em: &mut k::Ctx, ty: Expr) -> Result<Expr> {
                 let args = ty.unfold_pi().0;
                 if args.len() != 2 {
                     Err(Error::new_string(format!(
@@ -683,10 +687,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         #[derive(Debug)]
         struct ConstSelect;
         impl OConst for ConstSelect {
-            fn expr(&self, em: &mut dyn k::CtxI) -> Expr {
+            fn expr(&self, em: &mut k::Ctx) -> Expr {
                 em.find_const("select").expect("cannot find select").0.clone()
             }
-            fn apply(&self, em: &mut dyn k::CtxI, ty: Expr) -> Result<Expr> {
+            fn apply(&self, em: &mut k::Ctx, ty: Expr) -> Result<Expr> {
                 let a = ty
                     .as_pi()
                     .ok_or_else(|| {
@@ -962,11 +966,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         struct TyOpCustom(Vec<usize>, k::NewTypeDef);
 
         impl OTypeOp for TyOpCustom {
-            fn apply(
-                &self,
-                em: &mut dyn k::CtxI,
-                args: Vec<Expr>,
-            ) -> Result<Expr> {
+            fn apply(&self, em: &mut k::Ctx, args: Vec<Expr>) -> Result<Expr> {
                 if args.len() != self.0.len() {
                     return Err(Error::new("bad arity"));
                 }
@@ -1318,7 +1318,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
 impl<'a> VM<'a, ()> {
     /// Trivial constructor.
-    pub fn new(ctx: &'a mut dyn k::CtxI) -> Self {
+    pub fn new(ctx: &'a mut k::Ctx) -> Self {
         VM::new_with(ctx, ())
     }
 }

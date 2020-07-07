@@ -5,7 +5,7 @@
 //! for the main parser and terminology.
 
 use {
-    crate::{kernel_of_trust as k, CtxI, Error, Result},
+    crate::{kernel_of_trust as k, Ctx, Error, Result},
     std::fmt,
 };
 
@@ -294,7 +294,7 @@ pub enum ParseOutput {
 /// It uses a fixity function, and a lexer that yields the stream of tokens
 /// to parse.
 pub struct Parser<'a> {
-    ctx: &'a mut dyn CtxI,
+    ctx: &'a mut Ctx,
     /// Local variables from binders.
     local: Vec<k::Var>,
     /// Let bindings (`let x = y in z`)
@@ -326,7 +326,7 @@ impl<'a> Parser<'a> {
     /// A parse error will be emitted if the number of holes in `src` does not
     /// correspond to the length of `qargs`.
     pub fn new_with_args(
-        ctx: &'a mut dyn CtxI,
+        ctx: &'a mut Ctx,
         src: &'a str,
         qargs: &'a [InterpolationArg<'a>],
     ) -> Self {
@@ -345,7 +345,7 @@ impl<'a> Parser<'a> {
     /// New parser using the given string `src`.
     ///
     /// The string must not contain interpolation holes `"?"`.
-    pub fn new(ctx: &'a mut dyn CtxI, src: &'a str) -> Self {
+    pub fn new(ctx: &'a mut Ctx, src: &'a str) -> Self {
         Self::new_with_args(ctx, src, &[])
     }
 
@@ -863,14 +863,14 @@ impl<'a> Parser<'a> {
 }
 
 /// Parse the string into an expression.
-pub fn parse_expr(ctx: &mut dyn CtxI, s: &str) -> Result<k::Expr> {
+pub fn parse_expr(ctx: &mut Ctx, s: &str) -> Result<k::Expr> {
     let mut p = Parser::new(ctx, s);
     p.parse_expr()
 }
 
 /// Parse the string into an expression with a set of parameters.
 pub fn parse_expr_with_args(
-    ctx: &mut dyn CtxI,
+    ctx: &mut Ctx,
     s: &str,
     qargs: &[InterpolationArg],
 ) -> Result<k::Expr> {
@@ -907,8 +907,8 @@ impl Printer {
     ) -> fmt::Result {
         use k::ExprView as EV;
         match e.view() {
-            EV::EType => write!(out, "kind")?,
-            EV::EKind => write!(out, "type")?,
+            EV::EKind => write!(out, "kind")?,
+            EV::EType => write!(out, "type")?,
             EV::EConst(c) => write!(out, "{}", c.name.name())?,
             EV::EVar(v) => {
                 if self.scope.iter().any(|v2| v == v2) {
@@ -1182,17 +1182,17 @@ mod test {
         let cases: Vec<(
             &'static str,
             &'static str,
-            &'static dyn Fn(&mut dyn CtxI) -> Result<Vec<k::Expr>>,
+            &'static dyn Fn(&mut Ctx) -> Result<Vec<k::Expr>>,
         )> = vec![
             (
                 "with a:?. myb x:?. x=a",
                 "(myb bool (λx0 : bool. (= bool x0 a)))",
-                &|ctx: &mut dyn CtxI| Ok(vec![ctx.mk_bool(), ctx.mk_bool()]),
+                &|ctx: &mut Ctx| Ok(vec![ctx.mk_bool(), ctx.mk_bool()]),
             ),
             (
                 r#"(\x:bool. ?= x) "#,
                 "(λx0 : bool. (= bool x0 x0))",
-                &|ctx: &mut dyn CtxI| {
+                &|ctx: &mut Ctx| {
                     let b = ctx.mk_bool();
                     Ok(vec![ctx.mk_var_str("x", b)])
                 },
