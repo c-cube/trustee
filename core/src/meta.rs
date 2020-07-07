@@ -56,6 +56,23 @@ impl fmt::Debug for ValueArray {
     }
 }
 
+impl fmt::Display for Value {
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Value::Int(i) => write!(out, "{}", i),
+            Value::Bool(b) => write!(out, "{}", b),
+            Value::Sym(s) => write!(out, "{}", &*s),
+            Value::Source(_) => write!(out, "<source>"),
+            Value::Expr(e) => write!(out, "{}", e),
+            Value::Thm(th) => write!(out, "{}", th),
+            Value::CodeArray(ca) => write!(out, "{:?}", ca),
+            Value::Array(a) => {
+                out.debug_list().entries(a.0.borrow().iter()).finish()
+            }
+        }
+    }
+}
+
 /// A dictionary from symbols to values.
 ///
 /// Syntax: TODO
@@ -531,37 +548,17 @@ mod ml {
                 }
                 I::PrintPop => {
                     let x = st.pop1()?;
-                    println!("  {:?}", x);
+                    println!("  {}", x);
                 }
                 I::PrintStack => {
                     println!("stack:");
                     for x in st.stack.iter().rev() {
-                        println!("  > {:?}", x);
+                        println!("  > {}", x);
                     }
                 }
                 I::Inspect => {
-                    let s = st.pop1_sym()?;
-
-                    // Find definition of symbol `s` in `self.scopes`,
-                    // starting from the most recent scope.
-                    let v = {
-                        if let Some(v) =
-                            st.scopes.iter().rev().find_map(|d| d.0.get(&*s))
-                        {
-                            v.clone()
-                        } else if let Some(c) = st.ctx.find_const(&*s) {
-                            Value::Expr(c.0.clone())
-                        } else if let Some(th) = st.ctx.find_lemma(&*s) {
-                            Value::Thm(th.clone())
-                        } else {
-                            return Err(Error::new_string(format!(
-                                "symbol {:?} not found",
-                                s
-                            )));
-                        }
-                    };
-
-                    println!(">>  {:?}", v);
+                    let x = st.pop1()?;
+                    println!(">>  {:?}", x);
                 }
                 I::Clear => st.stack.clear(),
                 I::Source => {

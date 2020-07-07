@@ -4,7 +4,10 @@
 //! We follow https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
 //! for the main parser and terminology.
 
-use crate::{kernel_of_trust as k, CtxI, Error, Result};
+use {
+    crate::{kernel_of_trust as k, CtxI, Error, Result},
+    std::fmt,
+};
 
 /// ## Parsing
 ///
@@ -367,12 +370,11 @@ impl<'a> Parser<'a> {
     #[inline]
     fn fixity_(&self, s: &str) -> Fixity {
         match s {
-            "=" => Fixity::Infix((30, 31)),
-            "==>" => Fixity::Infix((46, 45)),
-            "->" => Fixity::Infix((81, 80)),
+            "=" => k::FIXITY_EQ,
+            "->" => k::FIXITY_ARROW,
             "with" => Fixity::Binder((1, 2)),
-            "\\" => Fixity::Binder((20, 21)),
-            "pi" => Fixity::Binder((24, 25)),
+            "\\" => k::FIXITY_LAM,
+            "pi" => k::FIXITY_PI,
             _ => {
                 // lookup in context
                 if let Some((_, f)) = self.ctx.find_const(s) {
@@ -876,7 +878,185 @@ pub fn parse_expr_with_args(
     p.parse_expr()
 }
 
-// TODO: pretty printer.
+struct Printer {
+    scope: Vec<k::Var>, // variable in scope
+}
+
+impl Printer {
+    fn new() -> Self {
+        Self { scope: vec![] }
+    }
+
+    fn pp_var_ty_(
+        &self,
+        v: &k::Var,
+        k: isize,
+        out: &mut fmt::Formatter,
+    ) -> fmt::Result {
+        write!(out, "({} : ", v.name.name())?;
+        self.pp_expr(&v.ty, k, 0, out)?;
+        write!(out, ")")
+    }
+
+    fn pp_expr(
+        &self,
+        e: &k::Expr,
+        k: isize,
+        p: u16,
+        out: &mut fmt::Formatter,
+    ) -> fmt::Result {
+        use k::ExprView as EV;
+        match e.view() {
+            EV::EType => write!(out, "kind")?,
+            EV::EKind => write!(out, "type")?,
+            EV::EConst(c) => write!(out, "{}", c.name.name())?,
+            EV::EVar(v) => {
+                if self.scope.iter().any(|v2| v == v2) {
+                    write!(out, "{}", v.name.name())?;
+                } else {
+                    self.pp_var_ty_(&v, k, out)?
+                }
+            }
+            EV::EBoundVar(v) => write!(out, "x{}", k - v.idx() as isize)?,
+            EV::EApp(_, _) => {
+                let (f, args) = e.unfold_app();
+                let fv = match f.as_const() {
+                    Some(fv) => fv,
+                    _ => {
+                        // prefix. Print sub-members with maximum binding power.
+                        if p > 0 {
+                            write!(out, "(")?;
+                        }
+                        self.pp_expr(f, k, u16::MAX, out)?;
+                        for x in &args {
+                            write!(out, " ")?;
+                            self.pp_expr(x, k, u16::MAX, out)?;
+                        }
+                        if p > 0 {
+                            write!(out, ")")?;
+                        }
+                        return Ok(());
+                    }
+                };
+                let f_name = fv.name.name();
+                match fv.fixity() {
+                    Fixity::Infix((l, r)) if args.len() >= 2 => {
+                        let n = args.len();
+                        let need_p = p >= l || p >= r;
+                        if need_p {
+                            write!(out, "(")?;
+                        }
+                        self.pp_expr(&args[n - 2], k, l, out)?;
+                        write!(out, " {} ", f_name)?;
+                        self.pp_expr(&args[n - 1], k, r, out)?;
+                        if need_p {
+                            write!(out, ")")?;
+                        }
+                    }
+                    Fixity::Binder(..)
+                    | Fixity::Infix(..)
+                    | Fixity::Prefix(..)
+                    | Fixity::Postfix(..) => {
+                        // TODO: print as binder, etc.
+                        // for now we just print using `$`
+                        write!(out, "($")?;
+                        self.pp_expr(f, k, u16::MAX, out)?;
+                        for x in &args {
+                            write!(out, " ")?;
+                            self.pp_expr(x, k, u16::MAX, out)?;
+                        }
+                        write!(out, ")")?;
+                    }
+                    // TODO: postfix, prefix, binder
+                    _ => {
+                        // prefix
+                        if p > 0 {
+                            write!(out, "(")?;
+                        }
+                        self.pp_expr(f, k, u16::MAX, out)?;
+                        for x in &args {
+                            write!(out, " ")?;
+                            self.pp_expr(x, k, u16::MAX, out)?;
+                        }
+                        if p > 0 {
+                            write!(out, ")")?;
+                        }
+                    }
+                }
+            }
+            EV::ELambda(ty_v, body) => {
+                let need_p = p >= k::FIXITY_LAM.bp().1;
+                if need_p {
+                    write!(out, "(")?;
+                }
+                write!(out, r#"\x{} : "#, k)?;
+                self.pp_expr(&ty_v, k, 0, out)?;
+                write!(out, ". ")?;
+                self.pp_expr(&body, k + 1, k::FIXITY_LAM.bp().1, out)?;
+                if need_p {
+                    write!(out, ")")?;
+                }
+            }
+            EV::EPi(ty_v, body) => {
+                let is_arrow = body.is_closed();
+                let myp = if is_arrow {
+                    k::FIXITY_ARROW.bp().1
+                } else {
+                    k::FIXITY_PI.bp().1
+                };
+                let need_p = p >= myp;
+                if need_p {
+                    write!(out, "(")?;
+                }
+                if body.is_closed() {
+                    // just print a lambda
+                    self.pp_expr(&ty_v, k, p, out)?;
+                    write!(out, " -> ")?;
+                    self.pp_expr(&body, k + 1, myp, out)?;
+                } else {
+                    write!(out, r#"pi x{}."#, k)?;
+                    self.pp_expr(&body, k + 1, myp, out)?;
+                }
+                if need_p {
+                    write!(out, ")")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn pp_expr_top(
+        &mut self,
+        e: &k::Expr,
+        out: &mut fmt::Formatter,
+    ) -> fmt::Result {
+        let mut fvars: Vec<_> = e.free_vars().collect();
+        fvars.sort_unstable();
+        fvars.dedup();
+
+        if fvars.len() > 0 {
+            write!(out, "with")?;
+            for v in &fvars {
+                write!(out, " ")?;
+                self.pp_var_ty_(v, 0, out)?
+            }
+            write!(out, ". ")?;
+        }
+
+        let n_scope = self.scope.len();
+        self.scope.extend(fvars.into_iter().cloned());
+        let r = self.pp_expr(e, 0, 0, out);
+        self.scope.truncate(n_scope);
+
+        r
+    }
+}
+
+/// Pretty print this expression according to the existing precedence rules.
+pub fn print_expr(e: &k::Expr, out: &mut fmt::Formatter) -> fmt::Result {
+    let mut pp = Printer::new();
+    pp.pp_expr_top(e, out)
+}
 
 #[cfg(test)]
 mod test {

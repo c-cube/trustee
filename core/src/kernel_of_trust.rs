@@ -176,16 +176,31 @@ struct ExprImpl {
     ty: Option<Expr>,
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Debug)]
 pub struct ConstContent {
-    name: Symbol,
-    ty: Expr,
+    pub name: Symbol,
+    pub ty: Expr,
+    fix: std::cell::Cell<Fixity>,
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct BoundVarContent {
     idx: DbIndex,
     ty: Expr,
+}
+
+impl Eq for ConstContent {}
+impl PartialEq for ConstContent {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.ty == other.ty
+    }
+}
+
+impl std::hash::Hash for ConstContent {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.ty.hash(state)
+    }
 }
 
 impl Eq for Expr {}
@@ -215,6 +230,13 @@ impl Ord for Expr {
             &(self.0.as_ref() as *const ExprImpl),
             &(other.0.as_ref() as *const _),
         )
+    }
+}
+
+impl fmt::Display for Expr {
+    // use the pretty-printer from `syntax`
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        crate::syntax::print_expr(self, out)
     }
 }
 
@@ -267,6 +289,13 @@ impl BoundVarContent {
     }
 }
 
+impl ConstContent {
+    #[inline]
+    pub fn fixity(&self) -> Fixity {
+        self.fix.get()
+    }
+}
+
 #[inline]
 fn pred_db_idx(n: DbIndex) -> DbIndex {
     if n == 0 {
@@ -306,9 +335,11 @@ impl ExprView {
     {
         Ok(match self {
             EType | EKind => self.clone(),
-            EConst(c) => {
-                EConst(ConstContent { ty: f(&c.ty, k)?, name: c.name.clone() })
-            }
+            EConst(c) => EConst(ConstContent {
+                ty: f(&c.ty, k)?,
+                name: c.name.clone(),
+                fix: std::cell::Cell::new(Fixity::Nullary),
+            }),
             EVar(v) => EVar(Var { ty: f(&v.ty, k)?, name: v.name.clone() }),
             EBoundVar(v) => {
                 EBoundVar(BoundVarContent { ty: f(&v.ty, k)?, idx: v.idx })
@@ -624,13 +655,6 @@ impl fmt::Debug for Expr {
     }
 }
 
-impl fmt::Display for Expr {
-    // printer
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        self.pp_(0, out, false)
-    }
-}
-
 impl fmt::Debug for Var {
     // printer
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
@@ -832,6 +856,8 @@ pub trait CtxI: fmt::Debug {
     fn set_fixity(&mut self, s: &str, f: Fixity);
 
     /// Find a constant by name. Returns `None` if no such constant exists.
+    ///
+    /// Use `as_const` on the expression to get its content.
     fn find_const(&self, s: &str) -> Option<(&Expr, Fixity)>;
 
     /// Define a named lemma.
@@ -965,7 +991,7 @@ pub struct Ctx {
     /// Hashconsing table, with weak semantics.
     tbl: fnv::FnvHashMap<ExprView, WExpr>,
     builtins: Option<ExprBuiltins>,
-    consts: fnv::FnvHashMap<Ref<str>, (Expr, Fixity)>,
+    consts: fnv::FnvHashMap<Ref<str>, Expr>,
     lemmas: fnv::FnvHashMap<Ref<str>, Thm>,
     eq: Option<Expr>,
     next_cleanup: usize,
@@ -1053,7 +1079,11 @@ impl Ctx {
         let bool = {
             let name = Symbol::Builtin(BS::Bool);
             ctx.hashcons_builtin_(
-                EConst(ConstContent { name, ty: ty.clone() }),
+                EConst(ConstContent {
+                    name,
+                    ty: ty.clone(),
+                    fix: std::cell::Cell::new(Fixity::Nullary),
+                }),
                 Some(ty.clone()),
             )
         };
@@ -1118,7 +1148,7 @@ impl Ctx {
             unreachable!("not a constant: {:?}", e);
         };
         self.tbl.insert(e.view().clone(), e.weak());
-        consts.insert(name, (e, Fixity::Nullary));
+        consts.insert(name, e);
     }
 
     fn hashcons_builtin_(&mut self, ev: ExprView, ty: Option<Expr>) -> Expr {
@@ -1129,6 +1159,30 @@ impl Ctx {
         e
     }
 
+    fn mk_const_with_(
+        &mut self,
+        s: Symbol,
+        ty: Type,
+        f: Fixity,
+    ) -> Result<Expr> {
+        self.check_uid_(&ty);
+        if self.consts.contains_key(s.name()) {
+            return Err(Error::new("a constant with this name already exists"));
+        }
+        if !ty.is_closed() || ty.free_vars().next().is_some() {
+            return Err(Error::new(
+                "cannot create constant with non-closed type",
+            ));
+        }
+        let c = self.hashcons_(EConst(ConstContent {
+            name: s.clone(),
+            ty,
+            fix: std::cell::Cell::new(f),
+        }))?;
+        self.add_const_(c.clone());
+        Ok(c)
+    }
+
     #[inline]
     fn check_uid_(&self, e: &Expr) {
         assert!(self.uid == e.0.em_uid); // term should belong to this EM
@@ -1137,38 +1191,6 @@ impl Ctx {
     #[inline]
     fn check_thm_uid_(&self, th: &Thm) {
         assert!(self.uid == th.0.em_uid); // theorem should belong to this EM
-    }
-
-    /// Get the `=` constant
-    pub fn mk_eq(&mut self) -> Expr {
-        match self.eq {
-            Some(ref c) => c.clone(),
-            None => {
-                let ty = self.mk_ty();
-                let bool = self.mk_bool();
-                let db0 = self.mk_bound_var(0, ty.clone());
-                let arr = self.mk_arrow(db0.clone(), bool.clone()).unwrap();
-                let arr = self.mk_arrow(db0.clone(), arr).unwrap();
-                let ty_eq = self.mk_pi_(ty.clone(), arr).unwrap();
-                let name = Symbol::Builtin(BS::Eq);
-                let c = self.mk_new_const(name, ty_eq).unwrap();
-                self.eq = Some(c.clone());
-                c
-            }
-        }
-    }
-
-    /// Make `a = b`.
-    ///
-    /// Fails if `a` and `b` do not have the same type.
-    pub fn mk_eq_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
-        self.check_uid_(&a);
-        self.check_uid_(&b);
-        if a.ty() != b.ty() {
-            return Err(Error::new("mk_eq: incompatible_types"));
-        }
-        let eq = self.mk_eq();
-        self.mk_app_l(eq, &[a.ty().clone(), a, b])
     }
 
     #[inline]
@@ -1318,64 +1340,6 @@ impl Ctx {
         })
     }
 
-    /// For each pair `(x,u)` in `subst`, replace instances of the free
-    /// variable `x` by `u` in `t`.
-    pub fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr> {
-        self.check_uid_(&t);
-        struct Replace<'a> {
-            // cache, relative to depth
-            ctx: &'a mut Ctx,
-            subst: &'a [(Var, Expr)],
-        }
-
-        impl<'a> Replace<'a> {
-            // replace in `t`, under `k` intermediate binders.
-            fn replace(&mut self, t: &Expr, k: DbIndex) -> Result<Expr> {
-                //eprintln!("> replace `{:?}` k={}", t, k);
-                let r = match t.view() {
-                    // fast cases first
-                    EType | EKind | EConst(..) => t.clone(),
-                    EVar(v) => {
-                        // lookup `v` in `subst`
-                        for (v2, u2) in self.subst.iter() {
-                            if v == v2 {
-                                let u3 = self.ctx.shift_(u2, k, 0)?;
-                                //eprintln!(
-                                //    ">> replace {:?} with {:?}, shifted[{}] into {:?}",
-                                //    v, u2, k, u3
-                                //);
-                                return Ok(u3);
-                            }
-                        }
-                        // otherwise just substitute in the type
-                        let v2 = Var {
-                            name: v.name.clone(),
-                            ty: self.replace(&v.ty, k)?,
-                        };
-                        self.ctx.mk_var(v2)
-                    }
-                    ev => {
-                        // shallow map + cache
-                        let uv = ev.map(|sub, k| self.replace(sub, k), k)?;
-                        self.ctx.hashcons_(uv)?
-                    }
-                };
-                //eprintln!("< replace `{:?}` k={}\n  yields `{:?}`", t, k, r);
-                Ok(r)
-            }
-        }
-
-        subst.iter().for_each(|(v, t)| {
-            self.check_uid_(&v.ty);
-            self.check_uid_(t)
-        });
-
-        debug_assert!(subst.iter().all(|(v, t)| &v.ty == t.ty())); // type preservation
-        let mut replace = Replace { ctx: self, subst };
-        //eprintln!("### start replace\n  `{:?}`,\n  subst {:?}", t, subst);
-        replace.replace(t, 0)
-    }
-
     /// Cleanup terms that are only referenced by this table.
     ///
     /// This is done regularly when new terms are created, but one can
@@ -1392,55 +1356,6 @@ impl Ctx {
             let n = WeakRef::strong_count(&v.0);
             n > 0
         })
-    }
-
-    /// The type of types. This has type `self.mk_kind()`.
-    pub fn mk_ty(&self) -> Expr {
-        self.builtins_().ty.clone()
-    }
-
-    /// The "type" of `type`. This is the only typeless expression.
-    ///
-    /// Trying to compute this expression's type will panic.
-    pub fn mk_kind(&self) -> Expr {
-        self.builtins_().kind.clone()
-    }
-
-    /// The type of booleans.
-    pub fn mk_bool(&self) -> Expr {
-        self.builtins_().bool.clone()
-    }
-
-    /// Apply `a` to `b`.
-    pub fn mk_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
-        self.check_uid_(&a);
-        self.check_uid_(&b);
-        self.hashcons_(EApp(a, b))
-    }
-
-    /// Make a free variable.
-    pub fn mk_var(&mut self, v: Var) -> Expr {
-        self.check_uid_(&v.ty);
-        self.hashcons_(EVar(v)).expect("mk_var can't fail")
-    }
-
-    /// Make a free variable.
-    pub fn mk_var_str(&mut self, name: &str, ty_var: Type) -> Expr {
-        self.check_uid_(&ty_var);
-        self.mk_var(Var::from_str(name, ty_var))
-    }
-
-    /// Make a free type variable.
-    pub fn mk_ty_var_str(&mut self, name: &str) -> Expr {
-        let ty = self.mk_ty();
-        self.mk_var_str(name, ty)
-    }
-
-    /// Make a bound variable with given type and index.
-    pub fn mk_bound_var(&mut self, idx: DbIndex, ty_var: Type) -> Expr {
-        self.check_uid_(&ty_var);
-        self.hashcons_(EBoundVar(BoundVarContent { idx, ty: ty_var }))
-            .expect("mk_bound_var cannot fail")
     }
 
     /// Make a lambda term.
@@ -1472,7 +1387,13 @@ impl Ctx {
     }
 }
 
+pub(crate) const FIXITY_EQ: Fixity = Fixity::Infix((30, 31));
+pub(crate) const FIXITY_LAM: Fixity = Fixity::Binder((20, 21));
+pub(crate) const FIXITY_PI: Fixity = Fixity::Binder((24, 25));
+pub(crate) const FIXITY_ARROW: Fixity = Fixity::Infix((81, 80));
+
 impl CtxI for Ctx {
+    /// Get the `=` constant
     fn mk_eq(&mut self) -> Expr {
         match self.eq {
             Some(ref c) => c.clone(),
@@ -1484,7 +1405,8 @@ impl CtxI for Ctx {
                 let arr = self.mk_arrow(db0.clone(), arr).unwrap();
                 let ty_eq = self.mk_pi_(ty.clone(), arr).unwrap();
                 let name = Symbol::Builtin(BS::Eq);
-                let c = self.mk_new_const(name, ty_eq).unwrap();
+                let fix = FIXITY_EQ;
+                let c = self.mk_const_with_(name, ty_eq, fix).unwrap();
                 self.eq = Some(c.clone());
                 c
             }
@@ -1621,27 +1543,22 @@ impl CtxI for Ctx {
     }
 
     fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
-        self.check_uid_(&ty);
-        if self.consts.contains_key(s.name()) {
-            return Err(Error::new("a constant with this name already exists"));
-        }
-        if !ty.is_closed() || ty.free_vars().next().is_some() {
-            return Err(Error::new(
-                "cannot create constant with non-closed type",
-            ));
-        }
-        let c = self.hashcons_(EConst(ConstContent { name: s.clone(), ty }))?;
-        self.add_const_(c.clone());
-        Ok(c)
+        self.mk_const_with_(s, ty, Fixity::Nullary)
     }
 
     fn find_const(&self, s: &str) -> Option<(&Expr, Fixity)> {
-        self.consts.get(s).map(|t| (&t.0, t.1))
+        self.consts.get(s).map(|e| {
+            let f = e.as_const().unwrap().fixity();
+            (e, f)
+        })
     }
 
     fn set_fixity(&mut self, s: &str, f: Fixity) {
         if let Some(t) = self.consts.get_mut(s) {
-            t.1 = f
+            match t.view() {
+                EConst(c) => c.fix.set(f),
+                _ => panic!("expected constant"),
+            }
         }
     }
 
