@@ -1,2 +1,2 @@
 #!/bin/sh
-exec cargo run -p trustee_opentheory --example parse_ot -- $@
+exec cargo run -p trustee_opentheory --release --example parse_ot -- $@

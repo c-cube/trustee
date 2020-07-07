@@ -242,6 +242,7 @@ struct CustomConst {
     ty_vars: Vec<Var>,
 }
 
+// TODO: move part of that into trustee::algo, use in parser
 impl OConst for CustomConst {
     fn expr(&self, _: &mut k::Ctx) -> Expr {
         self.c.clone()
