@@ -28,3 +28,48 @@ defconst
 
 "/\" "def_and" `\a b: bool. forall x:bool. (a ==> b ==> x) ==> x` defconst
 "/\" 60 59 set_infix
+
+# boolean theorems
+begin
+  # build `a/\b = …` from definition
+  "ab_def"
+    def_and
+    `a:bool` refl congr
+    `b:bool` refl congr
+  def
+
+  "goal"
+    `a:bool /\ b:bool` assume
+  def
+
+  # this gets `a/\b |- \f. f a b = \f. f T T`
+  "f_eq"
+    goal ab_def bool_eq [def_forall "beta"] rw
+  def
+
+  # prove: `a/\b |- a`
+  begin
+    # apply f_eq to `\x y. x=a`
+    "a_true"
+      f_eq `with a:bool. \x y: bool. (a = x)` refl congr "beta" rw
+    def
+
+      a_true eq_true_elim ["x" `with a:bool. (a=a) = (a=T)`] subst bool_eq
+      `a:bool` refl swap bool_eq
+      eq_true_elim ["x" `(a:bool)`] subst bool_eq
+   "bool_elim1" swap defthm
+  end
+
+  # prove: `a/\b |- b`
+  begin
+    # apply f_eq to `\x y. y=b`
+    "b_true"
+      f_eq `with b:bool. \x y: bool. (b = y)` refl congr "beta" rw
+    def
+
+      b_true eq_true_elim ["x" `with b:bool. (b=b) = (b=T)`] subst bool_eq
+      `b:bool` refl swap bool_eq
+      eq_true_elim ["x" `(b:bool)`] subst bool_eq
+   "bool_elim2" swap defthm
+  end
+end
