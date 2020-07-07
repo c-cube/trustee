@@ -1166,7 +1166,7 @@ mod test {
     fn test_parser() {
         use parser::Tok as T;
         let a = vec![(
-            " /a /b{mul 2}/d { 3 } def 2  ",
+            r#" "a" "b"{mul 2}"d" { 3 } def 2  "#,
             vec![
                 T::QuotedId("a"),
                 T::QuotedId("b"),
@@ -1218,9 +1218,9 @@ mod test {
 
         st.run(
             r#"
-        /T /def_true `let f = (\x: bool. x=x) in f=f` defconst
-        /forall /def_forall `\(a:type) (f:a -> bool). f = (\x:a. T)` defconst
-        /forall 30 set_binder
+        "T" "def_true" `let f = (\x: bool. x=x) in f=f` defconst
+        "forall" "def_forall" `\(a:type) (f:a -> bool). f = (\x:a. T)` defconst
+        "forall" 30 set_binder
         "#,
         )?;
         st.run("`forall x:bool. x=T`")?;
