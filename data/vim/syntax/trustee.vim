@@ -10,11 +10,11 @@ syn match       trusteeSym      +"[^"]\+"+
 
 
 " TODO: handle this only within ``
-syn match       trusteeExpr      "let"
-syn match       trusteeExpr      "in"
-syn match       trusteeExpr      "pi"
-syn match       trusteeExpr      "forall"
-syn match       trusteeExpr      "exists"
+syn match       trusteeExpr      "\blet\b"
+syn match       trusteeExpr      "\bin\b"
+syn match       trusteeExpr      "\bpi\b"
+syn match       trusteeExpr      "\bforall\b"
+syn match       trusteeExpr      "\bexists\b"
 syn match       trusteeExpr      "\~"
 syn match       trusteeExpr      "/\\"
 syn match       trusteeExpr      "\\/"
@@ -28,8 +28,8 @@ syn match       trusteeExpr      "==>"
 "syn match       trusteeDelim      ")"
 
 syn keyword trusteeThm   assume axiom mp bool_eq bool_eq_intro congr
-syn keyword trusteeThm   trans refl abs congr_ty beta_conv sym
-syn keyword trusteeThm   subst abs
+syn keyword trusteeThm   trans refl abs abs_expr congr_ty beta_conv sym
+syn keyword trusteeThm   subst abs rw concl
 
 syn keyword  trusteeTodo  contained TODO BUG FIX FIXME NOTE
 

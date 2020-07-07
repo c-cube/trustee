@@ -899,7 +899,6 @@ mod logic_builtins {
         Findconst,
         Findthm,
         ExprTy,
-        MP,
         Axiom,
         Assume,
         Refl,
@@ -913,6 +912,8 @@ mod logic_builtins {
         BetaConv,
         Instantiate,
         Abs,
+        AbsExpr,
+        Concl,
         HolPrelude,
         PledgeNoMoreAxioms,
         Rewrite,
@@ -930,7 +931,6 @@ mod logic_builtins {
         &R::ExprTy,
         &R::Findconst,
         &R::Findthm,
-        &R::MP,
         &R::Axiom,
         &R::Assume,
         &R::Refl,
@@ -944,6 +944,8 @@ mod logic_builtins {
         &R::BetaConv,
         &R::Instantiate,
         &R::Abs,
+        &R::AbsExpr,
+        &R::Concl,
         &R::HolPrelude,
         &R::PledgeNoMoreAxioms,
         &R::Rewrite,
@@ -960,7 +962,6 @@ mod logic_builtins {
                 R::ExprTy => "expr_ty",
                 R::Findconst => "findconst",
                 R::Findthm => "findthm",
-                R::MP => "mp",
                 R::Axiom => "axiom",
                 R::Assume => "assume",
                 R::Refl => "refl",
@@ -974,6 +975,8 @@ mod logic_builtins {
                 R::BetaConv => "beta_conv",
                 R::Instantiate => "subst",
                 R::Abs => "abs",
+                R::AbsExpr => "abs_expr",
+                R::Concl => "concl",
                 R::HolPrelude => "hol_prelude",
                 R::PledgeNoMoreAxioms => "pledge_no_more_axioms",
                 R::Rewrite => "rw",
@@ -1041,12 +1044,6 @@ mod logic_builtins {
                         .ok_or_else(|| Error::new("unknown theorem"))?
                         .clone();
                     st.push_val(Value::Thm(th))
-                }
-                R::MP => {
-                    let th2 = st.pop1_thm()?;
-                    let th1 = st.pop1_thm()?;
-                    let th = st.ctx.thm_mp(th1, th2)?;
-                    st.push_val(Value::Thm(th));
                 }
                 R::Axiom => {
                     let e = st.pop1_expr()?;
@@ -1141,6 +1138,19 @@ mod logic_builtins {
                     let v = k::Var::from_str(&*v, ty);
                     let th = st.ctx.thm_abs(&v, th)?;
                     st.push_val(Value::Thm(th))
+                }
+                R::AbsExpr => {
+                    let e = st.pop1_expr()?;
+                    let v = e.as_var().ok_or_else(|| {
+                        Error::new("abs_expr: expression must be a variable")
+                    })?;
+                    let th = st.pop1_thm()?;
+                    let th = st.ctx.thm_abs(v, th)?;
+                    st.push_val(Value::Thm(th))
+                }
+                R::Concl => {
+                    let th = st.pop1_thm()?;
+                    st.push_val(Value::Expr(th.concl().clone()))
                 }
                 R::HolPrelude => {
                     st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into()))

@@ -507,17 +507,6 @@ impl Expr {
         }
     }
 
-    /// `(a==>b).unfold_imply()` returns `Some((a,b))`.
-    pub fn unfold_imply(&self) -> Option<(&Expr, &Expr)> {
-        let (hd1, b) = self.as_app()?;
-        let (hd2, a) = hd1.as_app()?;
-        if hd2.as_const()?.name.name() == "==>" {
-            Some((a, b))
-        } else {
-            None
-        }
-    }
-
     /// Free variables of a given term.
     pub fn free_vars(&self) -> impl Iterator<Item = &Var> {
         let mut fv = FreeVars::new();
@@ -752,9 +741,6 @@ pub trait CtxI: fmt::Debug {
         self.mk_app_l(eq, &[a.ty().clone(), a, b])
     }
 
-    /// Get the `==>` constant.
-    fn mk_imply(&mut self) -> Expr;
-
     /// For each pair `(x,u)` in `subst`, replace instances of the free
     /// variable `x` by `u` in `t`.
     fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr>;
@@ -898,17 +884,13 @@ pub trait CtxI: fmt::Debug {
     /// but we include it here anyway.
     fn thm_cut(&mut self, th1: Thm, th2: Thm) -> Result<Thm>;
 
-    /// `mp (F1 |- a) (F2 |- a' ==> b)` is `F1, F2 |- b`
-    /// where `a` and `a'` are alpha equivalent.
-    fn thm_mp(&mut self, th1: Thm, th2: Thm) -> Result<Thm>;
-
     /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
     /// This is the boolean equivalent of transitivity.
     fn thm_bool_eq(&mut self, th1: Thm, th2: Thm) -> Result<Thm>;
 
     /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
     /// This is a way of building a boolean `a=b` from proofs of
-    /// `a==>b` and `b==>a` (or `a|-b` and `b|-a`).
+    ///  `a|-b` and `b|-a`.
     fn thm_bool_eq_intro(&mut self, th1: Thm, th2: Thm) -> Result<Thm>;
 
     /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
@@ -986,7 +968,6 @@ pub struct Ctx {
     consts: fnv::FnvHashMap<Ref<str>, (Expr, Fixity)>,
     lemmas: fnv::FnvHashMap<Ref<str>, Thm>,
     eq: Option<Expr>,
-    imply: Option<Expr>,
     next_cleanup: usize,
     axioms: Vec<Thm>,
     uid: u32, // Unique to this ctx
@@ -1059,7 +1040,6 @@ impl Ctx {
             consts: fnv::new_table_with_cap(n),
             lemmas: fnv::new_table_with_cap(n),
             eq: None,
-            imply: None,
             next_cleanup: CLEANUP_PERIOD,
             axioms: vec![],
             uid: uid as u32,
@@ -1189,22 +1169,6 @@ impl Ctx {
         }
         let eq = self.mk_eq();
         self.mk_app_l(eq, &[a.ty().clone(), a, b])
-    }
-
-    /// Get the `==>` constant.
-    pub fn mk_imply(&mut self) -> Expr {
-        match self.imply {
-            Some(ref c) => c.clone(),
-            None => {
-                let bool = self.mk_bool();
-                let arr = self.mk_arrow(bool.clone(), bool.clone()).unwrap();
-                let arr = self.mk_arrow(bool.clone(), arr).unwrap();
-                let name = Symbol::Builtin(BS::Imply);
-                let i = self.mk_new_const(name, arr).unwrap();
-                self.imply = Some(i.clone());
-                i
-            }
-        }
     }
 
     #[inline]
@@ -1537,21 +1501,6 @@ impl CtxI for Ctx {
         self.mk_app_l(eq, &[a.ty().clone(), a, b])
     }
 
-    fn mk_imply(&mut self) -> Expr {
-        match self.imply {
-            Some(ref c) => c.clone(),
-            None => {
-                let bool = self.mk_bool();
-                let arr = self.mk_arrow(bool.clone(), bool.clone()).unwrap();
-                let arr = self.mk_arrow(bool.clone(), arr).unwrap();
-                let name = Symbol::Builtin(BS::Imply);
-                let i = self.mk_new_const(name, arr).unwrap();
-                self.imply = Some(i.clone());
-                i
-            }
-        }
-    }
-
     fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr> {
         self.check_uid_(&t);
         struct Replace<'a> {
@@ -1849,23 +1798,6 @@ impl CtxI for Ctx {
             thref.concl = th2_c;
         }
         Ok(th1)
-    }
-
-    fn thm_mp(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
-        self.check_thm_uid_(&th1);
-        self.check_thm_uid_(&th2);
-        let th2_c = &th2.0.concl;
-        let (a, b) = th2_c.unfold_imply().ok_or_else(|| {
-            Error::new("mp: second theorem must be an implication")
-        })?;
-        if &th1.0.concl != a {
-            return Err(Error::new(
-                "mp: conclusion of th1 does not match LHS of implication of th2",
-            ));
-        }
-        let b = b.clone();
-        let hyps = hyps_merge(&mut th1, &mut th2);
-        Ok(Thm::make_(b, self.uid, hyps))
     }
 
     fn thm_bool_eq(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {

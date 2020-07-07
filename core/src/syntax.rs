@@ -540,7 +540,6 @@ impl<'a> Parser<'a> {
         };
         Ok(match s {
             "=" => self.ctx.mk_eq(),
-            "==>" => self.ctx.mk_imply(),
             "bool" => self.ctx.mk_bool(),
             "type" => self.ctx.mk_ty(),
             _ => self
@@ -561,10 +560,6 @@ impl<'a> Parser<'a> {
     ) -> Result<k::Expr> {
         match s {
             "=" => self.ctx.mk_eq_app(e1, e2),
-            "==>" => {
-                let i = self.ctx.mk_imply();
-                self.ctx.mk_app_l(i, &[e1, e2])
-            }
             "->" => self.ctx.mk_arrow(e1, e2),
             _ => {
                 if let Some((c, _)) = self.ctx.find_const(s) {
