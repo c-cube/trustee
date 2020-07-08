@@ -70,7 +70,7 @@ pub fn ocaml_func(_attribute: TokenStream, item: TokenStream) -> TokenStream {
         .map(|t| match t {
             Some(ident) => {
                 let ident = &ident.ident;
-                quote! { mut #ident: ocaml::Value }
+                quote! { #ident: ocaml::Value }
             }
             None => quote! { _: ocaml::Value },
         })
@@ -89,7 +89,7 @@ pub fn ocaml_func(_attribute: TokenStream, item: TokenStream) -> TokenStream {
         .filter_map(|arg| match arg {
             Some(ident) => {
                 let ident = ident.ident.clone();
-                Some(quote! { let mut #ident = ocaml::FromValue::from_value(#ident); })
+                Some(quote! { let #ident = ocaml::FromValue::from_value(#ident); })
             }
             None => None,
         })
@@ -231,7 +231,7 @@ pub fn ocaml_native_func(_attribute: TokenStream, item: TokenStream) -> TokenStr
     let mut ocaml_args: Vec<_> = args
         .iter()
         .map(|t| match t {
-            Some(ident) => quote! { mut #ident: ocaml::Value },
+            Some(ident) => quote! { #ident: ocaml::Value },
             None => quote! { _: ocaml::Value },
         })
         .collect();
@@ -304,11 +304,15 @@ fn ocaml_bytecode_func_impl(
     let args: Vec<_> = item_fn
         .sig
         .inputs
-        .iter()
+        .clone()
+        .into_iter()
         .map(|arg| match arg {
             syn::FnArg::Receiver(_) => panic!("OCaml functions cannot take a self argument"),
-            syn::FnArg::Typed(t) => match t.pat.as_ref() {
-                syn::Pat::Ident(ident) => Some(ident),
+            syn::FnArg::Typed(mut t) => match t.pat.as_mut() {
+                syn::Pat::Ident(ident) => {
+                    ident.mutability = None;
+                    Some(ident.clone())
+                }
                 _ => None,
             },
         })
@@ -317,7 +321,9 @@ fn ocaml_bytecode_func_impl(
     let mut ocaml_args: Vec<_> = args
         .iter()
         .map(|t| match t {
-            Some(ident) => quote! { #ident: ocaml::Value },
+            Some(ident) => {
+                quote! { #ident: ocaml::Value }
+            }
             None => quote! { _: ocaml::Value },
         })
         .collect();
@@ -394,7 +400,7 @@ fn ocaml_bytecode_func_impl(
         })
         .collect();
 
-    let len = rust_args.len();
+    let len = ocaml_args.len();
 
     if len > 5 {
         let convert_params: Vec<_> = args
@@ -402,7 +408,7 @@ fn ocaml_bytecode_func_impl(
             .filter_map(|arg| match arg {
                 Some(ident) => Some(quote! {
                     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-                    let mut #ident = ocaml::FromValue::from_value(unsafe {
+                    let #ident = ocaml::FromValue::from_value(unsafe {
                         core::ptr::read(__ocaml_argv.add(__ocaml_arg_index as usize))
                     });
                     __ocaml_arg_index += 1 ;
@@ -415,8 +421,8 @@ fn ocaml_bytecode_func_impl(
             #(
                 #attr
             )*
-            pub #constness #unsafety extern "C" fn #name(__ocaml_argv: *mut ocaml::Value, __ocaml_argc: i32) -> ocaml::Value #where_clause {
-                assert!(#len == __ocaml_argc as usize);
+            pub #constness unsafe extern "C" fn #name(__ocaml_argv: *mut ocaml::Value, __ocaml_argc: i32) -> ocaml::Value #where_clause {
+                assert!(#len <= __ocaml_argc as usize, "len: {}, argc: {}", #len, __ocaml_argc);
 
                 #inner
 
@@ -432,7 +438,7 @@ fn ocaml_bytecode_func_impl(
             .filter_map(|arg| match arg {
                 Some(ident) => {
                     let ident = ident.ident.clone();
-                    Some(quote! { let mut #ident = ocaml::FromValue::from_value(#ident); })
+                    Some(quote! { let #ident = ocaml::FromValue::from_value(#ident); })
                 }
                 None => None,
             })

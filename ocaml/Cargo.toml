@@ -8,7 +8,8 @@ crate-type = ["staticlib", "cdylib"]
 
 
 [dependencies]
-trustee = {path = "../../../core", version = "*"}
-ocaml = "^0.12.4"
+trustee = {git = "https://github.com/c-cube/trustee.git", features=["arc"], version = "*"}
+trustee_opentheory = {git = "https://github.com/c-cube/trustee.git", version = "*"}
+ocaml = "^0.14.0"
 
 [workspace]

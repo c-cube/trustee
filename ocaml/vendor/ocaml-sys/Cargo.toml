@@ -13,7 +13,7 @@
 [package]
 edition = "2018"
 name = "ocaml-sys"
-version = "0.12.2"
+version = "0.14.0"
 authors = ["Zach Shipko <zachshipko@gmail.com>"]
 description = "Low-level OCaml bindings for Rust"
 documentation = "https://docs.rs/ocaml-sys"

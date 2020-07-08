@@ -1,4 +1,4 @@
-use ocaml::{FromValue, Pointer, ToValue, Value};
+use ocaml::{FromValue, Pointer};
 use std::sync::{Arc, Mutex};
 use trustee::kernel_of_trust as k;
 
@@ -70,7 +70,7 @@ pub fn trustee_thm_hyps(v: Pointer<Thm>) -> Vec<Pointer<Expr>> {
 
 /// A wrapper around the context.
 #[derive(Debug, Clone)]
-pub struct Ctx(Arc<Mutex<k::ExprManager>>);
+pub struct Ctx(Arc<Mutex<k::Ctx>>);
 
 unsafe extern "C" fn trustee_finalize_ctx(v: ocaml::Value) {
     let ptr: Pointer<Ctx> = Pointer::from_value(v);
@@ -149,10 +149,51 @@ pub fn trustee_thm_assume(
     e: Pointer<Expr>,
 ) -> Result<Pointer<Thm>, ocaml::Error> {
     let mut ctx = ctx.as_mut().0.lock().unwrap();
-    let t = ctx.thm_assume(&e.as_ref().0);
+    let t = ctx.thm_assume(e.as_ref().0.clone())?;
     Ok(Pointer::alloc_custom(Thm(t)))
 }
 
+// === OPEN THEORY ====
+
+/// A wrapper around the context.
+#[derive(Debug, Clone)]
+pub struct OT(Arc<Mutex<k::Ctx>>);
+
+unsafe extern "C" fn trustee_finalize_ot(v: ocaml::Value) {
+    let ptr: Pointer<OT> = Pointer::from_value(v);
+    ptr.drop_in_place()
+}
+
+ocaml::custom_finalize!(OT, trustee_finalize_ot);
+
+/// Parse OpenTheory
+#[ocaml::func]
+pub fn trustee_ot_parse(
+    mut ctx: Pointer<Ctx>,
+    s: &str,
+) -> (Vec<Pointer<Expr>>, Vec<Pointer<Thm>>, Vec<Pointer<Thm>>) {
+    use trustee_opentheory as open_theory;
+    let mut ctx = ctx.as_mut().0.lock().unwrap();
+    let mut vm = open_theory::VM::new(&mut ctx);
+    let mut buf = std::io::BufReader::new(s.as_bytes());
+    eprintln!("reading string (len {})", s.as_bytes().len());
+    vm.parse_str(&mut buf).unwrap_or_else(|e| {
+        let msg = format!("trustee_parse_ot: {}", e);
+        ocaml::Error::raise_failure(&msg)
+    });
+    eprintln!("got OT article");
+    let open_theory::Article { defs: v1, assumptions: v2, theorems: v3 } =
+        vm.into_article();
+    let v1: Vec<_> =
+        v1.into_iter().map(|e| Pointer::alloc_custom(Expr(e.1))).collect();
+    let v2: Vec<_> =
+        v2.into_iter().map(|e| Pointer::alloc_custom(Thm(e))).collect();
+    let v3: Vec<_> =
+        v3.into_iter().map(|e| Pointer::alloc_custom(Thm(e))).collect();
+    (v1, v2, v3).into()
+}
+
+/*
 /// Parse OpenTheory
 #[ocaml::func]
 pub fn trustee_ot_parse(
@@ -190,43 +231,5 @@ pub fn trustee_ot_parse(
     let v3: Vec<_> = v3.into_iter().map(|e| Thm(e)).collect();
     // Ok(v1.to_value(), v2.to_value(), v3.to_value())
     Ok((v1, v2, v3))
-}
-
-/* TODO
-// === OPEN THEORY ====
-
-/// A wrapper around the context.
-#[derive(Debug, Clone)]
-pub struct OT(Arc<Mutex<k::ExprManager>>);
-
-unsafe extern "C" fn trustee_finalize_ot(v: ocaml::Value) {
-    let ptr: Pointer<OT> = Pointer::from_value(v);
-    ptr.drop_in_place()
-}
-
-ocaml::custom_finalize!(Ctx, trustee_finalize_ctx);
-
-/// Parse OpenTheory
-#[ocaml::func]
-pub fn trustee_ot_parse(mut ctx: Pointer<Ctx>, s: &str) -> Vec<Pointer<Thm>> {
-    let mut ctx = ctx.as_mut().0.lock().unwrap();
-    let mut vm = trustee::open_theory::VM::new(&mut ctx);
-    let mut buf = std::io::BufReader::new(s.as_bytes());
-    eprintln!("reading string (len {})", s.as_bytes().len());
-    vm.parse_str(&mut buf).unwrap_or_else(|e| {
-        let msg = format!("trustee_parse_ot: {}", e);
-        ocaml::Error::raise_failure(&msg)
-    });
-    eprintln!("got OT article");
-    let article = vm.into_article();
-    let (v1, v2, v3) = article.get(&mut ctx);
-    //let v1: Vec<_> =
-    //    v1.into_iter().map(|e| Pointer::alloc_custom(Expr(e))).collect();
-    //let v2: Vec<_> =
-    //    v2.into_iter().map(|e| Pointer::alloc_custom(Thm(e))).collect();
-    let v3: Vec<_> =
-        v3.into_iter().map(|e| Pointer::alloc_custom(Thm(e))).collect();
-    //(v1.to_value(), v2.to_value(), v3.to_value())
-    v3
 }
 */

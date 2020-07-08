@@ -13,7 +13,7 @@
 [package]
 edition = "2018"
 name = "ocaml"
-version = "0.12.4"
+version = "0.14.2"
 authors = ["Zach Shipko <zachshipko@gmail.com>"]
 description = "OCaml bindings for Rust"
 documentation = "https://docs.rs/ocaml"
@@ -28,11 +28,11 @@ version = "0.2"
 optional = true
 
 [dependencies.ocaml-derive]
-version = "0.12.1"
+version = "0.14"
 optional = true
 
 [dependencies.ocaml-sys]
-version = "0.12.2"
+version = "0.14"
 
 [features]
 default = ["derive"]

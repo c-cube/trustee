@@ -1,6 +1,6 @@
 test:
 	@cargo test --features=link -- --test-threads=1
-	@dune runtest --root=test --force
+	@dune runtest --root=test --force --no-buffer
 
 utop:
 	@dune utop --root=test
@@ -10,8 +10,8 @@ clean:
 	dune clean --root=test
 
 publish:
-	cd sys && cargo package && cargo publish
-	cd derive && cargo package && cargo publish
+	cd sys && cargo package && cargo publish && sleep 5
+	cd derive && cargo package && cargo publish && sleep 5
 	cargo package && cargo publish
 
 .PHONY: test clean
