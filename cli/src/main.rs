@@ -1,5 +1,8 @@
 use {
-    std::fmt,
+    std::{
+        ffi::{c_void, CStr},
+        fmt,
+    },
     trustee::{kernel_of_trust as k, meta},
 };
 
@@ -21,11 +24,11 @@ mod janet {
         CFUNCTION,
         FIBER,
         FUNCTION,
-        KEYWORD,
+        KEYWORD(&'a CStr),
         NIL,
         NUMBER(f64),
-        POINTER,
-        STRING,
+        POINTER(*const c_void),
+        STRING(&'a CStr),
         STRUCT,
         SYMBOL,
         TABLE,
@@ -49,14 +52,25 @@ mod janet {
                 j::JanetType_JANET_CFUNCTION => ValueKind::CFUNCTION,
                 j::JanetType_JANET_FIBER => ValueKind::FIBER,
                 j::JanetType_JANET_FUNCTION => ValueKind::FUNCTION,
-                j::JanetType_JANET_KEYWORD => ValueKind::KEYWORD,
+                j::JanetType_JANET_KEYWORD => {
+                    let a = j::janet_unwrap_keyword(v);
+                    let s = CStr::from_ptr(a as *const i8);
+                    ValueKind::KEYWORD(s)
+                }
                 j::JanetType_JANET_NIL => ValueKind::NIL,
                 j::JanetType_JANET_NUMBER => {
                     let i = j::janet_unwrap_number(v);
                     ValueKind::NUMBER(i)
                 }
-                j::JanetType_JANET_POINTER => ValueKind::POINTER,
-                j::JanetType_JANET_STRING => ValueKind::STRING,
+                j::JanetType_JANET_POINTER => {
+                    let v = j::janet_unwrap_pointer(v);
+                    ValueKind::POINTER(v)
+                }
+                j::JanetType_JANET_STRING => {
+                    let a = j::janet_unwrap_keyword(v);
+                    let s = CStr::from_ptr(a as *const i8);
+                    ValueKind::STRING(s)
+                }
                 j::JanetType_JANET_STRUCT => ValueKind::STRUCT,
                 j::JanetType_JANET_SYMBOL => ValueKind::SYMBOL,
                 j::JanetType_JANET_TABLE => ValueKind::TABLE,
@@ -76,7 +90,7 @@ mod janet {
 
     impl fmt::Debug for Value {
         fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-            write!(out, "value({:?})", self.kind())
+            write!(out, "value({:#?})", self.kind())
         }
     }
 
