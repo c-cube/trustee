@@ -23,7 +23,7 @@ mod data {
         where
             T: rlua::UserDataMethods<'lua, Self>,
         {
-            meths.add_method("__tostring", |_, e, ()| Ok(e.0.to_string()));
+            meths.add_method("__tostring", |_, th, ()| Ok(th.0.to_string()));
         }
     }
 }
