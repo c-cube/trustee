@@ -1,6 +1,6 @@
 //! Meta-language.
 //!
-//! The meta-language is a postscript-like stack language that manipulates
+//! The meta-language is a tiny lisp-like stack language that manipulates
 //! expressions, goals, theorems, and other values. It is designed to be
 //! used both interactively and as an efficient way of storing proofs.
 
@@ -11,7 +11,7 @@ use {
         kernel_of_trust::{self as k, Ctx},
         syntax, Error, Result,
     },
-    std::{cell::RefCell, fmt, rc::Rc},
+    std::{cell::RefCell, fmt},
 };
 
 macro_rules! logdebug {
@@ -21,150 +21,110 @@ macro_rules! logdebug {
     }
 }
 
-/// The state of the meta-language interpreter.
-pub struct State<'a> {
-    pub ctx: &'a mut Ctx,
-    pub stack: Vec<Value>,
-    /// Current instruction.
-    cur_i: Option<Instr>,
-    /// Nested scopes to handle definitions in local dictionaries.
-    ///
-    /// The toplevel dictionary (at index 0) is the system dictionary.
-    scopes: Vec<Dict>,
-    /// Control stack, for function call.
-    ctrl_stack: Vec<(CodeArray, usize)>,
-}
-
-/// An array of instructions.
+/// # Values
 ///
-/// Syntax: `{a b c d}`
-#[derive(Clone)]
-pub struct CodeArray(Rc<Vec<Instr>>);
-
-impl fmt::Debug for CodeArray {
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        out.debug_set().entries(self.0.iter()).finish()
-    }
-}
-
-#[derive(Clone)]
-pub struct ValueArray(Rc<RefCell<Vec<Value>>>);
-
-impl fmt::Debug for ValueArray {
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        out.debug_list().entries(self.0.borrow().iter()).finish()
-    }
-}
-
-impl fmt::Display for Value {
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Value::Int(i) => write!(out, "{}", i),
-            Value::Bool(b) => write!(out, "{}", b),
-            Value::Sym(s) => write!(out, "{}", &*s),
-            Value::Source(_) => write!(out, "<source>"),
-            Value::Expr(e) => write!(out, "{}", e),
-            Value::Thm(th) => write!(out, "{}", th),
-            Value::CodeArray(ca) => write!(out, "{:?}", ca),
-            Value::Array(a) => {
-                out.debug_list().entries(a.0.borrow().iter()).finish()
-            }
-        }
-    }
-}
-
-/// A dictionary from symbols to values.
-///
-/// Syntax: TODO
-/// Syntax: `begin … end` to create a dictionary and use it in a temporary scope.
-#[derive(Clone, Debug)]
-pub struct Dict(FnvHashMap<Rc<str>, Value>);
-
-// TODO: syntax for `Value::Source` (""" string?)
-// TODO: builtins for creating and manipulating arrays
-
 /// A value of the language.
 #[derive(Debug, Clone)]
 pub enum Value {
+    Nil,
     Int(i64),
     Bool(bool),
-    Sym(Rc<str>),
-    /// Source code. Obtained only by parsing a file.
-    Source(Rc<str>),
-    //Var(Var),
+    Sym(k::Symbol),
+    /// A raw string literal. Obtained by parsing a source file or using
+    /// an embedded rust string literal.
+    Str(String),
     Expr(k::Expr),
     Thm(k::Thm),
-    CodeArray(CodeArray),
-    Array(ValueArray),
-}
-
-impl PartialEq for Value {
-    fn eq(&self, other: &Value) -> bool {
-        use Value::*;
-
-        match (self, other) {
-            (Int(i), Int(j)) => i == j,
-            (Bool(i), Bool(j)) => i == j,
-            (Sym(i), Sym(j)) => i == j,
-            (Expr(i), Expr(j)) => i == j,
-            _ => false,
-        }
-    }
-}
-
-/// An instruction of the language.
-#[derive(Debug, Clone)]
-enum Instr {
-    /// A core instruction.
-    Core(InstrCore),
-    /// A rust builtin.
+    /// An executable chunk.
+    Chunk(Chunk),
+    /// A builtin instruction implemented in rust.
     Builtin(&'static dyn InstrBuiltin),
-    /// Immediate value (push itself on stack)
-    Im(Value),
-    /// Call a word defined using this code array.
-    Call(CodeArray),
-    /// Call a word by its name. Useful for late binding and recursion.
-    Get(Rc<str>),
+    //Array(ValueArray),
 }
 
-// NOTE: modify `INSTR_CORE` below when modifying this.
-/// Core operations: control flow and arithmetic.
-#[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum InstrCore {
-    Def,
-    If,
-    IfElse,
-    Dup,
-    Swap,
-    Drop,
-    Rot,
-    Begin,
-    End,
-    Eq,
-    Lt,
-    Gt,
-    Leq,
-    Geq,
-    Add,
-    Mul,
-    Sub,
-    Div,
-    Mod,
-    PrintPop,
-    PrintStack,
-    Inspect,
-    Clear,
-    /// Load a source string
-    Source,
-    /// Read a file into a source string
-    LoadFile,
+/// A chunk of code.
+///
+/// Each derived rule, expression, etc. is compiled to a self-contained chunk.
+/// Chunks can be evaluated several times.
+#[derive(Clone)]
+pub struct Chunk(k::Ref<ChunkImpl>);
+
+struct ChunkImpl {
+    /// Instructions to execute.
+    instrs: Box<[Instr]>,
+    /// Local values, typically chunks, theorems, or terms,
+    /// used during the evaluation.
+    locals: Box<[Value]>,
+    /// Number of slots required.
+    n_slots: u32,
+    /// Name of this chunk, if any.
+    name: Option<String>,
+}
+
+/// Index in the array of slots.
+type SlotIdx = u8;
+
+/// Index in the array of locals.
+type LocalIdx = u8;
+
+/// Index in the VM's argument stack.
+type ArgIdx = u8;
+
+// TODO: control flow
+/// An instruction of the language.
+///
+/// Each instruction's last argument is the index of the slot to put the result
+/// into. Abbreviations:
+/// - `sl` is the slots
+/// - `args` is the VM's argument stack.
+/// - `$3` is argument number 3 (numbered from 0)`
+#[derive(Debug, Copy, Clone)]
+#[repr(packed)]
+enum Instr {
+    /// Local a local value into a slot. `sl[$1] = locals[$0]`
+    LoadLocal(LocalIdx, SlotIdx),
+    /// Set `args[$0]` to value `sl[$1]`.
+    SetArg(ArgIdx, SlotIdx),
+    /// Return from current chunk, yielding value `sl[$0]`
+    Ret(SlotIdx),
+    /// `sl[$2] = (sl[$0] == sl[$1])`
+    Eq(SlotIdx, SlotIdx, SlotIdx),
+    Lt(SlotIdx, SlotIdx, SlotIdx),
+    Gt(SlotIdx, SlotIdx, SlotIdx),
+    Leq(SlotIdx, SlotIdx, SlotIdx),
+    Geq(SlotIdx, SlotIdx, SlotIdx),
+    Add(SlotIdx, SlotIdx, SlotIdx),
+    Mul(SlotIdx, SlotIdx, SlotIdx),
+    Sub(SlotIdx, SlotIdx, SlotIdx),
+    Div(SlotIdx, SlotIdx, SlotIdx),
+    Mod(SlotIdx, SlotIdx, SlotIdx),
+    /// prints `sl[$0]`
+    Print(SlotIdx),
+    /// prints `sl[$0]` in debug mode
+    PrintDebug(SlotIdx),
+    /// evaluates string in `sl[$0]`
+    EvalStr(SlotIdx),
+    /// read file whose name is `sl[$0]` into a string `sl[$1]`
+    LoadFile(SlotIdx, SlotIdx),
+    /// Call chunk `locals[$0]` with 0 argument, put result into `sl[$1]`
+    Call0(LocalIdx, SlotIdx),
+    /// Call chunk `locals[$0]` with argument `sl[$1]`, put result into `sl[$2]`
+    Call1(LocalIdx, SlotIdx, SlotIdx),
+    /// Call chunk `locals[$0]` with all the arguments on `args`, put result into `sl[$1]`.
+    /// Will clear `args`.
+    CallWithArgs(LocalIdx, SlotIdx),
+    /// Tail-call into chunk `locals[$0]` with 0 argument
+    Become0(LocalIdx),
+    /// Tail-call into chunk `locals[$0]` with argument `sl[$1]`
+    Become1(LocalIdx, SlotIdx),
+    /// Tail-call into chunk `locals[$0]` with arguments in `args`
+    BecomeWithArgs(LocalIdx),
 }
 
 /// A custom instruction implemented in rust.
 ///
-/// This is the most direct way of writing efficient "tactics" directly
-/// in rust.
+/// This is the most direct way of writing efficient inference rules or
+/// tactics directly in rust.
 pub trait InstrBuiltin {
     /// Name of the instruction. The instruction is invoked by its name.
     ///
@@ -172,8 +132,8 @@ pub trait InstrBuiltin {
     /// brackets, backquotes, etc.)
     fn name(&self) -> &'static str;
 
-    /// Execute the instruction on the given state.
-    fn run(&self, st: &mut State) -> Result<()>;
+    /// Execute the instruction on the given state with arguments.
+    fn run(&self, st: &mut VM, args: &[Value]) -> Result<Value>;
 
     /// A one-line help text for this instruction.
     fn help(&self) -> String {
@@ -181,222 +141,106 @@ pub trait InstrBuiltin {
     }
 }
 
-impl fmt::Debug for dyn InstrBuiltin {
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        write!(out, "{}", self.name())
-    }
+/// The meta-language virtual machine.
+pub struct VM<'a> {
+    /// The logical context underlying the VM.
+    ///
+    /// The context provides means to build expressions, theorems (following
+    /// the logic deduction rules), and stores maps from names to
+    /// constants, theorems, and chunks.
+    pub ctx: &'a mut Ctx,
+    /// Current instruction.
+    cur_i: Option<Instr>,
+    /// The stack where values live.
+    stack: Vec<Value>,
+    /// Control stack, for function calls.
+    ctrl_stack: Vec<StackFrame>,
+    /// Stack used to pass arguments to a chunk before execution.
+    /// This is typically reset before each function call.
+    call_stack: Vec<Value>,
 }
 
-pub(crate) mod parser {
-    /// A parser for RPN-like syntax, inspired from postscript.
-    pub struct Parser<'b> {
-        col: usize,
-        line: usize,
-        i: usize,
-        bytes: &'b [u8],
-        cur_: Option<Tok<'b>>,
-    }
-
-    /// A token for the RPN syntax..
-    #[derive(Clone, Copy, Debug, PartialEq)]
-    pub enum Tok<'b> {
-        Eof,
-        Id(&'b str),         // identifier
-        QuotedId(&'b str),   // '/' identifier
-        QuotedExpr(&'b str), // `some expr`
-        Int(i64),
-        LBracket,
-        RBracket,
-        LBrace,
-        RBrace,
-        Invalid(char),
-    }
-
-    #[inline]
-    fn is_id_char(c: u8) -> bool {
-        match c {
-            b'a'..=b'z'
-            | b'A'..=b'Z'
-            | b'_'
-            | b':'
-            | b'='
-            | b'+'
-            | b'-'
-            | b'@'
-            | b'!'
-            | b'$'
-            | b'%'
-            | b'^'
-            | b'&'
-            | b'*'
-            | b'|'
-            | b'/'
-            | b'\\'
-            | b';' => true,
-            _ => false,
-        }
-    }
-
-    impl<'b> Parser<'b> {
-        #[inline]
-        pub fn eof(&self) -> bool {
-            self.i >= self.bytes.len()
-        }
-
-        pub fn loc(&self) -> (usize, usize) {
-            (self.line, self.col)
-        }
-
-        fn skip_white_(&mut self) {
-            while self.i < self.bytes.len() {
-                let c = self.bytes[self.i];
-                if c == b'#' {
-                    // eat rest of line
-                    while self.i < self.bytes.len()
-                        && self.bytes[self.i] != b'\n'
-                    {
-                        self.i += 1
-                    }
-                } else if c == b' ' || c == b'\t' {
-                    self.i += 1;
-                    self.col += 1;
-                } else if c == b'\n' {
-                    self.i += 1;
-                    self.line += 1;
-                    self.col = 1
-                } else {
-                    return;
-                }
-            }
-        }
-
-        /// Next token.
-        pub fn next(&mut self) -> Tok<'b> {
-            self.skip_white_();
-            if self.eof() {
-                self.cur_ = Some(Tok::Eof);
-                return Tok::Eof;
-            }
-            let tok = match self.bytes[self.i] {
-                b'{' => {
-                    self.i += 1;
-                    self.col += 1;
-                    Tok::LBracket
-                }
-                b'[' => {
-                    self.i += 1;
-                    self.col += 1;
-                    Tok::LBrace
-                }
-                b'}' => {
-                    self.i += 1;
-                    self.col += 1;
-                    Tok::RBracket
-                }
-                b']' => {
-                    self.i += 1;
-                    self.col += 1;
-                    Tok::RBrace
-                }
-                b'`' => {
-                    let mut j = self.i + 1;
-                    while j < self.bytes.len() && self.bytes[j] != b'`' {
-                        j += 1;
-                    }
-                    let src_expr =
-                        std::str::from_utf8(&self.bytes[self.i + 1..j])
-                            .expect("invalid utf8 slice");
-                    self.col += j - self.i + 1;
-                    self.i = j + 1;
-                    Tok::QuotedExpr(src_expr)
-                }
-                c if c.is_ascii_digit() || c == b'-' => {
-                    let mut j = self.i + 1;
-                    while j < self.bytes.len() && self.bytes[j].is_ascii_digit()
-                    {
-                        j += 1;
-                    }
-                    let tok = std::str::from_utf8(&self.bytes[self.i..j])
-                        .expect("invalid utf8 slice");
-                    let n = str::parse(tok).expect("cannot parse int");
-                    self.col += j - self.i;
-                    self.i = j;
-                    Tok::Int(n)
-                }
-                b'"' => {
-                    let mut j = self.i + 1;
-                    while j < self.bytes.len() && {
-                        let c = self.bytes[j];
-                        c != b'"'
-                    } {
-                        j += 1;
-                    }
-                    let tok = std::str::from_utf8(&self.bytes[self.i + 1..j])
-                        .expect("invalid utf8 slice");
-                    self.col += j - self.i + 1;
-                    self.i = j + 1;
-                    Tok::QuotedId(tok)
-                }
-                c if is_id_char(c) => {
-                    assert!(c != b'-'); // number, dealt with above
-                    let mut j = self.i + 1;
-                    while j < self.bytes.len() && {
-                        let c = self.bytes[j];
-                        is_id_char(c) || c.is_ascii_digit()
-                    } {
-                        j += 1;
-                    }
-                    let tok = std::str::from_utf8(&self.bytes[self.i..j])
-                        .expect("invalid utf8 slice");
-                    self.col += j - self.i;
-                    self.i = j;
-                    Tok::Id(tok)
-                }
-                c => Tok::Invalid(std::char::from_u32(c as u32).unwrap()),
-            };
-            self.cur_ = Some(tok);
-            tok
-        }
-
-        /// Current token.
-        pub fn cur(&mut self) -> Tok<'b> {
-            if let Some(c) = self.cur_ {
-                c
-            } else {
-                self.next()
-            }
-        }
-
-        /// New parser.
-        pub fn new(s: &'b str) -> Self {
-            Self { col: 1, line: 1, i: 0, bytes: s.as_bytes(), cur_: None }
-        }
-    }
+/// A stack frame.
+///
+/// Each chunk has its own stack frame of its given size.
+struct StackFrame {
+    /// Offset in `vm.stack` where this frame starts.
+    /// The size of the stack is determined by `chunk.n_slots`.
+    start: u32,
+    /// Instruction pointer within `chunk`.
+    ic: u32,
+    /// Chunk being executed.
+    chunk: Chunk,
 }
 
 /// Meta-language.
 mod ml {
     use super::*;
 
-    impl CodeArray {
-        fn new(v: Vec<Instr>) -> Self {
-            CodeArray(Rc::new(v))
+    impl fmt::Debug for Chunk {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            out.debug_set().entries(self.0.instrs.iter()).finish()
         }
     }
 
-    impl Dict {
-        fn new() -> Self {
-            Dict(fnv::new_table_with_cap(8))
+    impl default::Default for Value {
+        fn default() -> Self {
+            Value::Nil
         }
     }
 
+    impl fmt::Debug for dyn InstrBuiltin {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            write!(out, "<builtin {}>", self.name())
+        }
+    }
+
+    /// Print a value.
+    impl fmt::Display for Value {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            match self {
+                Value::Nil => write!(out, "nil"),
+                Value::Int(i) => write!(out, "{}", i),
+                Value::Bool(b) => write!(out, "{}", b),
+                Value::Sym(s) => write!(out, "{}", s.name()),
+                Value::Str(s) => write!(out, "{:?}", s),
+                Value::Expr(e) => write!(out, "{}", e),
+                Value::Thm(th) => write!(out, "{}", th),
+                Value::Chunk(c) => {
+                    if c.0.name.is_some() {
+                        write!(out, "<chunk {:?}>", &c.0.name.unwrap())
+                    } else {
+                        write!(out, "<chunk>")
+                    }
+                }
+                Value::Builtin(b) => write!(out, "<builtin {}>", b.name()),
+                //Value::Array(a) => out.debug_list().entries(a.0.borrow().iter()).finish(),
+            }
+        }
+    }
+
+    impl PartialEq for Value {
+        fn eq(&self, other: &Value) -> bool {
+            use Value::*;
+
+            match (self, other) {
+                (Nil, Nil) => true,
+                (Int(i), Int(j)) => i == j,
+                (Bool(i), Bool(j)) => i == j,
+                (Sym(i), Sym(j)) => i == j,
+                (Expr(i), Expr(j)) => i == j,
+                _ => false, // other cases are not comparable
+            }
+        }
+    }
+
+    /* TODO: move directly into parser?
     /// All the core instructions.
     const INSTR_CORE: &'static [InstrCore] = {
         use InstrCore::*;
         &[
-            Def, If, IfElse, Dup, Swap, Drop, Rot, Eq, Lt, Gt, Leq, Geq, Add,
-            Mul, Sub, Div, Mod, PrintStack, Clear, PrintPop, Inspect, Source,
-            LoadFile, Begin, End,
+            Def, If, IfElse, Dup, Swap, Drop, Rot, Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod,
+            PrintStack, Clear, PrintPop, Inspect, Source, LoadFile, Begin, End,
         ]
     };
 
@@ -484,9 +328,7 @@ mod ml {
                 }
                 I::End => {
                     if st.scopes.len() < 2 {
-                        return Err(Error::new(
-                            "`end` does not match a `begin`",
-                        ));
+                        return Err(Error::new("`end` does not match a `begin`"));
                     }
                     st.scopes.pop();
                 }
@@ -567,27 +409,208 @@ mod ml {
                 }
                 I::LoadFile => {
                     let s = st.pop1_sym()?;
-                    let content =
-                        std::fs::read_to_string(&*s).map_err(|e| {
-                            Error::new_string(format!(
-                                "cannot load file {:?}: {}",
-                                s, e
-                            ))
-                        })?;
+                    let content = std::fs::read_to_string(&*s).map_err(|e| {
+                        Error::new_string(format!("cannot load file {:?}: {}", s, e))
+                    })?;
                     st.push_val(Value::Source(content.into()))
                 }
             }
             Ok(())
+
+        }
+        */
+}
+
+pub mod lexer {
+    /// A parser for RPN-like syntax, inspired from postscript.
+    pub struct Lexer<'b> {
+        col: usize,
+        line: usize,
+        i: usize,
+        bytes: &'b [u8],
+        cur_: Option<Tok<'b>>,
+    }
+
+    /// A token for the RPN syntax..
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub enum Tok<'b> {
+        Eof,
+        Id(&'b str),         // identifier
+        QuotedId(&'b str),   // '/' identifier
+        QuotedExpr(&'b str), // `some expr`
+        Int(i64),
+        LBracket,
+        RBracket,
+        LBrace,
+        RBrace,
+        Invalid(char),
+    }
+
+    #[inline]
+    fn is_id_char(c: u8) -> bool {
+        match c {
+            b'a'..=b'z'
+            | b'A'..=b'Z'
+            | b'_'
+            | b':'
+            | b'='
+            | b'+'
+            | b'-'
+            | b'@'
+            | b'!'
+            | b'$'
+            | b'%'
+            | b'^'
+            | b'&'
+            | b'*'
+            | b'|'
+            | b'/'
+            | b'\\'
+            | b';' => true,
+            _ => false,
         }
     }
 
-    impl fmt::Debug for InstrCore {
-        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-            write!(out, "{}", self.name())
+    impl<'b> Lexer<'b> {
+        #[inline]
+        pub fn eof(&self) -> bool {
+            self.i >= self.bytes.len()
+        }
+
+        pub fn loc(&self) -> (usize, usize) {
+            (self.line, self.col)
+        }
+
+        fn skip_white_(&mut self) {
+            while self.i < self.bytes.len() {
+                let c = self.bytes[self.i];
+                if c == b'#' {
+                    // eat rest of line
+                    while self.i < self.bytes.len() && self.bytes[self.i] != b'\n' {
+                        self.i += 1
+                    }
+                } else if c == b' ' || c == b'\t' {
+                    self.i += 1;
+                    self.col += 1;
+                } else if c == b'\n' {
+                    self.i += 1;
+                    self.line += 1;
+                    self.col = 1
+                } else {
+                    return;
+                }
+            }
+        }
+
+        /// Next token.
+        pub fn next(&mut self) -> Tok<'b> {
+            self.skip_white_();
+            if self.eof() {
+                self.cur_ = Some(Tok::Eof);
+                return Tok::Eof;
+            }
+            let tok = match self.bytes[self.i] {
+                b'{' => {
+                    self.i += 1;
+                    self.col += 1;
+                    Tok::LBracket
+                }
+                b'[' => {
+                    self.i += 1;
+                    self.col += 1;
+                    Tok::LBrace
+                }
+                b'}' => {
+                    self.i += 1;
+                    self.col += 1;
+                    Tok::RBracket
+                }
+                b']' => {
+                    self.i += 1;
+                    self.col += 1;
+                    Tok::RBrace
+                }
+                b'`' => {
+                    let mut j = self.i + 1;
+                    while j < self.bytes.len() && self.bytes[j] != b'`' {
+                        j += 1;
+                    }
+                    let src_expr = std::str::from_utf8(&self.bytes[self.i + 1..j])
+                        .expect("invalid utf8 slice");
+                    self.col += j - self.i + 1;
+                    self.i = j + 1;
+                    Tok::QuotedExpr(src_expr)
+                }
+                c if c.is_ascii_digit() || c == b'-' => {
+                    let mut j = self.i + 1;
+                    while j < self.bytes.len() && self.bytes[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    let tok =
+                        std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
+                    let n = str::parse(tok).expect("cannot parse int");
+                    self.col += j - self.i;
+                    self.i = j;
+                    Tok::Int(n)
+                }
+                b'"' => {
+                    let mut j = self.i + 1;
+                    while j < self.bytes.len() && {
+                        let c = self.bytes[j];
+                        c != b'"'
+                    } {
+                        j += 1;
+                    }
+                    let tok = std::str::from_utf8(&self.bytes[self.i + 1..j])
+                        .expect("invalid utf8 slice");
+                    self.col += j - self.i + 1;
+                    self.i = j + 1;
+                    Tok::QuotedId(tok)
+                }
+                c if is_id_char(c) => {
+                    assert!(c != b'-'); // number, dealt with above
+                    let mut j = self.i + 1;
+                    while j < self.bytes.len() && {
+                        let c = self.bytes[j];
+                        is_id_char(c) || c.is_ascii_digit()
+                    } {
+                        j += 1;
+                    }
+                    let tok =
+                        std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
+                    self.col += j - self.i;
+                    self.i = j;
+                    Tok::Id(tok)
+                }
+                c => Tok::Invalid(std::char::from_u32(c as u32).unwrap()),
+            };
+            self.cur_ = Some(tok);
+            tok
+        }
+
+        /// Current token.
+        pub fn cur(&mut self) -> Tok<'b> {
+            if let Some(c) = self.cur_ {
+                c
+            } else {
+                self.next()
+            }
+        }
+
+        /// New parser.
+        pub fn new(s: &'b str) -> Self {
+            Self {
+                col: 1,
+                line: 1,
+                i: 0,
+                bytes: s.as_bytes(),
+                cur_: None,
+            }
         }
     }
+}
 
-    macro_rules! perror {
+macro_rules! perror {
         ($loc: ident, $fmt: literal) => {
             Error::new_string(format!(
                         concat!( "parse error at {:?}: ", $fmt), $loc))
@@ -599,283 +622,271 @@ mod ml {
         };
     }
 
-    macro_rules! pop1_of {
-        ($f:ident, $what: literal, $p: pat, $v: ident, $ret: ty) => {
-            pub fn $f(&mut self) -> Result<$ret> {
-                match self.pop1()? {
-                    $p => Ok($v),
-                    _ => {
-                        return Err(Error::new(concat!(
-                            "type error: expected ",
-                            $what
-                        )))
-                    }
-                }
+// TODO: remove, use `unwrap_value` instead
+macro_rules! pop1_of {
+    ($f:ident, $what: literal, $p: pat, $v: ident, $ret: ty) => {
+        pub fn $f(&mut self) -> Result<$ret> {
+            match self.pop1()? {
+                $p => Ok($v),
+                _ => return Err(Error::new(concat!("type error: expected ", $what))),
             }
-        };
+        }
+    };
+}
+
+impl<'a> VM<'a> {
+    /// Create a new VM using the given context.
+    pub fn new(ctx: &'a mut Ctx) -> Self {
+        /* TODO: use a static dictionary instead.
+        // system-level dictionary
+        let mut scope0 = Dict::new();
+        {
+            for ic in INSTR_CORE {
+                let name: k::Ref<str> = ic.name().into();
+                let ca = CodeArray::new(vec![Instr::Core(*ic)]);
+                scope0.0.insert(name, Value::CodeArray(ca));
+            }
+            for b in logic_builtins::BUILTINS {
+                let name: k::Ref<str> = b.name().into();
+                let ca = CodeArray::new(vec![Instr::Builtin(*b)]);
+                scope0.0.insert(name, Value::CodeArray(ca));
+            }
+        }
+        */
+        Self {
+            ctx,
+            cur_i: None,
+            stack: Vec::with_capacity(256),
+            ctrl_stack: vec![],
+            call_stack: vec![],
+        }
     }
 
-    impl<'a> State<'a> {
-        /// Create a new state.
-        pub fn new(ctx: &'a mut Ctx) -> Self {
-            // system-level dictionary
-            let mut scope0 = Dict::new();
-            {
-                for ic in INSTR_CORE {
-                    let name: Rc<str> = ic.name().into();
-                    let ca = CodeArray::new(vec![Instr::Core(*ic)]);
-                    scope0.0.insert(name, Value::CodeArray(ca));
-                }
-                for b in logic_builtins::BUILTINS {
-                    let name: Rc<str> = b.name().into();
-                    let ca = CodeArray::new(vec![Instr::Builtin(*b)]);
-                    scope0.0.insert(name, Value::CodeArray(ca));
-                }
+    /// Execute instruction `i`.
+    ///
+    /// This should always be done within or before a `exec_loop_`.
+    fn exec_instr_(&mut self, i: Instr) -> Result<()> {
+        match i {
+            Instr::Im(v) => self.stack.push(v),
+            Instr::Builtin(b) => {
+                b.run(self)?; // ask the builtin to eval itself
             }
-            Self {
-                ctx,
-                cur_i: None,
-                stack: vec![],
-                scopes: vec![scope0],
-                ctrl_stack: vec![],
-            }
-        }
-
-        /// Parse an instruction, which is either a word invokation
-        /// or the construction of a value to push onto the stack.
-        fn parse_instr_(&mut self, p: &mut parser::Parser) -> Result<Instr> {
-            use parser::*;
-
-            let loc = p.loc();
-            match p.cur() {
-                Tok::Eof => return Err(Error::new("unexpected EOF")),
-                Tok::RBracket => return Err(Error::new("unexpected '}'")),
-                Tok::RBrace => return Err(Error::new("unexpected ']'")),
-                Tok::Invalid(c) => {
-                    return Err(perror!(loc, "invalid token {:?}", c))
-                }
-                Tok::Int(i) => {
-                    p.next();
-                    Ok(Instr::Im(Value::Int(i)))
-                }
-                Tok::QuotedId(s) => {
-                    let v = Value::Sym(s.into());
-                    p.next();
-                    Ok(Instr::Im(v))
-                }
-                Tok::QuotedExpr(s) => {
-                    let e = syntax::parse_expr(self.ctx, s)?;
-                    p.next();
-                    Ok(Instr::Im(Value::Expr(e)))
-                }
-                Tok::LBracket => {
-                    // parse an array of instructions.
-                    p.next();
-                    let mut ca = vec![];
-                    let v = loop {
-                        match p.cur() {
-                            Tok::RBracket => {
-                                p.next();
-                                let ca = CodeArray::new(ca);
-                                break Value::CodeArray(ca);
-                            }
-                            _ => {
-                                let instr = self.parse_instr_(p)?;
-                                ca.push(instr);
-                            }
+            Instr::Call(ca) => self.exec_codearray_(&ca),
+            Instr::Get(s) => {
+                // Find definition of symbol `s` in `self.scopes`,
+                // starting from the most recent scope.
+                if let Some(v) = self.scopes.iter().rev().find_map(|d| d.0.get(&*s)) {
+                    if let Value::CodeArray(ca) = v {
+                        self.cur_i = Some(ca.0[0].clone());
+                        if ca.0.len() > 1 {
+                            self.ctrl_stack.push((ca.clone(), 1));
                         }
-                    };
-                    Ok(Instr::Im(v))
-                }
-                Tok::LBrace => {
-                    // parse an array of values.
-                    p.next();
-                    let mut arr = vec![];
-                    let v = loop {
-                        match p.cur() {
-                            Tok::RBrace => {
-                                p.next();
-                                let va = ValueArray(Rc::new(RefCell::new(arr)));
-                                break Value::Array(va);
-                            }
-                            _ => match self.parse_instr_(p)? {
-                                Instr::Im(v) => {
-                                    arr.push(v); // only accept values
-                                }
-                                i => {
-                                    self.exec_instr_(i)?;
-                                    let v = self.pop1().map_err(|e| {
-                                        e.set_source(Error::new(
-                                            "evaluate element of an array",
-                                        ))
-                                    })?;
-                                    arr.push(v)
-                                }
-                            },
-                        }
-                    };
-                    Ok(Instr::Im(v))
-                }
-                Tok::Id("true") => {
-                    p.next();
-                    Ok(Instr::Im(Value::Bool(true)))
-                }
-                Tok::Id("false") => {
-                    p.next();
-                    Ok(Instr::Im(Value::Bool(false)))
-                }
-                Tok::Id(s) => {
-                    // Find definition of symbol `s` in `self.scopes[0]`,
-                    // otherwise emit a dynamic get (for user scopes)
-                    let i = match self.scopes[0].0.get(&*s) {
-                        Some(Value::CodeArray(ca)) if ca.0.len() == 1 => {
-                            ca.0[0].clone()
-                        }
-                        Some(Value::CodeArray(ca)) => Instr::Call(ca.clone()),
-                        Some(v) => Instr::Im(v.clone()),
-                        None => Instr::Get(s.into()),
-                    };
-                    p.next();
-                    Ok(i)
-                }
-            }
-        }
-
-        /// Execute instruction `i`.
-        ///
-        /// This should always be done within or before a `exec_loop_`.
-        fn exec_instr_(&mut self, i: Instr) -> Result<()> {
-            match i {
-                Instr::Im(v) => self.stack.push(v),
-                Instr::Builtin(b) => {
-                    b.run(self)?; // ask the builtin to eval itself
-                }
-                Instr::Call(ca) => self.exec_codearray_(&ca),
-                Instr::Get(s) => {
-                    // Find definition of symbol `s` in `self.scopes`,
-                    // starting from the most recent scope.
-                    if let Some(v) =
-                        self.scopes.iter().rev().find_map(|d| d.0.get(&*s))
-                    {
-                        if let Value::CodeArray(ca) = v {
-                            self.cur_i = Some(ca.0[0].clone());
-                            if ca.0.len() > 1 {
-                                self.ctrl_stack.push((ca.clone(), 1));
-                            }
-                        } else {
-                            self.stack.push(v.clone())
-                        }
-                    } else if let Some(c) = self.ctx.find_const(&*s) {
-                        self.stack.push(Value::Expr(c.0.clone()))
-                    } else if let Some(th) = self.ctx.find_lemma(&*s) {
-                        self.stack.push(Value::Thm(th.clone()))
                     } else {
-                        return Err(Error::new_string(format!(
-                            "symbol {:?} not found",
-                            s
-                        )));
+                        self.stack.push(v.clone())
                     }
+                } else if let Some(c) = self.ctx.find_const(&*s) {
+                    self.stack.push(Value::Expr(c.0.clone()))
+                } else if let Some(th) = self.ctx.find_lemma(&*s) {
+                    self.stack.push(Value::Thm(th.clone()))
+                } else {
+                    return Err(Error::new_string(format!("symbol {:?} not found", s)));
                 }
-                Instr::Core(c) => c.run(self)?,
             }
-            Ok(())
+            Instr::Core(c) => c.run(self)?,
         }
+        Ok(())
+    }
 
-        fn exec_codearray_(&mut self, ca: &CodeArray) {
-            // start execution of this block of code
-            self.cur_i = Some(ca.0[0].clone());
-            if ca.0.len() > 1 {
-                self.ctrl_stack.push((ca.clone(), 1));
-            }
+    fn exec_codearray_(&mut self, ca: &CodeArray) {
+        // start execution of this block of code
+        self.cur_i = Some(ca.0[0].clone());
+        if ca.0.len() > 1 {
+            self.ctrl_stack.push((ca.clone(), 1));
         }
+    }
 
-        fn exec_loop_(&mut self) -> Result<()> {
-            'top: loop {
-                // consume `self.cur` here and now.
-                let mut cur0 = None;
-                std::mem::swap(&mut self.cur_i, &mut cur0);
-                match cur0 {
-                    Some(i) => {
-                        self.exec_instr_(i)?;
-                    }
-                    None => {
-                        match self.ctrl_stack.last_mut() {
-                            None => break 'top,
-                            Some((ca, idx)) => {
-                                debug_assert!(*idx < ca.0.len());
-                                let i = ca.0[*idx].clone();
-                                self.cur_i = Some(i);
-                                *idx += 1; // point to next instruction in `ca`
-                                if *idx >= ca.0.len() {
-                                    // last instruction: tailcall
-                                    self.ctrl_stack.pop();
-                                }
+    fn exec_loop_(&mut self) -> Result<()> {
+        'top: loop {
+            // consume `self.cur` here and now.
+            let mut cur0 = None;
+            std::mem::swap(&mut self.cur_i, &mut cur0);
+            match cur0 {
+                Some(i) => {
+                    self.exec_instr_(i)?;
+                }
+                None => {
+                    match self.ctrl_stack.last_mut() {
+                        None => break 'top,
+                        Some((ca, idx)) => {
+                            debug_assert!(*idx < ca.0.len());
+                            let i = ca.0[*idx].clone();
+                            self.cur_i = Some(i);
+                            *idx += 1; // point to next instruction in `ca`
+                            if *idx >= ca.0.len() {
+                                // last instruction: tailcall
+                                self.ctrl_stack.pop();
                             }
                         }
                     }
                 }
             }
-            Ok(())
         }
+        Ok(())
+    }
 
-        pub fn pop1(&mut self) -> Result<Value> {
-            match self.stack.pop() {
-                Some(v) => Ok(v),
-                _ => return Err(Error::new("stack underflow")),
+    pub fn pop1(&mut self) -> Result<Value> {
+        match self.stack.pop() {
+            Some(v) => Ok(v),
+            _ => return Err(Error::new("stack underflow")),
+        }
+    }
+
+    pop1_of!(pop1_int, "int", Value::Int(i), i, i64);
+    pop1_of!(pop1_bool, "bool", Value::Bool(i), i, bool);
+    pop1_of!(
+        pop1_codearray,
+        "code array",
+        Value::CodeArray(i),
+        i,
+        CodeArray
+    );
+    pop1_of!(pop1_array, "array", Value::Array(v), v, ValueArray);
+    pop1_of!(pop1_expr, "expr", Value::Expr(i), i, k::Expr);
+    pop1_of!(pop1_thm, "thm", Value::Thm(i), i, k::Thm);
+    pop1_of!(pop1_sym, "sym", Value::Sym(i), i, k::Ref<str>);
+    pop1_of!(pop1_source, "source", Value::Source(i), i, k::Ref<str>);
+
+    /// Push a value onto the value stack.
+    #[inline]
+    pub fn push_val(&mut self, v: Value) {
+        self.stack.push(v);
+    }
+
+    /// Parse and execute the given code.
+    pub fn run(&mut self, s: &str) -> Result<()> {
+        use lexer::*;
+        let mut p = Lexer::new(s);
+
+        logdebug!("meta.run {}", s);
+
+        loop {
+            if p.cur() == Tok::Eof {
+                break;
             }
-        }
 
-        pop1_of!(pop1_int, "int", Value::Int(i), i, i64);
-        pop1_of!(pop1_bool, "bool", Value::Bool(i), i, bool);
-        pop1_of!(
-            pop1_codearray,
-            "code array",
-            Value::CodeArray(i),
-            i,
-            CodeArray
-        );
-        pop1_of!(pop1_array, "array", Value::Array(v), v, ValueArray);
-        pop1_of!(pop1_expr, "expr", Value::Expr(i), i, k::Expr);
-        pop1_of!(pop1_thm, "thm", Value::Thm(i), i, k::Thm);
-        pop1_of!(pop1_sym, "sym", Value::Sym(i), i, Rc<str>);
-        pop1_of!(pop1_source, "source", Value::Source(i), i, Rc<str>);
-
-        /// Push a value onto the value stack.
-        #[inline]
-        pub fn push_val(&mut self, v: Value) {
-            self.stack.push(v);
-        }
-
-        /// Parse and execute the given code.
-        pub fn run(&mut self, s: &str) -> Result<()> {
-            use parser::*;
-            let mut p = Parser::new(s);
-
-            logdebug!("meta.run {}", s);
-
-            loop {
-                if p.cur() == Tok::Eof {
-                    break;
+            assert!(self.cur_i.is_none());
+            let i = self.parse_instr_(&mut p);
+            match i {
+                Err(e) => {
+                    let (l, c) = p.loc();
+                    let e = e.set_source(k::Error::new_string(format!("at {}:{}", l, c)));
+                    return Err(e);
                 }
-
-                assert!(self.cur_i.is_none());
-                let i = self.parse_instr_(&mut p);
-                match i {
-                    Err(e) => {
-                        let (l, c) = p.loc();
-                        let e = e.set_source(k::Error::new_string(format!(
-                            "at {}:{}",
-                            l, c
-                        )));
-                        return Err(e);
-                    }
-                    Ok(i) => {
-                        self.cur_i = Some(i);
-                        self.exec_loop_()?;
-                    }
+                Ok(i) => {
+                    self.cur_i = Some(i);
+                    self.exec_loop_()?;
                 }
             }
-            Ok(())
+        }
+        Ok(())
+    }
+}
+
+mod parser {
+    use super::*;
+
+    // TODO: rewrite.
+    /// Parse an instruction, which is either a word invokation
+    /// or the construction of a value to push onto the stack.
+    fn parse_instr_(&mut self, p: &mut lexer::Lexer) -> Result<Instr> {
+        use lexer::*;
+
+        let loc = p.loc();
+        match p.cur() {
+            Tok::Eof => return Err(Error::new("unexpected EOF")),
+            Tok::RBracket => return Err(Error::new("unexpected '}'")),
+            Tok::RBrace => return Err(Error::new("unexpected ']'")),
+            Tok::Invalid(c) => return Err(perror!(loc, "invalid token {:?}", c)),
+            Tok::Int(i) => {
+                p.next();
+                Ok(Instr::Im(Value::Int(i)))
+            }
+            Tok::QuotedId(s) => {
+                let v = Value::Sym(s.into());
+                p.next();
+                Ok(Instr::Im(v))
+            }
+            Tok::QuotedExpr(s) => {
+                let e = syntax::parse_expr(self.ctx, s)?;
+                p.next();
+                Ok(Instr::Im(Value::Expr(e)))
+            }
+            Tok::LBracket => {
+                // parse an array of instructions.
+                p.next();
+                let mut ca = vec![];
+                let v = loop {
+                    match p.cur() {
+                        Tok::RBracket => {
+                            p.next();
+                            let ca = CodeArray::new(ca);
+                            break Value::CodeArray(ca);
+                        }
+                        _ => {
+                            let instr = self.parse_instr_(p)?;
+                            ca.push(instr);
+                        }
+                    }
+                };
+                Ok(Instr::Im(v))
+            }
+            Tok::LBrace => {
+                // parse an array of values.
+                p.next();
+                let mut arr = vec![];
+                let v = loop {
+                    match p.cur() {
+                        Tok::RBrace => {
+                            p.next();
+                            let va = ValueArray(Rc::new(RefCell::new(arr)));
+                            break Value::Array(va);
+                        }
+                        _ => match self.parse_instr_(p)? {
+                            Instr::Im(v) => {
+                                arr.push(v); // only accept values
+                            }
+                            i => {
+                                self.exec_instr_(i)?;
+                                let v = self.pop1().map_err(|e| {
+                                    e.set_source(Error::new("evaluate element of an array"))
+                                })?;
+                                arr.push(v)
+                            }
+                        },
+                    }
+                };
+                Ok(Instr::Im(v))
+            }
+            Tok::Id("true") => {
+                p.next();
+                Ok(Instr::Im(Value::Bool(true)))
+            }
+            Tok::Id("false") => {
+                p.next();
+                Ok(Instr::Im(Value::Bool(false)))
+            }
+            Tok::Id(s) => {
+                // Find definition of symbol `s` in `self.scopes[0]`,
+                // otherwise emit a dynamic get (for user scopes)
+                let i = match self.scopes[0].0.get(&*s) {
+                    Some(Value::CodeArray(ca)) if ca.0.len() == 1 => ca.0[0].clone(),
+                    Some(Value::CodeArray(ca)) => Instr::Call(ca.clone()),
+                    Some(v) => Instr::Im(v.clone()),
+                    None => Instr::Get(s.into()),
+                };
+                p.next();
+                Ok(i)
+            }
         }
     }
 }
@@ -987,8 +998,7 @@ mod logic_builtins {
                     let rhs = st.pop1_expr()?;
                     let nthm = &st.pop1_sym()?;
                     let nc = st.pop1_sym()?;
-                    let def =
-                        crate::algo::thm_new_poly_definition(st.ctx, &nc, rhs)?;
+                    let def = crate::algo::thm_new_poly_definition(st.ctx, &nc, rhs)?;
                     st.ctx.define_lemma(nthm, def.thm);
                 }
                 R::Defthm => {
@@ -999,9 +1009,7 @@ mod logic_builtins {
                 R::Decl => {
                     let ty = st.pop1_expr()?;
                     let name = st.pop1_sym()?;
-                    let _e = st
-                        .ctx
-                        .mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
+                    let _e = st.ctx.mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
                 }
                 R::ExprTy => {
                     let e = st.pop1_expr()?;
@@ -1119,9 +1127,7 @@ mod logic_builtins {
                                 let v = k::Var::from_str(&*x, e.ty().clone());
                                 subst.push((v, e.clone()))
                             }
-                            _ => {
-                                return Err(Error::new("invalid subst binding"))
-                            }
+                            _ => return Err(Error::new("invalid subst binding")),
                         }
                     }
 
@@ -1138,9 +1144,9 @@ mod logic_builtins {
                 }
                 R::AbsExpr => {
                     let e = st.pop1_expr()?;
-                    let v = e.as_var().ok_or_else(|| {
-                        Error::new("abs_expr: expression must be a variable")
-                    })?;
+                    let v = e
+                        .as_var()
+                        .ok_or_else(|| Error::new("abs_expr: expression must be a variable"))?;
                     let th = st.pop1_thm()?;
                     let th = st.ctx.thm_abs(v, th)?;
                     st.push_val(Value::Thm(th))
@@ -1149,9 +1155,7 @@ mod logic_builtins {
                     let th = st.pop1_thm()?;
                     st.push_val(Value::Expr(th.concl().clone()))
                 }
-                R::HolPrelude => {
-                    st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into()))
-                }
+                R::HolPrelude => st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into())),
                 R::PledgeNoMoreAxioms => {
                     st.ctx.pledge_no_new_axiom();
                 }
@@ -1188,19 +1192,18 @@ mod logic_builtins {
                         _ => return fail(),
                     }
 
-                    let rw: Box<dyn algo::Rewriter> =
-                        if beta && !rw_rules.is_empty() {
-                            let mut rw = algo::RewriteCombine::new();
-                            rw.add(&algo::RewriterBetaConv);
-                            rw.add(&rw_rules);
-                            Box::new(rw)
-                        } else if beta {
-                            Box::new(algo::RewriterBetaConv)
-                        } else if !rw_rules.is_empty() {
-                            Box::new(rw_rules)
-                        } else {
-                            return fail();
-                        };
+                    let rw: Box<dyn algo::Rewriter> = if beta && !rw_rules.is_empty() {
+                        let mut rw = algo::RewriteCombine::new();
+                        rw.add(&algo::RewriterBetaConv);
+                        rw.add(&rw_rules);
+                        Box::new(rw)
+                    } else if beta {
+                        Box::new(algo::RewriterBetaConv)
+                    } else if !rw_rules.is_empty() {
+                        Box::new(rw_rules)
+                    } else {
+                        return fail();
+                    };
                     let th = algo::thm_rw_concl(st.ctx, th, &*rw)?;
                     st.push_val(Value::Thm(th))
                 }
@@ -1237,7 +1240,7 @@ mod test {
 
     #[test]
     fn test_parser() {
-        use parser::Tok as T;
+        use lexer::Tok as T;
         let a = vec![(
             r#" "a" "b"{mul 2}"d" { 3 } def 2  "#,
             vec![
@@ -1258,7 +1261,7 @@ mod test {
         )];
 
         for (s, v) in a {
-            let mut p = parser::Parser::new(s);
+            let mut p = lexer::Lexer::new(s);
             let mut toks = vec![];
             loop {
                 let t = p.cur().clone();

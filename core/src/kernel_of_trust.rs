@@ -1,21 +1,11 @@
 //! Kernel of Trust: Terms and Theorems
 
-use crate::fnv;
+use crate::{fnv, meta};
 use std::{fmt, ops::Deref, sync::atomic};
 
-#[cfg(not(features = "arc"))]
 pub type Ref<T> = std::rc::Rc<T>;
-#[cfg(not(features = "arc"))]
 pub type WeakRef<T> = std::rc::Weak<T>;
-#[cfg(not(features = "arc"))]
 pub type Lock<T> = std::cell::RefCell<T>;
-
-#[cfg(features = "arc")]
-pub type Ref<T> = std::sync::Arc<T>;
-#[cfg(features = "arc")]
-pub type WeakRef<T> = std::sync::Weak<T>;
-#[cfg(features = "arc")]
-pub type Lock<T> = std::sync::Mutex<T>;
 
 /// For infix/prefix/postfix constants.
 pub type Fixity = crate::syntax::Fixity;
@@ -55,11 +45,17 @@ impl std::error::Error for Error {
 impl Error {
     /// Build a new error.
     pub fn new(msg: &'static str) -> Self {
-        Error { msg: ErrorMsg::EStatic(msg), source: None }
+        Error {
+            msg: ErrorMsg::EStatic(msg),
+            source: None,
+        }
     }
 
     pub fn new_string(msg: String) -> Self {
-        Error { msg: ErrorMsg::EDyn(msg), source: None }
+        Error {
+            msg: ErrorMsg::EDyn(msg),
+            source: None,
+        }
     }
 
     /// Change the source of this error.
@@ -130,6 +126,8 @@ pub type DbIndex = u32;
 ///! # Expressions, types, variables
 
 /// An expression.
+///
+/// The expression is refcounted and is thus cheaply clonable.
 #[derive(Clone)]
 pub struct Expr(Ref<ExprImpl>);
 
@@ -274,7 +272,10 @@ impl Var {
 
     /// Make a free variable.
     pub fn from_str(name: &str, ty: Type) -> Var {
-        Var { name: Symbol::from_str(name), ty }
+        Var {
+            name: Symbol::from_str(name),
+            ty,
+        }
     }
 }
 
@@ -340,10 +341,14 @@ impl ExprView {
                 name: c.name.clone(),
                 fix: std::cell::Cell::new(Fixity::Nullary),
             }),
-            EVar(v) => EVar(Var { ty: f(&v.ty, k)?, name: v.name.clone() }),
-            EBoundVar(v) => {
-                EBoundVar(BoundVarContent { ty: f(&v.ty, k)?, idx: v.idx })
-            }
+            EVar(v) => EVar(Var {
+                ty: f(&v.ty, k)?,
+                name: v.name.clone(),
+            }),
+            EBoundVar(v) => EBoundVar(BoundVarContent {
+                ty: f(&v.ty, k)?,
+                idx: v.idx,
+            }),
             EApp(a, b) => EApp(f(a, k)?, f(b, k)?),
             EPi(ty_a, b) => EPi(f(ty_a, k)?, f(b, k + 1)?),
             ELambda(ty_a, b) => ELambda(f(ty_a, k)?, f(b, k + 1)?),
@@ -386,7 +391,10 @@ impl<'a> Iterator for FreeVars<'a> {
 
 impl<'a> FreeVars<'a> {
     fn new() -> Self {
-        FreeVars { seen: fnv::new_set_with_cap(16), st: vec![] }
+        FreeVars {
+            seen: fnv::new_set_with_cap(16),
+            st: vec![],
+        }
     }
 
     /// Add an expression to explore
@@ -567,16 +575,16 @@ impl Expr {
     // helper for building expressions
     fn make_(v: ExprView, em_uid: u32, ty: Option<Expr>) -> Self {
         let db_depth = compute_db_depth(&v);
-        Expr(Ref::new(ExprImpl { view: v, em_uid, ty, db_depth }))
+        Expr(Ref::new(ExprImpl {
+            view: v,
+            em_uid,
+            ty,
+            db_depth,
+        }))
     }
 
     // pretty print
-    fn pp_(
-        &self,
-        k: DbIndex,
-        out: &mut fmt::Formatter,
-        full: bool,
-    ) -> fmt::Result {
+    fn pp_(&self, k: DbIndex, out: &mut fmt::Formatter, full: bool) -> fmt::Result {
         match self.view() {
             EKind => write!(out, "kind"),
             EType => write!(out, "type"),
@@ -699,7 +707,11 @@ impl Thm {
             hyps.dedup();
             hyps.shrink_to_fit();
         }
-        Thm(Ref::new(ThmImpl { concl, em_uid, hyps }))
+        Thm(Ref::new(ThmImpl {
+            concl,
+            em_uid,
+            hyps,
+        }))
     }
 
     /// Conclusion of the theorem
@@ -762,6 +774,9 @@ pub struct Ctx {
     builtins: Option<ExprBuiltins>,
     consts: fnv::FnvHashMap<Ref<str>, Expr>,
     lemmas: fnv::FnvHashMap<Ref<str>, Thm>,
+    /// The defined chunks of code. These comprise some user defined tactics,
+    /// derived rules, etc.
+    meta_chunks: fnv::FnvHashMap<Ref<str>, meta::Chunk>,
     eq: Option<Expr>,
     next_cleanup: usize,
     axioms: Vec<Thm>,
@@ -946,20 +961,13 @@ impl Ctx {
         e
     }
 
-    fn mk_const_with_(
-        &mut self,
-        s: Symbol,
-        ty: Type,
-        f: Fixity,
-    ) -> Result<Expr> {
+    fn mk_const_with_(&mut self, s: Symbol, ty: Type, f: Fixity) -> Result<Expr> {
         self.check_uid_(&ty);
         if self.consts.contains_key(s.name()) {
             return Err(Error::new("a constant with this name already exists"));
         }
         if !ty.is_closed() || ty.free_vars().next().is_some() {
-            return Err(Error::new(
-                "cannot create constant with non-closed type",
-            ));
+            return Err(Error::new("cannot create constant with non-closed type"));
         }
         let c = self.hashcons_(EConst(ConstContent {
             name: s.clone(),
@@ -1008,9 +1016,7 @@ impl Ctx {
                     ));
                 };
                 if !e.ty().is_type() && !e.ty().is_kind() {
-                    return Err(Error::new(
-                        "pi: body must have type `type` or `kind`",
-                    ));
+                    return Err(Error::new("pi: body must have type `type` or `kind`"));
                 };
                 Some(self.builtins_().ty.clone())
             }
@@ -1022,11 +1028,7 @@ impl Ctx {
                     }
                     Some(self.subst1_(ty_body_f, 0, arg)?)
                 }
-                _ => {
-                    return Err(Error::new(
-                        "cannot apply term with a non-pi type",
-                    ))
-                }
+                _ => return Err(Error::new("cannot apply term with a non-pi type")),
             },
         })
     }
@@ -1119,10 +1121,7 @@ impl Ctx {
             EBoundVar(v) => {
                 // shift bound var by `n`
                 let ty = self.shift_(&v.ty, n, k)?;
-                self.hashcons_(EBoundVar(BoundVarContent {
-                    idx: v.idx + n,
-                    ty,
-                }))?
+                self.hashcons_(EBoundVar(BoundVarContent { idx: v.idx + n, ty }))?
             }
         })
     }
@@ -1452,9 +1451,7 @@ impl Ctx {
             .unfold_eq()
             .ok_or_else(|| Error::new("trans: th2 must be an equation"))?;
         if b != b2 {
-            return Err(Error::new(
-                "trans: th1 and th2's conclusions do not align",
-            ));
+            return Err(Error::new("trans: th1 and th2's conclusions do not align"));
         }
 
         let eq_a_c = self.mk_eq_app(a.clone(), c.clone())?;
@@ -1467,12 +1464,14 @@ impl Ctx {
     pub fn thm_congr(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
-        let (f, g) = th1.concl().unfold_eq().ok_or_else(|| {
-            Error::new("congr: th1.concl must be an equality")
-        })?;
-        let (t, u) = th2.concl().unfold_eq().ok_or_else(|| {
-            Error::new("congr: th2.concl must be an equality")
-        })?;
+        let (f, g) = th1
+            .concl()
+            .unfold_eq()
+            .ok_or_else(|| Error::new("congr: th1.concl must be an equality"))?;
+        let (t, u) = th2
+            .concl()
+            .unfold_eq()
+            .ok_or_else(|| Error::new("congr: th2.concl must be an equality"))?;
         let ft = self.mk_app(f.clone(), t.clone())?;
         let gu = self.mk_app(g.clone(), u.clone())?;
         let eq = self.mk_eq_app(ft, gu)?;
@@ -1484,9 +1483,10 @@ impl Ctx {
     pub fn thm_congr_ty(&mut self, mut th: Thm, ty: &Expr) -> Result<Thm> {
         self.check_thm_uid_(&th);
         self.check_uid_(ty);
-        let (f, g) = th.0.concl.unfold_eq().ok_or_else(|| {
-            Error::new("congr_ty: th.concl must be an equality")
-        })?;
+        let (f, g) =
+            th.0.concl
+                .unfold_eq()
+                .ok_or_else(|| Error::new("congr_ty: th.concl must be an equality"))?;
         if ty.view() == &EKind || !ty.ty().is_type() {
             return Err(Error::new("congr_ty: argument must be a type"));
         }
@@ -1503,11 +1503,7 @@ impl Ctx {
     /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
     ///
     /// Returns an error if the substitution is not closed.
-    pub fn thm_instantiate(
-        &mut self,
-        mut th: Thm,
-        subst: &[(Var, Expr)],
-    ) -> Result<Thm> {
+    pub fn thm_instantiate(&mut self, mut th: Thm, subst: &[(Var, Expr)]) -> Result<Thm> {
         self.check_thm_uid_(&th);
         if subst.iter().any(|(_, t)| !t.is_closed()) {
             return Err(Error::new(
@@ -1532,14 +1528,14 @@ impl Ctx {
         self.check_uid_(&v.ty);
         self.check_thm_uid_(&thm);
         if free_vars_iter(thm.0.hyps.iter()).any(|v2| v == v2) {
-            return Err(Error::new(
-                "abs: variable occurs in one of the hypothesis",
-            ));
+            return Err(Error::new("abs: variable occurs in one of the hypothesis"));
         }
 
-        let (t, u) = thm.0.concl.unfold_eq().ok_or_else(|| {
-            Error::new("abs: thm conclusion should be an equality")
-        })?;
+        let (t, u) = thm
+            .0
+            .concl
+            .unfold_eq()
+            .ok_or_else(|| Error::new("abs: thm conclusion should be an equality"))?;
 
         let lam_t = self.mk_lambda(v.clone(), t.clone())?;
         let lam_u = self.mk_lambda(v.clone(), u.clone())?;
@@ -1578,9 +1574,9 @@ impl Ctx {
                     thref.hyps.extend(v.into_iter().filter(|u| *u != th1_c));
                 }
                 None => {
-                    thref.hyps.extend(
-                        th2.0.hyps.iter().filter(|u| *u != &th1_c).cloned(),
-                    );
+                    thref
+                        .hyps
+                        .extend(th2.0.hyps.iter().filter(|u| *u != &th1_c).cloned());
                 }
             }
             thref.concl = th2_c;
@@ -1599,9 +1595,7 @@ impl Ctx {
             .filter(|(a, _)| a.ty() == &self.builtins_().bool)
             .ok_or_else(|| {
                 //Some((a, b)) if a.ty() == &self.builtins_().bool => (a, b),
-                Error::new(
-                    "bool-eq: th2 should have a boleean equality as conclusion",
-                )
+                Error::new("bool-eq: th2 should have a boleean equality as conclusion")
             })?;
         if a != &th1.0.concl {
             return Err(Error::new(
@@ -1617,11 +1611,7 @@ impl Ctx {
     /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
     /// This is a way of building a boolean `a=b` from proofs of
     ///  `a|-b` and `b|-a`.
-    pub fn thm_bool_eq_intro(
-        &mut self,
-        mut th1: Thm,
-        mut th2: Thm,
-    ) -> Result<Thm> {
+    pub fn thm_bool_eq_intro(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
@@ -1631,9 +1621,9 @@ impl Ctx {
             thref1.hyps.retain(|x| x != &th2.0.concl);
             match Ref::get_mut(&mut th2.0) {
                 None => {
-                    thref1.hyps.extend(
-                        th2.hyps().iter().filter(|x| *x != &th1_c).cloned(),
-                    );
+                    thref1
+                        .hyps
+                        .extend(th2.hyps().iter().filter(|x| *x != &th1_c).cloned());
                 }
                 Some(thref2) => {
                     let mut v = vec![]; // steal thref2.hyps
@@ -1653,9 +1643,9 @@ impl Ctx {
         let (f, arg) = e
             .as_app()
             .ok_or_else(|| Error::new("beta-conv: expect an application"))?;
-        let (ty, bod) = f.as_lambda().ok_or_else(|| {
-            Error::new("beta-conv: expect a lambda in the application")
-        })?;
+        let (ty, bod) = f
+            .as_lambda()
+            .ok_or_else(|| Error::new("beta-conv: expect a lambda in the application"))?;
         debug_assert_eq!(ty, arg.ty()); // should already be enforced by typing.
 
         let lhs = e.clone();
@@ -1674,18 +1664,14 @@ impl Ctx {
             .unfold_eq()
             .and_then(|(x, rhs)| x.as_var().map(|x| (x, rhs)))
             .ok_or_else(|| {
-                Error::new(
-                    "new definition: expr should be an equation `x = rhs` with rhs closed",
-                )
+                Error::new("new definition: expr should be an equation `x = rhs` with rhs closed")
             })?;
         if !rhs.is_closed() || rhs.has_free_vars() {
             return Err(Error::new("RHS of equation should be closed"));
         }
         // checks that the type of `x` is closed
         if !x.ty.is_closed() || x.ty.has_free_vars() {
-            return Err(Error::new(
-                "LHS of equation should have a closed type",
-            ));
+            return Err(Error::new("LHS of equation should have a closed type"));
         }
 
         let c = self.mk_new_const(x.name.clone(), x.ty.clone())?;
@@ -1700,9 +1686,7 @@ impl Ctx {
     /// Fails if `pledge_no_new_axiom` was called earlier on this context.
     pub fn thm_axiom(&mut self, hyps: Vec<Expr>, concl: Expr) -> Result<Thm> {
         if !self.allow_new_axioms {
-            return Err(Error::new(
-                "this context has pledge to not take new axioms",
-            ));
+            return Err(Error::new("this context has pledge to not take new axioms"));
         }
         self.check_uid_(&concl);
         hyps.iter().for_each(|e| self.check_uid_(e));
@@ -1745,15 +1729,14 @@ impl Ctx {
                 "new_basic_type_def: theorem must not have hypotheses",
             ));
         }
-        let (phi, witness) =
-            thm_inhabited.concl().as_app().ok_or_else(|| {
-                Error::new("conclusion of theorem must be `(Phi x)`")
-            })?;
+        let (phi, witness) = thm_inhabited
+            .concl()
+            .as_app()
+            .ok_or_else(|| Error::new("conclusion of theorem must be `(Phi x)`"))?;
         // the concrete type
         let ty = witness.ty().clone();
         // check that all free variables are type variables
-        let mut fvars: Vec<Var> =
-            thm_inhabited.concl().free_vars().cloned().collect();
+        let mut fvars: Vec<Var> = thm_inhabited.concl().free_vars().cloned().collect();
         fvars.sort_unstable();
         fvars.dedup();
 
@@ -1765,8 +1748,7 @@ impl Ctx {
         }
 
         // free vars, as expressions
-        let fvars_exprs: Vec<_> =
-            fvars.iter().map(|v| self.mk_var(v.clone())).collect();
+        let fvars_exprs: Vec<_> = fvars.iter().map(|v| self.mk_var(v.clone())).collect();
 
         // construct new type and mapping functions
         let tau = {

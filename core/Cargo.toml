@@ -15,5 +15,4 @@ env_logger = { version= "*", default-features=false, features=["termcolor", "att
 anyhow="1.0"
 
 [features]
-arc=[]
 logging=["log"]
