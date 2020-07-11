@@ -1,6 +1,6 @@
 //! Meta-language.
 //!
-//! The meta-language is a postscript-like stack language that manipulates
+//! The meta-language is a tiny lisp-like stack language that manipulates
 //! expressions, goals, theorems, and other values. It is designed to be
 //! used both interactively and as an efficient way of storing proofs.
 
@@ -66,9 +66,7 @@ impl fmt::Display for Value {
             Value::Expr(e) => write!(out, "{}", e),
             Value::Thm(th) => write!(out, "{}", th),
             Value::CodeArray(ca) => write!(out, "{:?}", ca),
-            Value::Array(a) => {
-                out.debug_list().entries(a.0.borrow().iter()).finish()
-            }
+            Value::Array(a) => out.debug_list().entries(a.0.borrow().iter()).finish(),
         }
     }
 }
@@ -252,9 +250,7 @@ pub(crate) mod parser {
                 let c = self.bytes[self.i];
                 if c == b'#' {
                     // eat rest of line
-                    while self.i < self.bytes.len()
-                        && self.bytes[self.i] != b'\n'
-                    {
+                    while self.i < self.bytes.len() && self.bytes[self.i] != b'\n' {
                         self.i += 1
                     }
                 } else if c == b' ' || c == b'\t' {
@@ -303,21 +299,19 @@ pub(crate) mod parser {
                     while j < self.bytes.len() && self.bytes[j] != b'`' {
                         j += 1;
                     }
-                    let src_expr =
-                        std::str::from_utf8(&self.bytes[self.i + 1..j])
-                            .expect("invalid utf8 slice");
+                    let src_expr = std::str::from_utf8(&self.bytes[self.i + 1..j])
+                        .expect("invalid utf8 slice");
                     self.col += j - self.i + 1;
                     self.i = j + 1;
                     Tok::QuotedExpr(src_expr)
                 }
                 c if c.is_ascii_digit() || c == b'-' => {
                     let mut j = self.i + 1;
-                    while j < self.bytes.len() && self.bytes[j].is_ascii_digit()
-                    {
+                    while j < self.bytes.len() && self.bytes[j].is_ascii_digit() {
                         j += 1;
                     }
-                    let tok = std::str::from_utf8(&self.bytes[self.i..j])
-                        .expect("invalid utf8 slice");
+                    let tok =
+                        std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
                     let n = str::parse(tok).expect("cannot parse int");
                     self.col += j - self.i;
                     self.i = j;
@@ -346,8 +340,8 @@ pub(crate) mod parser {
                     } {
                         j += 1;
                     }
-                    let tok = std::str::from_utf8(&self.bytes[self.i..j])
-                        .expect("invalid utf8 slice");
+                    let tok =
+                        std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
                     self.col += j - self.i;
                     self.i = j;
                     Tok::Id(tok)
@@ -369,7 +363,13 @@ pub(crate) mod parser {
 
         /// New parser.
         pub fn new(s: &'b str) -> Self {
-            Self { col: 1, line: 1, i: 0, bytes: s.as_bytes(), cur_: None }
+            Self {
+                col: 1,
+                line: 1,
+                i: 0,
+                bytes: s.as_bytes(),
+                cur_: None,
+            }
         }
     }
 }
@@ -394,9 +394,8 @@ mod ml {
     const INSTR_CORE: &'static [InstrCore] = {
         use InstrCore::*;
         &[
-            Def, If, IfElse, Dup, Swap, Drop, Rot, Eq, Lt, Gt, Leq, Geq, Add,
-            Mul, Sub, Div, Mod, PrintStack, Clear, PrintPop, Inspect, Source,
-            LoadFile, Begin, End,
+            Def, If, IfElse, Dup, Swap, Drop, Rot, Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod,
+            PrintStack, Clear, PrintPop, Inspect, Source, LoadFile, Begin, End,
         ]
     };
 
@@ -484,9 +483,7 @@ mod ml {
                 }
                 I::End => {
                     if st.scopes.len() < 2 {
-                        return Err(Error::new(
-                            "`end` does not match a `begin`",
-                        ));
+                        return Err(Error::new("`end` does not match a `begin`"));
                     }
                     st.scopes.pop();
                 }
@@ -567,13 +564,9 @@ mod ml {
                 }
                 I::LoadFile => {
                     let s = st.pop1_sym()?;
-                    let content =
-                        std::fs::read_to_string(&*s).map_err(|e| {
-                            Error::new_string(format!(
-                                "cannot load file {:?}: {}",
-                                s, e
-                            ))
-                        })?;
+                    let content = std::fs::read_to_string(&*s).map_err(|e| {
+                        Error::new_string(format!("cannot load file {:?}: {}", s, e))
+                    })?;
                     st.push_val(Value::Source(content.into()))
                 }
             }
@@ -604,12 +597,7 @@ mod ml {
             pub fn $f(&mut self) -> Result<$ret> {
                 match self.pop1()? {
                     $p => Ok($v),
-                    _ => {
-                        return Err(Error::new(concat!(
-                            "type error: expected ",
-                            $what
-                        )))
-                    }
+                    _ => return Err(Error::new(concat!("type error: expected ", $what))),
                 }
             }
         };
@@ -651,9 +639,7 @@ mod ml {
                 Tok::Eof => return Err(Error::new("unexpected EOF")),
                 Tok::RBracket => return Err(Error::new("unexpected '}'")),
                 Tok::RBrace => return Err(Error::new("unexpected ']'")),
-                Tok::Invalid(c) => {
-                    return Err(perror!(loc, "invalid token {:?}", c))
-                }
+                Tok::Invalid(c) => return Err(perror!(loc, "invalid token {:?}", c)),
                 Tok::Int(i) => {
                     p.next();
                     Ok(Instr::Im(Value::Int(i)))
@@ -705,9 +691,7 @@ mod ml {
                                 i => {
                                     self.exec_instr_(i)?;
                                     let v = self.pop1().map_err(|e| {
-                                        e.set_source(Error::new(
-                                            "evaluate element of an array",
-                                        ))
+                                        e.set_source(Error::new("evaluate element of an array"))
                                     })?;
                                     arr.push(v)
                                 }
@@ -728,9 +712,7 @@ mod ml {
                     // Find definition of symbol `s` in `self.scopes[0]`,
                     // otherwise emit a dynamic get (for user scopes)
                     let i = match self.scopes[0].0.get(&*s) {
-                        Some(Value::CodeArray(ca)) if ca.0.len() == 1 => {
-                            ca.0[0].clone()
-                        }
+                        Some(Value::CodeArray(ca)) if ca.0.len() == 1 => ca.0[0].clone(),
                         Some(Value::CodeArray(ca)) => Instr::Call(ca.clone()),
                         Some(v) => Instr::Im(v.clone()),
                         None => Instr::Get(s.into()),
@@ -754,9 +736,7 @@ mod ml {
                 Instr::Get(s) => {
                     // Find definition of symbol `s` in `self.scopes`,
                     // starting from the most recent scope.
-                    if let Some(v) =
-                        self.scopes.iter().rev().find_map(|d| d.0.get(&*s))
-                    {
+                    if let Some(v) = self.scopes.iter().rev().find_map(|d| d.0.get(&*s)) {
                         if let Value::CodeArray(ca) = v {
                             self.cur_i = Some(ca.0[0].clone());
                             if ca.0.len() > 1 {
@@ -770,10 +750,7 @@ mod ml {
                     } else if let Some(th) = self.ctx.find_lemma(&*s) {
                         self.stack.push(Value::Thm(th.clone()))
                     } else {
-                        return Err(Error::new_string(format!(
-                            "symbol {:?} not found",
-                            s
-                        )));
+                        return Err(Error::new_string(format!("symbol {:?} not found", s)));
                     }
                 }
                 Instr::Core(c) => c.run(self)?,
@@ -863,10 +840,7 @@ mod ml {
                 match i {
                     Err(e) => {
                         let (l, c) = p.loc();
-                        let e = e.set_source(k::Error::new_string(format!(
-                            "at {}:{}",
-                            l, c
-                        )));
+                        let e = e.set_source(k::Error::new_string(format!("at {}:{}", l, c)));
                         return Err(e);
                     }
                     Ok(i) => {
@@ -987,8 +961,7 @@ mod logic_builtins {
                     let rhs = st.pop1_expr()?;
                     let nthm = &st.pop1_sym()?;
                     let nc = st.pop1_sym()?;
-                    let def =
-                        crate::algo::thm_new_poly_definition(st.ctx, &nc, rhs)?;
+                    let def = crate::algo::thm_new_poly_definition(st.ctx, &nc, rhs)?;
                     st.ctx.define_lemma(nthm, def.thm);
                 }
                 R::Defthm => {
@@ -999,9 +972,7 @@ mod logic_builtins {
                 R::Decl => {
                     let ty = st.pop1_expr()?;
                     let name = st.pop1_sym()?;
-                    let _e = st
-                        .ctx
-                        .mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
+                    let _e = st.ctx.mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
                 }
                 R::ExprTy => {
                     let e = st.pop1_expr()?;
@@ -1119,9 +1090,7 @@ mod logic_builtins {
                                 let v = k::Var::from_str(&*x, e.ty().clone());
                                 subst.push((v, e.clone()))
                             }
-                            _ => {
-                                return Err(Error::new("invalid subst binding"))
-                            }
+                            _ => return Err(Error::new("invalid subst binding")),
                         }
                     }
 
@@ -1138,9 +1107,9 @@ mod logic_builtins {
                 }
                 R::AbsExpr => {
                     let e = st.pop1_expr()?;
-                    let v = e.as_var().ok_or_else(|| {
-                        Error::new("abs_expr: expression must be a variable")
-                    })?;
+                    let v = e
+                        .as_var()
+                        .ok_or_else(|| Error::new("abs_expr: expression must be a variable"))?;
                     let th = st.pop1_thm()?;
                     let th = st.ctx.thm_abs(v, th)?;
                     st.push_val(Value::Thm(th))
@@ -1149,9 +1118,7 @@ mod logic_builtins {
                     let th = st.pop1_thm()?;
                     st.push_val(Value::Expr(th.concl().clone()))
                 }
-                R::HolPrelude => {
-                    st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into()))
-                }
+                R::HolPrelude => st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into())),
                 R::PledgeNoMoreAxioms => {
                     st.ctx.pledge_no_new_axiom();
                 }
@@ -1188,19 +1155,18 @@ mod logic_builtins {
                         _ => return fail(),
                     }
 
-                    let rw: Box<dyn algo::Rewriter> =
-                        if beta && !rw_rules.is_empty() {
-                            let mut rw = algo::RewriteCombine::new();
-                            rw.add(&algo::RewriterBetaConv);
-                            rw.add(&rw_rules);
-                            Box::new(rw)
-                        } else if beta {
-                            Box::new(algo::RewriterBetaConv)
-                        } else if !rw_rules.is_empty() {
-                            Box::new(rw_rules)
-                        } else {
-                            return fail();
-                        };
+                    let rw: Box<dyn algo::Rewriter> = if beta && !rw_rules.is_empty() {
+                        let mut rw = algo::RewriteCombine::new();
+                        rw.add(&algo::RewriterBetaConv);
+                        rw.add(&rw_rules);
+                        Box::new(rw)
+                    } else if beta {
+                        Box::new(algo::RewriterBetaConv)
+                    } else if !rw_rules.is_empty() {
+                        Box::new(rw_rules)
+                    } else {
+                        return fail();
+                    };
                     let th = algo::thm_rw_concl(st.ctx, th, &*rw)?;
                     st.push_val(Value::Thm(th))
                 }
