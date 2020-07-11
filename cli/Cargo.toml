@@ -9,8 +9,9 @@ default-run="trustee_cli"
 
 [dependencies]
 trustee = {path="../core", features=["logging"]}
-log = "*"
-env_logger = { version= "*", default-features=false, features=["termcolor", "atty"] }
+log = "0.4"
+env_logger = { version= "0.7", default-features=false, features=["termcolor", "atty"] }
 anyhow="1.0"
 pico-args="0.3"
 rustyline = "6.0"
+rlua = "*"

@@ -3,19 +3,9 @@
 use crate::fnv;
 use std::{fmt, ops::Deref, sync::atomic};
 
-#[cfg(not(features = "arc"))]
 pub type Ref<T> = std::rc::Rc<T>;
-#[cfg(not(features = "arc"))]
 pub type WeakRef<T> = std::rc::Weak<T>;
-#[cfg(not(features = "arc"))]
 pub type Lock<T> = std::cell::RefCell<T>;
-
-#[cfg(features = "arc")]
-pub type Ref<T> = std::sync::Arc<T>;
-#[cfg(features = "arc")]
-pub type WeakRef<T> = std::sync::Weak<T>;
-#[cfg(features = "arc")]
-pub type Lock<T> = std::sync::Mutex<T>;
 
 /// For infix/prefix/postfix constants.
 pub type Fixity = crate::syntax::Fixity;
