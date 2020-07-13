@@ -867,6 +867,7 @@ impl Ctx {
             builtins: None,
             consts: fnv::new_table_with_cap(n),
             lemmas: fnv::new_table_with_cap(n),
+            meta_chunks: fnv::new_table_with_cap(16),
             eq: None,
             next_cleanup: CLEANUP_PERIOD,
             axioms: vec![],
