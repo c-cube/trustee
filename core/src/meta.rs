@@ -67,10 +67,8 @@ type SlotIdx = u8;
 /// Index in the array of locals.
 type LocalIdx = u8;
 
-/// Index in the VM's argument stack.
-type ArgIdx = u8;
-
-// TODO: control flow
+/// ## Instructions
+///
 /// An instruction of the language.
 ///
 /// Each instruction's last argument is the index of the slot to put the result
@@ -79,46 +77,43 @@ type ArgIdx = u8;
 /// - `args` is the VM's argument stack.
 /// - `$3` is argument number 3 (numbered from 0)`
 #[derive(Debug, Copy, Clone)]
-#[repr(packed)]
 enum Instr {
+    /// copy `sl[$0]` into `sl[$1]`
+    Move(SlotIdx, SlotIdx),
     /// Local a local value into a slot. `sl[$1] = locals[$0]`
     LoadLocal(LocalIdx, SlotIdx),
-    /// Set `args[$0]` to value `sl[$1]`.
-    SetArg(ArgIdx, SlotIdx),
-    /// Return from current chunk, yielding value `sl[$0]`
-    Ret(SlotIdx),
+    /// Put the given (small) integer `$0` into `sl[$1]`
+    LoadInteger(i16, SlotIdx),
+    /// Set `sl[$1]` to bool `$0`
+    LoadBool(bool, SlotIdx),
+    /// Set `sl[$1 .. $1 + $0]` to nil
+    LoadNilN(u8, SlotIdx),
     /// `sl[$2] = (sl[$0] == sl[$1])`
     Eq(SlotIdx, SlotIdx, SlotIdx),
     Lt(SlotIdx, SlotIdx, SlotIdx),
-    Gt(SlotIdx, SlotIdx, SlotIdx),
     Leq(SlotIdx, SlotIdx, SlotIdx),
-    Geq(SlotIdx, SlotIdx, SlotIdx),
     Add(SlotIdx, SlotIdx, SlotIdx),
     Mul(SlotIdx, SlotIdx, SlotIdx),
     Sub(SlotIdx, SlotIdx, SlotIdx),
     Div(SlotIdx, SlotIdx, SlotIdx),
     Mod(SlotIdx, SlotIdx, SlotIdx),
-    /// prints `sl[$0]`
-    Print(SlotIdx),
-    /// prints `sl[$0]` in debug mode
-    PrintDebug(SlotIdx),
     /// evaluates string in `sl[$0]`
     EvalStr(SlotIdx),
     /// read file whose name is `sl[$0]` into a string `sl[$1]`
     LoadFile(SlotIdx, SlotIdx),
-    /// Call chunk `locals[$0]` with 0 argument, put result into `sl[$1]`
-    Call0(LocalIdx, SlotIdx),
-    /// Call chunk `locals[$0]` with argument `sl[$1]`, put result into `sl[$2]`
-    Call1(LocalIdx, SlotIdx, SlotIdx),
-    /// Call chunk `locals[$0]` with all the arguments on `args`, put result into `sl[$1]`.
-    /// Will clear `args`.
-    CallWithArgs(LocalIdx, SlotIdx),
-    /// Tail-call into chunk `locals[$0]` with 0 argument
-    Become0(LocalIdx),
-    /// Tail-call into chunk `locals[$0]` with argument `sl[$1]`
-    Become1(LocalIdx, SlotIdx),
-    /// Tail-call into chunk `locals[$0]` with arguments in `args`
-    BecomeWithArgs(LocalIdx),
+    /// Call chunk `sl[$0]` with arguments `sl[$0 + 1 .. $0 + 1 + $1]`,
+    /// and put the result into `sl[$2]`.
+    ///
+    /// `$1` is the number of arguments the function takes.
+    CallWithArgs(SlotIdx, u8, SlotIdx),
+    /// Tail-call into chunk `sl[$0]` with arguments `sl[$0 + 1 .. $0 + 1 + $1]`
+    BecomeWithArgs(LocalIdx, u8),
+    /// Return from current chunk, yielding value `sl[$0]`
+    Ret(SlotIdx),
+    // TODO: control flow:
+    // - `Jump(SlotIdx, offset:u16)`
+    // - `JumpIfTrue(SlotIdx, offset:i16)`
+    // - `JumpIfFalse(SlotIdx, offset:i16)`
 }
 
 /// A custom instruction implemented in rust.
@@ -162,7 +157,8 @@ pub struct VM<'a> {
 
 /// A stack frame.
 ///
-/// Each chunk has its own stack frame of its given size.
+/// Each call to a chunk (function) has its own stack frame that points to
+/// a slice of `vm.stack` of its given number of locals.
 struct StackFrame {
     /// Offset in `vm.stack` where this frame starts.
     /// The size of the stack is determined by `chunk.n_slots`.
@@ -183,7 +179,7 @@ mod ml {
         }
     }
 
-    impl default::Default for Value {
+    impl Default for Value {
         fn default() -> Self {
             Value::Nil
         }
@@ -207,8 +203,8 @@ mod ml {
                 Value::Expr(e) => write!(out, "{}", e),
                 Value::Thm(th) => write!(out, "{}", th),
                 Value::Chunk(c) => {
-                    if c.0.name.is_some() {
-                        write!(out, "<chunk {:?}>", &c.0.name.unwrap())
+                    if let Some(n) = &c.0.name {
+                        write!(out, "<chunk {:?}>", n)
                     } else {
                         write!(out, "<chunk>")
                     }
@@ -435,15 +431,17 @@ pub mod lexer {
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum Tok<'b> {
         Eof,
-        Id(&'b str),         // identifier
-        QuotedId(&'b str),   // '/' identifier
-        QuotedExpr(&'b str), // `some expr`
+        Id(&'b str),           // identifier
+        QuotedString(&'b str), // "some string"
+        QuotedExpr(&'b str),   // `some expr`
         Int(i64),
-        LBracket,
-        RBracket,
-        LBrace,
-        RBrace,
-        Invalid(char),
+        LParen,        // '('
+        RParen,        // ')'
+        LBracket,      // '['
+        RBracket,      // ']'
+        LBrace,        // '{'
+        RBrace,        // '}'
+        Invalid(char), // to report an error
     }
 
     #[inline]
@@ -486,7 +484,9 @@ pub mod lexer {
                 let c = self.bytes[self.i];
                 if c == b'#' {
                     // eat rest of line
-                    while self.i < self.bytes.len() && self.bytes[self.i] != b'\n' {
+                    while self.i < self.bytes.len()
+                        && self.bytes[self.i] != b'\n'
+                    {
                         self.i += 1
                     }
                 } else if c == b' ' || c == b'\t' {
@@ -510,44 +510,56 @@ pub mod lexer {
                 return Tok::Eof;
             }
             let tok = match self.bytes[self.i] {
-                b'{' => {
+                b'(' => {
                     self.i += 1;
                     self.col += 1;
-                    Tok::LBracket
+                    Tok::LParen
                 }
-                b'[' => {
+                b'{' => {
                     self.i += 1;
                     self.col += 1;
                     Tok::LBrace
                 }
+                b'[' => {
+                    self.i += 1;
+                    self.col += 1;
+                    Tok::LBracket
+                }
+                b')' => {
+                    self.i += 1;
+                    self.col += 1;
+                    Tok::RParen
+                }
                 b'}' => {
                     self.i += 1;
                     self.col += 1;
-                    Tok::RBracket
+                    Tok::RBrace
                 }
                 b']' => {
                     self.i += 1;
                     self.col += 1;
-                    Tok::RBrace
+                    Tok::RBracket
                 }
                 b'`' => {
                     let mut j = self.i + 1;
                     while j < self.bytes.len() && self.bytes[j] != b'`' {
                         j += 1;
                     }
-                    let src_expr = std::str::from_utf8(&self.bytes[self.i + 1..j])
-                        .expect("invalid utf8 slice");
+                    let src_expr =
+                        std::str::from_utf8(&self.bytes[self.i + 1..j])
+                            .expect("invalid utf8 slice");
                     self.col += j - self.i + 1;
                     self.i = j + 1;
                     Tok::QuotedExpr(src_expr)
                 }
                 c if c.is_ascii_digit() || c == b'-' => {
                     let mut j = self.i + 1;
-                    while j < self.bytes.len() && self.bytes[j].is_ascii_digit() {
+                    while j < self.bytes.len() && self.bytes[j].is_ascii_digit()
+                    {
                         j += 1;
                     }
-                    let tok =
-                        std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
+                    let tok = std::str::from_utf8(&self.bytes[self.i..j])
+                        .expect("invalid utf8 slice");
                     let n = str::parse(tok).expect("cannot parse int");
                     self.col += j - self.i;
                     self.i = j;
@@ -565,7 +577,7 @@ pub mod lexer {
                         .expect("invalid utf8 slice");
                     self.col += j - self.i + 1;
                     self.i = j + 1;
-                    Tok::QuotedId(tok)
+                    Tok::QuotedString(tok)
                 }
                 c if is_id_char(c) => {
                     assert!(c != b'-'); // number, dealt with above
@@ -576,8 +588,8 @@ pub mod lexer {
                     } {
                         j += 1;
                     }
-                    let tok =
-                        std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
+                    let tok = std::str::from_utf8(&self.bytes[self.i..j])
+                        .expect("invalid utf8 slice");
                     self.col += j - self.i;
                     self.i = j;
                     Tok::Id(tok)
@@ -599,13 +611,7 @@ pub mod lexer {
 
         /// New parser.
         pub fn new(s: &'b str) -> Self {
-            Self {
-                col: 1,
-                line: 1,
-                i: 0,
-                bytes: s.as_bytes(),
-                cur_: None,
-            }
+            Self { col: 1, line: 1, i: 0, bytes: s.as_bytes(), cur_: None }
         }
     }
 }
@@ -628,7 +634,12 @@ macro_rules! pop1_of {
         pub fn $f(&mut self) -> Result<$ret> {
             match self.pop1()? {
                 $p => Ok($v),
-                _ => return Err(Error::new(concat!("type error: expected ", $what))),
+                _ => {
+                    return Err(Error::new(concat!(
+                        "type error: expected ",
+                        $what
+                    )))
+                }
             }
         }
     };
@@ -662,6 +673,7 @@ impl<'a> VM<'a> {
         }
     }
 
+    /* TODO
     /// Execute instruction `i`.
     ///
     /// This should always be done within or before a `exec_loop_`.
@@ -675,7 +687,9 @@ impl<'a> VM<'a> {
             Instr::Get(s) => {
                 // Find definition of symbol `s` in `self.scopes`,
                 // starting from the most recent scope.
-                if let Some(v) = self.scopes.iter().rev().find_map(|d| d.0.get(&*s)) {
+                if let Some(v) =
+                    self.scopes.iter().rev().find_map(|d| d.0.get(&*s))
+                {
                     if let Value::CodeArray(ca) = v {
                         self.cur_i = Some(ca.0[0].clone());
                         if ca.0.len() > 1 {
@@ -689,7 +703,10 @@ impl<'a> VM<'a> {
                 } else if let Some(th) = self.ctx.find_lemma(&*s) {
                     self.stack.push(Value::Thm(th.clone()))
                 } else {
-                    return Err(Error::new_string(format!("symbol {:?} not found", s)));
+                    return Err(Error::new_string(format!(
+                        "symbol {:?} not found",
+                        s
+                    )));
                 }
             }
             Instr::Core(c) => c.run(self)?,
@@ -697,7 +714,7 @@ impl<'a> VM<'a> {
         Ok(())
     }
 
-    fn exec_codearray_(&mut self, ca: &CodeArray) {
+    fn exec_chunk_(&mut self, ca: &Chunk) {
         // start execution of this block of code
         self.cur_i = Some(ca.0[0].clone());
         if ca.0.len() > 1 {
@@ -742,19 +759,13 @@ impl<'a> VM<'a> {
     }
 
     pop1_of!(pop1_int, "int", Value::Int(i), i, i64);
+    pop1_of!(pop1_nil, "nil", (_i @ Value::Nil), _i, ());
     pop1_of!(pop1_bool, "bool", Value::Bool(i), i, bool);
-    pop1_of!(
-        pop1_codearray,
-        "code array",
-        Value::CodeArray(i),
-        i,
-        CodeArray
-    );
-    pop1_of!(pop1_array, "array", Value::Array(v), v, ValueArray);
+    pop1_of!(pop1_str, "string", Value::Str(i), i, k::Ref<str>);
+    //pop1_of!(pop1_codearray, "code array", Value::CodeArray(i), i, CodeArray);
     pop1_of!(pop1_expr, "expr", Value::Expr(i), i, k::Expr);
     pop1_of!(pop1_thm, "thm", Value::Thm(i), i, k::Thm);
-    pop1_of!(pop1_sym, "sym", Value::Sym(i), i, k::Ref<str>);
-    pop1_of!(pop1_source, "source", Value::Source(i), i, k::Ref<str>);
+    //pop1_of!(pop1_sym, "sym", Value::Sym(i), i, k::Ref<str>);
 
     /// Push a value onto the value stack.
     #[inline]
@@ -779,7 +790,10 @@ impl<'a> VM<'a> {
             match i {
                 Err(e) => {
                     let (l, c) = p.loc();
-                    let e = e.set_source(k::Error::new_string(format!("at {}:{}", l, c)));
+                    let e = e.set_source(k::Error::new_string(format!(
+                        "at {}:{}",
+                        l, c
+                    )));
                     return Err(e);
                 }
                 Ok(i) => {
@@ -790,10 +804,28 @@ impl<'a> VM<'a> {
         }
         Ok(())
     }
+    */
 }
 
 mod parser {
     use super::*;
+
+    /// A parser.
+    struct Parser<'a> {
+        lexer: lexer::Lexer<'a>,
+        ctx: &'a mut k::Ctx,
+    }
+
+    impl<'a> Parser<'a> {
+        /// Create a new parser for source string `s`.
+        pub fn new(ctx: &'a mut k::Ctx, s: &'a str) -> Self {
+            Self { ctx, lexer: lexer::Lexer::new(s) }
+        }
+    }
+
+    /* TODO
+    pub fn parse_chunk(&mut VM, &str) -> Result<Chunk> {
+    }
 
     // TODO: rewrite.
     /// Parse an instruction, which is either a word invokation
@@ -806,7 +838,9 @@ mod parser {
             Tok::Eof => return Err(Error::new("unexpected EOF")),
             Tok::RBracket => return Err(Error::new("unexpected '}'")),
             Tok::RBrace => return Err(Error::new("unexpected ']'")),
-            Tok::Invalid(c) => return Err(perror!(loc, "invalid token {:?}", c)),
+            Tok::Invalid(c) => {
+                return Err(perror!(loc, "invalid token {:?}", c))
+            }
             Tok::Int(i) => {
                 p.next();
                 Ok(Instr::Im(Value::Int(i)))
@@ -858,7 +892,9 @@ mod parser {
                             i => {
                                 self.exec_instr_(i)?;
                                 let v = self.pop1().map_err(|e| {
-                                    e.set_source(Error::new("evaluate element of an array"))
+                                    e.set_source(Error::new(
+                                        "evaluate element of an array",
+                                    ))
                                 })?;
                                 arr.push(v)
                             }
@@ -879,7 +915,9 @@ mod parser {
                 // Find definition of symbol `s` in `self.scopes[0]`,
                 // otherwise emit a dynamic get (for user scopes)
                 let i = match self.scopes[0].0.get(&*s) {
-                    Some(Value::CodeArray(ca)) if ca.0.len() == 1 => ca.0[0].clone(),
+                    Some(Value::CodeArray(ca)) if ca.0.len() == 1 => {
+                        ca.0[0].clone()
+                    }
                     Some(Value::CodeArray(ca)) => Instr::Call(ca.clone()),
                     Some(v) => Instr::Im(v.clone()),
                     None => Instr::Get(s.into()),
@@ -889,6 +927,7 @@ mod parser {
             }
         }
     }
+    */
 }
 
 /// Primitives of the meta-language related to theorem proving.
@@ -929,6 +968,7 @@ mod logic_builtins {
 
     use Rule as R;
 
+    /* TODO
     /// Builtin functions for manipulating expressions and theorems.
     pub(super) const BUILTINS: &'static [&'static dyn InstrBuiltin] = &[
         &R::Defconst,
@@ -998,7 +1038,8 @@ mod logic_builtins {
                     let rhs = st.pop1_expr()?;
                     let nthm = &st.pop1_sym()?;
                     let nc = st.pop1_sym()?;
-                    let def = crate::algo::thm_new_poly_definition(st.ctx, &nc, rhs)?;
+                    let def =
+                        crate::algo::thm_new_poly_definition(st.ctx, &nc, rhs)?;
                     st.ctx.define_lemma(nthm, def.thm);
                 }
                 R::Defthm => {
@@ -1009,7 +1050,9 @@ mod logic_builtins {
                 R::Decl => {
                     let ty = st.pop1_expr()?;
                     let name = st.pop1_sym()?;
-                    let _e = st.ctx.mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
+                    let _e = st
+                        .ctx
+                        .mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
                 }
                 R::ExprTy => {
                     let e = st.pop1_expr()?;
@@ -1127,7 +1170,9 @@ mod logic_builtins {
                                 let v = k::Var::from_str(&*x, e.ty().clone());
                                 subst.push((v, e.clone()))
                             }
-                            _ => return Err(Error::new("invalid subst binding")),
+                            _ => {
+                                return Err(Error::new("invalid subst binding"))
+                            }
                         }
                     }
 
@@ -1144,9 +1189,9 @@ mod logic_builtins {
                 }
                 R::AbsExpr => {
                     let e = st.pop1_expr()?;
-                    let v = e
-                        .as_var()
-                        .ok_or_else(|| Error::new("abs_expr: expression must be a variable"))?;
+                    let v = e.as_var().ok_or_else(|| {
+                        Error::new("abs_expr: expression must be a variable")
+                    })?;
                     let th = st.pop1_thm()?;
                     let th = st.ctx.thm_abs(v, th)?;
                     st.push_val(Value::Thm(th))
@@ -1155,7 +1200,9 @@ mod logic_builtins {
                     let th = st.pop1_thm()?;
                     st.push_val(Value::Expr(th.concl().clone()))
                 }
-                R::HolPrelude => st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into())),
+                R::HolPrelude => {
+                    st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into()))
+                }
                 R::PledgeNoMoreAxioms => {
                     st.ctx.pledge_no_new_axiom();
                 }
@@ -1192,18 +1239,19 @@ mod logic_builtins {
                         _ => return fail(),
                     }
 
-                    let rw: Box<dyn algo::Rewriter> = if beta && !rw_rules.is_empty() {
-                        let mut rw = algo::RewriteCombine::new();
-                        rw.add(&algo::RewriterBetaConv);
-                        rw.add(&rw_rules);
-                        Box::new(rw)
-                    } else if beta {
-                        Box::new(algo::RewriterBetaConv)
-                    } else if !rw_rules.is_empty() {
-                        Box::new(rw_rules)
-                    } else {
-                        return fail();
-                    };
+                    let rw: Box<dyn algo::Rewriter> =
+                        if beta && !rw_rules.is_empty() {
+                            let mut rw = algo::RewriteCombine::new();
+                            rw.add(&algo::RewriterBetaConv);
+                            rw.add(&rw_rules);
+                            Box::new(rw)
+                        } else if beta {
+                            Box::new(algo::RewriterBetaConv)
+                        } else if !rw_rules.is_empty() {
+                            Box::new(rw_rules)
+                        } else {
+                            return fail();
+                        };
                     let th = algo::thm_rw_concl(st.ctx, th, &*rw)?;
                     st.push_val(Value::Thm(th))
                 }
@@ -1211,50 +1259,62 @@ mod logic_builtins {
             Ok(())
         }
     }
+    */
 }
 
 /// Standard prelude for HOL logic
 pub const SRC_PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
 
-/// Load the HOL prelude into this context.
-pub fn load_prelude_hol(ctx: &mut Ctx) -> Result<()> {
-    if ctx.find_const("hol_prelude_loaded").is_none() {
-        let mut st = State::new(ctx);
-        st.run("hol_prelude source")?;
-    }
-    Ok(())
-}
-
+/* TODO
 /// Run the given code in a fresh VM.
 ///
 /// This has some overhead, if you want to execute a lot of code efficienty
-/// consider creating a `State` and re-using it.
+/// (e.g. in a CLI) consider creating a `VM` and re-using it.
 pub fn run_code(ctx: &mut Ctx, s: &str) -> Result<()> {
-    let mut st = State::new(ctx);
+    let mut st = VM::new(ctx);
     st.run(s)
 }
+
+/// Load the HOL prelude into this context.
+///
+/// This uses a temporary VM. See `run_code` for more details.
+pub fn load_prelude_hol(ctx: &mut Ctx) -> Result<()> {
+    if ctx.find_const("hol_prelude_loaded").is_none() {
+        run_code(ctx, SRC_PRELUDE_HOL)?;
+    }
+    Ok(())
+}
+*/
 
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
-    fn test_parser() {
+    fn test_instr_size() {
+        // make sure instructions remain small
+        assert_eq!(std::mem::size_of::<Instr>(), 4);
+    }
+
+    #[test]
+    fn test_lexer() {
         use lexer::Tok as T;
         let a = vec![(
-            r#" "a" "b"{mul 2}"d" { 3 } def 2  "#,
+            r#" ("a" "b"[mul 2}"d" { 3 } def) 2  "#,
             vec![
-                T::QuotedId("a"),
-                T::QuotedId("b"),
+                T::LParen,
+                T::QuotedString("a"),
+                T::QuotedString("b"),
                 T::LBracket,
                 T::Id("mul"),
                 T::Int(2),
-                T::RBracket,
-                T::QuotedId("d"),
-                T::LBracket,
+                T::RBrace,
+                T::QuotedString("d"),
+                T::LBrace,
                 T::Int(3),
-                T::RBracket,
+                T::RBrace,
                 T::Id("def"),
+                T::RParen,
                 T::Int(2),
                 T::Eof,
             ],
@@ -1275,22 +1335,24 @@ mod test {
         }
     }
 
+    /* TODO
     #[test]
     fn test_basic_ops() -> Result<()> {
         let mut ctx = k::Ctx::new();
-        let mut st = State::new(&mut ctx);
+        let mut st = VM::new(&mut ctx);
 
-        st.run("1 2 add")?;
+        st.run("(+ 1 2)")?;
         let v = st.pop1_int()?;
         assert_eq!(v, 3);
 
         Ok(())
     }
 
+    // TODO
     #[test]
     fn test_parse_prelude_and_forall() -> Result<()> {
         let mut ctx = k::Ctx::new();
-        let mut st = State::new(&mut ctx);
+        let mut st = VM::new(&mut ctx);
 
         st.run(
             r#"
@@ -1314,4 +1376,5 @@ mod test {
         load_prelude_hol(&mut ctx)?; // can we load it twice?
         Ok(())
     }
+    */
 }
