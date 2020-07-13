@@ -11,14 +11,14 @@ pub type Lock<T> = std::cell::RefCell<T>;
 pub type Fixity = crate::syntax::Fixity;
 
 /// Errors that can be returned from the Kernel.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Error {
     pub msg: ErrorMsg,
     pub source: Option<Box<Error>>,
 }
 
 /// An error message.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ErrorMsg {
     EStatic(&'static str),
     EDyn(String),
