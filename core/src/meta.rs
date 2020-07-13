@@ -38,7 +38,7 @@ pub enum Value {
     /// An executable chunk.
     Chunk(Chunk),
     /// A builtin instruction implemented in rust.
-    Builtin(&'static dyn InstrBuiltin),
+    Builtin(&'static InstrBuiltin),
     //Array(ValueArray),
 }
 
@@ -105,9 +105,9 @@ enum Instr {
     /// and put the result into `sl[$2]`.
     ///
     /// `$1` is the number of arguments the function takes.
-    CallWithArgs(SlotIdx, u8, SlotIdx),
+    Call(SlotIdx, u8, SlotIdx),
     /// Tail-call into chunk `sl[$0]` with arguments `sl[$0 + 1 .. $0 + 1 + $1]`
-    BecomeWithArgs(LocalIdx, u8),
+    Become(LocalIdx, u8),
     /// Return from current chunk, yielding value `sl[$0]`
     Ret(SlotIdx),
     // TODO: control flow:
@@ -120,20 +120,18 @@ enum Instr {
 ///
 /// This is the most direct way of writing efficient inference rules or
 /// tactics directly in rust.
-pub trait InstrBuiltin {
+pub struct InstrBuiltin {
     /// Name of the instruction. The instruction is invoked by its name.
     ///
     /// The name should be consistent with lexical conventions (no whitespaces,
     /// brackets, backquotes, etc.)
-    fn name(&self) -> &'static str;
+    name: &'static str,
 
     /// Execute the instruction on the given state with arguments.
-    fn run(&self, st: &mut VM, args: &[Value]) -> Result<Value>;
+    run: fn(st: &mut VM, args: &[Value]) -> Result<Value>,
 
     /// A one-line help text for this instruction.
-    fn help(&self) -> String {
-        self.name().to_string()
-    }
+    help: &'static str,
 }
 
 /// The meta-language virtual machine.
@@ -144,8 +142,6 @@ pub struct VM<'a> {
     /// the logic deduction rules), and stores maps from names to
     /// constants, theorems, and chunks.
     pub ctx: &'a mut Ctx,
-    /// Current instruction.
-    cur_i: Option<Instr>,
     /// The stack where values live.
     stack: Vec<Value>,
     /// Control stack, for function calls.
@@ -153,6 +149,8 @@ pub struct VM<'a> {
     /// Stack used to pass arguments to a chunk before execution.
     /// This is typically reset before each function call.
     call_stack: Vec<Value>,
+    /// In case of error, the error message lives here.
+    result: Result<()>,
 }
 
 /// A stack frame.
@@ -185,9 +183,17 @@ mod ml {
         }
     }
 
-    impl fmt::Debug for dyn InstrBuiltin {
+    impl fmt::Debug for InstrBuiltin {
         fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-            write!(out, "<builtin {}>", self.name())
+            write!(out, "<builtin {}>", self.name)
+        }
+    }
+
+    impl Chunk {
+        /// Access the content.
+        #[inline]
+        fn get(&self) -> &ChunkImpl {
+            &*self.0
         }
     }
 
@@ -209,7 +215,7 @@ mod ml {
                         write!(out, "<chunk>")
                     }
                 }
-                Value::Builtin(b) => write!(out, "<builtin {}>", b.name()),
+                Value::Builtin(b) => write!(out, "<builtin {}>", b.name),
                 //Value::Array(a) => out.debug_list().entries(a.0.borrow().iter()).finish(),
             }
         }
@@ -230,48 +236,67 @@ mod ml {
         }
     }
 
-    /* TODO: move directly into parser?
-    /// All the core instructions.
-    const INSTR_CORE: &'static [InstrCore] = {
-        use InstrCore::*;
-        &[
-            Def, If, IfElse, Dup, Swap, Drop, Rot, Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod,
-            PrintStack, Clear, PrintPop, Inspect, Source, LoadFile, Begin, End,
-        ]
-    };
+    macro_rules! get_slot_as {
+        ($f: ident, $what: literal, $p: pat, $v: ident, $ret_ty: ty) => {
+            macro_rules! $f {
+                ($self: expr, $idx: expr) => {
+                    match &$self.stack[$idx as usize] {
+                        $p => $v,
+                        _ => {
+                            $self.result = Err(Error::new(concat!("type error: expected ", $what)));
+                            break;
+                        }
+                    }
+                };
+            }
+        };
+    }
 
-    impl InstrBuiltin for InstrCore {
-        fn name(&self) -> &'static str {
-            use InstrCore as I;
+    get_slot_as!(get_slot_int, "int", Value::Int(i), i, i64);
+    get_slot_as!(get_slot_nil, "nil", (_i @ Value::Nil), _i, ());
+    get_slot_as!(get_slot_bool, "bool", Value::Bool(i), i, bool);
+    get_slot_as!(get_slot_str, "string", Value::Str(i), i, &str);
+    //get_as_of!(get_slot_codearray, "code array", Value::CodeArray(i), i, CodeArray);
+    get_slot_as!(get_slot_expr, "expr", Value::Expr(i), i, k::Expr);
+    get_slot_as!(get_slot_thm, "thm", Value::Thm(i), i, k::Thm);
+    //get_as_of!(get_slot_sym, "sym", Value::Sym(i), i, k::Ref<str>);
 
-            match self {
-                I::Def => "def",
-                I::If => "if",
-                I::IfElse => "ifelse",
-                I::Dup => "dup",
-                I::Swap => "swap",
-                I::Drop => "drop",
-                I::Rot => "rot",
-                I::Begin => "begin",
-                I::End => "end",
-                I::Eq => "eq",
-                I::Lt => "lt",
-                I::Gt => "gt",
-                I::Leq => "leq",
-                I::Geq => "geq",
-                I::Add => "add",
-                I::Mul => "mul",
-                I::Sub => "sub",
-                I::Div => "div",
-                I::Mod => "mod",
-                I::PrintPop => "==",
-                I::PrintStack => "pstack",
-                I::Inspect => "inspect",
-                I::Clear => "clear",
-                I::Source => "source",
-                I::LoadFile => "load_file",
+    macro_rules! abs_offset {
+        ($sf: expr, $i: expr) => {
+            ($sf.start as usize) + ($i as usize)
+        };
+    }
+
+    impl<'a> VM<'a> {
+        /// Create a new VM using the given context.
+        pub fn new(ctx: &'a mut Ctx) -> Self {
+            /* TODO: use a static dictionary instead.
+            // system-level dictionary
+            let mut scope0 = Dict::new();
+            {
+                for ic in INSTR_CORE {
+                    let name: k::Ref<str> = ic.name().into();
+                    let ca = CodeArray::new(vec![Instr::Core(*ic)]);
+                    scope0.0.insert(name, Value::CodeArray(ca));
+                }
+                for b in logic_builtins::BUILTINS {
+                    let name: k::Ref<str> = b.name().into();
+                    let ca = CodeArray::new(vec![Instr::Builtin(*b)]);
+                    scope0.0.insert(name, Value::CodeArray(ca));
+                }
+            }
+            */
+            Self {
+                ctx,
+                stack: Vec::with_capacity(256),
+                ctrl_stack: vec![],
+                call_stack: vec![],
+                result: Ok(()),
             }
         }
+
+        /*
+
 
         fn run(&self, st: &mut State) -> Result<()> {
             use InstrCore as I;
@@ -415,6 +440,198 @@ mod ml {
 
         }
         */
+
+        /// Main execution loop.
+        fn exec_loop_(&mut self) -> Result<()> {
+            use Instr as I;
+            while let Some(sf) = self.ctrl_stack.last_mut() {
+                assert!((sf.ic as usize) < sf.chunk.0.instrs.len());
+                let instr = sf.chunk.0.instrs[sf.ic as usize];
+                sf.ic += 1;
+                match instr {
+                    I::Move(s0, s1) => {
+                        let s0 = abs_offset!(sf, s0);
+                        let s1 = abs_offset!(sf, s1);
+                        self.stack[s1] = self.stack[s0].clone();
+                    }
+                    I::LoadLocal(l0, s1) => {
+                        let s1 = abs_offset!(sf, s1);
+                        self.stack[s1] = sf.chunk.0.locals[l0 as usize].clone();
+                    }
+                    I::LoadInteger(i, s1) => {
+                        let s1 = abs_offset!(sf, s1);
+                        self.stack[s1] = Value::Int(i as i64);
+                    }
+                    I::LoadBool(b, s1) => {
+                        let s1 = abs_offset!(sf, s1);
+                        self.stack[s1] = Value::Bool(b);
+                    }
+                    I::LoadNilN(n, s1) => {
+                        let s1 = abs_offset!(sf, s1);
+                        for i in s1..s1 + (n as usize) {
+                            self.stack[i] = Value::Nil
+                        }
+                    }
+                    I::Eq(s0, s1, s2) => {
+                        let s0 = abs_offset!(sf, s0);
+                        let s1 = abs_offset!(sf, s1);
+                        let v = Value::Bool(self.stack[s0] == self.stack[s1]);
+                        let s2 = abs_offset!(sf, s2);
+                        self.stack[s2] = v
+                    }
+                    I::Lt(_, _, _) => todo!(),  // TODO
+                    I::Leq(_, _, _) => todo!(), // TODO
+                    I::Add(s0, s1, s2) => {
+                        let s0 = get_slot_int!(self, abs_offset!(sf, s0));
+                        let s1 = get_slot_int!(self, abs_offset!(sf, s1));
+                        self.stack[abs_offset!(sf, s2)] = Value::Int(s0 + s1);
+                    }
+                    I::Mul(_, _, _) => todo!(), // TODO
+                    I::Sub(_, _, _) => todo!(), // TODO
+                    I::Div(_, _, _) => todo!(), // TODO
+                    I::Mod(_, _, _) => todo!(), // TODO
+                    I::EvalStr(_) => todo!(),   // TODO
+                    I::LoadFile(s0, s1) => {
+                        let s0 = get_slot_str!(self, abs_offset!(sf, s0));
+                        let s1 = abs_offset!(sf, s1);
+                        let content = match std::fs::read_to_string(&*s0) {
+                            Ok(x) => x.into(),
+                            Err(e) => {
+                                // TODO: some kind of exception handling
+                                self.result = Err(Error::new_string(format!(
+                                    "cannot load file `{}: {}",
+                                    s0, e
+                                )));
+                                break;
+                            }
+                        };
+                        self.stack[s1] = Value::Str(content)
+                    }
+                    I::Call(_, _, _) => todo!(), // TODO
+                    I::Become(_, _) => todo!(),  // TODO
+                    I::Ret(_) => {}
+                }
+            }
+
+            self.result.clone()
+        }
+
+        /*
+        match self.ctrl_stack.last_mut() {
+            None => break 'top,
+            Some((ca, idx)) => {
+                debug_assert!(*idx < ca.0.len());
+                let i = ca.0[*idx].clone();
+                self.cur_i = Some(i);
+                *idx += 1; // point to next instruction in `ca`
+                if *idx >= ca.0.len() {
+                    // last instruction: tailcall
+                    self.ctrl_stack.pop();
+                }
+            }
+            }
+        */
+
+        /// Call chunk `c` with `n_args` arguments.
+        fn exec_chunk_(&mut self, c: &Chunk, n_args: u8) -> Result<()> {
+            if self.stack.len() < n_args as usize {
+                return Err(k::Error::new("invoking chunk with too few arguments"));
+            }
+            self.ctrl_stack.push(StackFrame {
+                ic: 0,
+                chunk: c.clone(),
+                start: (self.stack.len() - n_args as usize) as u32,
+            });
+            Ok(())
+        }
+
+        /* TODO
+        /// Execute instruction `i`.
+        ///
+        /// This should always be done within or before a `exec_loop_`.
+        fn exec_instr_(&mut self, i: Instr) -> Result<()> {
+            match i {
+                Instr::Im(v) => self.stack.push(v),
+                Instr::Builtin(b) => {
+                    b.run(self)?; // ask the builtin to eval itself
+                }
+                Instr::Call(ca) => self.exec_codearray_(&ca),
+                Instr::Get(s) => {
+                    // Find definition of symbol `s` in `self.scopes`,
+                    // starting from the most recent scope.
+                    if let Some(v) =
+                        self.scopes.iter().rev().find_map(|d| d.0.get(&*s))
+                    {
+                        if let Value::CodeArray(ca) = v {
+                            self.cur_i = Some(ca.0[0].clone());
+                            if ca.0.len() > 1 {
+                                self.ctrl_stack.push((ca.clone(), 1));
+                            }
+                        } else {
+                            self.stack.push(v.clone())
+                        }
+                    } else if let Some(c) = self.ctx.find_const(&*s) {
+                        self.stack.push(Value::Expr(c.0.clone()))
+                    } else if let Some(th) = self.ctx.find_lemma(&*s) {
+                        self.stack.push(Value::Thm(th.clone()))
+                    } else {
+                        return Err(Error::new_string(format!(
+                            "symbol {:?} not found",
+                            s
+                        )));
+                    }
+                }
+                Instr::Core(c) => c.run(self)?,
+            }
+            Ok(())
+        }
+
+        pub fn pop1(&mut self) -> Result<Value> {
+            match self.stack.pop() {
+                Some(v) => Ok(v),
+                _ => return Err(Error::new("stack underflow")),
+            }
+        }
+
+        /// Push a value onto the value stack.
+        #[inline]
+        pub fn push_val(&mut self, v: Value) {
+            self.stack.push(v);
+        }
+
+        /// Parse and execute the given code.
+        pub fn run(&mut self, s: &str) -> Result<()> {
+            use lexer::*;
+            let mut p = Lexer::new(s);
+
+            logdebug!("meta.run {}", s);
+
+            loop {
+                if p.cur() == Tok::Eof {
+                    break;
+                }
+
+                assert!(self.cur_i.is_none());
+                let i = self.parse_instr_(&mut p);
+                match i {
+                    Err(e) => {
+                        let (l, c) = p.loc();
+                        let e = e.set_source(k::Error::new_string(format!(
+                            "at {}:{}",
+                            l, c
+                        )));
+                        return Err(e);
+                    }
+                    Ok(i) => {
+                        self.cur_i = Some(i);
+                        self.exec_loop_()?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        */
+    }
 }
 
 pub mod lexer {
@@ -484,9 +701,7 @@ pub mod lexer {
                 let c = self.bytes[self.i];
                 if c == b'#' {
                     // eat rest of line
-                    while self.i < self.bytes.len()
-                        && self.bytes[self.i] != b'\n'
-                    {
+                    while self.i < self.bytes.len() && self.bytes[self.i] != b'\n' {
                         self.i += 1
                     }
                 } else if c == b' ' || c == b'\t' {
@@ -545,21 +760,19 @@ pub mod lexer {
                     while j < self.bytes.len() && self.bytes[j] != b'`' {
                         j += 1;
                     }
-                    let src_expr =
-                        std::str::from_utf8(&self.bytes[self.i + 1..j])
-                            .expect("invalid utf8 slice");
+                    let src_expr = std::str::from_utf8(&self.bytes[self.i + 1..j])
+                        .expect("invalid utf8 slice");
                     self.col += j - self.i + 1;
                     self.i = j + 1;
                     Tok::QuotedExpr(src_expr)
                 }
                 c if c.is_ascii_digit() || c == b'-' => {
                     let mut j = self.i + 1;
-                    while j < self.bytes.len() && self.bytes[j].is_ascii_digit()
-                    {
+                    while j < self.bytes.len() && self.bytes[j].is_ascii_digit() {
                         j += 1;
                     }
-                    let tok = std::str::from_utf8(&self.bytes[self.i..j])
-                        .expect("invalid utf8 slice");
+                    let tok =
+                        std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
                     let n = str::parse(tok).expect("cannot parse int");
                     self.col += j - self.i;
                     self.i = j;
@@ -588,8 +801,8 @@ pub mod lexer {
                     } {
                         j += 1;
                     }
-                    let tok = std::str::from_utf8(&self.bytes[self.i..j])
-                        .expect("invalid utf8 slice");
+                    let tok =
+                        std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
                     self.col += j - self.i;
                     self.i = j;
                     Tok::Id(tok)
@@ -611,204 +824,70 @@ pub mod lexer {
 
         /// New parser.
         pub fn new(s: &'b str) -> Self {
-            Self { col: 1, line: 1, i: 0, bytes: s.as_bytes(), cur_: None }
-        }
-    }
-}
-
-macro_rules! perror {
-        ($loc: ident, $fmt: literal) => {
-            Error::new_string(format!(
-                        concat!( "parse error at {:?}: ", $fmt), $loc))
-        };
-        ($loc: ident, $fmt: literal, $($arg:expr ),*) => {
-            Error::new_string(format!(
-                        concat!( "parse error at {:?}: ", $fmt), $loc,
-                        $($arg),*))
-        };
-    }
-
-// TODO: remove, use `unwrap_value` instead
-macro_rules! pop1_of {
-    ($f:ident, $what: literal, $p: pat, $v: ident, $ret: ty) => {
-        pub fn $f(&mut self) -> Result<$ret> {
-            match self.pop1()? {
-                $p => Ok($v),
-                _ => {
-                    return Err(Error::new(concat!(
-                        "type error: expected ",
-                        $what
-                    )))
-                }
+            Self {
+                col: 1,
+                line: 1,
+                i: 0,
+                bytes: s.as_bytes(),
+                cur_: None,
             }
         }
-    };
-}
-
-impl<'a> VM<'a> {
-    /// Create a new VM using the given context.
-    pub fn new(ctx: &'a mut Ctx) -> Self {
-        /* TODO: use a static dictionary instead.
-        // system-level dictionary
-        let mut scope0 = Dict::new();
-        {
-            for ic in INSTR_CORE {
-                let name: k::Ref<str> = ic.name().into();
-                let ca = CodeArray::new(vec![Instr::Core(*ic)]);
-                scope0.0.insert(name, Value::CodeArray(ca));
-            }
-            for b in logic_builtins::BUILTINS {
-                let name: k::Ref<str> = b.name().into();
-                let ca = CodeArray::new(vec![Instr::Builtin(*b)]);
-                scope0.0.insert(name, Value::CodeArray(ca));
-            }
-        }
-        */
-        Self {
-            ctx,
-            cur_i: None,
-            stack: Vec::with_capacity(256),
-            ctrl_stack: vec![],
-            call_stack: vec![],
-        }
     }
-
-    /* TODO
-    /// Execute instruction `i`.
-    ///
-    /// This should always be done within or before a `exec_loop_`.
-    fn exec_instr_(&mut self, i: Instr) -> Result<()> {
-        match i {
-            Instr::Im(v) => self.stack.push(v),
-            Instr::Builtin(b) => {
-                b.run(self)?; // ask the builtin to eval itself
-            }
-            Instr::Call(ca) => self.exec_codearray_(&ca),
-            Instr::Get(s) => {
-                // Find definition of symbol `s` in `self.scopes`,
-                // starting from the most recent scope.
-                if let Some(v) =
-                    self.scopes.iter().rev().find_map(|d| d.0.get(&*s))
-                {
-                    if let Value::CodeArray(ca) = v {
-                        self.cur_i = Some(ca.0[0].clone());
-                        if ca.0.len() > 1 {
-                            self.ctrl_stack.push((ca.clone(), 1));
-                        }
-                    } else {
-                        self.stack.push(v.clone())
-                    }
-                } else if let Some(c) = self.ctx.find_const(&*s) {
-                    self.stack.push(Value::Expr(c.0.clone()))
-                } else if let Some(th) = self.ctx.find_lemma(&*s) {
-                    self.stack.push(Value::Thm(th.clone()))
-                } else {
-                    return Err(Error::new_string(format!(
-                        "symbol {:?} not found",
-                        s
-                    )));
-                }
-            }
-            Instr::Core(c) => c.run(self)?,
-        }
-        Ok(())
-    }
-
-    fn exec_chunk_(&mut self, ca: &Chunk) {
-        // start execution of this block of code
-        self.cur_i = Some(ca.0[0].clone());
-        if ca.0.len() > 1 {
-            self.ctrl_stack.push((ca.clone(), 1));
-        }
-    }
-
-    fn exec_loop_(&mut self) -> Result<()> {
-        'top: loop {
-            // consume `self.cur` here and now.
-            let mut cur0 = None;
-            std::mem::swap(&mut self.cur_i, &mut cur0);
-            match cur0 {
-                Some(i) => {
-                    self.exec_instr_(i)?;
-                }
-                None => {
-                    match self.ctrl_stack.last_mut() {
-                        None => break 'top,
-                        Some((ca, idx)) => {
-                            debug_assert!(*idx < ca.0.len());
-                            let i = ca.0[*idx].clone();
-                            self.cur_i = Some(i);
-                            *idx += 1; // point to next instruction in `ca`
-                            if *idx >= ca.0.len() {
-                                // last instruction: tailcall
-                                self.ctrl_stack.pop();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn pop1(&mut self) -> Result<Value> {
-        match self.stack.pop() {
-            Some(v) => Ok(v),
-            _ => return Err(Error::new("stack underflow")),
-        }
-    }
-
-    pop1_of!(pop1_int, "int", Value::Int(i), i, i64);
-    pop1_of!(pop1_nil, "nil", (_i @ Value::Nil), _i, ());
-    pop1_of!(pop1_bool, "bool", Value::Bool(i), i, bool);
-    pop1_of!(pop1_str, "string", Value::Str(i), i, k::Ref<str>);
-    //pop1_of!(pop1_codearray, "code array", Value::CodeArray(i), i, CodeArray);
-    pop1_of!(pop1_expr, "expr", Value::Expr(i), i, k::Expr);
-    pop1_of!(pop1_thm, "thm", Value::Thm(i), i, k::Thm);
-    //pop1_of!(pop1_sym, "sym", Value::Sym(i), i, k::Ref<str>);
-
-    /// Push a value onto the value stack.
-    #[inline]
-    pub fn push_val(&mut self, v: Value) {
-        self.stack.push(v);
-    }
-
-    /// Parse and execute the given code.
-    pub fn run(&mut self, s: &str) -> Result<()> {
-        use lexer::*;
-        let mut p = Lexer::new(s);
-
-        logdebug!("meta.run {}", s);
-
-        loop {
-            if p.cur() == Tok::Eof {
-                break;
-            }
-
-            assert!(self.cur_i.is_none());
-            let i = self.parse_instr_(&mut p);
-            match i {
-                Err(e) => {
-                    let (l, c) = p.loc();
-                    let e = e.set_source(k::Error::new_string(format!(
-                        "at {}:{}",
-                        l, c
-                    )));
-                    return Err(e);
-                }
-                Ok(i) => {
-                    self.cur_i = Some(i);
-                    self.exec_loop_()?;
-                }
-            }
-        }
-        Ok(())
-    }
-    */
 }
 
 mod parser {
     use super::*;
+
+    macro_rules! perror {
+        ($loc: ident, $fmt: literal) => {
+            Error::new_string(format!(
+                    concat!( "parse error at {:?}: ", $fmt), $loc))
+        };
+        ($loc: ident, $fmt: literal, $($arg:expr ),*) => {
+            Error::new_string(format!(
+                    concat!( "parse error at {:?}: ", $fmt), $loc,
+                    $($arg),*))
+        };
+    }
+
+    /* TODO: use that to lookup builtin funs
+    /// All the core instructions.
+    const INSTR_CORE: &'static [InstrCore] = {
+        use InstrCore::*;
+        &[
+            Def, If, IfElse, Dup, Swap, Drop, Rot, Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod,
+            PrintStack, Clear, PrintPop, Inspect, Source, LoadFile, Begin, End,
+        ]
+    };
+
+    match self {
+        I::Def => "def",
+        I::If => "if",
+        I::IfElse => "ifelse",
+        I::Dup => "dup",
+        I::Swap => "swap",
+        I::Drop => "drop",
+        I::Rot => "rot",
+        I::Begin => "begin",
+        I::End => "end",
+        I::Eq => "eq",
+        I::Lt => "lt",
+        I::Gt => "gt",
+        I::Leq => "leq",
+        I::Geq => "geq",
+        I::Add => "add",
+        I::Mul => "mul",
+        I::Sub => "sub",
+        I::Div => "div",
+        I::Mod => "mod",
+        I::PrintPop => "==",
+        I::PrintStack => "pstack",
+        I::Inspect => "inspect",
+        I::Clear => "clear",
+        I::Source => "source",
+        I::LoadFile => "load_file",
+    }
+    */
 
     /// A parser.
     struct Parser<'a> {
@@ -819,7 +898,10 @@ mod parser {
     impl<'a> Parser<'a> {
         /// Create a new parser for source string `s`.
         pub fn new(ctx: &'a mut k::Ctx, s: &'a str) -> Self {
-            Self { ctx, lexer: lexer::Lexer::new(s) }
+            Self {
+                ctx,
+                lexer: lexer::Lexer::new(s),
+            }
         }
     }
 
@@ -1291,10 +1373,20 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_instr_size() {
+    fn test_sizeof_instr() {
         // make sure instructions remain small
         assert_eq!(std::mem::size_of::<Instr>(), 4);
     }
+
+    /* FIXME: make `Symbol` one word only? Always a `Rc<str>`?
+    #[test]
+    fn test_sizeof_value() {
+        // make sure values are at most 2 words
+        let sz = std::mem::size_of::<Value>();
+        println!("sizeof(value) is {}", sz);
+        assert!(sz <= 16);
+    }
+    */
 
     #[test]
     fn test_lexer() {
