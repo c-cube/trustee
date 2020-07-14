@@ -62,6 +62,13 @@ struct ChunkImpl {
     name: Option<String>,
 }
 
+struct PreChunk {
+    instrs: Vec<Instr>,
+    locals: Vec<Value>,
+    n_slots: u32,
+    name: Option<String>,
+}
+
 /// Index in the array of slots.
 type SlotIdx = u8;
 
@@ -195,6 +202,18 @@ mod ml {
         #[inline]
         fn get(&self) -> &ChunkImpl {
             &*self.0
+        }
+    }
+
+    impl PreChunk {
+        pub fn into_chunk(self) -> Chunk {
+            let c = ChunkImpl {
+                instrs: self.instrs.into_boxed_slice(),
+                locals: self.locals.into_boxed_slice(),
+                n_slots: self.n_slots,
+                name: self.name,
+            };
+            Chunk(k::Ref::new(c))
         }
     }
 
@@ -587,55 +606,28 @@ mod ml {
             Ok(())
         }
 
-        pub fn pop1(&mut self) -> Result<Value> {
-            match self.stack.pop() {
-                Some(v) => Ok(v),
-                _ => return Err(Error::new("stack underflow")),
-            }
-        }
-
         /// Push a value onto the value stack.
         #[inline]
         pub fn push_val(&mut self, v: Value) {
             self.stack.push(v);
         }
+        */
 
         /// Parse and execute the given code.
         pub fn run(&mut self, s: &str) -> Result<()> {
-            use lexer::*;
-            let mut p = Lexer::new(s);
+            use parser::*;
+            let mut p = Parser::new(self.ctx, s);
 
             logdebug!("meta.run {}", s);
 
-            loop {
-                if p.cur() == Tok::Eof {
-                    break;
-                }
-
-                assert!(self.cur_i.is_none());
-                let i = self.parse_instr_(&mut p);
-                match i {
-                    Err(e) => {
-                        let (l, c) = p.loc();
-                        let e = e.set_source(k::Error::new_string(format!(
-                            "at {}:{}",
-                            l, c
-                        )));
-                        return Err(e);
-                    }
-                    Ok(i) => {
-                        self.cur_i = Some(i);
-                        self.exec_loop_()?;
-                    }
-                }
-            }
+            let c = p.parse_top()?;
+            self.exec_chunk_(&c, 0)?;
             Ok(())
         }
-        */
     }
 }
 
-pub mod lexer {
+mod lexer {
     /// A parser for RPN-like syntax, inspired from postscript.
     pub struct Lexer<'b> {
         col: usize,
@@ -838,17 +830,24 @@ pub mod lexer {
 
 mod parser {
     use super::*;
+    use lexer::Tok;
 
     macro_rules! perror {
-        ($loc: ident, $fmt: literal) => {
+        ($loc: expr, $fmt: literal) => {
             Error::new_string(format!(
                     concat!( "parse error at {:?}: ", $fmt), $loc))
         };
-        ($loc: ident, $fmt: literal, $($arg:expr ),*) => {
+        ($loc: expr, $fmt: literal, $($arg:expr ),*) => {
             Error::new_string(format!(
                     concat!( "parse error at {:?}: ", $fmt), $loc,
                     $($arg),*))
         };
+    }
+
+    /// A parser.
+    pub struct Parser<'a> {
+        pub(crate) lexer: lexer::Lexer<'a>,
+        ctx: &'a mut k::Ctx,
     }
 
     /* TODO: use that to lookup builtin funs
@@ -890,18 +889,108 @@ mod parser {
     }
     */
 
-    /// A parser.
-    struct Parser<'a> {
-        lexer: lexer::Lexer<'a>,
-        ctx: &'a mut k::Ctx,
-    }
-
     impl<'a> Parser<'a> {
         /// Create a new parser for source string `s`.
         pub fn new(ctx: &'a mut k::Ctx, s: &'a str) -> Self {
             Self {
                 ctx,
                 lexer: lexer::Lexer::new(s),
+            }
+        }
+
+        /// Parse the string given at creation time into a chunk.
+        pub fn parse_top(&mut self) -> Result<Chunk> {
+            let mut c = PreChunk {
+                instrs: vec![],
+                locals: vec![],
+                n_slots: 0,
+                name: None,
+            };
+
+            loop {
+                let t = self.lexer.cur();
+
+                if t == Tok::Eof {
+                    break;
+                }
+
+                self.parse_statement_(&mut c)?;
+            }
+
+            Ok(c.into_chunk())
+        }
+
+        fn parse_statement_(&mut self, c: &mut PreChunk) -> Result<()> {
+            let t = self.lexer.cur();
+            let loc = self.lexer.loc();
+            match t {
+                Tok::Eof => return Err(perror!(loc, "unexpected EOF")),
+                Tok::Id(_) | Tok::QuotedString(..) | Tok::QuotedExpr(..) | Tok::Int(..) => {
+                    return Err(perror!(loc, "unexpected token {:?}", t))
+                }
+                Tok::LParen | Tok::LBracket => {
+                    self.lexer.next();
+                    let closing = if t == Tok::LParen {
+                        Tok::RParen
+                    } else {
+                        Tok::RBracket
+                    };
+                    match self.lexer.cur() {
+                        Tok::Id("def") => {
+                            self.lexer.next();
+                            let id = self.parse_id_()?;
+                            logdebug!("parsing def for {:?}", id);
+                            todo!() // TODO
+                        }
+                        _ => {
+                            self.parse_expr_app_(c)?;
+                            self.eat_(closing, "unclosed expression")?;
+                        }
+                    }
+                }
+                Tok::RParen => {
+                    return Err(perror!(loc, "non-closed ')'"));
+                }
+                Tok::RBracket => {
+                    return Err(perror!(loc, "non-closed ']'"));
+                }
+                Tok::LBrace => {
+                    return Err(perror!(loc, "unexpected '{{'"));
+                }
+                Tok::RBrace => {
+                    return Err(perror!(loc, "non-closed '}}'"));
+                }
+                Tok::Invalid(c) => {
+                    return Err(perror!(loc, "invalid charachter '{}'", c));
+                }
+            };
+            Ok(())
+        }
+
+        // TODO
+        fn parse_expr_app_(&mut self, _c: &mut PreChunk) -> Result<()> {
+            todo!() // parse application
+        }
+
+        /// Parse an identifier.
+        fn parse_id_(&mut self) -> Result<RStr> {
+            match self.lexer.cur() {
+                Tok::Id(s) => {
+                    let id = s.into();
+                    self.lexer.next();
+                    Ok(id)
+                }
+                _ => Err(perror!(self.lexer.loc(), "expected identifier")),
+            }
+        }
+
+        /// Expect the token `t`, and consume it; or return an error.
+        fn eat_(&mut self, t: lexer::Tok, errmsg: &str) -> Result<()> {
+            if self.lexer.cur() == t {
+                self.lexer.next();
+                Ok(())
+            } else {
+                Err(perror!(self.lexer.loc(), "{}", errmsg))
             }
         }
     }
@@ -1348,7 +1437,6 @@ mod logic_builtins {
 /// Standard prelude for HOL logic
 pub const SRC_PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
 
-/* TODO
 /// Run the given code in a fresh VM.
 ///
 /// This has some overhead, if you want to execute a lot of code efficienty
@@ -1367,7 +1455,6 @@ pub fn load_prelude_hol(ctx: &mut Ctx) -> Result<()> {
     }
     Ok(())
 }
-*/
 
 #[cfg(test)]
 mod test {
