@@ -78,15 +78,21 @@ struct Lexer<'a> {
 /// Symbol that can be infix or prefix or postfix
 fn is_ascii_symbol(c: u8) -> bool {
     match c {
-        b'=' | b',' | b';' | b'<' | b'>' | b'!' | b'/' | b'\\' | b'+'
-        | b'-' | b'|' | b'^' | b'~' | b'*' | b'&' | b'%' | b'@' => true,
+        b'=' | b',' | b';' | b'<' | b'>' | b'!' | b'/' | b'\\' | b'+' | b'-' | b'|' | b'^'
+        | b'~' | b'*' | b'&' | b'%' | b'@' => true,
         _ => false,
     }
 }
 
 impl<'a> Lexer<'a> {
     fn new(src: &'a str) -> Self {
-        Self { src, i: 0, line: 1, col: 1, is_done: false }
+        Self {
+            src,
+            i: 0,
+            line: 1,
+            col: 1,
+            is_done: false,
+        }
     }
 
     pub fn cur_pos(&self) -> (usize, usize) {
@@ -405,7 +411,10 @@ impl<'a> Parser<'a> {
             self.next_();
             Ok(())
         } else {
-            Err(Error::new_string(format!("expected {:?}, got {:?}", tok, t)))
+            Err(Error::new_string(format!(
+                "expected {:?}, got {:?}",
+                tok, t
+            )))
         }
     }
 
@@ -419,10 +428,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a (list of) bound variable(s) of the same type.
-    fn parse_bnd_var_list_(
-        &mut self,
-        ty_expected: Option<&k::Expr>,
-    ) -> Result<usize> {
+    fn parse_bnd_var_list_(&mut self, ty_expected: Option<&k::Expr>) -> Result<usize> {
         use Tok::*;
         const MAX_NUM: usize = 16;
 
@@ -471,17 +477,16 @@ impl<'a> Parser<'a> {
             (Some(ty), _) => &ty,
             (None, Some(ty)) => ty,
             (None, None) => {
-                return Err(perror!(
-                    self,
-                    "cannot infer type for bound variable(s)",
-                ));
+                return Err(perror!(self, "cannot infer type for bound variable(s)",));
             }
         };
 
         // push variables now that we have their type.
         for j in 0..i {
-            let v =
-                k::Var { name: k::Symbol::from_str(names[j]), ty: ty.clone() };
+            let v = k::Var {
+                name: k::Symbol::from_str(names[j]),
+                ty: ty.clone(),
+            };
             self.local.push(v)
         }
 
@@ -491,10 +496,7 @@ impl<'a> Parser<'a> {
     /// Parse a list of bound variables and pushes them onto `self.local`.
     ///
     /// Returns the number of parsed variables.
-    fn parse_bnd_vars_(
-        &mut self,
-        ty_expected: Option<&k::Expr>,
-    ) -> Result<usize> {
+    fn parse_bnd_vars_(&mut self, ty_expected: Option<&k::Expr>) -> Result<usize> {
         use Tok::*;
 
         let mut n = 0;
@@ -504,7 +506,7 @@ impl<'a> Parser<'a> {
                     self.next_();
                     n += self.parse_bnd_var_list_(ty_expected)?;
                     self.eat_(RPAREN)?;
-                },
+                }
                 SYM(_) => {
                     n += self.parse_bnd_var_list_(ty_expected)?;
                     break;
@@ -514,9 +516,9 @@ impl<'a> Parser<'a> {
                     return Err(perror!(
                         self,
                         "unexpected token {:?} while parsing a list of bound variables",
-                        t))
+                        t
+                    ))
                 }
-
             }
         }
         if n == 0 {
@@ -554,12 +556,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Apply an infix token.
-    fn apply_expr_infix_(
-        &mut self,
-        s: &str,
-        e1: k::Expr,
-        e2: k::Expr,
-    ) -> Result<k::Expr> {
+    fn apply_expr_infix_(&mut self, s: &str, e1: k::Expr, e2: k::Expr) -> Result<k::Expr> {
         match s {
             "=" => self.ctx.mk_eq_app(e1, e2),
             "->" => self.ctx.mk_arrow(e1, e2),
@@ -586,12 +583,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Apply binder `b`.
-    fn mk_expr_binder_(
-        &mut self,
-        b: &str,
-        local_offset: usize,
-        body: k::Expr,
-    ) -> Result<k::Expr> {
+    fn mk_expr_binder_(&mut self, b: &str, local_offset: usize, body: k::Expr) -> Result<k::Expr> {
         let vars = &self.local[local_offset..];
         Ok(match b {
             "with" => {
@@ -625,10 +617,10 @@ impl<'a> Parser<'a> {
                 InterpolationArg::Expr(e) => e.clone(),
                 InterpolationArg::Thm(_) => {
                     return Err(perror!(
-                    self,
-                    "interpolation parameter {} is a theorem, expected a term",
-                    self.qargs_idx
-                ))
+                        self,
+                        "interpolation parameter {} is a theorem, expected a term",
+                        self.qargs_idx
+                    ))
                 }
             };
             self.qargs_idx += 1;
@@ -657,11 +649,7 @@ impl<'a> Parser<'a> {
     /// Parse an expression.
     ///
     /// `bp` is the current binding power for this Pratt parser.
-    fn parse_expr_bp_(
-        &mut self,
-        bp: u16,
-        ty_expected: Option<k::Expr>,
-    ) -> Result<k::Expr> {
+    fn parse_expr_bp_(&mut self, bp: u16, ty_expected: Option<k::Expr>) -> Result<k::Expr> {
         use Tok::*;
 
         let mut lhs = {
@@ -687,18 +675,10 @@ impl<'a> Parser<'a> {
                             self.ctx.mk_app(lhs, arg)?
                         }
                         Fixity::Infix(..) => {
-                            return Err(perror!(
-                                self,
-                                "unexpected infix operator {:?}",
-                                s
-                            ));
+                            return Err(perror!(self, "unexpected infix operator {:?}", s));
                         }
                         Fixity::Postfix(..) => {
-                            return Err(perror!(
-                                self,
-                                "unexpected postfix operator {:?}",
-                                s
-                            ));
+                            return Err(perror!(self, "unexpected postfix operator {:?}", s));
                         }
                         Fixity::Binder((_, l2)) => {
                             let local_offset = self.local.len();
@@ -707,8 +687,7 @@ impl<'a> Parser<'a> {
                             self.eat_(DOT)?;
                             // TODO: find expected type for body, maybe
                             let body = self.parse_expr_bp_(l2, None)?;
-                            let result =
-                                self.mk_expr_binder_(s, local_offset, body);
+                            let result = self.mk_expr_binder_(s, local_offset, body);
                             self.local.truncate(local_offset);
                             result?
                         }
@@ -718,35 +697,39 @@ impl<'a> Parser<'a> {
                 DOLLAR_SYM(s) => self.expr_of_atom_(s)?,
                 QUESTION_MARK => self.interpol_expr_()?,
                 NUM(s) => {
-                    let mut i: i64 = s.parse().map_err(|e| {
-                        perror!(self, "cannot parse integer literal: {}", e)
-                    })?;
+                    let mut i: i64 = s
+                        .parse()
+                        .map_err(|e| perror!(self, "cannot parse integer literal: {}", e))?;
                     if i < 0 {
                         // TODO: relative numbers
-                        return Err(perror!(
-                            self,
-                            "cannot parse negative numbers yet"
-                        ));
+                        return Err(perror!(self, "cannot parse negative numbers yet"));
                     }
-                    let mut t = self.ctx.find_const("Zero")
-                        .ok_or_else(||
-                        perror!(self, "cannot find constant `Zero` to encode number `{}`", i)
-                    )?.0.clone();
+                    let mut t = self
+                        .ctx
+                        .find_const("Zero")
+                        .ok_or_else(|| {
+                            perror!(self, "cannot find constant `Zero` to encode number `{}`", i)
+                        })?
+                        .0
+                        .clone();
                     while i > 0 {
                         let b = i % 2 == 1;
                         let f = if b { "Bit1" } else { "Bit0" };
-                        let f =
-                            self.ctx.find_const(f)
-                                .ok_or_else(||
-                                    perror!(self, "cannot find constant `{}` to encode number `{}`", f, i)
-                                )?.0.clone();
+                        let f = self
+                            .ctx
+                            .find_const(f)
+                            .ok_or_else(|| {
+                                perror!(
+                                    self,
+                                    "cannot find constant `{}` to encode number `{}`",
+                                    f,
+                                    i
+                                )
+                            })?
+                            .0
+                            .clone();
                         t = self.ctx.mk_app(f, t).map_err(|e| {
-                            perror!(
-                                self,
-                                "type error when encoding number `{}`: {}",
-                                i,
-                                e
-                            )
+                            perror!(self, "type error when encoding number `{}`: {}", i, e)
                         })?;
                         i = i / 2;
                     }
@@ -814,18 +797,10 @@ impl<'a> Parser<'a> {
                             continue;
                         }
                         Fixity::Prefix(..) => {
-                            return Err(perror!(
-                                self,
-                                "unexpected prefix symbol {:?}",
-                                s
-                            ))
+                            return Err(perror!(self, "unexpected prefix symbol {:?}", s))
                         }
                         Fixity::Binder(..) => {
-                            return Err(perror!(
-                                self,
-                                "unexpected binder {:?}",
-                                s
-                            ))
+                            return Err(perror!(self, "unexpected binder {:?}", s))
                         }
                     }
                 }
@@ -853,9 +828,12 @@ impl<'a> Parser<'a> {
         if self.peek_() != Tok::EOF {
             Err(perror!(self, "expected EOF"))
         } else if self.qargs_idx < self.qargs.len() {
-            Err(perror!(self,
-                    "expected all {} interpolation arguments to be used, but only {} were",
-                    self.qargs.len(), self.qargs_idx))
+            Err(perror!(
+                self,
+                "expected all {} interpolation arguments to be used, but only {} were",
+                self.qargs.len(),
+                self.qargs_idx
+            ))
         } else {
             Ok(e)
         }
@@ -869,11 +847,7 @@ pub fn parse_expr(ctx: &mut Ctx, s: &str) -> Result<k::Expr> {
 }
 
 /// Parse the string into an expression with a set of parameters.
-pub fn parse_expr_with_args(
-    ctx: &mut Ctx,
-    s: &str,
-    qargs: &[InterpolationArg],
-) -> Result<k::Expr> {
+pub fn parse_expr_with_args(ctx: &mut Ctx, s: &str, qargs: &[InterpolationArg]) -> Result<k::Expr> {
     let mut p = Parser::new_with_args(ctx, s, qargs);
     p.parse_expr()
 }
@@ -887,24 +861,13 @@ impl Printer {
         Self { scope: vec![] }
     }
 
-    fn pp_var_ty_(
-        &self,
-        v: &k::Var,
-        k: isize,
-        out: &mut fmt::Formatter,
-    ) -> fmt::Result {
+    fn pp_var_ty_(&self, v: &k::Var, k: isize, out: &mut fmt::Formatter) -> fmt::Result {
         write!(out, "({} : ", v.name.name())?;
         self.pp_expr(&v.ty, k, 0, out)?;
         write!(out, ")")
     }
 
-    fn pp_expr(
-        &self,
-        e: &k::Expr,
-        k: isize,
-        p: u16,
-        out: &mut fmt::Formatter,
-    ) -> fmt::Result {
+    fn pp_expr(&self, e: &k::Expr, k: isize, p: u16, out: &mut fmt::Formatter) -> fmt::Result {
         use k::ExprView as EV;
         match e.view() {
             EV::EKind => write!(out, "kind")?,
@@ -1025,11 +988,7 @@ impl Printer {
         Ok(())
     }
 
-    fn pp_expr_top(
-        &mut self,
-        e: &k::Expr,
-        out: &mut fmt::Formatter,
-    ) -> fmt::Result {
+    fn pp_expr_top(&mut self, e: &k::Expr, out: &mut fmt::Formatter) -> fmt::Result {
         let mut fvars: Vec<_> = e.free_vars().collect();
         fvars.sort_unstable();
         fvars.dedup();
@@ -1168,9 +1127,8 @@ mod test {
 
         for (x, y) in &pairs {
             let mut ctx = mkctx()?;
-            let r = parse_expr(&mut ctx, x).map_err(|e| {
-                e.set_source(Error::new_string(format!("parsing {:?}", x)))
-            })?;
+            let r = parse_expr(&mut ctx, x)
+                .map_err(|e| e.set_source(Error::new_string(format!("parsing {:?}", x))))?;
             let r2 = format!("{:?}", r);
             assert_eq!(&r2, *y);
         }
@@ -1216,11 +1174,9 @@ mod test {
         for (x, y, f) in &cases {
             let mut ctx = mkctx()?;
             let args: Vec<_> = f(&mut ctx)?;
-            let qargs: Vec<InterpolationArg> =
-                args.iter().map(|x| x.into()).collect();
-            let r = parse_expr_with_args(&mut ctx, x, &qargs).map_err(|e| {
-                e.set_source(Error::new_string(format!("parsing {:?}", x)))
-            })?;
+            let qargs: Vec<InterpolationArg> = args.iter().map(|x| x.into()).collect();
+            let r = parse_expr_with_args(&mut ctx, x, &qargs)
+                .map_err(|e| e.set_source(Error::new_string(format!("parsing {:?}", x))))?;
             let r2 = format!("{:?}", r);
             assert_eq!(&r2, *y);
         }

@@ -1,6 +1,6 @@
 //! Kernel of Trust: Terms and Theorems
 
-use crate::{fnv, meta};
+use crate::{fnv, meta, rstr::RStr};
 use std::{fmt, ops::Deref, sync::atomic};
 
 pub type Ref<T> = std::rc::Rc<T>;
@@ -74,49 +74,59 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 ///! # Symbols.
 
-/// Builtin symbols
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Hash, Eq, PartialEq)]
-pub enum BuiltinSymbol {
-    Eq,
-    Imply,
-    Bool,
+/// Description of builtin symbols
+#[derive(Debug)]
+pub struct BuiltinSymbol<'a> {
+    eq: &'a str,
+    bool: &'a str,
 }
-use BuiltinSymbol as BS;
 
-impl BuiltinSymbol {
-    pub fn name(&self) -> &'static str {
-        match self {
-            BS::Eq => "=",
-            BS::Imply => "==>",
-            BS::Bool => "bool",
+impl<'a> BuiltinSymbol<'a> {
+    /// Default symbols.
+    pub fn default() -> Self {
+        Self {
+            eq: "=",
+            bool: "bool",
         }
     }
 }
 
-/// Any kind of symbol.
-#[derive(Debug, Clone, Ord, PartialOrd, Hash, Eq, PartialEq)]
-pub enum Symbol {
-    Builtin(BuiltinSymbol),
-    Named(Ref<str>),
+impl<'a> Default for BuiltinSymbol<'a> {
+    fn default() -> Self {
+        Self::default()
+    }
 }
+
+/// A logic symbol.
+#[derive(Debug, Clone, Ord, PartialOrd, Hash, Eq, PartialEq)]
+pub struct Symbol(RStr);
 
 impl Symbol {
     /// New symbol from this string.
     pub fn from_str(s: &str) -> Self {
-        let a = Ref::from(s);
-        Symbol::Named(a)
+        let a = RStr::from(s);
+        Symbol(a)
     }
 
     pub fn from_rc_str(s: &std::rc::Rc<str>) -> Self {
-        let a: Ref<str> = Ref::from(s.as_ref());
-        Symbol::Named(a)
+        let a: RStr = RStr::from(s.as_ref());
+        Symbol(a)
     }
 
     pub fn name(&self) -> &str {
-        match &self {
-            Symbol::Builtin(s) => s.name(),
-            Symbol::Named(s) => &*s,
-        }
+        &*self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for Symbol {
+    fn borrow(&self) -> &str {
+        &*self.0
+    }
+}
+
+impl<'a> From<&'a str> for Symbol {
+    fn from(s: &str) -> Self {
+        Symbol::from_str(s)
     }
 }
 
@@ -143,7 +153,7 @@ pub type Type = Expr;
 pub enum ExprView {
     EType,
     EKind,
-    EConst(ConstContent),
+    EConst(Box<ConstContent>),
     EVar(Var),
     EBoundVar(BoundVarContent),
     EApp(Expr, Expr),
@@ -178,7 +188,15 @@ struct ExprImpl {
 pub struct ConstContent {
     pub name: Symbol,
     pub ty: Expr,
+    tag: ConstTag,
     fix: std::cell::Cell<Fixity>,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+#[repr(u8)]
+enum ConstTag {
+    None,
+    Eq,
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
@@ -336,11 +354,12 @@ impl ExprView {
     {
         Ok(match self {
             EType | EKind => self.clone(),
-            EConst(c) => EConst(ConstContent {
+            EConst(c) => EConst(Box::new(ConstContent {
                 ty: f(&c.ty, k)?,
                 name: c.name.clone(),
-                fix: std::cell::Cell::new(Fixity::Nullary),
-            }),
+                tag: c.tag,
+                fix: c.fix.clone(),
+            })),
             EVar(v) => EVar(Var {
                 ty: f(&v.ty, k)?,
                 name: v.name.clone(),
@@ -430,11 +449,8 @@ impl Expr {
 
     /// Is this the representation of `=`?
     pub fn is_eq(&self) -> bool {
-        match self.0.view {
-            EConst(ConstContent {
-                name: Symbol::Builtin(BuiltinSymbol::Eq),
-                ..
-            }) => true,
+        match &self.0.view {
+            EConst(c) => c.tag == ConstTag::Eq,
             _ => false,
         }
     }
@@ -772,8 +788,8 @@ pub struct Ctx {
     /// Hashconsing table, with weak semantics.
     tbl: fnv::FnvHashMap<ExprView, WExpr>,
     builtins: Option<ExprBuiltins>,
-    consts: fnv::FnvHashMap<Ref<str>, Expr>,
-    lemmas: fnv::FnvHashMap<Ref<str>, Thm>,
+    consts: fnv::FnvHashMap<Symbol, Expr>,
+    lemmas: fnv::FnvHashMap<Symbol, Thm>,
     /// The defined chunks of code. These comprise some user defined tactics,
     /// derived rules, etc.
     meta_chunks: fnv::FnvHashMap<Ref<str>, meta::Chunk>,
@@ -855,7 +871,7 @@ static EM_ID: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
 // helpers
 impl Ctx {
     /// Create a new term manager with given initial capacity.
-    pub fn with_capacity(n: usize) -> Self {
+    pub fn with_capacity(bs: &BuiltinSymbol, n: usize) -> Self {
         let tbl = fnv::new_table_with_cap(n);
         // allocate new uid
         let uid = EM_ID.fetch_add(1, atomic::Ordering::SeqCst);
@@ -868,10 +884,10 @@ impl Ctx {
             consts: fnv::new_table_with_cap(n),
             lemmas: fnv::new_table_with_cap(n),
             meta_chunks: fnv::new_table_with_cap(16),
-            eq: None,
             next_cleanup: CLEANUP_PERIOD,
             axioms: vec![],
             uid: uid as u32,
+            eq: None,
             allow_new_axioms: true,
         };
         // insert initial builtins
@@ -880,24 +896,40 @@ impl Ctx {
         let ty = ctx.hashcons_builtin_(EType, Some(kind.clone()));
         ctx.tbl.insert(ty.view().clone(), ty.weak());
         let bool = {
-            let name = Symbol::Builtin(BS::Bool);
+            let name = Symbol::from_str(bs.bool);
             ctx.hashcons_builtin_(
-                EConst(ConstContent {
+                EConst(Box::new(ConstContent {
                     name,
                     ty: ty.clone(),
+                    tag: ConstTag::None,
                     fix: std::cell::Cell::new(Fixity::Nullary),
-                }),
+                })),
                 Some(ty.clone()),
             )
         };
         ctx.add_const_(bool.clone());
         let builtins = ExprBuiltins { bool, ty };
         ctx.builtins = Some(builtins);
+        // build `=`. It needs `builtins` to be set.
+        let eq = {
+            let name = Symbol::from_str(bs.eq);
+            let ty = ctx.mk_ty();
+            let bool = ctx.mk_bool();
+            let db0 = ctx.mk_bound_var(0, ty.clone());
+            let arr = ctx.mk_arrow(db0.clone(), bool.clone()).unwrap();
+            let arr = ctx.mk_arrow(db0.clone(), arr).unwrap();
+            let ty_eq = ctx.mk_pi_(ty.clone(), arr).unwrap();
+            let fix = FIXITY_EQ;
+            ctx.mk_const_with_(name, ty_eq, ConstTag::Eq, fix).unwrap()
+        };
+        ctx.eq = Some(eq);
+
         ctx
     }
 
+    /// New context with the default builtin symbols.
     pub fn new() -> Self {
-        Self::with_capacity(2_048)
+        Self::with_capacity(&BuiltinSymbol::default(), 2_048)
     }
 
     /// Add to the internal table, return the canonical representant.
@@ -942,11 +974,8 @@ impl Ctx {
 
     fn add_const_(&mut self, e: Expr) {
         let consts = &mut self.consts;
-        let name = if let EConst(ConstContent { name, .. }) = &e.0.view {
-            match name {
-                Symbol::Named(n) => n.clone(),
-                Symbol::Builtin(..) => return,
-            }
+        let name = if let EConst(c) = &e.0.view {
+            c.name.clone()
         } else {
             unreachable!("not a constant: {:?}", e);
         };
@@ -962,19 +991,20 @@ impl Ctx {
         e
     }
 
-    fn mk_const_with_(&mut self, s: Symbol, ty: Type, f: Fixity) -> Result<Expr> {
+    fn mk_const_with_(&mut self, s: Symbol, ty: Type, tag: ConstTag, f: Fixity) -> Result<Expr> {
         self.check_uid_(&ty);
-        if self.consts.contains_key(s.name()) {
+        if self.consts.contains_key(&s) {
             return Err(Error::new("a constant with this name already exists"));
         }
         if !ty.is_closed() || ty.free_vars().next().is_some() {
             return Err(Error::new("cannot create constant with non-closed type"));
         }
-        let c = self.hashcons_(EConst(ConstContent {
+        let c = self.hashcons_(EConst(Box::new(ConstContent {
             name: s.clone(),
             ty,
+            tag,
             fix: std::cell::Cell::new(f),
-        }))?;
+        })))?;
         self.add_const_(c.clone());
         Ok(c)
     }
@@ -1185,19 +1215,7 @@ impl Ctx {
     pub fn mk_eq(&mut self) -> Expr {
         match self.eq {
             Some(ref c) => c.clone(),
-            None => {
-                let ty = self.mk_ty();
-                let bool = self.mk_bool();
-                let db0 = self.mk_bound_var(0, ty.clone());
-                let arr = self.mk_arrow(db0.clone(), bool.clone()).unwrap();
-                let arr = self.mk_arrow(db0.clone(), arr).unwrap();
-                let ty_eq = self.mk_pi_(ty.clone(), arr).unwrap();
-                let name = Symbol::Builtin(BS::Eq);
-                let fix = FIXITY_EQ;
-                let c = self.mk_const_with_(name, ty_eq, fix).unwrap();
-                self.eq = Some(c.clone());
-                c
-            }
+            None => panic!("equality is not defined in this context"),
         }
     }
 
@@ -1380,8 +1398,8 @@ impl Ctx {
     /// Fails if some constant with the same name exists, or if
     /// the type is not closed.
     /// This constant has no axiom associated to it, it is entirely opaque.
-    pub fn mk_new_const(&mut self, s: Symbol, ty: Type) -> Result<Expr> {
-        self.mk_const_with_(s, ty, Fixity::Nullary)
+    pub fn mk_new_const(&mut self, s: impl Into<Symbol>, ty: Type) -> Result<Expr> {
+        self.mk_const_with_(s.into(), ty, ConstTag::None, Fixity::Nullary)
     }
 
     // TODO: return a result, and only allow infix/binder if type is inferrable
@@ -1410,7 +1428,7 @@ impl Ctx {
     /// Define a named lemma.
     ///
     /// If another lemma with the same name exists, it will be replaced.
-    pub fn define_lemma(&mut self, name: &str, th: Thm) {
+    pub fn define_lemma(&mut self, name: impl Into<Symbol>, th: Thm) {
         self.lemmas.insert(name.into(), th);
     }
 

@@ -9,6 +9,7 @@ use {
         algo,
         fnv::{self, FnvHashMap},
         kernel_of_trust::{self as k, Ctx},
+        rstr::RStr,
         syntax, Error, Result,
     },
     std::{cell::RefCell, fmt},
@@ -32,7 +33,7 @@ pub enum Value {
     Sym(k::Symbol),
     /// A raw string literal. Obtained by parsing a source file or using
     /// an embedded rust string literal.
-    Str(String),
+    Str(RStr),
     Expr(k::Expr),
     Thm(k::Thm),
     /// An executable chunk.
@@ -494,7 +495,7 @@ mod ml {
                     I::LoadFile(s0, s1) => {
                         let s0 = get_slot_str!(self, abs_offset!(sf, s0));
                         let s1 = abs_offset!(sf, s1);
-                        let content = match std::fs::read_to_string(&*s0) {
+                        let content = match std::fs::read_to_string(&**s0 as &str) {
                             Ok(x) => x.into(),
                             Err(e) => {
                                 // TODO: some kind of exception handling
@@ -1378,15 +1379,21 @@ mod test {
         assert_eq!(std::mem::size_of::<Instr>(), 4);
     }
 
-    /* FIXME: make `Symbol` one word only? Always a `Rc<str>`?
     #[test]
     fn test_sizeof_value() {
         // make sure values are at most 2 words
+        let sz = std::mem::size_of::<k::Symbol>();
+        println!("sizeof(symbol) is {}", sz);
+        let sz = std::mem::size_of::<k::Expr>();
+        println!("sizeof(expr) is {}", sz);
+        let sz = std::mem::size_of::<k::Thm>();
+        println!("sizeof(thm) is {}", sz);
+        let sz = std::mem::size_of::<RStr>();
+        println!("sizeof(rstr) is {}", sz);
         let sz = std::mem::size_of::<Value>();
         println!("sizeof(value) is {}", sz);
         assert!(sz <= 16);
     }
-    */
 
     #[test]
     fn test_lexer() {
