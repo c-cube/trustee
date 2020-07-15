@@ -23,6 +23,7 @@ macro_rules! get_impl_ref {
 }
 
 impl Clone for RStr {
+    #[inline]
     fn clone(&self) -> Self {
         unsafe {
             let i = get_impl_ref!(self);
@@ -82,12 +83,15 @@ impl Drop for RStr {
 
 impl std::ops::Deref for RStr {
     type Target = str;
+    #[inline]
     fn deref(&self) -> &Self::Target {
-        unsafe {
-            let p = get_impl_ref!(self);
-            let sl = std::slice::from_raw_parts(p.data, p.len as usize);
-            std::str::from_utf8_unchecked(sl)
-        }
+        self.get()
+    }
+}
+
+impl std::borrow::Borrow<str> for RStr {
+    fn borrow(&self) -> &str {
+        self.deref()
     }
 }
 
@@ -132,6 +136,14 @@ impl RStr {
 
     pub fn refcount(&self) -> usize {
         unsafe { get_impl_ref!(self) }.rc.get() as usize
+    }
+
+    pub fn get(&self) -> &str {
+        unsafe {
+            let p = get_impl_ref!(self);
+            let sl = std::slice::from_raw_parts(p.data, p.len as usize);
+            std::str::from_utf8_unchecked(sl)
+        }
     }
 }
 

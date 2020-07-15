@@ -792,7 +792,7 @@ pub struct Ctx {
     lemmas: fnv::FnvHashMap<Symbol, Thm>,
     /// The defined chunks of code. These comprise some user defined tactics,
     /// derived rules, etc.
-    meta_chunks: fnv::FnvHashMap<Ref<str>, meta::Chunk>,
+    meta_chunks: fnv::FnvHashMap<RStr, meta::Chunk>,
     eq: Option<Expr>,
     next_cleanup: usize,
     axioms: Vec<Thm>,
@@ -1423,6 +1423,18 @@ impl Ctx {
             let f = e.as_const().unwrap().fixity();
             (e, f)
         })
+    }
+
+    /// Find a meta-language chunk by name. Returns `None` if no such constant exists.
+    pub fn find_meta_chunk(&self, s: &str) -> Option<&meta::Chunk> {
+        self.meta_chunks.get(s)
+    }
+
+    /// Define a meta-language chunk.
+    ///
+    /// Will erase previous binding if existing.
+    pub fn define_meta_chunk(&mut self, s: impl Into<RStr>, c: meta::Chunk) {
+        self.meta_chunks.insert(s.into(), c);
     }
 
     /// Define a named lemma.

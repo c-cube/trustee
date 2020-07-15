@@ -12,7 +12,7 @@ use {
         rstr::RStr,
         syntax, Error, Result,
     },
-    std::{cell::RefCell, fmt},
+    std::{fmt, i16, u8},
 };
 
 macro_rules! logdebug {
@@ -62,18 +62,27 @@ struct ChunkImpl {
     name: Option<String>,
 }
 
-struct PreChunk {
+/// Compiler for a given chunk.
+struct Compiler {
     instrs: Vec<Instr>,
     locals: Vec<Value>,
+    /// Maximum size `slots` ever took.
     n_slots: u32,
     name: Option<String>,
+    slots: Vec<CompilerSlot>,
+}
+struct CompilerSlot {
+    /// If this slot is for a named variable.
+    var_name: Option<RStr>,
+    activated: bool,
 }
 
 /// Index in the array of slots.
 type SlotIdx = u8;
 
 /// Index in the array of locals.
-type LocalIdx = u8;
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct LocalIdx(u8);
 
 /// ## Instructions
 ///
@@ -116,6 +125,8 @@ enum Instr {
     Call(SlotIdx, u8, SlotIdx),
     /// Tail-call into chunk `sl[$0]` with arguments `sl[$0 + 1 .. $0 + 1 + $1]`
     Become(LocalIdx, u8),
+    /// Pop n values from the slots.
+    Pop(u16),
     /// Return from current chunk, yielding value `sl[$0]`
     Ret(SlotIdx),
     // TODO: control flow:
@@ -202,18 +213,6 @@ mod ml {
         #[inline]
         fn get(&self) -> &ChunkImpl {
             &*self.0
-        }
-    }
-
-    impl PreChunk {
-        pub fn into_chunk(self) -> Chunk {
-            let c = ChunkImpl {
-                instrs: self.instrs.into_boxed_slice(),
-                locals: self.locals.into_boxed_slice(),
-                n_slots: self.n_slots,
-                name: self.name,
-            };
-            Chunk(k::Ref::new(c))
         }
     }
 
@@ -476,7 +475,7 @@ mod ml {
                     }
                     I::LoadLocal(l0, s1) => {
                         let s1 = abs_offset!(sf, s1);
-                        self.stack[s1] = sf.chunk.0.locals[l0 as usize].clone();
+                        self.stack[s1] = sf.chunk.0.locals[l0.0 as usize].clone();
                     }
                     I::LoadInteger(i, s1) => {
                         let s1 = abs_offset!(sf, s1);
@@ -529,6 +528,14 @@ mod ml {
                     }
                     I::Call(_, _, _) => todo!(), // TODO
                     I::Become(_, _) => todo!(),  // TODO
+                    I::Pop(n) => {
+                        let sz_stack = self.stack.len();
+                        if n as usize > sz_stack {
+                            self.result = Err(Error::new("stack underflow"));
+                            break;
+                        }
+                        self.stack.truncate(sz_stack - n as usize);
+                    }
                     I::Ret(_) => {}
                 }
             }
@@ -621,7 +628,9 @@ mod ml {
             logdebug!("meta.run {}", s);
 
             let c = p.parse_top()?;
-            self.exec_chunk_(&c, 0)?;
+            logdebug!("chunk: {:#?}", &c);
+
+            dbg!(self.exec_chunk_(&c, 0))?;
             Ok(())
         }
     }
@@ -844,6 +853,96 @@ mod parser {
         };
     }
 
+    impl Compiler {
+        /// Convert the compiler's state into a proper chunk.
+        pub fn into_chunk(self) -> Chunk {
+            let c = ChunkImpl {
+                instrs: self.instrs.into_boxed_slice(),
+                locals: self.locals.into_boxed_slice(),
+                n_slots: self.n_slots,
+                name: self.name,
+            };
+            Chunk(k::Ref::new(c))
+        }
+
+        /// Allocate a new compiler.
+        pub fn new(name: Option<String>) -> Self {
+            Self {
+                instrs: vec![],
+                locals: vec![],
+                n_slots: 0,
+                name,
+                slots: vec![],
+            }
+        }
+
+        pub fn top_slot_(&self) -> SlotIdx {
+            let i = self.slots.len();
+            assert!(i <= u8::MAX as usize);
+            i as u8
+        }
+
+        #[inline]
+        pub fn get_slot_(&mut self, i: SlotIdx) -> &mut CompilerSlot {
+            &mut self.slots[i as usize]
+        }
+
+        /// Push the value into `self.locals`, return its index.
+        pub fn push_local_(&mut self, v: Value) -> Result<LocalIdx> {
+            let i = self.locals.len();
+            if i > u8::MAX as usize {
+                return Err(Error::new("maximum number of locals exceeded"));
+            }
+            self.locals.push(v);
+            Ok(LocalIdx(i as u8))
+        }
+
+        /// Emit instruction.
+        pub fn emit_instr_(&mut self, i: Instr) {
+            logdebug!("compiler(name={:?}): emit instr {:?}", self.name, i);
+            self.instrs.push(i);
+        }
+
+        pub fn allocate_top_slot_with_<F>(&mut self, mut f: F) -> Result<SlotIdx>
+        where
+            F: FnMut(SlotIdx, &mut CompilerSlot),
+        {
+            let i = self.slots.len();
+            if i > u8::MAX as usize {
+                return Err(Error::new("maximum number of slots exceeded"));
+            }
+
+            let sl = CompilerSlot {
+                var_name: None,
+                activated: false,
+            };
+            self.slots.push(sl);
+            f(i as u8, &mut self.slots[i]);
+
+            Ok(i as u8)
+        }
+
+        /// Allocate a slot on the stack, to hold a temporary result.
+        ///
+        /// The slot is considered activated already.
+        #[inline]
+        pub fn allocate_top_slot_(&mut self) -> Result<SlotIdx> {
+            self.allocate_top_slot_with_(|_, sl| sl.activated = true)
+        }
+
+        /// Find slot for the given variable `v`.
+        pub fn find_slot_of_var_(&self, v: &str) -> Option<SlotIdx> {
+            for (i, s) in self.slots.iter().enumerate().rev() {
+                if let Some(v2) = &s.var_name {
+                    if v2.get() == v {
+                        return Some(i as u8);
+                    }
+                }
+            }
+            None
+        }
+    }
+
     /// A parser.
     pub struct Parser<'a> {
         pub(crate) lexer: lexer::Lexer<'a>,
@@ -889,6 +988,61 @@ mod parser {
     }
     */
 
+    use Instr as I;
+
+    /// A builtin binary operator
+    fn binary_op_(s: &str) -> Option<&'static dyn Fn(SlotIdx, SlotIdx, SlotIdx) -> Instr> {
+        macro_rules! ret {
+            ($i: expr) => {
+                Some(&|s1, s2, s3| $i(s1, s2, s3))
+            };
+        };
+        if s == "+" {
+            ret!(I::Add)
+        } else if s == "-" {
+            ret!(I::Sub)
+        } else if s == "*" {
+            ret!(I::Mul)
+        } else if s == "/" {
+            ret!(I::Div)
+        } else if s == "%" {
+            ret!(I::Mod)
+        } else {
+            None
+        }
+    }
+
+    /// Resolve the ID as a chunk or builtin, and put it into `sl`.
+    fn resolve_id_(
+        ctx: &mut Ctx,
+        c: &mut Compiler,
+        s: &str,
+        loc: (usize, usize),
+        sl: SlotIdx,
+    ) -> Result<()> {
+        if let Some(f_var_slot) = c.find_slot_of_var_(s) {
+            assert_ne!(f_var_slot, sl);
+            c.emit_instr_(I::Move(f_var_slot, sl));
+        } else if let Some(b) = logic_builtins::BUILTINS.iter().find(|b| b.name == s) {
+            let lidx = c.push_local_(Value::Builtin(b))?;
+            c.emit_instr_(I::LoadLocal(lidx, sl));
+        } else if let Some(ch) = ctx.find_meta_chunk(s) {
+            let lidx = c.push_local_(Value::Chunk(ch.clone()))?;
+            c.emit_instr_(I::LoadLocal(lidx, sl));
+        } else {
+            return Err(perror!(loc, "unknown identifier {}", s));
+        }
+        Ok(())
+    }
+
+    /// Extract current token as an identifier.
+    fn cur_tok_as_id_<'a>(lexer: &'a mut lexer::Lexer, errmsg: &'static str) -> Result<&'a str> {
+        match lexer.cur() {
+            Tok::Id(s) => Ok(s),
+            _ => Err(perror!(lexer.loc(), "{}", errmsg)),
+        }
+    }
+
     impl<'a> Parser<'a> {
         /// Create a new parser for source string `s`.
         pub fn new(ctx: &'a mut k::Ctx, s: &'a str) -> Self {
@@ -900,11 +1054,12 @@ mod parser {
 
         /// Parse the string given at creation time into a chunk.
         pub fn parse_top(&mut self) -> Result<Chunk> {
-            let mut c = PreChunk {
+            let mut c = Compiler {
                 instrs: vec![],
                 locals: vec![],
                 n_slots: 0,
                 name: None,
+                slots: vec![],
             };
 
             loop {
@@ -914,13 +1069,26 @@ mod parser {
                     break;
                 }
 
-                self.parse_statement_(&mut c)?;
+                self.parse_top_statement_(&mut c)?;
             }
 
             Ok(c.into_chunk())
         }
 
-        fn parse_statement_(&mut self, c: &mut PreChunk) -> Result<()> {
+        /// Current token
+        #[inline]
+        fn cur_tok_(&mut self) -> Tok {
+            self.lexer.cur()
+        }
+
+        /// Next token
+        #[inline]
+        fn next_tok_(&mut self) -> Tok {
+            self.lexer.next()
+        }
+
+        /// Parse a toplevel statement in a file or CLI input.
+        fn parse_top_statement_(&mut self, c: &mut Compiler) -> Result<()> {
             let t = self.lexer.cur();
             let loc = self.lexer.loc();
             match t {
@@ -929,21 +1097,23 @@ mod parser {
                     return Err(perror!(loc, "unexpected token {:?}", t))
                 }
                 Tok::LParen | Tok::LBracket => {
-                    self.lexer.next();
                     let closing = if t == Tok::LParen {
                         Tok::RParen
                     } else {
                         Tok::RBracket
                     };
+
+                    self.lexer.next();
                     match self.lexer.cur() {
                         Tok::Id("def") => {
                             self.lexer.next();
-                            let id = self.parse_id_()?;
-                            logdebug!("parsing def for {:?}", id);
+                            //let id = self.parse_id_()?;
+                            //logdebug!("parsing def for {:?}", id);
                             todo!() // TODO
                         }
                         _ => {
-                            self.parse_expr_app_(c)?;
+                            let sl = c.allocate_top_slot_()?;
+                            self.parse_expr_app_(c, closing, sl)?;
                             self.eat_(closing, "unclosed expression")?;
                         }
                     }
@@ -967,21 +1137,250 @@ mod parser {
             Ok(())
         }
 
-        // TODO
-        fn parse_expr_app_(&mut self, _c: &mut PreChunk) -> Result<()> {
-            todo!() // parse application
+        /// Parse an application-type expression, closed with `closing`.
+        ///
+        /// Put the result into slot `sl_res`.
+        fn parse_expr_app_(
+            &mut self,
+            c: &mut Compiler,
+            closing: Tok,
+            sl_res: SlotIdx,
+        ) -> Result<()> {
+            let loc = self.lexer.loc();
+            let Self { ctx, lexer, .. } = self;
+            let id = cur_tok_as_id_(lexer, "expect an identifier after opening")?;
+            logdebug!("parse expr app id={:?}", id);
+
+            if let Some(binop_instr) = binary_op_(id) {
+                // binary operator
+                self.next_tok_();
+
+                let a_slot = c.allocate_top_slot_()?;
+                let b_slot = c.allocate_top_slot_()?;
+                self.parse_expr_(c, a_slot)?;
+                self.parse_expr_(c, b_slot)?;
+                c.emit_instr_(binop_instr(a_slot, b_slot, sl_res));
+                c.emit_instr_(I::Pop(2));
+                return Ok(());
+            }
+
+            if id == "do" {
+                // composite expression, defining a local scope.
+                let l_slots = c.slots.len();
+
+                // store result of last expression
+                let tmp_slot = c.allocate_top_slot_()?;
+
+                loop {
+                    if self.cur_tok_() == closing {
+                        break;
+                    }
+
+                    self.parse_expr_(c, tmp_slot)?;
+                }
+                self.eat_(closing, "expected closing after `do`")?;
+
+                // now copy result into `sl_res`
+                c.emit_instr_(I::Move(tmp_slot, sl_res));
+                // restore stack to its former size.
+                // This also deallocates local variables.
+                if c.slots.len() > l_slots {
+                    let to_pop = c.slots.len() - l_slots;
+                    assert!(to_pop < u16::MAX as usize);
+                    c.emit_instr_(I::Pop(to_pop as u16));
+                }
+            } else {
+                // make a function call.
+                let f_slot = c.allocate_top_slot_()?;
+                resolve_id_(ctx, c, id, loc, f_slot)?;
+                lexer.next();
+
+                // parse arguments
+                let mut n_args = 0;
+                loop {
+                    if self.cur_tok_() == closing {
+                        break;
+                    }
+
+                    n_args += 1;
+                    if n_args > u8::MAX {
+                        return Err(perror!(
+                            self.lexer.loc(),
+                            "maximum number of arguments exceeded"
+                        ));
+                    }
+
+                    let sl_arg = c.allocate_top_slot_()?;
+                    self.parse_expr_(c, sl_arg)?;
+                }
+
+                // emit call
+                c.emit_instr_(I::Call(f_slot, n_args as u8, sl_res));
+                // pop `f` and the arguments.
+                c.emit_instr_(I::Pop((n_args + 1) as u16));
+            }
+            Ok(())
         }
 
-        /// Parse an identifier.
-        fn parse_id_(&mut self) -> Result<RStr> {
-            match self.lexer.cur() {
-                Tok::Id(s) => {
-                    let id = s.into();
-                    self.lexer.next();
-                    Ok(id)
+        /// Parse an expression or a `let`-binding, return `true` if
+        /// `sl_res` is assigned.
+        fn parse_expr_or_let_(&mut self, c: &mut Compiler, sl_res: SlotIdx) -> Result<bool> {
+            match self.cur_tok_() {
+                Tok::LParen => {
+                    self.next_tok_();
+                    self.parse_expr_or_let_app_(c, sl_res, Tok::RParen)
                 }
-                _ => Err(perror!(self.lexer.loc(), "expected identifier")),
+                Tok::LBracket => {
+                    self.next_tok_();
+                    self.parse_expr_or_let_app_(c, sl_res, Tok::RBracket)
+                }
+                Tok::LBrace => {
+                    self.next_tok_();
+                    self.parse_infix_(c, sl_res)?;
+                    Ok(true)
+                }
+                _ => {
+                    self.parse_expr_(c, sl_res);
+                    Ok(true)
+                }
             }
+        }
+
+        /// Parse an item in a `do` group.
+        ///
+        /// Returns `true` if `sl_res` was set.
+        fn parse_expr_or_let_app_(
+            &mut self,
+            c: &mut Compiler,
+            sl_res: SlotIdx,
+            closing: Tok,
+        ) -> Result<bool> {
+            let Self { lexer, .. } = self;
+            let id = cur_tok_as_id_(lexer, "expected 'let' or an identifier after opening")?;
+            if id == "let" {
+                // local definition.
+                lexer.next();
+
+                let id: RStr = cur_tok_as_id_(lexer, "expected an identifer after 'let'")?.into();
+                self.next_tok_();
+
+                let sl_x = c.allocate_top_slot_with_(|_, sl| {
+                    sl.activated = false;
+                    sl.var_name = Some(id.clone());
+                })?;
+
+                self.parse_expr_(c, sl_x)?;
+                c.get_slot_(sl_x).activated = true;
+                self.eat_(closing, "unclosed 'let' expression")?;
+                return Ok(false);
+            }
+            self.parse_expr_app_(c, closing, sl_res)?;
+            Ok(true)
+        }
+
+        /* TODO: local def?
+        } else if id == "def" {
+            // local definition.
+            self.next_tok_();
+
+            let id = self.cur_tok_as_id_("expect identifier after `def`")?;
+            let sl_x = c.allocate_top_slot_with_(|_, sl| {
+                sl.activated = true;
+                sl.var_name = Some(id.clone());
+            });
+        */
+
+        fn parse_infix_(&mut self, c: &mut Compiler, sl_res: SlotIdx) -> Result<()> {
+            logdebug!("parse infix expr");
+
+            let sl_op = c.allocate_top_slot_()?;
+            let sl_a = c.allocate_top_slot_()?;
+            let sl_b = c.allocate_top_slot_()?;
+            self.next_tok_();
+            self.parse_expr_(c, sl_a)?;
+
+            let loc = self.lexer.loc();
+            let Self { ctx, lexer, .. } = self;
+            if let Tok::Id(op) = lexer.cur() {
+                resolve_id_(ctx, c, &op, loc, sl_op)?;
+                lexer.next();
+            } else {
+                return Err(perror!(self.lexer.loc(), "expected an infix operator"));
+            }
+            self.parse_expr_(c, sl_b)?;
+            self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
+            c.emit_instr_(I::Call(sl_op, 2, sl_res));
+            c.emit_instr_(I::Pop(3));
+            Ok(())
+        }
+
+        /// Parse an expression into slot `sl_res`
+        fn parse_expr_(&mut self, c: &mut Compiler, sl_res: SlotIdx) -> Result<()> {
+            logdebug!("parse expr (cur {:?})", self.lexer.cur());
+            let Self { ctx, lexer, .. } = self;
+            let loc = lexer.loc();
+            match lexer.cur() {
+                Tok::LParen => {
+                    lexer.next();
+                    self.parse_expr_app_(c, Tok::RParen, sl_res)?;
+                }
+                Tok::LBracket => {
+                    lexer.next();
+                    self.parse_expr_app_(c, Tok::RBracket, sl_res)?;
+                }
+                Tok::LBrace => {
+                    // infix: `{a x b}` is `[0]; a; b; [0]=x; call`
+                    lexer.next();
+                    self.parse_infix_(c, sl_res)?;
+                }
+                Tok::Int(i) => {
+                    lexer.next();
+                    if i >= i16::MIN as i64 && i <= i16::MAX as i64 {
+                        c.emit_instr_(I::LoadInteger(i as i16, sl_res))
+                    } else {
+                        let lidx = c.push_local_(Value::Int(i))?;
+                        c.emit_instr_(I::LoadLocal(lidx, sl_res));
+                    }
+                }
+                Tok::Id("true") => {
+                    lexer.next();
+                    c.emit_instr_(I::LoadBool(true, sl_res))
+                }
+                Tok::Id("false") => {
+                    lexer.next();
+                    c.emit_instr_(I::LoadBool(true, sl_res))
+                }
+                Tok::Id(id) => {
+                    resolve_id_(ctx, c, id, loc, sl_res)?;
+                    lexer.next();
+                }
+                Tok::QuotedString(s) => {
+                    // TODO: find a local that contains `s`, if any,
+                    // and reuse it
+                    let lidx = c.push_local_(Value::Str(s.into()))?;
+                    self.next_tok_();
+                    c.emit_instr_(I::LoadLocal(lidx, sl_res))
+                }
+                Tok::QuotedExpr(e) => {
+                    if e.as_bytes().contains(&b'?') {
+                        // TODO: interpolation
+                        return Err(perror!(loc, "unimplemented: interpolating exprs"));
+                    }
+                    let e = syntax::parse_expr(self.ctx, e)
+                        .map_err(|e| perror!(loc, "while parsing expression: {}", e))?;
+                    // TODO: reuse local if `e` is there already
+                    let lidx = c.push_local_(Value::Expr(e))?;
+                    self.next_tok_();
+                    c.emit_instr_(I::LoadLocal(lidx, sl_res))
+                }
+                Tok::RParen | Tok::RBracket | Tok::RBrace => {
+                    return Err(perror!(loc, "invalid closing delimiter"))
+                }
+                Tok::Invalid(c) => return Err(perror!(loc, "invalid char {}", c)),
+
+                Tok::Eof => return Err(perror!(loc, "unexpected EOF when parsing expr")),
+            }
+            Ok(())
         }
 
         /// Expect the token `t`, and consume it; or return an error.
@@ -994,112 +1393,6 @@ mod parser {
             }
         }
     }
-
-    /* TODO
-    pub fn parse_chunk(&mut VM, &str) -> Result<Chunk> {
-    }
-
-    // TODO: rewrite.
-    /// Parse an instruction, which is either a word invokation
-    /// or the construction of a value to push onto the stack.
-    fn parse_instr_(&mut self, p: &mut lexer::Lexer) -> Result<Instr> {
-        use lexer::*;
-
-        let loc = p.loc();
-        match p.cur() {
-            Tok::Eof => return Err(Error::new("unexpected EOF")),
-            Tok::RBracket => return Err(Error::new("unexpected '}'")),
-            Tok::RBrace => return Err(Error::new("unexpected ']'")),
-            Tok::Invalid(c) => {
-                return Err(perror!(loc, "invalid token {:?}", c))
-            }
-            Tok::Int(i) => {
-                p.next();
-                Ok(Instr::Im(Value::Int(i)))
-            }
-            Tok::QuotedId(s) => {
-                let v = Value::Sym(s.into());
-                p.next();
-                Ok(Instr::Im(v))
-            }
-            Tok::QuotedExpr(s) => {
-                let e = syntax::parse_expr(self.ctx, s)?;
-                p.next();
-                Ok(Instr::Im(Value::Expr(e)))
-            }
-            Tok::LBracket => {
-                // parse an array of instructions.
-                p.next();
-                let mut ca = vec![];
-                let v = loop {
-                    match p.cur() {
-                        Tok::RBracket => {
-                            p.next();
-                            let ca = CodeArray::new(ca);
-                            break Value::CodeArray(ca);
-                        }
-                        _ => {
-                            let instr = self.parse_instr_(p)?;
-                            ca.push(instr);
-                        }
-                    }
-                };
-                Ok(Instr::Im(v))
-            }
-            Tok::LBrace => {
-                // parse an array of values.
-                p.next();
-                let mut arr = vec![];
-                let v = loop {
-                    match p.cur() {
-                        Tok::RBrace => {
-                            p.next();
-                            let va = ValueArray(Rc::new(RefCell::new(arr)));
-                            break Value::Array(va);
-                        }
-                        _ => match self.parse_instr_(p)? {
-                            Instr::Im(v) => {
-                                arr.push(v); // only accept values
-                            }
-                            i => {
-                                self.exec_instr_(i)?;
-                                let v = self.pop1().map_err(|e| {
-                                    e.set_source(Error::new(
-                                        "evaluate element of an array",
-                                    ))
-                                })?;
-                                arr.push(v)
-                            }
-                        },
-                    }
-                };
-                Ok(Instr::Im(v))
-            }
-            Tok::Id("true") => {
-                p.next();
-                Ok(Instr::Im(Value::Bool(true)))
-            }
-            Tok::Id("false") => {
-                p.next();
-                Ok(Instr::Im(Value::Bool(false)))
-            }
-            Tok::Id(s) => {
-                // Find definition of symbol `s` in `self.scopes[0]`,
-                // otherwise emit a dynamic get (for user scopes)
-                let i = match self.scopes[0].0.get(&*s) {
-                    Some(Value::CodeArray(ca)) if ca.0.len() == 1 => {
-                        ca.0[0].clone()
-                    }
-                    Some(Value::CodeArray(ca)) => Instr::Call(ca.clone()),
-                    Some(v) => Instr::Im(v.clone()),
-                    None => Instr::Get(s.into()),
-                };
-                p.next();
-                Ok(i)
-            }
-        }
-    }
-    */
 }
 
 /// Primitives of the meta-language related to theorem proving.
@@ -1140,9 +1433,9 @@ mod logic_builtins {
 
     use Rule as R;
 
-    /* TODO
     /// Builtin functions for manipulating expressions and theorems.
-    pub(super) const BUILTINS: &'static [&'static dyn InstrBuiltin] = &[
+    pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[
+        /* TODO
         &R::Defconst,
         &R::Defthm,
         &R::Decl,
@@ -1169,8 +1462,10 @@ mod logic_builtins {
         &R::HolPrelude,
         &R::PledgeNoMoreAxioms,
         &R::Rewrite,
+        */
     ];
 
+    /* TODO
     impl InstrBuiltin for Rule {
         fn name(&self) -> &'static str {
             match self {
@@ -1482,6 +1777,24 @@ mod test {
         assert!(sz <= 16);
     }
 
+    macro_rules! lex_test {
+        ($a:expr) => {
+            for (s, v) in $a {
+                let mut p = lexer::Lexer::new(s);
+                let mut toks = vec![];
+                loop {
+                    let t = p.cur().clone();
+                    toks.push(t);
+                    if t == T::Eof {
+                        break;
+                    }
+                    p.next();
+                }
+                assert_eq!(toks, v)
+            }
+        };
+    }
+
     #[test]
     fn test_lexer() {
         use lexer::Tok as T;
@@ -1505,20 +1818,27 @@ mod test {
                 T::Eof,
             ],
         )];
+        lex_test!(a)
+    }
 
-        for (s, v) in a {
-            let mut p = lexer::Lexer::new(s);
-            let mut toks = vec![];
-            loop {
-                let t = p.cur().clone();
-                toks.push(t);
-                if t == T::Eof {
-                    break;
-                }
-                p.next();
-            }
-            assert_eq!(toks, v)
-        }
+    #[test]
+    fn test_lexer2() {
+        use lexer::Tok as T;
+        let a = vec![(
+            r#"(print {1 + 1})"#,
+            vec![
+                T::LParen,
+                T::Id("print"),
+                T::LBrace,
+                T::Int(1),
+                T::Id("+"),
+                T::Int(1),
+                T::RBrace,
+                T::RParen,
+                T::Eof,
+            ],
+        )];
+        lex_test!(a)
     }
 
     /* TODO
