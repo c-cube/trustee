@@ -65,29 +65,52 @@ struct ChunkImpl {
     /// Number of local slots required.
     n_slots: u32,
     /// Name of this chunk, if any.
-    name: Option<String>,
+    name: Option<RStr>,
 }
 
 /// Compiler for a given chunk.
-struct Compiler {
+struct Compiler<'a> {
     instrs: Vec<Instr>,
     locals: Vec<Value>,
     /// Maximum size `slots` ever took.
     n_slots: u32,
-    name: Option<String>,
+    name: Option<RStr>,
     slots: Vec<CompilerSlot>,
+    /// Parent compiler, used to resolve values from outer scopes.
+    parent: Option<&'a Compiler<'a>>,
 }
 struct CompilerSlot {
     /// If this slot is for a named variable.
     var_name: Option<RStr>,
-    activated: bool,
+    state: CompilerSlotState,
+}
+#[derive(Debug, Copy, Clone, PartialEq)]
+enum CompilerSlotState {
+    Unused,
+    NotActivatedYet,
+    Activated,
+}
+
+/// Result of parsing an expression into the current chunk.
+///
+/// All expressions return a value, which lives in a slot (`self.slot`).
+/// The slot might have been allocated for this purpose, in which case
+/// `self.temporary` will be true, meaning the slot can be disposed of
+/// when the expression is not needed anymore.
+#[derive(Clone, Debug)]
+struct ExprRes {
+    /// Where the result lives.
+    slot: SlotIdx,
+    /// Was the slot allocated for this expression?
+    temporary: bool,
 }
 
 /// Index in the array of slots.
-type SlotIdx = u8;
+#[derive(Copy, Clone, PartialEq)]
+struct SlotIdx(u8);
 
 /// Index in the array of locals.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq)]
 struct LocalIdx(u8);
 
 /// ## Instructions
@@ -122,17 +145,17 @@ enum Instr {
     Mod(SlotIdx, SlotIdx, SlotIdx),
     /// evaluates string in `sl[$0]`
     EvalStr(SlotIdx),
-    /// read file whose name is `sl[$0]` into a string `sl[$1]`
-    LoadFile(SlotIdx, SlotIdx),
-    /// Call chunk `sl[$0]` with arguments `sl[$0 + 1 .. $0 + 1 + $1]`,
+    /// Push `sl[$0]` into the call array, before a call.
+    PushCallArg(SlotIdx),
+    // TODO: reinstate `Call1`
+    /// Call chunk `sl[$0]` with arguments in `vm.call_args`
     /// and put the result into `sl[$2]`.
     ///
     /// `$1` is the number of arguments the function takes.
-    Call(SlotIdx, u8, SlotIdx),
-    /// Tail-call into chunk `sl[$0]` with arguments `sl[$0 + 1 .. $0 + 1 + $1]`
-    Become(LocalIdx, u8),
-    /// Pop n values from the slots.
-    Pop(u16),
+    Call(SlotIdx, SlotIdx),
+    /// Tail-call into chunk `sl[$0]` with arguments in `call_args`.
+    /// Does not return.
+    Become(LocalIdx),
     // TODO: remove argument? should already have set slot
     /// Return from current chunk with value `sl[$0]`.
     Ret(SlotIdx),
@@ -172,9 +195,9 @@ pub struct VM<'a> {
     stack: Vec<Value>,
     /// Control stack, for function calls.
     ctrl_stack: Vec<StackFrame>,
-    /// Stack used to pass arguments to a chunk before execution.
+    /// Array of arguments used to pass arguments to a chunk before execution.
     /// This is typically reset before each function call.
-    call_stack: Vec<Value>,
+    call_args: Vec<Value>,
     /// In case of error, the error message lives here.
     result: Result<()>,
 }
@@ -228,6 +251,17 @@ mod ml {
     impl fmt::Debug for InstrBuiltin {
         fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
             write!(out, "<builtin {}>", self.name)
+        }
+    }
+
+    impl fmt::Debug for SlotIdx {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            write!(out, "sl[{}]", self.0)
+        }
+    }
+    impl fmt::Debug for LocalIdx {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            write!(out, "loc[{}]", self.0)
         }
     }
 
@@ -305,7 +339,7 @@ mod ml {
 
     macro_rules! abs_offset {
         ($sf: expr, $i: expr) => {
-            ($sf.start as usize) + ($i as usize)
+            ($sf.start as usize) + ($i.0 as usize)
         };
     }
 
@@ -332,7 +366,7 @@ mod ml {
                 ctx,
                 stack: Vec::with_capacity(256),
                 ctrl_stack: vec![],
-                call_stack: vec![],
+                call_args: vec![],
                 result: Ok(()),
             }
         }
@@ -559,41 +593,26 @@ mod ml {
                         self.stack[abs_offset!(sf, s2)] = Value::Int(s0 % s1);
                     }
                     I::EvalStr(_) => todo!("eval str"), // TODO
-                    I::LoadFile(s0, s1) => {
-                        let s0 = get_slot_str!(self, abs_offset!(sf, s0));
-                        let s1 = abs_offset!(sf, s1);
-                        let content = match std::fs::read_to_string(&**s0 as &str) {
-                            Ok(x) => x.into(),
-                            Err(e) => {
-                                // TODO: some kind of exception handling
-                                self.result = Err(Error::new_string(format!(
-                                    "cannot load file `{}: {}",
-                                    s0, e
-                                )));
-                                break;
-                            }
-                        };
-                        self.stack[s1] = Value::Str(content)
+                    I::PushCallArg(sl_arg) => {
+                        let sl_f = abs_offset!(sf, sl_arg);
+                        let v = self.stack[sl_f].clone();
+                        self.call_args.push(v);
                     }
-                    I::Pop(n) => {
-                        let sz_stack = self.stack.len();
-                        if n as usize > sz_stack {
-                            self.result = Err(Error::new("stack underflow"));
-                            break;
-                        }
-                        self.stack.truncate(sz_stack - n as usize);
-                    }
-                    I::Call(sl_f, n_args, sl_ret) => {
+                    I::Call(sl_f, sl_ret) => {
                         let sl_f = abs_offset!(sf, sl_f);
                         let offset_ret = abs_offset!(sf, sl_ret);
 
-                        let Self { stack, ctx, .. } = self;
+                        let Self {
+                            stack,
+                            ctx,
+                            call_args,
+                            ..
+                        } = self;
                         match &stack[sl_f] {
                             Value::Builtin(b) => {
                                 logdebug!("call builtin {:?}", &b.name);
-                                let args = &stack[sl_f + 1..sl_f + 1 + n_args as usize];
                                 let f = &b.run;
-                                match f(ctx, args) {
+                                match f(ctx, &call_args) {
                                     Ok(ret_value) => {
                                         self.stack[offset_ret] = ret_value;
                                     }
@@ -606,8 +625,7 @@ mod ml {
                             Value::Chunk(c) => {
                                 // push frame for `c`
                                 let c = c.clone();
-                                logdebug!("call chunk {:?}", &c.0.name);
-                                self.exec_chunk_(c, n_args, offset_ret as u32)?;
+                                self.exec_chunk_(c, offset_ret as u32)?;
                             }
                             _ => {
                                 self.result = Err(Error::new("cannot call value"));
@@ -615,13 +633,62 @@ mod ml {
                             }
                         }
                     }
-                    I::Become(_, _) => todo!(), // TODO
+                    I::Become(sl_f) => {
+                        if self.ctrl_stack.is_empty() {
+                            self.result = Err(Error::new("tailcall from empty stack"));
+                            break;
+                        }
+
+                        let Self {
+                            ctrl_stack,
+                            ctx,
+                            stack,
+                            call_args,
+                            ..
+                        } = self;
+
+                        // pop last stack frame. the tailcallee will
+                        // do without one, or allocate its own.
+                        let sf = ctrl_stack.pop().unwrap();
+
+                        // fetch function
+                        let offset_f = abs_offset!(sf, sl_f);
+                        let offset_ret = sf.res_offset;
+                        let f = stack[offset_f].clone();
+
+                        stack.truncate(sf.start as usize);
+                        match f {
+                            Value::Chunk(c) => {
+                                self.exec_chunk_(c, offset_ret as u32)?;
+                            }
+                            Value::Builtin(b) => {
+                                logdebug!("call builtin {:?}", &b.name);
+                                let f = &b.run;
+                                match f(ctx, &call_args) {
+                                    Ok(ret_value) => {
+                                        self.stack[offset_ret as usize] = ret_value;
+                                    }
+                                    Err(e) => {
+                                        self.result = Err(e);
+                                        break;
+                                    }
+                                }
+                            }
+                            _ => {
+                                self.result = Err(Error::new("cannot call value"));
+                                break;
+                            }
+                        }
+                    }
                     I::Ret(sl_v) => {
                         let sl_v = abs_offset!(sf, sl_v);
 
-                        // pop frame, get return address
-                        let res_offset = if let Some(sf) = self.ctrl_stack.pop() {
-                            sf.res_offset
+                        // pop frame, get return address and frame offset
+                        let res_offset;
+                        let start;
+                        if let Some(sf) = self.ctrl_stack.pop() {
+                            res_offset = sf.res_offset;
+                            start = sf.start;
                         } else {
                             self.result = Err(Error::new("stack underflow"));
                             break;
@@ -632,6 +699,8 @@ mod ml {
                             break;
                         }
                         self.stack[res_offset as usize] = self.stack[sl_v].clone();
+                        // pop slots of the function call
+                        self.stack.truncate(start as usize);
                     }
                 }
             }
@@ -683,29 +752,34 @@ mod ml {
             }
         */
 
-        /// Call chunk `c` with `n_args` arguments, put result into slot `offset`.
-        fn exec_chunk_(&mut self, c: Chunk, n_args: u8, res_offset: u32) -> Result<()> {
-            if self.stack.len() < n_args as usize {
-                return Err(k::Error::new("invoking chunk with too few arguments"));
-            }
+        /// Call chunk `c` with arguments in `self.call_args`,
+        /// put result into slot `offset`.
+        fn exec_chunk_(&mut self, c: Chunk, res_offset: u32) -> Result<()> {
+            logdebug!("call chunk {:?}", &c.0.name);
+            let start = self.stack.len() as u32;
 
-            // start at top of current stack, minus the given number of arguments,
-            // since the arguments are shared between callee and caller's frames.
-            let start = (self.stack.len() - n_args as usize) as u32;
+            // push `self.call_args` on top of stack
+            let Self {
+                stack, call_args, ..
+            } = self;
+            stack.extend(call_args.drain(..));
+
+            // also allocate as many slots as needed by `c`.
+            self.stack
+                .extend(std::iter::repeat(Value::Nil).take(c.0.n_slots as usize));
             self.ctrl_stack.push(StackFrame {
                 ic: 0,
-                chunk: c.clone(),
+                chunk: c,
                 start,
                 res_offset,
             });
-            self.stack
-                .extend(std::iter::repeat(Value::Nil).take(c.0.n_slots as usize));
             Ok(())
         }
 
         /// Call toplevel chunk `c`
         fn exec_top_chunk_(&mut self, c: Chunk) -> Result<()> {
-            self.exec_chunk_(c, 0, 0)?;
+            assert_eq!(self.call_args.len(), 0);
+            self.exec_chunk_(c, 0)?;
             self.exec_loop_() // enter main loop
         }
 
@@ -761,6 +835,7 @@ mod ml {
         fn reset(&mut self) {
             self.stack.clear();
             self.ctrl_stack.clear();
+            self.call_args.clear();
             self.result = Ok(());
         }
 
@@ -856,7 +931,7 @@ mod lexer {
         fn skip_white_(&mut self) {
             while self.i < self.bytes.len() {
                 let c = self.bytes[self.i];
-                if c == b'#' {
+                if c == b';' {
                     // eat rest of line
                     while self.i < self.bytes.len() && self.bytes[self.i] != b'\n' {
                         self.i += 1
@@ -1008,7 +1083,17 @@ mod parser {
         };
     }
 
-    impl Compiler {
+    impl ExprRes {
+        /// Make a new expression result.
+        fn new(sl: SlotIdx, temporary: bool) -> Self {
+            Self {
+                slot: sl,
+                temporary,
+            }
+        }
+    }
+
+    impl<'a> Compiler<'a> {
         /// Convert the compiler's state into a proper chunk.
         pub fn into_chunk(self) -> Chunk {
             let c = ChunkImpl {
@@ -1022,12 +1107,19 @@ mod parser {
 
         #[inline]
         pub fn get_slot_(&mut self, i: SlotIdx) -> &mut CompilerSlot {
-            &mut self.slots[i as usize]
+            &mut self.slots[i.0 as usize]
         }
 
-        /// Push the value into `self.locals`, return its index.
-        pub fn push_local_(&mut self, v: Value) -> Result<LocalIdx> {
+        /// Ensure the value is in `self.locals`, return its index.
+        pub fn allocate_local_(&mut self, v: Value) -> Result<LocalIdx> {
             logdebug!("compiler(name={:?}): push local {}", self.name, v);
+
+            // see if `v` is a local already.
+            if let Some((i, _)) = self.locals.iter().enumerate().find(|(_, v2)| *v2 == &v) {
+                return Ok(LocalIdx(i as u8));
+            }
+
+            // else push a new local
             let i = self.locals.len();
             if i > u8::MAX as usize {
                 return Err(Error::new("maximum number of locals exceeded"));
@@ -1044,22 +1136,12 @@ mod parser {
                 self.locals.len(),
                 i
             );
-            if let I::Pop(n1) = i {
-                if let Some(last_i) = self.instrs.last_mut() {
-                    if let I::Pop(n2) = last_i {
-                        // optim: merge successive `pop`
-                        *last_i = I::Pop(n1 + *n2);
-                        return;
-                    }
-                }
-            }
             self.instrs.push(i)
         }
 
-        pub fn allocate_top_slot_with_<F>(&mut self, mut f: F) -> Result<SlotIdx>
-        where
-            F: FnMut(SlotIdx, &mut CompilerSlot),
-        {
+        /// Allocate a slot on top of the stack.
+        fn allocate_top_slot_(&mut self, st: CompilerSlotState) -> Result<SlotIdx> {
+            assert_ne!(st, CompilerSlotState::Unused);
             let i = self.slots.len();
             if i > u8::MAX as usize {
                 return Err(Error::new("maximum number of slots exceeded"));
@@ -1068,28 +1150,85 @@ mod parser {
 
             let sl = CompilerSlot {
                 var_name: None,
-                activated: false,
+                state: st,
             };
             self.slots.push(sl);
-            f(i as u8, &mut self.slots[i]);
-
-            Ok(i as u8)
+            Ok(SlotIdx(i as u8))
         }
 
-        /// Allocate a slot on the stack, to hold a temporary result.
-        ///
-        /// The slot is considered activated already.
-        #[inline]
-        pub fn allocate_top_slot_(&mut self) -> Result<SlotIdx> {
-            self.allocate_top_slot_with_(|_, sl| sl.activated = true)
+        /// Allocate or reuse a slot.
+        fn allocate_any_slot_(&mut self, st: CompilerSlotState) -> Result<SlotIdx> {
+            if let Some((i, sl)) = self
+                .slots
+                .iter_mut()
+                .enumerate()
+                .find(|(_, sl)| sl.state == CompilerSlotState::Unused)
+            {
+                // we can reuse slot `i`
+                sl.state = st;
+                assert!(i < u8::MAX as usize);
+                Ok(SlotIdx(i as u8))
+            } else {
+                self.allocate_top_slot_(st)
+            }
         }
 
+        /// Allocate a variable (bound, local, etc.) somewhere in the stack.
+        pub fn allocate_var_(&mut self, name: RStr) -> Result<ExprRes> {
+            let slot = self.allocate_any_slot_(CompilerSlotState::NotActivatedYet)?;
+            self.get_slot_(slot).var_name = Some(name);
+            Ok(ExprRes {
+                slot,
+                temporary: false,
+            })
+        }
+
+        /// Allocate a slot on the stack, anywhere, to hold a temporary result.
+        pub fn allocate_temporary_(&mut self) -> Result<ExprRes> {
+            let slot = self.allocate_any_slot_(CompilerSlotState::Activated)?;
+            Ok(ExprRes {
+                slot,
+                temporary: true,
+            })
+        }
+
+        pub fn allocate_temporary_on_top_(&mut self) -> Result<ExprRes> {
+            let slot = self.allocate_top_slot_(CompilerSlotState::Activated)?;
+            Ok(ExprRes {
+                slot,
+                temporary: true,
+            })
+        }
+
+        /// Free expression result.
+        pub fn free(&mut self, e: ExprRes) {
+            if e.temporary {
+                self.deallocate_slot_(e.slot)
+            }
+        }
+
+        /// Deallocate that slot, it becomes available for further use.
+        pub fn deallocate_slot_(&mut self, sl: SlotIdx) {
+            if sl.0 as usize + 1 == self.slots.len() {
+                // just pop the slot
+                self.slots.pop().unwrap();
+            } else {
+                let sl = self.get_slot_(sl);
+                sl.var_name = None;
+                sl.state = CompilerSlotState::Unused;
+            }
+        }
+
+        // TODO: also look in parents scopes, and return an upvalue
         /// Find slot for the given variable `v`.
-        pub fn find_slot_of_var_(&self, v: &str) -> Option<SlotIdx> {
+        pub fn find_slot_of_var(&self, v: &str) -> Option<SlotIdx> {
             for (i, s) in self.slots.iter().enumerate().rev() {
+                if s.state != CompilerSlotState::Activated {
+                    continue; // slot is not actually ready
+                }
                 if let Some(v2) = &s.var_name {
                     if v2.get() == v {
-                        return Some(i as u8);
+                        return Some(SlotIdx(i as u8));
                     }
                 }
             }
@@ -1102,45 +1241,6 @@ mod parser {
         pub(crate) lexer: lexer::Lexer<'a>,
         ctx: &'a mut k::Ctx,
     }
-
-    /* TODO: use that to lookup builtin funs
-    /// All the core instructions.
-    const INSTR_CORE: &'static [InstrCore] = {
-        use InstrCore::*;
-        &[
-            Def, If, IfElse, Dup, Swap, Drop, Rot, Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub, Div, Mod,
-            PrintStack, Clear, PrintPop, Inspect, Source, LoadFile, Begin, End,
-        ]
-    };
-
-    match self {
-        I::Def => "def",
-        I::If => "if",
-        I::IfElse => "ifelse",
-        I::Dup => "dup",
-        I::Swap => "swap",
-        I::Drop => "drop",
-        I::Rot => "rot",
-        I::Begin => "begin",
-        I::End => "end",
-        I::Eq => "eq",
-        I::Lt => "lt",
-        I::Gt => "gt",
-        I::Leq => "leq",
-        I::Geq => "geq",
-        I::Add => "add",
-        I::Mul => "mul",
-        I::Sub => "sub",
-        I::Div => "div",
-        I::Mod => "mod",
-        I::PrintPop => "==",
-        I::PrintStack => "pstack",
-        I::Inspect => "inspect",
-        I::Clear => "clear",
-        I::Source => "source",
-        I::LoadFile => "load_file",
-    }
-    */
 
     use Instr as I;
 
@@ -1167,24 +1267,24 @@ mod parser {
     }
 
     /// Resolve the ID as a chunk or builtin, and put it into `sl`.
-    fn resolve_id_(
+    fn resolve_id_into_slot_(
         ctx: &mut Ctx,
         c: &mut Compiler,
         s: &str,
         loc: (usize, usize),
         sl: SlotIdx,
     ) -> Result<()> {
-        if let Some(f_var_slot) = c.find_slot_of_var_(s) {
+        if let Some(f_var_slot) = c.find_slot_of_var(s) {
             assert_ne!(f_var_slot, sl);
             c.emit_instr_(I::Move(f_var_slot, sl));
         } else if let Some(b) = basic_primitives::BUILTINS.iter().find(|b| b.name == s) {
-            let lidx = c.push_local_(Value::Builtin(b))?;
+            let lidx = c.allocate_local_(Value::Builtin(b))?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
         } else if let Some(b) = logic_builtins::BUILTINS.iter().find(|b| b.name == s) {
-            let lidx = c.push_local_(Value::Builtin(b))?;
+            let lidx = c.allocate_local_(Value::Builtin(b))?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
         } else if let Some(ch) = ctx.find_meta_chunk(s) {
-            let lidx = c.push_local_(Value::Chunk(ch.clone()))?;
+            let lidx = c.allocate_local_(Value::Chunk(ch.clone()))?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
         } else {
             return Err(perror!(loc, "unknown identifier '{}'", s));
@@ -1217,9 +1317,10 @@ mod parser {
                 n_slots: 0,
                 name: None,
                 slots: vec![],
+                parent: None,
             };
+            let res = c.allocate_temporary_()?;
 
-            c.emit_instr_(I::LoadNilN(0, 1)); // get one slot with `nil` in it
             loop {
                 let t = self.lexer.cur();
 
@@ -1227,15 +1328,12 @@ mod parser {
                     break;
                 }
 
-                self.parse_top_statement_(&mut c)?;
+                self.parse_top_statement_(&mut c, res.slot)?;
             }
-            let n = c.locals.len();
-            // pop all but last binding
-            if n > 1 {
-                c.emit_instr_(I::Pop((n - 1) as u16));
-            }
-            c.emit_instr_(I::Ret(0)); // return the first argument.
 
+            // TODO: load nil if no statement assigned `sl`
+            c.emit_instr_(I::Ret(res.slot));
+            c.free(res);
             Ok(c.into_chunk())
         }
 
@@ -1252,7 +1350,7 @@ mod parser {
         }
 
         /// Parse a toplevel statement in a file or CLI input.
-        fn parse_top_statement_(&mut self, c: &mut Compiler) -> Result<()> {
+        fn parse_top_statement_(&mut self, c: &mut Compiler, sl_res: SlotIdx) -> Result<()> {
             let t = self.lexer.cur();
             let loc = self.lexer.loc();
             match t {
@@ -1268,18 +1366,39 @@ mod parser {
                     };
 
                     self.lexer.next();
-                    match self.lexer.cur() {
-                        Tok::Id("def") => {
-                            self.lexer.next();
-                            //let id = self.parse_id_()?;
-                            //logdebug!("parsing def for {:?}", id);
-                            todo!() // TODO
-                        }
-                        _ => {
-                            let sl = c.allocate_top_slot_()?;
-                            self.parse_expr_app_(c, closing, sl)?;
-                            self.eat_(closing, "unclosed expression")?;
-                        }
+                    if let Tok::Id("defn") = self.lexer.cur() {
+                        self.lexer.next();
+
+                        // function name
+                        let f_name: RStr =
+                            cur_tok_as_id_(&mut self.lexer, "expected function name")?.into();
+                        self.next_tok_();
+
+                        // get bound variables
+                        let b_closing = match self.cur_tok_() {
+                            Tok::LParen => Tok::RParen,
+                            Tok::LBracket => Tok::RBracket,
+                            _ => {
+                                return Err(perror!(
+                                    self.lexer.loc(),
+                                    "expect '(' or '[' after `defn <id>`"
+                                ))
+                            }
+                        };
+                        self.next_tok_();
+
+                        // parse function
+                        let sub_c =
+                            self.parse_fn_args_and_body_(Some(f_name.clone()), b_closing, &*c)?;
+                        self.eat_(closing, "unclosed expression")?;
+
+                        // define the function.
+                        logdebug!("define {} as {:?}", &f_name, sub_c);
+                        self.ctx.define_meta_chunk(f_name, sub_c);
+                    } else {
+                        let r = self.parse_expr_app_(c, closing, Some(sl_res))?;
+                        self.eat_(closing, "unclosed expression")?;
+                        c.free(r);
                     }
                 }
                 Tok::RParen => {
@@ -1301,15 +1420,57 @@ mod parser {
             Ok(())
         }
 
+        fn parse_fn_args_and_body_(
+            &mut self,
+            f_name: Option<RStr>,
+            closing: Tok,
+            parent: &Compiler,
+        ) -> Result<Chunk> {
+            let mut vars: Vec<RStr> = vec![];
+
+            while self.cur_tok_() != closing {
+                let e = cur_tok_as_id_(
+                    &mut self.lexer,
+                    "expected a bound variable or closing delimiter",
+                )?
+                .into();
+                self.next_tok_();
+                vars.push(e)
+            }
+            self.next_tok_();
+
+            // make a compiler for this chunk.
+            let mut c = Compiler {
+                instrs: vec![],
+                locals: vec![],
+                n_slots: 0,
+                name: f_name.clone(),
+                slots: vec![],
+                parent: Some(parent),
+            };
+            // add variables to `sub_c`
+            for x in vars {
+                let sl_x = c.allocate_top_slot_(CompilerSlotState::Activated)?;
+                c.slots[sl_x.0 as usize].var_name = Some(x);
+            }
+            let (_, res) = self.parse_expr_or_let_seq_(&mut c, closing, None)?;
+
+            // return value
+            c.emit_instr_(I::Ret(res.slot));
+            c.free(res);
+
+            Ok(c.into_chunk())
+        }
+
         /// Parse an application-type expression, closed with `closing`.
         ///
-        /// Put the result into slot `sl_res`.
+        /// Put the result into slot `sl_res` if provided.
         fn parse_expr_app_(
             &mut self,
             c: &mut Compiler,
             closing: Tok,
-            sl_res: SlotIdx,
-        ) -> Result<()> {
+            sl_res: Option<SlotIdx>,
+        ) -> Result<ExprRes> {
             let loc = self.lexer.loc();
             let Self { ctx, lexer, .. } = self;
             let id = cur_tok_as_id_(lexer, "expect an identifier after opening")?;
@@ -1319,128 +1480,170 @@ mod parser {
                 // binary operator
                 self.next_tok_();
 
-                let a_slot = c.allocate_top_slot_()?;
-                let b_slot = c.allocate_top_slot_()?;
-                self.parse_expr_(c, a_slot)?;
-                self.parse_expr_(c, b_slot)?;
-                c.emit_instr_(binop_instr(a_slot, b_slot, sl_res));
-                c.emit_instr_(I::Pop(2));
-                self.eat_(closing, "expected closing in application")?;
-                return Ok(());
-            }
+                let res = match sl_res {
+                    None => c.allocate_temporary_()?,
+                    Some(sl) => ExprRes::new(sl, false),
+                };
 
-            if id == "do" {
-                // composite expression, defining a local scope.
-                let l_slots = c.slots.len();
+                let a = self.parse_expr_(c, None)?;
+                let b = self.parse_expr_(c, None)?;
+                self.eat_(closing, "expected closing in infix application")?;
 
-                // store result of last expression
-                let tmp_slot = c.allocate_top_slot_()?;
-
-                loop {
-                    if self.cur_tok_() == closing {
-                        break;
-                    }
-
-                    self.parse_expr_or_let_(c, tmp_slot)?;
-                }
+                c.emit_instr_(binop_instr(a.slot, b.slot, res.slot));
+                c.free(a);
+                c.free(b);
+                Ok(res)
+            } else if id == "do" {
+                // parse a series of expressions and `let` bindings.
+                let (locals, res) = self.parse_expr_or_let_seq_(c, closing, sl_res)?;
                 self.eat_(closing, "expected closing after `do`")?;
 
-                // now copy result into `sl_res`
-                c.emit_instr_(I::Move(tmp_slot, sl_res));
-                // restore stack to its former size.
-                // This also deallocates local variables.
-                if c.slots.len() > l_slots {
-                    let to_pop = c.slots.len() - l_slots;
-                    assert!(to_pop < u16::MAX as usize);
-                    c.emit_instr_(I::Pop(to_pop as u16));
+                // now free the local variables.
+                for x in locals {
+                    logdebug!("variable {:?} goes out of scope", x);
+                    c.deallocate_slot_(x);
                 }
+                Ok(res)
             } else {
                 // make a function call.
-                let f_slot = c.allocate_top_slot_()?;
-                resolve_id_(ctx, c, id, loc, f_slot)?;
+
+                let res = match sl_res {
+                    None => c.allocate_temporary_()?,
+                    Some(sl) => ExprRes::new(sl, false),
+                };
+
+                let f = c.allocate_temporary_()?;
+                resolve_id_into_slot_(ctx, c, id, loc, f.slot)?;
                 lexer.next();
 
                 // parse arguments
-                let mut n_args = 0;
+                let mut args = vec![];
                 loop {
                     if self.cur_tok_() == closing {
                         break;
                     }
 
-                    n_args += 1;
-                    if n_args > u8::MAX {
+                    let arg = self.parse_expr_(c, None)?;
+                    args.push(arg);
+
+                    if args.len() > u8::MAX as usize {
                         return Err(perror!(
                             self.lexer.loc(),
                             "maximum number of arguments exceeded"
                         ));
                     }
-
-                    let sl_arg = c.allocate_top_slot_()?;
-                    self.parse_expr_(c, sl_arg)?;
                 }
 
                 // emit call
-                c.emit_instr_(I::Call(f_slot, n_args as u8, sl_res));
-                // pop `f` and the arguments.
-                c.emit_instr_(I::Pop((n_args + 1) as u16));
+                for a in &args {
+                    c.emit_instr_(I::PushCallArg(a.slot));
+                }
+                c.emit_instr_(I::Call(f.slot, res.slot));
+                // free `f` and the arguments.
+                for a in args.into_iter().rev() {
+                    c.free(a);
+                }
+                c.free(f);
+                Ok(res)
             }
-            Ok(())
         }
 
-        /// Parse an expression or a `let`-binding, return `true` if
-        /// `sl_res` is assigned.
-        fn parse_expr_or_let_(&mut self, c: &mut Compiler, sl_res: SlotIdx) -> Result<bool> {
-            match self.cur_tok_() {
-                Tok::LParen => {
-                    self.next_tok_();
-                    self.parse_expr_or_let_app_(c, sl_res, Tok::RParen)
-                }
-                Tok::LBracket => {
-                    self.next_tok_();
-                    self.parse_expr_or_let_app_(c, sl_res, Tok::RBracket)
-                }
-                Tok::LBrace => {
-                    self.next_tok_();
-                    self.parse_infix_(c, sl_res)?;
-                    Ok(true)
-                }
-                _ => {
-                    self.parse_expr_(c, sl_res)?;
-                    Ok(true)
+        /// Parse a series of expressions or `let`-bindings.
+        ///
+        /// The series must end with an expression, otherwise an error is raised.
+        /// `sl_res` is an optional place to store the result, if any; otherwise
+        /// a temporary is allocated.
+        ///
+        /// Return a tuple `(local_vars, res)`
+        fn parse_expr_or_let_seq_(
+            &mut self,
+            c: &mut Compiler,
+            closing: Tok,
+            sl_res: Option<SlotIdx>,
+        ) -> Result<(Vec<SlotIdx>, ExprRes)> {
+            // get or create result slot.
+            let res = match sl_res {
+                None => c.allocate_temporary_()?,
+                Some(sl) => ExprRes::new(sl, false),
+            };
+
+            let loc0 = self.lexer.loc();
+            let mut local_vars = vec![];
+            let mut last_is_expr = false;
+            loop {
+                match self.cur_tok_() {
+                    t if t == closing => {
+                        // done
+                        break;
+                    }
+                    Tok::LParen => {
+                        self.next_tok_();
+                        let r = self.parse_expr_or_let_app_(c, res.slot, Tok::RParen)?;
+                        last_is_expr = r.1;
+                        if !r.1 {
+                            local_vars.push(r.0);
+                        }
+                    }
+                    Tok::LBracket => {
+                        self.next_tok_();
+                        let r = self.parse_expr_or_let_app_(c, res.slot, Tok::RBracket)?;
+                        last_is_expr = r.1;
+                        if !r.1 {
+                            local_vars.push(r.0);
+                        }
+                    }
+                    Tok::LBrace => {
+                        self.next_tok_();
+                        self.parse_infix_(c, Some(res.slot))?;
+                        last_is_expr = true;
+                    }
+                    _ => {
+                        self.parse_expr_(c, Some(res.slot))?;
+                        last_is_expr = true;
+                    }
                 }
             }
+
+            // check that we do return an expression, not a let
+            if !last_is_expr {
+                return Err(perror!(loc0, "block does not end with an expression"));
+            }
+
+            Ok((local_vars, res))
         }
 
         /// Parse an item in a `do` group.
         ///
-        /// Returns `true` if `sl_res` was set.
+        /// Returns a slot and `true` if an expression was parsed,
+        /// `false` if it was a let.
         fn parse_expr_or_let_app_(
             &mut self,
             c: &mut Compiler,
             sl_res: SlotIdx,
             closing: Tok,
-        ) -> Result<bool> {
+        ) -> Result<(SlotIdx, bool)> {
             let Self { lexer, .. } = self;
             let id = cur_tok_as_id_(lexer, "expected 'let' or an identifier after opening")?;
             if id == "let" {
                 // local definition.
                 lexer.next();
 
-                let id: RStr = cur_tok_as_id_(lexer, "expected an identifer after 'let'")?.into();
+                let x_name: RStr =
+                    cur_tok_as_id_(lexer, "expected an identifer after 'let'")?.into();
                 self.next_tok_();
 
-                let sl_x = c.allocate_top_slot_with_(|_, sl| {
-                    sl.activated = false;
-                    sl.var_name = Some(id.clone());
-                })?;
+                let sl_x = c.allocate_top_slot_(CompilerSlotState::NotActivatedYet)?;
+                c.get_slot_(sl_x).var_name = Some(x_name);
 
-                self.parse_expr_(c, sl_x)?;
-                c.get_slot_(sl_x).activated = true;
+                self.parse_expr_(c, Some(sl_x))?;
+                // now the variable is defined.
+                c.get_slot_(sl_x).state = CompilerSlotState::Activated;
                 self.eat_(closing, "unclosed 'let' expression")?;
-                return Ok(false);
+                Ok((sl_x, false))
+            } else {
+                let r = self.parse_expr_app_(c, closing, Some(sl_res))?;
+                Ok((r.slot, true))
             }
-            self.parse_expr_app_(c, closing, sl_res)?;
-            Ok(true)
         }
 
         /* TODO: local def?
@@ -1455,40 +1658,61 @@ mod parser {
             });
         */
 
-        fn parse_infix_(&mut self, c: &mut Compiler, sl_res: SlotIdx) -> Result<()> {
+        fn parse_infix_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
             logdebug!("parse infix expr");
 
-            let sl_0 = c.allocate_top_slot_()?;
-            let sl_a = c.allocate_top_slot_()?;
-            self.parse_expr_(c, sl_a)?;
+            let res = match sl_res {
+                None => c.allocate_temporary_()?,
+                Some(sl) => ExprRes::new(sl, false),
+            };
+
+            let a = self.parse_expr_(c, None)?;
 
             let loc = self.lexer.loc();
             let Self { ctx, lexer, .. } = self;
             if let Tok::Id(op) = lexer.cur() {
                 if let Some(binop_instr) = binary_op_(op) {
+                    // infix primitive operator
                     lexer.next();
-                    // only use two slots, and emit binary op
-                    self.parse_expr_(c, sl_0)?;
+                    let b = self.parse_expr_(c, None)?;
                     self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
-                    c.emit_instr_(binop_instr(sl_a, sl_0, sl_res));
+                    c.emit_instr_(binop_instr(a.slot, b.slot, res.slot));
+                    c.free(a);
+                    c.free(b);
                 } else {
-                    resolve_id_(ctx, c, &op, loc, sl_0)?;
+                    // infix function
+                    let f = c.allocate_temporary_on_top_()?;
+                    resolve_id_into_slot_(ctx, c, &op, loc, f.slot)?;
+
                     lexer.next();
-                    let sl_b = c.allocate_top_slot_()?;
-                    self.parse_expr_(c, sl_b)?;
+                    let b = self.parse_expr_(c, None)?;
                     self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
-                    c.emit_instr_(I::Call(sl_0, 2, sl_res));
-                    c.emit_instr_(I::Pop(3));
+
+                    c.emit_instr_(I::PushCallArg(a.slot));
+                    c.emit_instr_(I::PushCallArg(b.slot));
+                    c.emit_instr_(I::Call(f.slot, res.slot));
+                    c.free(b);
+                    c.free(f);
+                    c.free(a);
                 }
-                Ok(())
+                Ok(res)
             } else {
                 return Err(perror!(self.lexer.loc(), "expected an infix operator"));
             }
         }
 
-        /// Parse an expression into slot `sl_res`
-        fn parse_expr_(&mut self, c: &mut Compiler, sl_res: SlotIdx) -> Result<()> {
+        /// Parse an expression and return its result's slot.
+        ///
+        /// `sl_res` is an optional pre-provided slot.
+        fn parse_expr_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
             logdebug!("parse expr (cur {:?})", self.lexer.cur());
+
+            // get or create result slot.
+            let res = match sl_res {
+                Some(s) => ExprRes::new(s, false),
+                None => c.allocate_temporary_()?,
+            };
+
             let Self { ctx, lexer, .. } = self;
             let loc = lexer.loc();
             match lexer.cur() {
@@ -1508,32 +1732,31 @@ mod parser {
                 Tok::Int(i) => {
                     lexer.next();
                     if i >= i16::MIN as i64 && i <= i16::MAX as i64 {
-                        // TODO: see if it's already in locals, and reuse
-                        c.emit_instr_(I::LoadInteger(i as i16, sl_res))
+                        c.emit_instr_(I::LoadInteger(i as i16, res.slot))
                     } else {
-                        // TODO: see if it's already in locals, and reuse
-                        let lidx = c.push_local_(Value::Int(i))?;
-                        c.emit_instr_(I::LoadLocal(lidx, sl_res));
+                        let lidx = c.allocate_local_(Value::Int(i))?;
+                        c.emit_instr_(I::LoadLocal(lidx, res.slot));
                     }
                 }
                 Tok::Id("true") => {
                     lexer.next();
-                    c.emit_instr_(I::LoadBool(true, sl_res))
+                    c.emit_instr_(I::LoadBool(true, res.slot))
                 }
                 Tok::Id("false") => {
                     lexer.next();
-                    c.emit_instr_(I::LoadBool(true, sl_res))
+                    c.emit_instr_(I::LoadBool(true, res.slot))
                 }
                 Tok::Id(id) => {
-                    resolve_id_(ctx, c, id, loc, sl_res)?;
+                    if let Some(sl) = c.find_slot_of_var(id) {
+                    } else {
+                        resolve_id_into_slot_(ctx, c, id, loc, res.slot)?;
+                    }
                     lexer.next();
                 }
                 Tok::QuotedString(s) => {
-                    // TODO: find a local that contains `s`, if any,
-                    // and reuse it
-                    let lidx = c.push_local_(Value::Str(s.into()))?;
+                    let lidx = c.allocate_local_(Value::Str(s.into()))?;
                     self.next_tok_();
-                    c.emit_instr_(I::LoadLocal(lidx, sl_res))
+                    c.emit_instr_(I::LoadLocal(lidx, res.slot))
                 }
                 Tok::QuotedExpr(e) => {
                     if e.as_bytes().contains(&b'?') {
@@ -1543,9 +1766,9 @@ mod parser {
                     let e = syntax::parse_expr(self.ctx, e)
                         .map_err(|e| perror!(loc, "while parsing expression: {}", e))?;
                     // TODO: reuse local if `e` is there already
-                    let lidx = c.push_local_(Value::Expr(e))?;
+                    let lidx = c.allocate_local_(Value::Expr(e))?;
                     self.next_tok_();
-                    c.emit_instr_(I::LoadLocal(lidx, sl_res))
+                    c.emit_instr_(I::LoadLocal(lidx, res.slot))
                 }
                 Tok::RParen | Tok::RBracket | Tok::RBrace => {
                     return Err(perror!(loc, "invalid closing delimiter"))
@@ -1554,7 +1777,7 @@ mod parser {
 
                 Tok::Eof => return Err(perror!(loc, "unexpected EOF when parsing expr")),
             }
-            Ok(())
+            Ok(res)
         }
 
         /// Expect the token `t`, and consume it; or return an error.
@@ -1572,49 +1795,36 @@ mod parser {
 mod basic_primitives {
     use super::*;
 
-    // TODO: defty
+    /* TODO: load_file
+    I::LoadFile(s0, s1) => {
+        let s0 = get_slot_str!(self, abs_offset!(sf, s0));
+        let s1 = abs_offset!(sf, s1);
+        let content = match std::fs::read_to_string(&**s0 as &str) {
+            Ok(x) => x.into(),
+            Err(e) => {
+                // TODO: some kind of exception handling
+                self.result = Err(Error::new_string(format!(
+                    "cannot load file `{}: {}",
+                    s0, e
+                )));
+                break;
+            }
+        };
+        self.stack[s1] = Value::Str(content)
+    }
+    */
 
     /// Builtin functions.
-    pub(super) const BUILTINS: &'static [InstrBuiltin] = &[
-        InstrBuiltin {
-            name: "print",
-            help: "print a value.",
-            run: |_, args: &[Value]| {
-                for x in args {
-                    println!("> {}", x)
-                }
-                Ok(Value::Nil)
-            },
+    pub(super) const BUILTINS: &'static [InstrBuiltin] = &[InstrBuiltin {
+        name: "print",
+        help: "print a value.",
+        run: |_, args: &[Value]| {
+            for x in args {
+                println!("> {}", x)
+            }
+            Ok(Value::Nil)
         },
-        /* TODO
-        &R::Defconst,
-        &R::Defthm,
-        &R::Decl,
-        &R::SetInfix,
-        &R::SetBinder,
-        &R::ExprTy,
-        &R::Findconst,
-        &R::Findthm,
-        &R::Axiom,
-        &R::Assume,
-        &R::Refl,
-        &R::Sym,
-        &R::Trans,
-        &R::Congr,
-        &R::CongrTy,
-        &R::Cut,
-        &R::BoolEq,
-        &R::BoolEqIntro,
-        &R::BetaConv,
-        &R::Instantiate,
-        &R::Abs,
-        &R::AbsExpr,
-        &R::Concl,
-        &R::HolPrelude,
-        &R::PledgeNoMoreAxioms,
-        &R::Rewrite,
-        */
-    ];
+    }];
 }
 
 /// Primitives of the meta-language related to theorem proving.
@@ -1623,6 +1833,7 @@ mod logic_builtins {
 
     // TODO: defty
 
+    /*
     #[derive(Debug, Clone)]
     enum Rule {
         Defconst,
@@ -1654,6 +1865,7 @@ mod logic_builtins {
     }
 
     use Rule as R;
+    */
 
     /// Builtin functions for manipulating expressions and theorems.
     pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[
