@@ -101,10 +101,6 @@ impl RStrImpl {
         Self::from_vec_(s.as_bytes().to_vec())
     }
 
-    pub fn from_string(s: String) -> Self {
-        Self::from_vec_(s.into_bytes())
-    }
-
     pub fn get(&self) -> &str {
         unsafe {
             let sl = std::slice::from_raw_parts(self.data, self.len as usize);

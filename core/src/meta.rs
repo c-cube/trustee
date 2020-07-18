@@ -126,6 +126,9 @@ struct SlotIdx(u8);
 #[derive(Copy, Clone, PartialEq)]
 struct LocalIdx(u8);
 
+#[derive(Copy, Clone, PartialEq, Debug)]
+struct JumpPosition(usize);
+
 /// ## Instructions
 ///
 /// An instruction of the language.
@@ -158,6 +161,12 @@ enum Instr {
     Sub(SlotIdx, SlotIdx, SlotIdx),
     Div(SlotIdx, SlotIdx, SlotIdx),
     Mod(SlotIdx, SlotIdx, SlotIdx),
+    /// Jump to `ic + $1` if `sl[$0]` is false
+    JumpIfFalse(SlotIdx, i16),
+    /// Jump to `ic + $1` if `sl[$0]` is true
+    JumpIfTrue(SlotIdx, i16),
+    /// Jump to `ic + $1` unconditionally
+    Jump(i16),
     /// evaluates string in `sl[$0]`
     EvalStr(SlotIdx),
     /// Push `sl[$0]` into the call array, before a call.
@@ -178,6 +187,8 @@ enum Instr {
     // - `Jump(SlotIdx, offset:u16)`
     // - `JumpIfTrue(SlotIdx, offset:i16)`
     // - `JumpIfFalse(SlotIdx, offset:i16)`
+    /// Error.
+    Trap,
 }
 
 /// A custom instruction implemented in rust.
@@ -325,13 +336,15 @@ mod ml {
                 (Str(i), Str(j)) => i == j,
                 (Cons(i), Cons(j)) => i == j,
                 (Expr(i), Expr(j)) => i == j,
+                (Chunk(c1), Chunk(c2)) => std::ptr::eq(&*c1.0 as *const _, &*c2.0),
+                (Builtin(b1), Builtin(b2)) => std::ptr::eq(&*b1 as *const _, &*b2),
                 _ => false, // other cases are not comparable
             }
         }
     }
 
     macro_rules! get_slot_as {
-        ($f: ident, $what: literal, $p: pat, $v: ident, $ret_ty: ty) => {
+        ($f: ident, $what: literal, $p: pat, $v: expr, $ret_ty: ty) => {
             macro_rules! $f {
                 ($self: expr, $idx: expr) => {
                     match &$self.stack[$idx as usize] {
@@ -347,8 +360,8 @@ mod ml {
     }
 
     get_slot_as!(get_slot_int, "int", Value::Int(i), i, i64);
-    get_slot_as!(get_slot_nil, "nil", (_i @ Value::Nil), _i, ());
-    get_slot_as!(get_slot_bool, "bool", Value::Bool(i), i, bool);
+    //get_slot_as!(get_slot_nil, "nil", (_i @ Value::Nil), _i, ());
+    get_slot_as!(get_slot_bool, "bool", Value::Bool(i), *i, bool);
     get_slot_as!(get_slot_str, "string", Value::Str(i), i, &str);
     //get_as_of!(get_slot_codearray, "code array", Value::CodeArray(i), i, CodeArray);
     get_slot_as!(get_slot_expr, "expr", Value::Expr(i), i, k::Expr);
@@ -587,8 +600,20 @@ mod ml {
                         let s2 = abs_offset!(sf, s2);
                         self.stack[s2] = v
                     }
-                    I::Lt(_, _, _) => todo!(),  // TODO
-                    I::Leq(_, _, _) => todo!(), // TODO
+                    I::Lt(s0, s1, s2) => {
+                        let s0 = get_slot_int!(self, abs_offset!(sf, s0));
+                        let s1 = get_slot_int!(self, abs_offset!(sf, s1));
+                        let v = Value::Bool(s0 < s1);
+                        let s2 = abs_offset!(sf, s2);
+                        self.stack[s2] = v;
+                    }
+                    I::Leq(s0, s1, s2) => {
+                        let s0 = get_slot_int!(self, abs_offset!(sf, s0));
+                        let s1 = get_slot_int!(self, abs_offset!(sf, s1));
+                        let v = Value::Bool(s0 <= s1);
+                        let s2 = abs_offset!(sf, s2);
+                        self.stack[s2] = v;
+                    }
                     I::Add(s0, s1, s2) => {
                         let s0 = get_slot_int!(self, abs_offset!(sf, s0));
                         let s1 = get_slot_int!(self, abs_offset!(sf, s1));
@@ -617,6 +642,24 @@ mod ml {
                         let s0 = get_slot_int!(self, abs_offset!(sf, s0));
                         let s1 = get_slot_int!(self, abs_offset!(sf, s1));
                         self.stack[abs_offset!(sf, s2)] = Value::Int(s0 % s1);
+                    }
+                    I::Jump(offset) => {
+                        logdebug!("jump from ic={} with offset {}", sf.ic, offset);
+                        sf.ic = ((sf.ic - 1) as isize + offset as isize) as u32
+                    }
+                    I::JumpIfTrue(s0, offset) => {
+                        let s0 = get_slot_bool!(self, abs_offset!(sf, s0));
+                        if s0 {
+                            logdebug!("jump from ic={} with offset {}", sf.ic, offset);
+                            sf.ic = ((sf.ic - 1) as isize + offset as isize) as u32
+                        }
+                    }
+                    I::JumpIfFalse(s0, offset) => {
+                        let s0 = get_slot_bool!(self, abs_offset!(sf, s0));
+                        if !s0 {
+                            logdebug!("jump from ic={} with offset {}", sf.ic, offset);
+                            sf.ic = ((sf.ic - 1) as isize + offset as isize) as u32
+                        }
                     }
                     I::EvalStr(_) => todo!("eval str"), // TODO
                     I::PushCallArg(sl_arg) => {
@@ -727,6 +770,10 @@ mod ml {
                         self.stack[res_offset as usize] = self.stack[sl_v].clone();
                         // pop slots of the function call
                         self.stack.truncate(start as usize);
+                    }
+                    I::Trap => {
+                        self.result = Err(Error::new("executed `trap`"));
+                        break;
                     }
                 }
             }
@@ -953,6 +1000,8 @@ mod lexer {
             | b'*'
             | b'|'
             | b'/'
+            | b'>'
+            | b'<'
             | b'\\'
             | b';' => true,
             _ => false,
@@ -1190,6 +1239,36 @@ pub(crate) mod parser {
                 i
             );
             self.instrs.push(i)
+        }
+
+        /// Reserve space for a jump instruction that will be emitted later.
+        pub fn reserve_jump_(&mut self) -> JumpPosition {
+            let off = self.instrs.len();
+            logdebug!(
+                "compiler(name={:?}, n_locals={}): reserve jump at offset {}",
+                self.name,
+                self.locals.len(),
+                off
+            );
+            self.instrs.push(I::Trap); // reserve space
+            JumpPosition(off)
+        }
+
+        /// Set a reserve jump
+        pub fn emit_jump(&mut self, pos: JumpPosition, i: Instr) {
+            logdebug!(
+                "compiler(name={:?}, n_locals={}): emit jump {:?} at offset {}",
+                self.name,
+                self.locals.len(),
+                i,
+                pos.0
+            );
+
+            if let I::Trap = self.instrs[pos.0] {
+            } else {
+                panic!("jump already edited at pos {}", pos.0);
+            }
+            self.instrs[pos.0] = i;
         }
 
         /// Allocate a slot on top of the stack.
@@ -1581,6 +1660,46 @@ pub(crate) mod parser {
 
                 c.emit_instr_(binop_instr(a.slot, b.slot, res.slot));
                 Ok(res)
+            } else if id == "if" {
+                self.next_tok_();
+                let res = get_res!(c, sl_res);
+                let res_test = self.parse_expr_(c, None)?;
+
+                let jump_if_false_slot = c.reserve_jump_();
+                let off_before_jump = c.instrs.len() as isize;
+
+                let _e_then = self.parse_expr_(c, Some(res.slot))?;
+                let jump_post_then = c.reserve_jump_();
+                let off_after_then = c.instrs.len() as isize;
+
+                {
+                    let j_offset = off_after_then - off_before_jump + 1;
+                    if j_offset > i16::MAX as isize {
+                        return Err(perror!(loc, "jump is too long"));
+                    }
+                    // jump here if the test if false
+                    c.emit_jump(
+                        jump_if_false_slot,
+                        I::JumpIfFalse(res_test.slot, j_offset as i16),
+                    );
+                }
+
+                let _e_else = self.parse_expr_(c, Some(res.slot))?;
+
+                // jump here after `then` is done.
+                let off_after_else = c.instrs.len() as isize;
+                {
+                    let j_offset = off_after_else - off_after_then + 1;
+                    if j_offset > i16::MAX as isize {
+                        return Err(perror!(loc, "jump is too long"));
+                    }
+                    // jump here after `then` is done.
+                    c.emit_jump(jump_post_then, I::Jump(j_offset as i16));
+                }
+
+                self.eat_(closing, "expected closing delimiter after 'if'")?;
+                c.free(&res_test);
+                Ok(res)
             } else if id == "let" {
                 // local definitions.
                 self.next_tok_();
@@ -1608,8 +1727,8 @@ pub(crate) mod parser {
                 }
                 self.eat_(b_closing, "expected block of bound variables to end")?;
 
-                let res = self.parse_expr_(c, sl_res)?;
-                self.eat_(closing, "expected `let` to be closed")?;
+                let res = get_res!(c, sl_res);
+                let res = self.parse_expr_seq_(c, closing, Some(res.slot))?;
                 // deallocate locals
                 for x in locals {
                     c.deallocate_slot_(x.slot);
@@ -1905,7 +2024,7 @@ mod basic_primitives {
     */
 
     /// Builtin functions.
-    pub(super) const BUILTINS: &'static [InstrBuiltin] = &[InstrBuiltin {
+    pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[&InstrBuiltin {
         name: "print",
         help: "print a value.",
         run: |_, args: &[Value]| {
