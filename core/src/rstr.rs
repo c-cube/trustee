@@ -3,55 +3,38 @@
 //! These strings are accessed via a thin pointer and are refcounted
 //! with a `u32`. They cannot be bigger than `u32::MAX`.
 
-use std::{cell::Cell, fmt::Debug, ops::Deref, ptr, u32};
+use crate::rptr::RPtr;
+use std::{fmt::Debug, ops::Deref, u32};
 
 /// A refcounted string in one block on the heap.
-#[derive(Eq, Ord)]
-pub struct RStr(*const RStrImpl);
+#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
+pub struct RStr(RPtr<RStrImpl>);
 
+#[derive(Eq, Ord)]
 struct RStrImpl {
-    rc: Cell<u32>,
     len: u32,
     data: *const u8,
 }
 
-macro_rules! get_impl_ref {
-    ($p: expr) => {{
-        let p: &RStrImpl = &*$p.0;
-        p
-    }};
-}
-
-impl Clone for RStr {
-    #[inline]
-    fn clone(&self) -> Self {
-        unsafe {
-            let i = get_impl_ref!(self);
-            i.rc.set(1 + i.rc.get());
-        };
-        RStr(self.0)
-    }
-}
-
-impl Debug for RStr {
+impl Debug for RStrImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self.deref() as &str)
+        write!(f, "{:?}", self.get() as &str)
     }
 }
 
 impl std::fmt::Display for RStr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.deref() as &str)
+        write!(f, "{}", self.get() as &str)
     }
 }
 
-impl PartialEq for RStr {
+impl PartialEq for RStrImpl {
     fn eq(&self, other: &Self) -> bool {
-        self.deref() == other.deref()
+        self.get() == other.get()
     }
 }
 
-impl PartialOrd for RStr {
+impl PartialOrd for RStrImpl {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         PartialOrd::partial_cmp(self.deref(), other.deref())
     }
@@ -60,24 +43,6 @@ impl PartialOrd for RStr {
 impl std::hash::Hash for RStr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.deref().hash(state)
-    }
-}
-
-impl Drop for RStr {
-    fn drop(&mut self) {
-        unsafe {
-            let i = get_impl_ref!(self);
-            let rc = i.rc.get() - 1;
-            i.rc.set(rc);
-            if rc == 0 {
-                let b = Vec::from_raw_parts(i.data as *mut u8, i.len as usize, i.len as usize);
-                drop(b);
-                drop(i);
-                let b = Box::from_raw(self.0 as *mut RStrImpl);
-                drop(b);
-                self.0 = ptr::null();
-            }
-        }
     }
 }
 
@@ -91,7 +56,16 @@ impl std::ops::Deref for RStr {
 
 impl std::borrow::Borrow<str> for RStr {
     fn borrow(&self) -> &str {
-        self.deref()
+        self.get()
+    }
+}
+
+impl Drop for RStrImpl {
+    fn drop(&mut self) {
+        unsafe {
+            let b = Vec::from_raw_parts(self.data as *mut u8, self.len as usize, self.len as usize);
+            drop(b);
+        }
     }
 }
 
@@ -107,21 +81,18 @@ impl From<String> for RStr {
     }
 }
 
-impl RStr {
+impl RStrImpl {
     fn from_vec_(v: Vec<u8>) -> Self {
         let s: Box<[u8]> = v.into_boxed_slice();
         let len = s.len();
         if len > u32::MAX as usize {
             panic!("from_str: capacity exceeded");
         }
-        let i = Box::new(RStrImpl {
-            rc: Cell::new(1),
+        let res = RStrImpl {
             len: len as u32,
             data: s.as_ref().as_ptr(),
-        });
+        };
         std::mem::forget(s);
-        let res = RStr(i.as_ref() as *const _);
-        std::mem::forget(i);
         res
     }
 
@@ -134,16 +105,34 @@ impl RStr {
         Self::from_vec_(s.into_bytes())
     }
 
+    pub fn get(&self) -> &str {
+        unsafe {
+            let sl = std::slice::from_raw_parts(self.data, self.len as usize);
+            std::str::from_utf8_unchecked(sl)
+        }
+    }
+}
+
+impl RStr {
+    fn from_vec_(v: Vec<u8>) -> Self {
+        RStr(RPtr::new(RStrImpl::from_vec_(v)))
+    }
+
+    /// Copy the given `str` into the heap.
+    pub fn from_str(s: &str) -> Self {
+        RStr(RPtr::new(RStrImpl::from_str(s)))
+    }
+
+    pub fn from_string(s: String) -> Self {
+        Self::from_vec_(s.into_bytes())
+    }
+
     pub fn refcount(&self) -> usize {
-        unsafe { get_impl_ref!(self) }.rc.get() as usize
+        self.0.refcount()
     }
 
     pub fn get(&self) -> &str {
-        unsafe {
-            let p = get_impl_ref!(self);
-            let sl = std::slice::from_raw_parts(p.data, p.len as usize);
-            std::str::from_utf8_unchecked(sl)
-        }
+        self.0.get().get()
     }
 }
 
