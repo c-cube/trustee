@@ -7,7 +7,7 @@ use crate::rptr::RPtr;
 use std::{fmt::Debug, ops::Deref, u32};
 
 /// A refcounted string in one block on the heap.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Debug)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Clone)]
 pub struct RStr(RPtr<RStrImpl>);
 
 #[derive(Eq, Ord)]
@@ -16,7 +16,7 @@ struct RStrImpl {
     data: *const u8,
 }
 
-impl Debug for RStrImpl {
+impl Debug for RStr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:?}", self.get() as &str)
     }

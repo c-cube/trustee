@@ -15,7 +15,13 @@ use {
     std::{fmt, i16, io, u8},
 };
 
-macro_rules! logdebug {
+macro_rules! logtrace{
+    ($($t:expr),*) => {
+        #[cfg(feature="logging")]
+        log::trace!($($t),*)
+    }
+}
+macro_rules! logdebug{
     ($($t:expr),*) => {
         #[cfg(feature="logging")]
         log::debug!($($t),*)
@@ -42,6 +48,7 @@ pub enum Value {
     /// an embedded rust string literal.
     Str(RStr),
     Expr(k::Expr),
+    // TODO: add `cons?`, `car`, `cdr`… or destructuring
     /// Cons: a pair of values. This is the basis for lists.
     Cons(RPtr<(Value, Value)>),
     Thm(k::Thm),
@@ -82,11 +89,14 @@ struct Compiler<'a> {
     /// Parent compiler, used to resolve values from outer scopes.
     parent: Option<&'a Compiler<'a>>,
 }
+
+#[derive(Debug)]
 struct CompilerSlot {
     /// If this slot is for a named variable.
     var_name: Option<RStr>,
     state: CompilerSlotState,
 }
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum CompilerSlotState {
     Unused,
@@ -135,8 +145,10 @@ enum Instr {
     LoadInteger(i16, SlotIdx),
     /// Set `sl[$1]` to bool `$0`
     LoadBool(bool, SlotIdx),
-    /// Set `sl[$1 .. $1 + $0]` to nil
-    LoadNilN(u8, SlotIdx),
+    /// Set `sl[$1]` to nil
+    LoadNil(SlotIdx),
+    /// Set `sl[$2]` to `cons(sl[$0], sl[$1])`
+    Cons(SlotIdx, SlotIdx, SlotIdx),
     /// `sl[$2] = (sl[$0] == sl[$1])`
     Eq(SlotIdx, SlotIdx, SlotIdx),
     Lt(SlotIdx, SlotIdx, SlotIdx),
@@ -284,7 +296,7 @@ mod ml {
                 Value::Int(i) => write!(out, "{}", i),
                 Value::Bool(b) => write!(out, "{}", b),
                 Value::Sym(s) => write!(out, ":{}", s.name()),
-                Value::Cons(v) => write!(out, "({} . {})", v.0, v.1),
+                Value::Cons(v) => write!(out, "{{{} . {}}}", v.0, v.1),
                 Value::Str(s) => write!(out, "{:?}", s),
                 Value::Expr(e) => write!(out, "{}", e),
                 Value::Thm(th) => write!(out, "{}", th),
@@ -554,11 +566,19 @@ mod ml {
                         let s1 = abs_offset!(sf, s1);
                         self.stack[s1] = Value::Bool(b);
                     }
-                    I::LoadNilN(n, s1) => {
+                    I::LoadNil(s1) => {
                         let s1 = abs_offset!(sf, s1);
-                        for i in s1..s1 + (n as usize) {
-                            self.stack[i] = Value::Nil
-                        }
+                        self.stack[s1] = Value::Nil;
+                    }
+                    I::Cons(s0, s1, s2) => {
+                        let s0 = abs_offset!(sf, s0);
+                        let s1 = abs_offset!(sf, s1);
+                        let v = Value::Cons(RPtr::new((
+                            self.stack[s0].clone(),
+                            self.stack[s1].clone(),
+                        )));
+                        let s2 = abs_offset!(sf, s2);
+                        self.stack[s2] = v
                     }
                     I::Eq(s0, s1, s2) => {
                         let s0 = abs_offset!(sf, s0);
@@ -909,6 +929,7 @@ mod lexer {
             | b'='
             | b'+'
             | b'-'
+            | b'.'
             | b'@'
             | b'!'
             | b'$'
@@ -1087,7 +1108,7 @@ mod lexer {
     }
 }
 
-mod parser {
+pub(crate) mod parser {
     use super::*;
     use lexer::Tok;
 
@@ -1271,6 +1292,11 @@ mod parser {
                 Some(&|s1, s2, s3| $i(s1, s2, s3))
             };
         };
+        macro_rules! ret_swap {
+            ($i: expr) => {
+                Some(&|s1, s2, s3| $i(s2, s1, s3))
+            };
+        };
         if s == "+" {
             ret!(I::Add)
         } else if s == "-" {
@@ -1281,6 +1307,18 @@ mod parser {
             ret!(I::Div)
         } else if s == "%" {
             ret!(I::Mod)
+        } else if s == "." {
+            ret!(I::Cons)
+        } else if s == "==" {
+            ret!(I::Eq)
+        } else if s == "<" {
+            ret!(I::Lt)
+        } else if s == "<=" {
+            ret!(I::Leq)
+        } else if s == ">" {
+            ret_swap!(I::Lt)
+        } else if s == ">=" {
+            ret_swap!(I::Leq)
         } else {
             None
         }
@@ -1318,6 +1356,16 @@ mod parser {
             Tok::Id(s) => Ok(s),
             _ => Err(perror!(lexer.loc(), "{}", errmsg)),
         }
+    }
+
+    /// get or create result slot, from an optional slot passed as argument.
+    macro_rules! get_res {
+        ($c: expr, $sl_res: expr) => {
+            match $sl_res {
+                Some(s) => ExprRes::new(s, true),
+                None => $c.allocate_temporary_()?,
+            }
+        };
     }
 
     impl<'a> Parser<'a> {
@@ -1412,14 +1460,12 @@ mod parser {
                         // parse function
                         let sub_c =
                             self.parse_fn_args_and_body_(Some(f_name.clone()), b_closing, &*c)?;
-                        self.eat_(closing, "unclosed expression")?;
 
                         // define the function.
                         logdebug!("define {} as {:?}", &f_name, sub_c);
                         self.ctx.define_meta_chunk(f_name, sub_c);
                     } else {
                         let r = self.parse_expr_app_(c, closing, Some(sl_res))?;
-                        self.eat_(closing, "unclosed expression")?;
                         c.free(r);
                     }
                 }
@@ -1503,11 +1549,7 @@ mod parser {
                 // binary operator
                 self.next_tok_();
 
-                let res = match sl_res {
-                    None => c.allocate_temporary_()?,
-                    Some(sl) => ExprRes::new(sl, false),
-                };
-
+                let res = get_res!(c, sl_res);
                 let a = self.parse_expr_(c, None)?;
                 let b = self.parse_expr_(c, None)?;
                 self.eat_(closing, "expected closing in infix application")?;
@@ -1516,10 +1558,26 @@ mod parser {
                 c.free(a);
                 c.free(b);
                 Ok(res)
+            } else if id == "list" {
+                // parse into a list
+                self.next_tok_();
+
+                let res = get_res!(c, sl_res);
+                logdebug!("parse list (sl_res {:?}, res {:?})", sl_res, res);
+
+                // arguments
+                let args = self.parse_expr_list_(c, closing)?;
+
+                c.emit_instr_(I::LoadNil(res.slot));
+                for a in args.into_iter().rev() {
+                    // res=cons(a,res)
+                    c.emit_instr_(I::Cons(a.slot, res.slot, res.slot));
+                    c.free(a);
+                }
+                Ok(res)
             } else if id == "do" {
                 // parse a series of expressions and `let` bindings.
                 let (locals, res) = self.parse_expr_or_let_seq_(c, closing, sl_res)?;
-                self.eat_(closing, "expected closing after `do`")?;
 
                 // now free the local variables.
                 for x in locals {
@@ -1534,41 +1592,53 @@ mod parser {
                     None => c.allocate_temporary_()?,
                     Some(sl) => ExprRes::new(sl, false),
                 };
+                logdebug!("parse application (res: {:?})", res);
 
                 let f = c.allocate_temporary_()?;
                 resolve_id_into_slot_(ctx, c, id, loc, f.slot)?;
                 lexer.next();
+                logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
 
                 // parse arguments
-                let mut args = vec![];
-                loop {
-                    if self.cur_tok_() == closing {
-                        break;
-                    }
-
-                    let arg = self.parse_expr_(c, None)?;
-                    args.push(arg);
-
-                    if args.len() > u8::MAX as usize {
-                        return Err(perror!(
-                            self.lexer.loc(),
-                            "maximum number of arguments exceeded"
-                        ));
-                    }
+                let args = self.parse_expr_list_(c, closing)?;
+                if args.len() > u8::MAX as usize {
+                    return Err(perror!(
+                        self.lexer.loc(),
+                        "maximum number of arguments exceeded"
+                    ));
                 }
 
                 // emit call
-                for a in &args {
+                for a in args {
                     c.emit_instr_(I::PushCallArg(a.slot));
-                }
-                c.emit_instr_(I::Call(f.slot, res.slot));
-                // free `f` and the arguments.
-                for a in args.into_iter().rev() {
                     c.free(a);
                 }
+                c.emit_instr_(I::Call(f.slot, res.slot));
                 c.free(f);
                 Ok(res)
             }
+        }
+
+        /// Parse a list of expressions, return their slots.
+        fn parse_expr_list_(&mut self, c: &mut Compiler, closing: Tok) -> Result<Vec<ExprRes>> {
+            let mut args = vec![];
+            loop {
+                if self.cur_tok_() == closing {
+                    break;
+                }
+
+                let arg = self.parse_expr_(c, None)?;
+                args.push(arg);
+
+                if args.len() > u8::MAX as usize {
+                    return Err(perror!(
+                        self.lexer.loc(),
+                        "maximum number of arguments exceeded"
+                    ));
+                }
+            }
+            self.eat_(closing, "expected closing delimiter")?;
+            Ok(args)
         }
 
         /// Parse a series of expressions or `let`-bindings.
@@ -1584,11 +1654,7 @@ mod parser {
             closing: Tok,
             sl_res: Option<SlotIdx>,
         ) -> Result<(Vec<SlotIdx>, ExprRes)> {
-            // get or create result slot.
-            let res = match sl_res {
-                None => c.allocate_temporary_()?,
-                Some(sl) => ExprRes::new(sl, false),
-            };
+            let res = get_res!(c, sl_res);
 
             let loc0 = self.lexer.loc();
             let mut local_vars = vec![];
@@ -1626,6 +1692,7 @@ mod parser {
                     }
                 }
             }
+            self.eat_(closing, "unclosed sequence")?;
 
             // check that we do return an expression, not a let
             if !last_is_expr {
@@ -1655,14 +1722,13 @@ mod parser {
                     cur_tok_as_id_(lexer, "expected an identifer after 'let'")?.into();
                 self.next_tok_();
 
-                let sl_x = c.allocate_top_slot_(CompilerSlotState::NotActivatedYet)?;
-                c.get_slot_(sl_x).var_name = Some(x_name);
+                let sl_x = c.allocate_var_(x_name)?;
 
-                self.parse_expr_(c, Some(sl_x))?;
+                self.parse_expr_(c, Some(sl_x.slot))?;
                 // now the variable is defined.
-                c.get_slot_(sl_x).state = CompilerSlotState::Activated;
+                c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
                 self.eat_(closing, "unclosed 'let' expression")?;
-                Ok((sl_x, false))
+                Ok((sl_x.slot, false))
             } else {
                 let r = self.parse_expr_app_(c, closing, Some(sl_res))?;
                 Ok((r.slot, true))
@@ -1683,12 +1749,7 @@ mod parser {
 
         fn parse_infix_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
             logdebug!("parse infix expr");
-
-            let res = match sl_res {
-                None => c.allocate_temporary_()?,
-                Some(sl) => ExprRes::new(sl, false),
-            };
-
+            let res = get_res!(c, sl_res);
             let a = self.parse_expr_(c, None)?;
 
             let loc = self.lexer.loc();
@@ -1729,67 +1790,89 @@ mod parser {
         /// `sl_res` is an optional pre-provided slot.
         fn parse_expr_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
             logdebug!("parse expr (cur {:?})", self.lexer.cur());
-
-            // get or create result slot.
-            let res = match sl_res {
-                Some(s) => ExprRes::new(s, false),
-                None => c.allocate_temporary_()?,
-            };
+            logtrace!("> slots {:?}", c.slots);
 
             let Self { ctx, lexer, .. } = self;
             let loc = lexer.loc();
             match lexer.cur() {
                 Tok::LParen => {
                     lexer.next();
-                    self.parse_expr_app_(c, Tok::RParen, sl_res)?;
+                    self.parse_expr_app_(c, Tok::RParen, sl_res)
                 }
                 Tok::LBracket => {
                     lexer.next();
-                    self.parse_expr_app_(c, Tok::RBracket, sl_res)?;
+                    self.parse_expr_app_(c, Tok::RBracket, sl_res)
                 }
                 Tok::LBrace => {
                     // infix: `{a x b}` is `[0]; a; b; [0]=x; call`
                     lexer.next();
-                    self.parse_infix_(c, sl_res)?;
+                    self.parse_infix_(c, sl_res)
                 }
                 Tok::Int(i) => {
                     lexer.next();
+                    let res = get_res!(c, sl_res);
                     if i >= i16::MIN as i64 && i <= i16::MAX as i64 {
                         c.emit_instr_(I::LoadInteger(i as i16, res.slot))
                     } else {
                         let lidx = c.allocate_local_(Value::Int(i))?;
                         c.emit_instr_(I::LoadLocal(lidx, res.slot));
                     }
+                    Ok(res)
+                }
+                Tok::Id("nil") => {
+                    lexer.next();
+                    let res = get_res!(c, sl_res);
+                    c.emit_instr_(I::LoadNil(res.slot));
+                    Ok(res)
                 }
                 Tok::Id("true") => {
                     lexer.next();
-                    c.emit_instr_(I::LoadBool(true, res.slot))
+                    let res = get_res!(c, sl_res);
+                    c.emit_instr_(I::LoadBool(true, res.slot));
+                    Ok(res)
                 }
                 Tok::Id("false") => {
                     lexer.next();
-                    c.emit_instr_(I::LoadBool(true, res.slot))
+                    let res = get_res!(c, sl_res);
+                    c.emit_instr_(I::LoadBool(true, res.slot));
+                    Ok(res)
                 }
                 Tok::Id(id) => {
-                    if let Some(sl) = c.find_slot_of_var(id) {
-                        // return the existing variable instead.
-                        return Ok(ExprRes {
-                            slot: sl,
-                            temporary: false,
-                        });
+                    let res = get_res!(c, sl_res);
+                    if let Some(sl_var) = c.find_slot_of_var(id) {
+                        if let Some(sl_r) = sl_res {
+                            if sl_r != sl_var {
+                                // must copy
+                                c.emit_instr_(I::Move(sl_var, sl_r));
+                            }
+                        } else {
+                            // return the existing variable instead.
+                            self.next_tok_();
+                            c.free(res);
+                            return Ok(ExprRes {
+                                slot: sl_var,
+                                temporary: false,
+                            });
+                        }
                     } else {
                         resolve_id_into_slot_(ctx, c, id, loc, res.slot)?;
                     }
                     lexer.next();
+                    Ok(res)
                 }
                 Tok::ColonId(s) => {
                     let lidx = c.allocate_local_(Value::Sym(s.into()))?;
                     self.next_tok_();
-                    c.emit_instr_(I::LoadLocal(lidx, res.slot))
+                    let res = get_res!(c, sl_res);
+                    c.emit_instr_(I::LoadLocal(lidx, res.slot));
+                    Ok(res)
                 }
                 Tok::QuotedString(s) => {
                     let lidx = c.allocate_local_(Value::Str(s.into()))?;
                     self.next_tok_();
-                    c.emit_instr_(I::LoadLocal(lidx, res.slot))
+                    let res = get_res!(c, sl_res);
+                    c.emit_instr_(I::LoadLocal(lidx, res.slot));
+                    Ok(res)
                 }
                 Tok::QuotedExpr(e) => {
                     if e.as_bytes().contains(&b'?') {
@@ -1801,7 +1884,9 @@ mod parser {
                     // TODO: reuse local if `e` is there already
                     let lidx = c.allocate_local_(Value::Expr(e))?;
                     self.next_tok_();
-                    c.emit_instr_(I::LoadLocal(lidx, res.slot))
+                    let res = get_res!(c, sl_res);
+                    c.emit_instr_(I::LoadLocal(lidx, res.slot));
+                    Ok(res)
                 }
                 Tok::RParen | Tok::RBracket | Tok::RBrace => {
                     return Err(perror!(loc, "invalid closing delimiter"))
@@ -1810,7 +1895,6 @@ mod parser {
 
                 Tok::Eof => return Err(perror!(loc, "unexpected EOF when parsing expr")),
             }
-            Ok(res)
         }
 
         /// Expect the token `t`, and consume it; or return an error.
