@@ -892,7 +892,21 @@ mod ml {
     }
 }
 
+macro_rules! perror {
+    ($loc: expr, $fmt: literal) => {
+        Error::new_string(format!(
+                concat!( "parse error at {:?}: ", $fmt), $loc))
+    };
+    ($loc: expr, $fmt: literal, $($arg:expr ),*) => {
+        Error::new_string(format!(
+                concat!( "parse error at {:?}: ", $fmt), $loc,
+                $($arg),*))
+    };
+}
+
 mod lexer {
+    use super::*;
+
     /// A parser for RPN-like syntax, inspired from postscript.
     pub struct Lexer<'b> {
         col: usize,
@@ -973,6 +987,16 @@ mod lexer {
                 } else {
                     return;
                 }
+            }
+        }
+
+        /// Expect the token `t`, and consume it; or return an error.
+        pub fn eat_(&mut self, t: Tok, errmsg: &str) -> Result<()> {
+            if self.cur() == t {
+                self.next();
+                Ok(())
+            } else {
+                Err(perror!(self.loc(), "{}", errmsg))
             }
         }
 
@@ -1112,18 +1136,6 @@ pub(crate) mod parser {
     use super::*;
     use lexer::Tok;
 
-    macro_rules! perror {
-        ($loc: expr, $fmt: literal) => {
-            Error::new_string(format!(
-                    concat!( "parse error at {:?}: ", $fmt), $loc))
-        };
-        ($loc: expr, $fmt: literal, $($arg:expr ),*) => {
-            Error::new_string(format!(
-                    concat!( "parse error at {:?}: ", $fmt), $loc,
-                    $($arg),*))
-        };
-    }
-
     impl ExprRes {
         /// Make a new expression result.
         fn new(sl: SlotIdx, temporary: bool) -> Self {
@@ -1242,7 +1254,7 @@ pub(crate) mod parser {
         }
 
         /// Free expression result.
-        pub fn free(&mut self, e: ExprRes) {
+        pub fn free(&mut self, e: &ExprRes) {
             if e.temporary {
                 self.deallocate_slot_(e.slot)
             }
@@ -1368,6 +1380,16 @@ pub(crate) mod parser {
         };
     }
 
+    macro_rules! get_closing {
+        ($t: expr) => {
+            if $t == Tok::LParen {
+                Tok::RParen
+            } else {
+                Tok::RBracket
+            }
+        };
+    }
+
     impl<'a> Parser<'a> {
         /// Create a new parser for source string `s`.
         pub fn new(ctx: &'a mut k::Ctx, s: &'a str) -> Self {
@@ -1401,7 +1423,7 @@ pub(crate) mod parser {
 
             // TODO: load nil if no statement assigned `sl`
             c.emit_instr_(I::Ret(res.slot));
-            c.free(res);
+            c.free(&res);
             Ok(c.into_chunk())
         }
 
@@ -1429,12 +1451,7 @@ pub(crate) mod parser {
                 | Tok::Int(..)
                 | Tok::ColonId(..) => return Err(perror!(loc, "unexpected token {:?}", t)),
                 Tok::LParen | Tok::LBracket => {
-                    let closing = if t == Tok::LParen {
-                        Tok::RParen
-                    } else {
-                        Tok::RBracket
-                    };
-
+                    let closing = get_closing!(t);
                     self.lexer.next();
                     if let Tok::Id("defn") = self.lexer.cur() {
                         self.lexer.next();
@@ -1458,15 +1475,19 @@ pub(crate) mod parser {
                         self.next_tok_();
 
                         // parse function
-                        let sub_c =
-                            self.parse_fn_args_and_body_(Some(f_name.clone()), b_closing, &*c)?;
+                        let sub_c = self.parse_fn_args_and_body_(
+                            Some(f_name.clone()),
+                            b_closing,
+                            closing,
+                            &*c,
+                        )?;
 
                         // define the function.
                         logdebug!("define {} as {:?}", &f_name, sub_c);
                         self.ctx.define_meta_chunk(f_name, sub_c);
                     } else {
                         let r = self.parse_expr_app_(c, closing, Some(sl_res))?;
-                        c.free(r);
+                        c.free(&r);
                     }
                 }
                 Tok::RParen => {
@@ -1491,12 +1512,13 @@ pub(crate) mod parser {
         fn parse_fn_args_and_body_(
             &mut self,
             f_name: Option<RStr>,
+            var_closing: Tok,
             closing: Tok,
             parent: &Compiler,
         ) -> Result<Chunk> {
             let mut vars: Vec<RStr> = vec![];
 
-            while self.cur_tok_() != closing {
+            while self.cur_tok_() != var_closing {
                 let e = cur_tok_as_id_(
                     &mut self.lexer,
                     "expected a bound variable or closing delimiter",
@@ -1506,7 +1528,7 @@ pub(crate) mod parser {
                 logdebug!("add var {:?}", e);
                 vars.push(e);
             }
-            self.next_tok_();
+            self.eat_(var_closing, "expected closing delimiter after variables")?;
 
             // make a compiler for this chunk.
             let mut c = Compiler {
@@ -1522,11 +1544,11 @@ pub(crate) mod parser {
                 let sl_x = c.allocate_top_slot_(CompilerSlotState::Activated)?;
                 c.slots[sl_x.0 as usize].var_name = Some(x);
             }
-            let (_, res) = self.parse_expr_or_let_seq_(&mut c, closing, None)?;
+            let res = self.parse_expr_seq_(&mut c, closing, None)?;
 
             // return value
             c.emit_instr_(I::Ret(res.slot));
-            c.free(res);
+            c.free(&res);
 
             Ok(c.into_chunk())
         }
@@ -1541,50 +1563,77 @@ pub(crate) mod parser {
             sl_res: Option<SlotIdx>,
         ) -> Result<ExprRes> {
             let loc = self.lexer.loc();
-            let Self { ctx, lexer, .. } = self;
-            let id = cur_tok_as_id_(lexer, "expect an identifier after opening")?;
+            let id = cur_tok_as_id_(&mut self.lexer, "expect an identifier after opening")?;
             logdebug!("parse expr app id={:?}", id);
 
             if let Some(binop_instr) = binary_op_(id) {
                 // binary operator
                 self.next_tok_();
 
-                let res = get_res!(c, sl_res);
                 let a = self.parse_expr_(c, None)?;
                 let b = self.parse_expr_(c, None)?;
                 self.eat_(closing, "expected closing in infix application")?;
 
+                // free before allocating result
+                c.free(&a);
+                c.free(&b);
+                let res = get_res!(c, sl_res);
+
                 c.emit_instr_(binop_instr(a.slot, b.slot, res.slot));
-                c.free(a);
-                c.free(b);
+                Ok(res)
+            } else if id == "let" {
+                // local definitions.
+                self.next_tok_();
+
+                let b_closing = match self.cur_tok_() {
+                    Tok::LParen => Tok::RParen,
+                    Tok::LBracket => Tok::RBracket,
+                    _ => return Err(perror!(loc, "expecting opening delimiter")),
+                };
+                self.next_tok_();
+
+                let mut locals = vec![];
+                loop {
+                    let x: RStr = cur_tok_as_id_(&mut self.lexer, "expected variable name")?.into();
+                    let sl_x = c.allocate_var_(x)?;
+                    locals.push(sl_x.clone());
+                    self.next_tok_();
+                    self.parse_expr_(c, Some(sl_x.slot))?;
+                    // now the variable is defined.
+                    c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
+
+                    if self.cur_tok_() == b_closing {
+                        break;
+                    }
+                }
+                self.eat_(b_closing, "expected block of bound variables to end")?;
+
+                let res = self.parse_expr_(c, sl_res)?;
+                self.eat_(closing, "expected `let` to be closed")?;
+                // deallocate locals
+                for x in locals {
+                    c.deallocate_slot_(x.slot);
+                }
                 Ok(res)
             } else if id == "list" {
                 // parse into a list
-                self.next_tok_();
+                self.lexer.next();
 
                 let res = get_res!(c, sl_res);
                 logdebug!("parse list (sl_res {:?}, res {:?})", sl_res, res);
 
-                // arguments
-                let args = self.parse_expr_list_(c, closing)?;
-
                 c.emit_instr_(I::LoadNil(res.slot));
-                for a in args.into_iter().rev() {
-                    // res=cons(a,res)
-                    c.emit_instr_(I::Cons(a.slot, res.slot, res.slot));
-                    c.free(a);
+
+                while self.lexer.cur() != closing {
+                    let x = self.parse_expr_(c, None)?;
+                    c.free(&x);
+                    c.emit_instr_(I::Cons(x.slot, res.slot, res.slot));
                 }
+                self.lexer.eat_(closing, "list must be closed")?;
                 Ok(res)
             } else if id == "do" {
-                // parse a series of expressions and `let` bindings.
-                let (locals, res) = self.parse_expr_or_let_seq_(c, closing, sl_res)?;
-
-                // now free the local variables.
-                for x in locals {
-                    logdebug!("variable {:?} goes out of scope", x);
-                    c.deallocate_slot_(x);
-                }
-                Ok(res)
+                // parse a series of expressions.
+                self.parse_expr_seq_(c, closing, sl_res)
             } else {
                 // make a function call.
 
@@ -1595,8 +1644,8 @@ pub(crate) mod parser {
                 logdebug!("parse application (res: {:?})", res);
 
                 let f = c.allocate_temporary_()?;
-                resolve_id_into_slot_(ctx, c, id, loc, f.slot)?;
-                lexer.next();
+                resolve_id_into_slot_(&mut self.ctx, c, id, loc, f.slot)?;
+                self.lexer.next();
                 logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
 
                 // parse arguments
@@ -1611,10 +1660,10 @@ pub(crate) mod parser {
                 // emit call
                 for a in args {
                     c.emit_instr_(I::PushCallArg(a.slot));
-                    c.free(a);
+                    c.free(&a);
                 }
                 c.emit_instr_(I::Call(f.slot, res.slot));
-                c.free(f);
+                c.free(&f);
                 Ok(res)
             }
         }
@@ -1641,98 +1690,24 @@ pub(crate) mod parser {
             Ok(args)
         }
 
-        /// Parse a series of expressions or `let`-bindings.
+        /// Parse a series of expressions.
         ///
-        /// The series must end with an expression, otherwise an error is raised.
-        /// `sl_res` is an optional place to store the result, if any; otherwise
-        /// a temporary is allocated.
-        ///
-        /// Return a tuple `(local_vars, res)`
-        fn parse_expr_or_let_seq_(
+        fn parse_expr_seq_(
             &mut self,
             c: &mut Compiler,
             closing: Tok,
             sl_res: Option<SlotIdx>,
-        ) -> Result<(Vec<SlotIdx>, ExprRes)> {
+        ) -> Result<ExprRes> {
             let res = get_res!(c, sl_res);
-
-            let loc0 = self.lexer.loc();
-            let mut local_vars = vec![];
-            let mut last_is_expr = false;
             loop {
-                match self.cur_tok_() {
-                    t if t == closing => {
-                        // done
-                        break;
-                    }
-                    Tok::LParen => {
-                        self.next_tok_();
-                        let r = self.parse_expr_or_let_app_(c, res.slot, Tok::RParen)?;
-                        last_is_expr = r.1;
-                        if !r.1 {
-                            local_vars.push(r.0);
-                        }
-                    }
-                    Tok::LBracket => {
-                        self.next_tok_();
-                        let r = self.parse_expr_or_let_app_(c, res.slot, Tok::RBracket)?;
-                        last_is_expr = r.1;
-                        if !r.1 {
-                            local_vars.push(r.0);
-                        }
-                    }
-                    Tok::LBrace => {
-                        self.next_tok_();
-                        self.parse_infix_(c, Some(res.slot))?;
-                        last_is_expr = true;
-                    }
-                    _ => {
-                        self.parse_expr_(c, Some(res.slot))?;
-                        last_is_expr = true;
-                    }
+                if self.cur_tok_() == closing {
+                    break; // done
                 }
+                self.parse_expr_(c, Some(res.slot))?;
             }
             self.eat_(closing, "unclosed sequence")?;
 
-            // check that we do return an expression, not a let
-            if !last_is_expr {
-                return Err(perror!(loc0, "block does not end with an expression"));
-            }
-
-            Ok((local_vars, res))
-        }
-
-        /// Parse an item in a `do` group.
-        ///
-        /// Returns a slot and `true` if an expression was parsed,
-        /// `false` if it was a let.
-        fn parse_expr_or_let_app_(
-            &mut self,
-            c: &mut Compiler,
-            sl_res: SlotIdx,
-            closing: Tok,
-        ) -> Result<(SlotIdx, bool)> {
-            let Self { lexer, .. } = self;
-            let id = cur_tok_as_id_(lexer, "expected 'let' or an identifier after opening")?;
-            if id == "let" {
-                // local definition.
-                lexer.next();
-
-                let x_name: RStr =
-                    cur_tok_as_id_(lexer, "expected an identifer after 'let'")?.into();
-                self.next_tok_();
-
-                let sl_x = c.allocate_var_(x_name)?;
-
-                self.parse_expr_(c, Some(sl_x.slot))?;
-                // now the variable is defined.
-                c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
-                self.eat_(closing, "unclosed 'let' expression")?;
-                Ok((sl_x.slot, false))
-            } else {
-                let r = self.parse_expr_app_(c, closing, Some(sl_res))?;
-                Ok((r.slot, true))
-            }
+            Ok(res)
         }
 
         /* TODO: local def?
@@ -1749,7 +1724,6 @@ pub(crate) mod parser {
 
         fn parse_infix_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
             logdebug!("parse infix expr");
-            let res = get_res!(c, sl_res);
             let a = self.parse_expr_(c, None)?;
 
             let loc = self.lexer.loc();
@@ -1760,9 +1734,12 @@ pub(crate) mod parser {
                     lexer.next();
                     let b = self.parse_expr_(c, None)?;
                     self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
+
+                    c.free(&a);
+                    c.free(&b);
+                    let res = get_res!(c, sl_res);
                     c.emit_instr_(binop_instr(a.slot, b.slot, res.slot));
-                    c.free(a);
-                    c.free(b);
+                    Ok(res)
                 } else {
                     // infix function
                     let f = c.allocate_temporary_on_top_()?;
@@ -1774,12 +1751,13 @@ pub(crate) mod parser {
 
                     c.emit_instr_(I::PushCallArg(a.slot));
                     c.emit_instr_(I::PushCallArg(b.slot));
+                    c.free(&b);
+                    c.free(&a);
+                    c.free(&f);
+                    let res = get_res!(c, sl_res);
                     c.emit_instr_(I::Call(f.slot, res.slot));
-                    c.free(b);
-                    c.free(f);
-                    c.free(a);
+                    Ok(res)
                 }
-                Ok(res)
             } else {
                 return Err(perror!(self.lexer.loc(), "expected an infix operator"));
             }
@@ -1848,7 +1826,7 @@ pub(crate) mod parser {
                         } else {
                             // return the existing variable instead.
                             self.next_tok_();
-                            c.free(res);
+                            c.free(&res);
                             return Ok(ExprRes {
                                 slot: sl_var,
                                 temporary: false,
@@ -1899,12 +1877,7 @@ pub(crate) mod parser {
 
         /// Expect the token `t`, and consume it; or return an error.
         fn eat_(&mut self, t: lexer::Tok, errmsg: &str) -> Result<()> {
-            if self.lexer.cur() == t {
-                self.lexer.next();
-                Ok(())
-            } else {
-                Err(perror!(self.lexer.loc(), "{}", errmsg))
-            }
+            self.lexer.eat_(t, errmsg)
         }
     }
 }
