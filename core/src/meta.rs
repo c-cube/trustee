@@ -248,6 +248,13 @@ struct StackFrame {
 mod ml {
     use super::*;
 
+    impl Value {
+        /// Build a cons.
+        pub fn cons(x: Value, y: Value) -> Value {
+            Value::Cons(RPtr::new((x, y)))
+        }
+    }
+
     // TODO: extract to a method, and display that with a margin.
     // Also get optional `ic` to write ==> next to it.
     impl fmt::Debug for Chunk {
@@ -309,7 +316,7 @@ mod ml {
                 Value::Sym(s) => write!(out, ":{}", s.name()),
                 Value::Cons(v) => write!(out, "{{{} . {}}}", v.0, v.1),
                 Value::Str(s) => write!(out, "{:?}", s),
-                Value::Expr(e) => write!(out, "{}", e),
+                Value::Expr(e) => write!(out, "`{}`", e),
                 Value::Thm(th) => write!(out, "{}", th),
                 Value::Chunk(c) => {
                     if let Some(n) = &c.0.name {
@@ -683,6 +690,7 @@ mod ml {
                                 let f = &b.run;
                                 match f(ctx, &call_args) {
                                     Ok(ret_value) => {
+                                        logdebug!("returned {:?}", ret_value);
                                         self.stack[offset_ret] = ret_value;
                                     }
                                     Err(e) => {
@@ -2001,6 +2009,52 @@ pub(crate) mod parser {
     }
 }
 
+macro_rules! get_arg_as {
+    ($f: ident, $what: literal, $p: pat, $v: expr, $ret_ty: ty) => {
+        macro_rules! $f {
+            ($args: expr, $idx: expr) => {
+                match &$args[$idx as usize] {
+                    $p => $v,
+                    _ => {
+                        return Err(Error::new(concat!("type error: expected ", $what)));
+                    }
+                }
+            };
+        }
+    };
+}
+
+get_arg_as!(get_arg_int, "int", Value::Int(i), i, i64);
+//get_arg_as!(get_arg_nil, "nil", (_i @ Value::Nil), _i, ());
+get_arg_as!(get_arg_bool, "bool", Value::Bool(i), *i, bool);
+get_arg_as!(get_arg_str, "string", Value::Str(i), &*i, &str);
+//get_as_of!(get_arg_codearray, "code array", Value::CodeArray(i), i, CodeArray);
+get_arg_as!(get_arg_expr, "expr", Value::Expr(i), i, &k::Expr);
+get_arg_as!(get_arg_thm, "thm", Value::Thm(i), i, k::Thm);
+//get_as_of!(get_slot_sym, "sym", Value::Sym(i), i, k::Ref<str>);
+
+macro_rules! defbuiltin {
+    ($name: literal, $help:literal, $run:expr) => {
+        InstrBuiltin {
+            name: $name,
+            help: $help,
+            run: $run,
+        }
+    };
+}
+
+macro_rules! check_arity {
+    ($args: expr, $n: literal) => {
+        if $args.len() != $n {
+            return Err(Error::new(concat!(
+                "arity mismatch: expected ",
+                stringify!($n),
+                "args"
+            )));
+        }
+    };
+}
+
 mod basic_primitives {
     use super::*;
 
@@ -2024,21 +2078,122 @@ mod basic_primitives {
     */
 
     /// Builtin functions.
-    pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[&InstrBuiltin {
-        name: "print",
-        help: "print a value.",
-        run: |_, args: &[Value]| {
+    pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[
+        &defbuiltin!("print", "print a value.", |_, args: &[Value]| {
             for x in args {
                 println!("> {}", x)
             }
             Ok(Value::Nil)
-        },
-    }];
+        }),
+        &defbuiltin!(
+            "help",
+            "print help for an identifier.",
+            |_, args: &[Value]| -> Result<_> {
+                check_arity!(args, 1);
+                let _s = get_arg_str!(args, 0);
+                // TODO: actually display help
+                Ok(Value::Nil)
+            }
+        ),
+    ];
 }
 
 /// Primitives of the meta-language related to theorem proving.
 mod logic_builtins {
     use super::*;
+
+    /// Builtin functions for manipulating expressions and theorems.
+    pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[
+        &defbuiltin!(
+            "defconst",
+            "Defines a logic constant. Takes `(nc, nth, expr_rhs)` and returns
+            the tuple `{c . th}` where `c` is the constant, with name `nc`,
+            and `th` is the defining theorem with name `nth`",
+            |ctx, args: &[Value]| {
+                check_arity!(args, 3);
+                let nc: k::Symbol = get_arg_str!(args, 0).into();
+                let nthm = get_arg_str!(args, 1);
+                let rhs = get_arg_expr!(args, 2);
+                let def = algo::thm_new_poly_definition(ctx, &nc.name(), rhs.clone())?;
+                ctx.define_lemma(nthm, def.thm.clone());
+                Ok(Value::cons(Value::Expr(def.c), Value::Thm(def.thm)))
+            }
+        ),
+        &defbuiltin!(
+            "defthm",
+            "Defines a theorem. Takes `(name, th)`.",
+            |ctx, args| {
+                check_arity!(args, 2);
+                let th = get_arg_thm!(args, 1);
+                let name = get_arg_str!(args, 0);
+                ctx.define_lemma(&*name, th.clone());
+                Ok(Value::Nil)
+            }
+        ),
+        &defbuiltin!("expr_ty", "Get the type of an expression.", |_ctx, args| {
+            check_arity!(args, 1);
+            let e = get_arg_expr!(args, 0);
+            if e.is_kind() {
+                return Err(Error::new("cannot get type of `kind`"));
+            }
+            Ok(Value::Expr(e.ty().clone()))
+        }),
+        &defbuiltin!(
+            "findconst",
+            "Find the constant with given name.",
+            |ctx, args| {
+                check_arity!(args, 1);
+                let name = get_arg_str!(args, 0);
+                let e = ctx
+                    .find_const(&name)
+                    .ok_or_else(|| Error::new("unknown constant"))?
+                    .0
+                    .clone();
+                Ok(Value::Expr(e))
+            }
+        ),
+        &defbuiltin!(
+            "axiom",
+            "Takes a boolean expression and makes it into an axiom.
+            Might fail if `pledge_no_new_axiom` was called earlier.",
+            |ctx, args| {
+                check_arity!(args, 1);
+                let e = get_arg_expr!(args, 0);
+                let th = ctx.thm_axiom(vec![], e.clone())?;
+                Ok(Value::Thm(th))
+            }
+        ),
+        &defbuiltin!(
+            "assume",
+            "Takes a boolean expression and returns the theorem `e|-e`.",
+            |ctx, args| {
+                check_arity!(args, 1);
+                let e = get_arg_expr!(args, 0);
+                let th = ctx.thm_assume(e.clone())?;
+                Ok(Value::Thm(th))
+            }
+        ),
+        &defbuiltin!(
+            "refl",
+            "Takes an expression `e` and returns the theorem `|-e=e`.",
+            |ctx, args| {
+                check_arity!(args, 1);
+                let e = get_arg_expr!(args, 0);
+                let th = ctx.thm_refl(e.clone());
+                Ok(Value::Thm(th))
+            }
+        ),
+        &defbuiltin!(
+            "sym",
+            "Takes a theorem `A|- t=u` and returns the theorem `A|- u=t`.",
+            |ctx, args| {
+                check_arity!(args, 1);
+                let th1 = get_arg_thm!(args, 0);
+                let th = algo::thm_sym(ctx, th1.clone())?;
+                Ok(Value::Thm(th))
+            }
+        ),
+    ];
 
     // TODO: defty
 
@@ -2076,37 +2231,34 @@ mod logic_builtins {
     use Rule as R;
     */
 
-    /// Builtin functions for manipulating expressions and theorems.
-    pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[
-        /* TODO
-        &R::Defconst,
-        &R::Defthm,
-        &R::Decl,
-        &R::SetInfix,
-        &R::SetBinder,
-        &R::ExprTy,
-        &R::Findconst,
-        &R::Findthm,
-        &R::Axiom,
-        &R::Assume,
-        &R::Refl,
-        &R::Sym,
-        &R::Trans,
-        &R::Congr,
-        &R::CongrTy,
-        &R::Cut,
-        &R::BoolEq,
-        &R::BoolEqIntro,
-        &R::BetaConv,
-        &R::Instantiate,
-        &R::Abs,
-        &R::AbsExpr,
-        &R::Concl,
-        &R::HolPrelude,
-        &R::PledgeNoMoreAxioms,
-        &R::Rewrite,
-        */
-    ];
+    /* TODO
+    &R::Defconst,
+    &R::Defthm,
+    &R::Decl,
+    &R::SetInfix,
+    &R::SetBinder,
+    &R::ExprTy,
+    &R::Findconst,
+    &R::Findthm,
+    &R::Axiom,
+    &R::Assume,
+    &R::Refl,
+    &R::Sym,
+    &R::Trans,
+    &R::Congr,
+    &R::CongrTy,
+    &R::Cut,
+    &R::BoolEq,
+    &R::BoolEqIntro,
+    &R::BetaConv,
+    &R::Instantiate,
+    &R::Abs,
+    &R::AbsExpr,
+    &R::Concl,
+    &R::HolPrelude,
+    &R::PledgeNoMoreAxioms,
+    &R::Rewrite,
+    */
 
     /* TODO
     impl InstrBuiltin for Rule {
@@ -2144,32 +2296,12 @@ mod logic_builtins {
         // th1 th2 -- mp(th1,th2)
         fn run(&self, st: &mut State) -> Result<()> {
             match self {
-                R::Defconst => {
-                    let rhs = st.pop1_expr()?;
-                    let nthm = &st.pop1_sym()?;
-                    let nc = st.pop1_sym()?;
-                    let def =
-                        crate::algo::thm_new_poly_definition(st.ctx, &nc, rhs)?;
-                    st.ctx.define_lemma(nthm, def.thm);
-                }
-                R::Defthm => {
-                    let th = st.pop1_thm()?;
-                    let name = st.pop1_sym()?;
-                    st.ctx.define_lemma(&name, th);
-                }
                 R::Decl => {
                     let ty = st.pop1_expr()?;
                     let name = st.pop1_sym()?;
                     let _e = st
                         .ctx
                         .mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
-                }
-                R::ExprTy => {
-                    let e = st.pop1_expr()?;
-                    if e.is_kind() {
-                        return Err(Error::new("cannot get type of `kind`"));
-                    }
-                    st.stack.push(Value::Expr(e.ty().clone()))
                 }
                 R::SetInfix => {
                     let j = st.pop1_int()?;
@@ -2184,16 +2316,6 @@ mod logic_builtins {
                     let f = syntax::Fixity::Binder((0, i as u16));
                     st.ctx.set_fixity(&*c, f);
                 }
-                R::Findconst => {
-                    let name = st.pop1_sym()?;
-                    let e = st
-                        .ctx
-                        .find_const(&name)
-                        .ok_or_else(|| Error::new("unknown constant"))?
-                        .0
-                        .clone();
-                    st.push_val(Value::Expr(e))
-                }
                 R::Findthm => {
                     let name = st.pop1_sym()?;
                     let th = st
@@ -2201,26 +2323,6 @@ mod logic_builtins {
                         .find_lemma(&name)
                         .ok_or_else(|| Error::new("unknown theorem"))?
                         .clone();
-                    st.push_val(Value::Thm(th))
-                }
-                R::Axiom => {
-                    let e = st.pop1_expr()?;
-                    let th = st.ctx.thm_axiom(vec![], e)?;
-                    st.push_val(Value::Thm(th))
-                }
-                R::Assume => {
-                    let e = st.pop1_expr()?;
-                    let th = st.ctx.thm_assume(e)?;
-                    st.push_val(Value::Thm(th))
-                }
-                R::Refl => {
-                    let e = st.pop1_expr()?;
-                    let th = st.ctx.thm_refl(e);
-                    st.push_val(Value::Thm(th))
-                }
-                R::Sym => {
-                    let th1 = st.pop1_thm()?;
-                    let th = crate::algo::thm_sym(st.ctx, th1)?;
                     st.push_val(Value::Thm(th))
                 }
                 R::Trans => {

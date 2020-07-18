@@ -3,7 +3,7 @@
 //! These strings are accessed via a thin pointer and are refcounted
 //! with a `u32`. They cannot be bigger than `u32::MAX`.
 
-use crate::rptr::RPtr;
+use crate::{kernel_of_trust as k, rptr::RPtr};
 use std::{fmt::Debug, ops::Deref, u32};
 
 /// A refcounted string in one block on the heap.
@@ -78,6 +78,11 @@ impl From<&str> for RStr {
 impl From<String> for RStr {
     fn from(s: String) -> Self {
         RStr::from_string(s)
+    }
+}
+impl Into<k::Symbol> for &RStr {
+    fn into(self) -> k::Symbol {
+        k::Symbol::from_str(&*self)
     }
 }
 
