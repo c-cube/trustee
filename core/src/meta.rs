@@ -8,6 +8,7 @@ use {
     crate::{
         algo,
         kernel_of_trust::{self as k, Ctx},
+        rptr::RPtr,
         rstr::RStr,
         syntax, Error, Result,
     },
@@ -41,6 +42,8 @@ pub enum Value {
     /// an embedded rust string literal.
     Str(RStr),
     Expr(k::Expr),
+    /// Cons: a pair of values. This is the basis for lists.
+    Cons(RPtr<(Value, Value)>),
     Thm(k::Thm),
     /// An executable chunk.
     Chunk(Chunk),
@@ -280,7 +283,8 @@ mod ml {
                 Value::Nil => write!(out, "nil"),
                 Value::Int(i) => write!(out, "{}", i),
                 Value::Bool(b) => write!(out, "{}", b),
-                Value::Sym(s) => write!(out, "{}", s.name()),
+                Value::Sym(s) => write!(out, ":{}", s.name()),
+                Value::Cons(v) => write!(out, "({} . {})", v.0, v.1),
                 Value::Str(s) => write!(out, "{:?}", s),
                 Value::Expr(e) => write!(out, "{}", e),
                 Value::Thm(th) => write!(out, "{}", th),
@@ -306,6 +310,8 @@ mod ml {
                 (Int(i), Int(j)) => i == j,
                 (Bool(i), Bool(j)) => i == j,
                 (Sym(i), Sym(j)) => i == j,
+                (Str(i), Str(j)) => i == j,
+                (Cons(i), Cons(j)) => i == j,
                 (Expr(i), Expr(j)) => i == j,
                 _ => false, // other cases are not comparable
             }
@@ -880,6 +886,7 @@ mod lexer {
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum Tok<'b> {
         Eof,
+        ColonId(&'b str),      // `:foo`
         Id(&'b str),           // identifier
         QuotedString(&'b str), // "some string"
         QuotedExpr(&'b str),   // `some expr`
@@ -899,7 +906,6 @@ mod lexer {
             b'a'..=b'z'
             | b'A'..=b'Z'
             | b'_'
-            | b':'
             | b'='
             | b'+'
             | b'-'
@@ -1009,6 +1015,20 @@ mod lexer {
                     self.col += j - self.i;
                     self.i = j;
                     Tok::Int(n)
+                }
+                b':' => {
+                    let mut j = self.i + 1;
+                    while j < self.bytes.len() && {
+                        let c = self.bytes[j];
+                        is_id_char(c) || (j > self.i + 1 && c.is_ascii_digit())
+                    } {
+                        j += 1;
+                    }
+                    let tok = std::str::from_utf8(&self.bytes[self.i + 1..j])
+                        .expect("invalid utf8 slice");
+                    self.col += j - self.i;
+                    self.i = j;
+                    Tok::ColonId(tok)
                 }
                 b'"' => {
                     let mut j = self.i + 1;
@@ -1355,9 +1375,11 @@ mod parser {
             let loc = self.lexer.loc();
             match t {
                 Tok::Eof => return Err(perror!(loc, "unexpected EOF")),
-                Tok::Id(_) | Tok::QuotedString(..) | Tok::QuotedExpr(..) | Tok::Int(..) => {
-                    return Err(perror!(loc, "unexpected token {:?}", t))
-                }
+                Tok::Id(_)
+                | Tok::QuotedString(..)
+                | Tok::QuotedExpr(..)
+                | Tok::Int(..)
+                | Tok::ColonId(..) => return Err(perror!(loc, "unexpected token {:?}", t)),
                 Tok::LParen | Tok::LBracket => {
                     let closing = if t == Tok::LParen {
                         Tok::RParen
@@ -1435,7 +1457,8 @@ mod parser {
                 )?
                 .into();
                 self.next_tok_();
-                vars.push(e)
+                logdebug!("add var {:?}", e);
+                vars.push(e);
             }
             self.next_tok_();
 
@@ -1748,10 +1771,20 @@ mod parser {
                 }
                 Tok::Id(id) => {
                     if let Some(sl) = c.find_slot_of_var(id) {
+                        // return the existing variable instead.
+                        return Ok(ExprRes {
+                            slot: sl,
+                            temporary: false,
+                        });
                     } else {
                         resolve_id_into_slot_(ctx, c, id, loc, res.slot)?;
                     }
                     lexer.next();
+                }
+                Tok::ColonId(s) => {
+                    let lidx = c.allocate_local_(Value::Sym(s.into()))?;
+                    self.next_tok_();
+                    c.emit_instr_(I::LoadLocal(lidx, res.slot))
                 }
                 Tok::QuotedString(s) => {
                     let lidx = c.allocate_local_(Value::Str(s.into()))?;
