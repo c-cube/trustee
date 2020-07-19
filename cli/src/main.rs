@@ -13,7 +13,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut vm = meta::VM::new(&mut ctx);
     if let Some(x) = args.opt_value_from_str::<&str, String>("--include")? {
-        vm.run(&format!(r#"(load_file (source "{}"))"#, &x))?;
+        vm.run(&format!(r#"(eval (load_file "{}"))"#, &x))?;
     }
 
     let mut rl = rustyline::Editor::<()>::new();
@@ -30,7 +30,10 @@ fn main() -> anyhow::Result<()> {
 
                 log::info!("parse line {:?}", &line);
                 match vm.run(&line) {
-                    Ok(()) => {}
+                    Ok(meta::Value::Nil) => {}
+                    Ok(v) => {
+                        println!("> {}", v);
+                    }
                     Err(e) => {
                         log::error!("err: {}", e);
                     }
