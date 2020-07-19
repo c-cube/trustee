@@ -753,8 +753,18 @@ impl fmt::Display for Thm {
         if self.hyps().len() == 0 {
             write!(out, "|- {}", self.concl())
         } else {
+            let mut first = true;
             for h in self.hyps() {
-                write!(out, "    {}\n", h)?;
+                if out.alternate() {
+                    write!(out, "    {}\n", h)?;
+                } else {
+                    if first {
+                        first = false
+                    } else {
+                        write!(out, ", ")?;
+                    }
+                    write!(out, "{}", h)?;
+                }
             }
             write!(out, " |- {}", self.concl())
         }
