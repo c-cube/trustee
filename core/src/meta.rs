@@ -1445,6 +1445,17 @@ pub(crate) mod parser {
         } else if let Some(ch) = ctx.find_meta_chunk(s) {
             let lidx = c.allocate_local_(Value::Chunk(ch.clone()))?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
+        } else if let Some(e) = ctx.find_const(s) {
+            let lidx = c.allocate_local_(Value::Expr(e.0.clone()))?;
+            c.emit_instr_(I::LoadLocal(lidx, sl));
+        } else if let Some(th) = ctx.find_lemma(s) {
+            let lidx = c.allocate_local_(Value::Thm(th.clone()))?;
+            c.emit_instr_(I::LoadLocal(lidx, sl));
+        // } else if c.defines_const(s) {
+        // TODO: emit `add_local(s); add_local(builtin("find_const")); call
+        //
+        // or:
+        // TODO: parse and eval the top statements one by one.
         } else {
             return Err(perror!(loc, "unknown identifier '{}'", s));
         }
@@ -1538,7 +1549,10 @@ pub(crate) mod parser {
                 | Tok::QuotedString(..)
                 | Tok::QuotedExpr(..)
                 | Tok::Int(..)
-                | Tok::ColonId(..) => return Err(perror!(loc, "unexpected token {:?}", t)),
+                | Tok::ColonId(..) => {
+                    let r = self.parse_expr_(c, Some(sl_res))?;
+                    c.free(&r);
+                }
                 Tok::LParen | Tok::LBracket => {
                     let closing = get_closing!(t);
                     self.lexer.next();
@@ -2387,35 +2401,6 @@ mod logic_builtins {
                         .find_lemma(&name)
                         .ok_or_else(|| Error::new("unknown theorem"))?
                         .clone();
-                    st.push_val(Value::Thm(th))
-                }
-                R::CongrTy => {
-                    let ty = st.pop1_expr()?;
-                    let th1 = st.pop1_thm()?;
-                    let th = st.ctx.thm_congr_ty(th1, &ty)?;
-                    st.push_val(Value::Thm(th))
-                }
-                R::Cut => {
-                    let th2 = st.pop1_thm()?;
-                    let th1 = st.pop1_thm()?;
-                    let th = st.ctx.thm_cut(th1, th2)?;
-                    st.push_val(Value::Thm(th))
-                }
-                R::BoolEq => {
-                    let th2 = st.pop1_thm()?;
-                    let th1 = st.pop1_thm()?;
-                    let th = st.ctx.thm_bool_eq(th1, th2)?;
-                    st.push_val(Value::Thm(th))
-                }
-                R::BoolEqIntro => {
-                    let th2 = st.pop1_thm()?;
-                    let th1 = st.pop1_thm()?;
-                    let th = st.ctx.thm_bool_eq_intro(th1, th2)?;
-                    st.push_val(Value::Thm(th))
-                }
-                R::BetaConv => {
-                    let e = st.pop1_expr()?;
-                    let th = st.ctx.thm_beta_conv(&e)?;
                     st.push_val(Value::Thm(th))
                 }
                 R::Instantiate => {
