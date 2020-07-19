@@ -225,7 +225,7 @@ pub struct VM<'a> {
     /// This is typically reset before each function call.
     call_args: Vec<Value>,
     /// In case of error, the error message lives here.
-    result: Result<()>,
+    result: Result<Value>,
 }
 
 /// A stack frame.
@@ -405,7 +405,7 @@ mod ml {
                 stack: Vec::with_capacity(256),
                 ctrl_stack: vec![],
                 call_args: vec![],
-                result: Ok(()),
+                result: Ok(Value::Nil),
             }
         }
 
@@ -556,18 +556,19 @@ mod ml {
         */
 
         /// Main execution loop.
-        fn exec_loop_(&mut self) -> Result<()> {
+        fn exec_loop_(&mut self) -> Result<Value> {
             use Instr as I;
             while let Some(sf) = self.ctrl_stack.last_mut() {
                 assert!((sf.ic as usize) < sf.chunk.0.instrs.len());
                 let instr = sf.chunk.0.instrs[sf.ic as usize];
-                sf.ic += 1;
                 logdebug!(
                     "exec loop: ic={} stacklen={} instr={:?}",
                     sf.ic,
                     self.stack.len(),
                     instr
                 );
+
+                sf.ic += 1; // ready for next iteration
                 match instr {
                     I::Move(s0, s1) => {
                         let s0 = abs_offset!(sf, s0);
@@ -686,14 +687,24 @@ mod ml {
                         } = self;
                         match &stack[sl_f] {
                             Value::Builtin(b) => {
-                                logdebug!("call builtin {:?}", &b.name);
+                                logdebug!(
+                                    "call builtin {:?} with {} args",
+                                    &b.name,
+                                    call_args.len()
+                                );
                                 let f = &b.run;
-                                match f(ctx, &call_args) {
+                                let res = f(ctx, &call_args);
+                                call_args.clear();
+                                match res {
                                     Ok(ret_value) => {
                                         logdebug!("returned {:?}", ret_value);
                                         self.stack[offset_ret] = ret_value;
                                     }
-                                    Err(e) => {
+                                    Err(mut e) => {
+                                        e = e.set_source(Error::new_string(format!(
+                                            "while calling {}",
+                                            b.name
+                                        )));
                                         self.result = Err(e);
                                         break;
                                     }
@@ -775,7 +786,14 @@ mod ml {
                             self.result = Err(Error::new("invalid res offset"));
                             break;
                         }
-                        self.stack[res_offset as usize] = self.stack[sl_v].clone();
+
+                        let ret_val = self.stack[sl_v].clone();
+
+                        if self.ctrl_stack.is_empty() {
+                            self.result = Ok(ret_val); // no more frames, will return
+                        } else {
+                            self.stack[res_offset as usize] = ret_val;
+                        }
                         // pop slots of the function call
                         self.stack.truncate(start as usize);
                     }
@@ -817,22 +835,6 @@ mod ml {
             Ok(())
         }
 
-        /*
-        match self.ctrl_stack.last_mut() {
-            None => break 'top,
-            Some((ca, idx)) => {
-                debug_assert!(*idx < ca.0.len());
-                let i = ca.0[*idx].clone();
-                self.cur_i = Some(i);
-                *idx += 1; // point to next instruction in `ca`
-                if *idx >= ca.0.len() {
-                    // last instruction: tailcall
-                    self.ctrl_stack.pop();
-                }
-            }
-            }
-        */
-
         /// Call chunk `c` with arguments in `self.call_args`,
         /// put result into slot `offset`.
         fn exec_chunk_(&mut self, c: Chunk, res_offset: u32) -> Result<()> {
@@ -858,10 +860,10 @@ mod ml {
         }
 
         /// Call toplevel chunk `c`
-        fn exec_top_chunk_(&mut self, c: Chunk) -> Result<()> {
+        fn exec_top_chunk_(&mut self, c: Chunk) -> Result<Value> {
             assert_eq!(self.call_args.len(), 0);
             self.exec_chunk_(c, 0)?;
-            self.exec_loop_() // enter main loop
+            self.exec_loop_()
         }
 
         /* TODO
@@ -917,11 +919,11 @@ mod ml {
             self.stack.clear();
             self.ctrl_stack.clear();
             self.call_args.clear();
-            self.result = Ok(());
+            self.result = Ok(Value::Nil);
         }
 
         /// Parse and execute the given code.
-        pub fn run(&mut self, s: &str) -> Result<()> {
+        pub fn run(&mut self, s: &str) -> Result<Value> {
             use parser::*;
 
             self.reset();
@@ -933,7 +935,7 @@ mod ml {
             let c = p.parse_top()?;
             logdebug!("chunk: {:?}", &c);
 
-            let res = dbg!(self.exec_top_chunk_(c));
+            let res = self.exec_top_chunk_(c);
             if res.is_err() {
                 let mut s = vec![];
                 self.print_trace_(&mut s).unwrap();
@@ -2049,7 +2051,7 @@ macro_rules! check_arity {
             return Err(Error::new(concat!(
                 "arity mismatch: expected ",
                 stringify!($n),
-                "args"
+                " args"
             )));
         }
     };
@@ -2058,30 +2060,11 @@ macro_rules! check_arity {
 mod basic_primitives {
     use super::*;
 
-    /* TODO: load_file
-    I::LoadFile(s0, s1) => {
-        let s0 = get_slot_str!(self, abs_offset!(sf, s0));
-        let s1 = abs_offset!(sf, s1);
-        let content = match std::fs::read_to_string(&**s0 as &str) {
-            Ok(x) => x.into(),
-            Err(e) => {
-                // TODO: some kind of exception handling
-                self.result = Err(Error::new_string(format!(
-                    "cannot load file `{}: {}",
-                    s0, e
-                )));
-                break;
-            }
-        };
-        self.stack[s1] = Value::Str(content)
-    }
-    */
-
     /// Builtin functions.
     pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[
         &defbuiltin!("print", "print a value.", |_, args: &[Value]| {
             for x in args {
-                println!("> {}", x)
+                println!("print: {}", x)
             }
             Ok(Value::Nil)
         }),
@@ -2093,6 +2076,37 @@ mod basic_primitives {
                 let _s = get_arg_str!(args, 0);
                 // TODO: actually display help
                 Ok(Value::Nil)
+            }
+        ),
+        &defbuiltin!(
+            "eval",
+            "Takes a string, and returns the value yielded by evaluating it.",
+            |ctx, args: &[Value]| -> Result<_> {
+                check_arity!(args, 1);
+                let s = get_arg_str!(args, 0);
+                logdebug!("evaluate `{}`", s);
+                let mut vm = VM::new(ctx);
+                // evaluate `s` in a new VM.
+                let v = vm.run(s).map_err(|e| {
+                    e.set_source(Error::new_string(format!("while evaluating {}", s)))
+                })?;
+                Ok(v)
+            }
+        ),
+        &defbuiltin!(
+            "load_file",
+            "Takes a string `f`, and returns content of file `f` as a string.",
+            |_ctx, args: &[Value]| -> Result<_> {
+                check_arity!(args, 1);
+                let s = get_arg_str!(args, 0);
+                let content = match std::fs::read_to_string(&*s as &str) {
+                    Ok(x) => x.into(),
+                    Err(e) => {
+                        // TODO: some kind of exception handling
+                        return Err(Error::new_string(format!("cannot load file `{}: {}", s, e)));
+                    }
+                };
+                Ok(Value::Str(content))
             }
         ),
     ];
@@ -2193,129 +2207,179 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
+        &defbuiltin!(
+            "trans",
+            "Transitivity", // TODO Takes ` theorem `A|- t=u` and returns the theorem `A|- u=t`.",
+            |ctx, args| {
+                check_arity!(args, 2);
+                let th1 = get_arg_thm!(args, 0).clone();
+                let th2 = get_arg_thm!(args, 1).clone();
+                let th = ctx.thm_trans(th1, th2)?;
+                Ok(Value::Thm(th))
+            }
+        ),
+        &defbuiltin!(
+            "congr",
+            "Congruence. Takes `A|- f=g` and `B|- t=u`, returns `A,B|- f t=g u`",
+            |ctx, args| {
+                check_arity!(args, 2);
+                let th1 = get_arg_thm!(args, 0).clone();
+                let th2 = get_arg_thm!(args, 1).clone();
+                let th = ctx.thm_congr(th1, th2)?;
+                Ok(Value::Thm(th))
+            }
+        ),
+        &defbuiltin!(
+            "decl",
+            "Declare a symbol. Takes a symbol `n`, and a type.",
+            |ctx, args| {
+                check_arity!(args, 2);
+                let name = get_arg_str!(args, 0);
+                let ty = get_arg_expr!(args, 1);
+                let e = ctx.mk_new_const(k::Symbol::from_str(name), ty.clone())?;
+                Ok(Value::Expr(e))
+            }
+        ),
+        &defbuiltin!(
+            "set_infix",
+            "Make a symbol infix.
+
+            Takes a symbol `n`, and a pair of integers `i`,`j` as left and right
+            precedences.",
+            |ctx, args| {
+                check_arity!(args, 3);
+                let c = get_arg_str!(args, 0);
+                let i = get_arg_int!(args, 1);
+                let j = get_arg_int!(args, 2);
+                let f = syntax::Fixity::Infix((*i as u16, *j as u16));
+                ctx.set_fixity(&*c, f);
+                Ok(Value::Nil)
+            }
+        ),
+        &defbuiltin!("set_binder", "Make a symbol a binder.", |ctx, args| {
+            check_arity!(args, 2);
+            let c = get_arg_str!(args, 0);
+            let i = get_arg_int!(args, 1);
+            let f = syntax::Fixity::Binder((0, *i as u16));
+            ctx.set_fixity(&*c, f);
+            Ok(Value::Nil)
+        }),
+        &defbuiltin!(
+            "abs",
+            "Takes `x`, `ty`, and `A|- t=u`, and returns
+            the theorem `A|- \\x:ty. t = \\x:ty. u`.",
+            |ctx, args| {
+                check_arity!(args, 3);
+                let v = get_arg_str!(args, 0);
+                let ty = get_arg_expr!(args, 1);
+                let th = get_arg_thm!(args, 2);
+                let v = k::Var::from_str(&*v, ty.clone());
+                let th = ctx.thm_abs(&v, th.clone())?;
+                Ok(Value::Thm(th))
+            }
+        ),
+        &defbuiltin!(
+            "abs_expr",
+            "Takes expr `x`, and `A|- t=u`, and returns
+            the theorem `A|- \\x:ty. t = \\x:ty. u`.",
+            |ctx, args| {
+                check_arity!(args, 2);
+                let e = get_arg_expr!(args, 0);
+                let v = e
+                    .as_var()
+                    .ok_or_else(|| Error::new("abs_expr: expression must be a variable"))?;
+                let th = get_arg_thm!(args, 1);
+                let th = ctx.thm_abs(v, th.clone())?;
+                Ok(Value::Thm(th))
+            }
+        ),
+        &defbuiltin!(
+            "concl",
+            "Takes a theorem `A |- t`, and returns `t`.",
+            |_ctx, args| {
+                check_arity!(args, 1);
+                let th = get_arg_thm!(args, 0);
+                Ok(Value::Expr(th.concl().clone()))
+            }
+        ),
+        &defbuiltin!(
+            "hol_prelude",
+            "Returns the builtin HOL prelude, as a string.",
+            |_ctx, args| {
+                check_arity!(args, 0);
+                Ok(Value::Str(super::SRC_PRELUDE_HOL.into()))
+            }
+        ),
+        &defbuiltin!(
+            "pledge_no_new_axiom",
+            "Prevent any further calls to `axiom` to succeed.",
+            |ctx, args| {
+                check_arity!(args, 0);
+                ctx.pledge_no_new_axiom();
+                Ok(Value::Nil)
+            }
+        ),
+        &defbuiltin!(
+            "congr_ty",
+            "Congruence rule on a type argument.",
+            |ctx, args| {
+                check_arity!(args, 2);
+                let th1 = get_arg_thm!(args, 0);
+                let ty = get_arg_expr!(args, 1);
+                let th = ctx.thm_congr_ty(th1.clone(), &ty)?;
+                Ok(Value::Thm(th))
+            }
+        ),
+        &defbuiltin!("cut", "Cut rule.", |ctx, args| {
+            check_arity!(args, 2);
+            let th1 = get_arg_thm!(args, 0);
+            let th2 = get_arg_thm!(args, 1);
+            let th = ctx.thm_cut(th1.clone(), th2.clone())?;
+            Ok(Value::Thm(th))
+        }),
+        &defbuiltin!(
+            "bool_eq",
+            "Boolean equality. Takes `A|- t=u` and `B|- t`, returns `A,B|- u`.",
+            |ctx, args| {
+                check_arity!(args, 2);
+                let th1 = get_arg_thm!(args, 0);
+                let th2 = get_arg_thm!(args, 1);
+                let th = ctx.thm_bool_eq(th1.clone(), th2.clone())?;
+                Ok(Value::Thm(th))
+            }
+        ),
+        &defbuiltin!(
+            "bool_eq_intro",
+            "Boolean equality introduction.
+            Takes `A, t|- u` and `B,u |- t`, returns `A,B|- t=u`.",
+            |ctx, args| {
+                check_arity!(args, 2);
+                let th1 = get_arg_thm!(args, 0);
+                let th2 = get_arg_thm!(args, 1);
+                let th = ctx.thm_bool_eq_intro(th1.clone(), th2.clone())?;
+                Ok(Value::Thm(th))
+            }
+        ),
+        &defbuiltin!(
+            "beta_conv",
+            "Beta-conversion rule.
+            Takes expr `(\\x. t) u`, returns `|- (\\x. t) u = t[u/x]`.",
+            |ctx, args| {
+                check_arity!(args, 1);
+                let e = get_arg_expr!(args, 0);
+                let th = ctx.thm_beta_conv(e)?;
+                Ok(Value::Thm(th))
+            }
+        ),
     ];
 
     // TODO: defty
 
-    /*
-    #[derive(Debug, Clone)]
-    enum Rule {
-        Defconst,
-        Defthm,
-        Decl,
-        SetInfix,
-        SetBinder,
-        Findconst,
-        Findthm,
-        ExprTy,
-        Axiom,
-        Assume,
-        Refl,
-        Sym,
-        Trans,
-        Congr,
-        CongrTy,
-        Cut,
-        BoolEq,
-        BoolEqIntro,
-        BetaConv,
-        Instantiate,
-        Abs,
-        AbsExpr,
-        Concl,
-        HolPrelude,
-        PledgeNoMoreAxioms,
-        Rewrite,
-    }
-
-    use Rule as R;
-    */
-
     /* TODO
-    &R::Defconst,
-    &R::Defthm,
-    &R::Decl,
-    &R::SetInfix,
-    &R::SetBinder,
-    &R::ExprTy,
-    &R::Findconst,
-    &R::Findthm,
-    &R::Axiom,
-    &R::Assume,
-    &R::Refl,
-    &R::Sym,
-    &R::Trans,
-    &R::Congr,
-    &R::CongrTy,
-    &R::Cut,
-    &R::BoolEq,
-    &R::BoolEqIntro,
-    &R::BetaConv,
-    &R::Instantiate,
-    &R::Abs,
-    &R::AbsExpr,
-    &R::Concl,
-    &R::HolPrelude,
-    &R::PledgeNoMoreAxioms,
-    &R::Rewrite,
-    */
-
-    /* TODO
-    impl InstrBuiltin for Rule {
-        fn name(&self) -> &'static str {
-            match self {
-                R::Defconst => "defconst",
-                R::Defthm => "defthm",
-                R::Decl => "decl",
-                R::SetInfix => "set_infix",
-                R::SetBinder => "set_binder",
-                R::ExprTy => "expr_ty",
-                R::Findconst => "findconst",
-                R::Findthm => "findthm",
-                R::Axiom => "axiom",
-                R::Assume => "assume",
-                R::Refl => "refl",
-                R::Sym => "sym",
-                R::Trans => "trans",
-                R::Congr => "congr",
-                R::CongrTy => "congr_ty",
-                R::Cut => "cut",
-                R::BoolEq => "bool_eq",
-                R::BoolEqIntro => "bool_eq_intro",
-                R::BetaConv => "beta_conv",
-                R::Instantiate => "subst",
-                R::Abs => "abs",
-                R::AbsExpr => "abs_expr",
-                R::Concl => "concl",
-                R::HolPrelude => "hol_prelude",
-                R::PledgeNoMoreAxioms => "pledge_no_more_axioms",
-                R::Rewrite => "rw",
-            }
-        }
 
         // th1 th2 -- mp(th1,th2)
         fn run(&self, st: &mut State) -> Result<()> {
             match self {
-                R::Decl => {
-                    let ty = st.pop1_expr()?;
-                    let name = st.pop1_sym()?;
-                    let _e = st
-                        .ctx
-                        .mk_new_const(k::Symbol::from_rc_str(&name), ty)?;
-                }
-                R::SetInfix => {
-                    let j = st.pop1_int()?;
-                    let i = st.pop1_int()?;
-                    let c = st.pop1_sym()?;
-                    let f = syntax::Fixity::Infix((i as u16, j as u16));
-                    st.ctx.set_fixity(&*c, f);
-                }
-                R::SetBinder => {
-                    let i = st.pop1_int()?;
-                    let c = st.pop1_sym()?;
-                    let f = syntax::Fixity::Binder((0, i as u16));
-                    st.ctx.set_fixity(&*c, f);
-                }
                 R::Findthm => {
                     let name = st.pop1_sym()?;
                     let th = st
@@ -2323,18 +2387,6 @@ mod logic_builtins {
                         .find_lemma(&name)
                         .ok_or_else(|| Error::new("unknown theorem"))?
                         .clone();
-                    st.push_val(Value::Thm(th))
-                }
-                R::Trans => {
-                    let th2 = st.pop1_thm()?;
-                    let th1 = st.pop1_thm()?;
-                    let th = st.ctx.thm_trans(th1, th2)?;
-                    st.push_val(Value::Thm(th))
-                }
-                R::Congr => {
-                    let th2 = st.pop1_thm()?;
-                    let th1 = st.pop1_thm()?;
-                    let th = st.ctx.thm_congr(th1, th2)?;
                     st.push_val(Value::Thm(th))
                 }
                 R::CongrTy => {
@@ -2390,33 +2442,6 @@ mod logic_builtins {
 
                     let th = st.ctx.thm_instantiate(th, &subst)?;
                     st.push_val(Value::Thm(th))
-                }
-                R::Abs => {
-                    let ty = st.pop1_expr()?;
-                    let v = st.pop1_sym()?;
-                    let th = st.pop1_thm()?;
-                    let v = k::Var::from_str(&*v, ty);
-                    let th = st.ctx.thm_abs(&v, th)?;
-                    st.push_val(Value::Thm(th))
-                }
-                R::AbsExpr => {
-                    let e = st.pop1_expr()?;
-                    let v = e.as_var().ok_or_else(|| {
-                        Error::new("abs_expr: expression must be a variable")
-                    })?;
-                    let th = st.pop1_thm()?;
-                    let th = st.ctx.thm_abs(v, th)?;
-                    st.push_val(Value::Thm(th))
-                }
-                R::Concl => {
-                    let th = st.pop1_thm()?;
-                    st.push_val(Value::Expr(th.concl().clone()))
-                }
-                R::HolPrelude => {
-                    st.push_val(Value::Source(super::SRC_PRELUDE_HOL.into()))
-                }
-                R::PledgeNoMoreAxioms => {
-                    st.ctx.pledge_no_new_axiom();
                 }
                 R::Rewrite => {
                     let rw = st.pop1()?;
@@ -2481,7 +2506,7 @@ pub const SRC_PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
 ///
 /// This has some overhead, if you want to execute a lot of code efficienty
 /// (e.g. in a CLI) consider creating a `VM` and re-using it.
-pub fn run_code(ctx: &mut Ctx, s: &str) -> Result<()> {
+pub fn run_code(ctx: &mut Ctx, s: &str) -> Result<Value> {
     let mut st = VM::new(ctx);
     st.run(s)
 }
