@@ -10,6 +10,6 @@ crate-type = ["staticlib", "cdylib"]
 [dependencies]
 trustee = {git = "https://github.com/c-cube/trustee.git", features=["arc"], version = "*"}
 trustee_opentheory = {git = "https://github.com/c-cube/trustee.git", version = "*"}
-ocaml = "^0.14.0"
+ocaml = "^0.14.2"
 
 [workspace]

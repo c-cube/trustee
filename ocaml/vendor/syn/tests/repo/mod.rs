@@ -8,7 +8,26 @@ use std::path::Path;
 use tar::Archive;
 use walkdir::DirEntry;
 
-const REVISION: &str = "2c462a2f776b899d46743b1b44eda976e846e61d";
+const REVISION: &str = "46e85b4328fe18492894093c1092dfe509df4370";
+
+#[rustfmt::skip]
+static EXCLUDE: &[&str] = &[
+    // Deprecated anonymous parameter syntax in traits
+    "test/ui/issues/issue-13105.rs",
+    "test/ui/issues/issue-13775.rs",
+    "test/ui/issues/issue-34074.rs",
+    "test/ui/proc-macro/trait-fn-args-2015.rs",
+
+    // not actually test cases
+    "test/rustdoc-ui/test-compile-fail2.rs",
+    "test/rustdoc-ui/test-compile-fail3.rs",
+    "test/ui/include-single-expr-helper.rs",
+    "test/ui/include-single-expr-helper-1.rs",
+    "test/ui/issues/auxiliary/issue-21146-inc.rs",
+    "test/ui/json-bom-plus-crlf-multifile-aux.rs",
+    "test/ui/macros/auxiliary/macro-comma-support.rs",
+    "test/ui/macros/auxiliary/macro-include-items-expr.rs",
+];
 
 pub fn base_dir_filter(entry: &DirEntry) -> bool {
     let path = entry.path();
@@ -42,45 +61,15 @@ pub fn base_dir_filter(entry: &DirEntry) -> bool {
         }
     }
 
-    match path {
-        // TODO: mut receiver in fn pointer type: `fn(mut self)`
-        // https://github.com/dtolnay/syn/issues/765
-        "test/ui/parser/self-param-syntactic-pass.rs" |
+    !EXCLUDE.contains(&path)
+}
 
-        // TODO: const trait impls and bounds
-        // https://github.com/dtolnay/syn/issues/766
-        // https://github.com/dtolnay/syn/issues/767
-        "test/ui/rfc-2632-const-trait-impl/assoc-type.rs" |
-        "test/ui/rfc-2632-const-trait-impl/call-const-trait-method-pass.rs" |
-        "test/ui/rfc-2632-const-trait-impl/const-trait-bound-opt-out/feature-gate.rs" |
-        "test/ui/rfc-2632-const-trait-impl/const-trait-bound-opt-out/syntax.rs" |
-        "test/ui/rfc-2632-const-trait-impl/feature-gate.rs" |
-        "test/ui/rfc-2632-const-trait-impl/generic-bound.rs" |
-        "test/ui/rfc-2632-const-trait-impl/syntax.rs" |
-
-        // Deprecated placement syntax
-        "test/ui/obsolete-in-place/bad.rs" |
-
-        // Deprecated anonymous parameter syntax in traits
-        "test/ui/error-codes/e0119/auxiliary/issue-23563-a.rs" |
-        "test/ui/issues/issue-13105.rs" |
-        "test/ui/issues/issue-13775.rs" |
-        "test/ui/issues/issue-34074.rs" |
-
-        // 2015-style dyn that libsyntax rejects
-        "test/ui/dyn-keyword/dyn-2015-no-warnings-without-lints.rs" |
-
-        // not actually test cases
-        "test/rustdoc-ui/test-compile-fail2.rs" |
-        "test/rustdoc-ui/test-compile-fail3.rs" |
-        "test/ui/include-single-expr-helper.rs" |
-        "test/ui/include-single-expr-helper-1.rs" |
-        "test/ui/issues/auxiliary/issue-21146-inc.rs" |
-        "test/ui/json-bom-plus-crlf-multifile-aux.rs" |
-        "test/ui/macros/auxiliary/macro-comma-support.rs" |
-        "test/ui/macros/auxiliary/macro-include-items-expr.rs" => false,
-
-        _ => true,
+#[allow(dead_code)]
+pub fn edition(path: &Path) -> &'static str {
+    if path.ends_with("dyn-2015-no-warnings-without-lints.rs") {
+        "2015"
+    } else {
+        "2018"
     }
 }
 
@@ -91,6 +80,17 @@ pub fn clone_rust() {
     };
     if needs_clone {
         download_and_unpack().unwrap();
+    }
+    let mut missing = String::new();
+    let test_src = Path::new("tests/rust/src");
+    for exclude in EXCLUDE {
+        if !test_src.join(exclude).exists() {
+            missing += "\ntests/rust/src/";
+            missing += exclude;
+        }
+    }
+    if !missing.is_empty() {
+        panic!("excluded test file does not exist:{}\n", missing);
     }
 }
 

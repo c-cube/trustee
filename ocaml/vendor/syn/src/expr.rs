@@ -1191,7 +1191,7 @@ ast_enum! {
 #[cfg(any(feature = "parsing", feature = "printing"))]
 #[cfg(feature = "full")]
 pub(crate) fn requires_terminator(expr: &Expr) -> bool {
-    // see https://github.com/rust-lang/rust/blob/eb8f2586e/src/libsyntax/parse/classify.rs#L17-L37
+    // see https://github.com/rust-lang/rust/blob/2679c38fc/src/librustc_ast/util/classify.rs#L7-L25
     match *expr {
         Expr::Unsafe(..)
         | Expr::Block(..)
@@ -1210,7 +1210,6 @@ pub(crate) fn requires_terminator(expr: &Expr) -> bool {
 pub(crate) mod parsing {
     use super::*;
 
-    use crate::parse::discouraged::Speculative;
     use crate::parse::{Parse, ParseStream, Result};
     use crate::path;
 
@@ -1278,9 +1277,91 @@ pub(crate) mod parsing {
         }
     }
 
-    #[cfg(feature = "full")]
-    fn expr_no_struct(input: ParseStream) -> Result<Expr> {
-        ambiguous_expr(input, AllowStruct(false))
+    impl Expr {
+        /// An alternative to the primary `Expr::parse` parser (from the
+        /// [`Parse`] trait) for ambiguous syntactic positions in which a
+        /// trailing brace should not be taken as part of the expression.
+        ///
+        /// Rust grammar has an ambiguity where braces sometimes turn a path
+        /// expression into a struct initialization and sometimes do not. In the
+        /// following code, the expression `S {}` is one expression. Presumably
+        /// there is an empty struct `struct S {}` defined somewhere which it is
+        /// instantiating.
+        ///
+        /// ```
+        /// # struct S;
+        /// # impl std::ops::Deref for S {
+        /// #     type Target = bool;
+        /// #     fn deref(&self) -> &Self::Target {
+        /// #         &true
+        /// #     }
+        /// # }
+        /// let _ = *S {};
+        ///
+        /// // parsed by rustc as: `*(S {})`
+        /// ```
+        ///
+        /// We would want to parse the above using `Expr::parse` after the `=`
+        /// token.
+        ///
+        /// But in the following, `S {}` is *not* a struct init expression.
+        ///
+        /// ```
+        /// # const S: &bool = &true;
+        /// if *S {} {}
+        ///
+        /// // parsed by rustc as:
+        /// //
+        /// //    if (*S) {
+        /// //        /* empty block */
+        /// //    }
+        /// //    {
+        /// //        /* another empty block */
+        /// //    }
+        /// ```
+        ///
+        /// For that reason we would want to parse if-conditions using
+        /// `Expr::parse_without_eager_brace` after the `if` token. Same for
+        /// similar syntactic positions such as the condition expr after a
+        /// `while` token or the expr at the top of a `match`.
+        ///
+        /// The Rust grammar's choices around which way this ambiguity is
+        /// resolved at various syntactic positions is fairly arbitrary. Really
+        /// either parse behavior could work in most positions, and language
+        /// designers just decide each case based on which is more likely to be
+        /// what the programmer had in mind most of the time.
+        ///
+        /// ```
+        /// # struct S;
+        /// # fn doc() -> S {
+        /// if return S {} {}
+        /// # unreachable!()
+        /// # }
+        ///
+        /// // parsed by rustc as:
+        /// //
+        /// //    if (return (S {})) {
+        /// //    }
+        /// //
+        /// // but could equally well have been this other arbitrary choice:
+        /// //
+        /// //    if (return S) {
+        /// //    }
+        /// //    {}
+        /// ```
+        ///
+        /// Note the grammar ambiguity on trailing braces is distinct from
+        /// precedence and is not captured by assigning a precedence level to
+        /// the braced struct init expr in relation to other operators. This can
+        /// be illustrated by `return 0..S {}` vs `match 0..S {}`. The former
+        /// parses as `return (0..(S {}))` implying tighter precedence for
+        /// struct init than `..`, while the latter parses as `match (0..S) {}`
+        /// implying tighter precedence for `..` than struct init, a
+        /// contradiction.
+        #[cfg(feature = "full")]
+        pub fn parse_without_eager_brace(input: ParseStream) -> Result<Expr> {
+            ambiguous_expr(input, AllowStruct(false))
+        }
     }
 
     #[cfg(feature = "full")]
@@ -1462,6 +1543,30 @@ pub(crate) mod parsing {
         parse_expr(input, lhs, allow_struct, Precedence::Any)
     }
 
+    #[cfg(feature = "full")]
+    fn expr_attrs(input: ParseStream) -> Result<Vec<Attribute>> {
+        let mut attrs = Vec::new();
+        loop {
+            if input.peek(token::Group) {
+                let ahead = input.fork();
+                let group = crate::group::parse_group(&ahead)?;
+                if !group.content.peek(Token![#]) || group.content.peek2(Token![!]) {
+                    break;
+                }
+                let attr = group.content.call(attr::parsing::single_parse_outer)?;
+                if !group.content.is_empty() {
+                    break;
+                }
+                attrs.push(attr);
+            } else if input.peek(Token![#]) {
+                attrs.push(input.call(attr::parsing::single_parse_outer)?);
+            } else {
+                break;
+            }
+        }
+        Ok(attrs)
+    }
+
     // <UnOp> <trailer>
     // & <trailer>
     // &mut <trailer>
@@ -1469,66 +1574,53 @@ pub(crate) mod parsing {
     #[cfg(feature = "full")]
     fn unary_expr(input: ParseStream, allow_struct: AllowStruct) -> Result<Expr> {
         let begin = input.fork();
-        let ahead = input.fork();
-        let attrs = ahead.call(Attribute::parse_outer)?;
-        if ahead.peek(Token![&])
-            || ahead.peek(Token![box])
-            || ahead.peek(Token![*])
-            || ahead.peek(Token![!])
-            || ahead.peek(Token![-])
-        {
-            input.advance_to(&ahead);
-            if input.peek(Token![&]) {
-                let and_token: Token![&] = input.parse()?;
-                let raw: Option<raw> = if input.peek(raw)
-                    && (input.peek2(Token![mut]) || input.peek2(Token![const]))
-                {
+        let attrs = input.call(expr_attrs)?;
+        if input.peek(Token![&]) {
+            let and_token: Token![&] = input.parse()?;
+            let raw: Option<raw> =
+                if input.peek(raw) && (input.peek2(Token![mut]) || input.peek2(Token![const])) {
                     Some(input.parse()?)
                 } else {
                     None
                 };
-                let mutability: Option<Token![mut]> = input.parse()?;
-                if raw.is_some() && mutability.is_none() {
-                    input.parse::<Token![const]>()?;
-                }
-                let expr = Box::new(unary_expr(input, allow_struct)?);
-                if raw.is_some() {
-                    Ok(Expr::Verbatim(verbatim::between(begin, input)))
-                } else {
-                    Ok(Expr::Reference(ExprReference {
-                        attrs,
-                        and_token,
-                        raw: Reserved::default(),
-                        mutability,
-                        expr,
-                    }))
-                }
-            } else if input.peek(Token![box]) {
-                Ok(Expr::Box(ExprBox {
-                    attrs,
-                    box_token: input.parse()?,
-                    expr: Box::new(unary_expr(input, allow_struct)?),
-                }))
+            let mutability: Option<Token![mut]> = input.parse()?;
+            if raw.is_some() && mutability.is_none() {
+                input.parse::<Token![const]>()?;
+            }
+            let expr = Box::new(unary_expr(input, allow_struct)?);
+            if raw.is_some() {
+                Ok(Expr::Verbatim(verbatim::between(begin, input)))
             } else {
-                Ok(Expr::Unary(ExprUnary {
+                Ok(Expr::Reference(ExprReference {
                     attrs,
-                    op: input.parse()?,
-                    expr: Box::new(unary_expr(input, allow_struct)?),
+                    and_token,
+                    raw: Reserved::default(),
+                    mutability,
+                    expr,
                 }))
             }
+        } else if input.peek(Token![box]) {
+            Ok(Expr::Box(ExprBox {
+                attrs,
+                box_token: input.parse()?,
+                expr: Box::new(unary_expr(input, allow_struct)?),
+            }))
+        } else if input.peek(Token![*]) || input.peek(Token![!]) || input.peek(Token![-]) {
+            Ok(Expr::Unary(ExprUnary {
+                attrs,
+                op: input.parse()?,
+                expr: Box::new(unary_expr(input, allow_struct)?),
+            }))
         } else {
-            trailer_expr(input, allow_struct)
+            trailer_expr(attrs, input, allow_struct)
         }
     }
 
     #[cfg(not(feature = "full"))]
     fn unary_expr(input: ParseStream, allow_struct: AllowStruct) -> Result<Expr> {
-        let ahead = input.fork();
-        let attrs = ahead.call(Attribute::parse_outer)?;
-        if ahead.peek(Token![*]) || ahead.peek(Token![!]) || ahead.peek(Token![-]) {
-            input.advance_to(&ahead);
+        if input.peek(Token![*]) || input.peek(Token![!]) || input.peek(Token![-]) {
             Ok(Expr::Unary(ExprUnary {
-                attrs,
+                attrs: Vec::new(),
                 op: input.parse()?,
                 expr: Box::new(unary_expr(input, allow_struct)?),
             }))
@@ -1544,13 +1636,11 @@ pub(crate) mod parsing {
     // <atom> [ <expr> ] ...
     // <atom> ? ...
     #[cfg(feature = "full")]
-    fn trailer_expr(input: ParseStream, allow_struct: AllowStruct) -> Result<Expr> {
-        if input.peek(token::Group) {
-            return input.call(expr_group).map(Expr::Group);
-        }
-
-        let outer_attrs = input.call(Attribute::parse_outer)?;
-
+    fn trailer_expr(
+        outer_attrs: Vec<Attribute>,
+        input: ParseStream,
+        allow_struct: AllowStruct,
+    ) -> Result<Expr> {
         let atom = atom_expr(input, allow_struct)?;
         let mut e = trailer_helper(input, atom)?;
 
@@ -1574,13 +1664,20 @@ pub(crate) mod parsing {
             } else if input.peek(Token![.]) && !input.peek(Token![..]) {
                 let dot_token: Token![.] = input.parse()?;
 
-                if input.peek(token::Await) {
+                let await_token: Option<token::Await> = input.parse()?;
+                if let Some(await_token) = await_token {
                     e = Expr::Await(ExprAwait {
                         attrs: Vec::new(),
                         base: Box::new(e),
                         dot_token,
-                        await_token: input.parse()?,
+                        await_token,
                     });
+                    continue;
+                }
+
+                let float_token: Option<LitFloat> = input.parse()?;
+                if let Some(float_token) = float_token {
+                    e = multi_index(e, dot_token, float_token)?;
                     continue;
                 }
 
@@ -1669,12 +1766,18 @@ pub(crate) mod parsing {
                 });
             } else if input.peek(Token![.]) && !input.peek(Token![..]) && !input.peek2(token::Await)
             {
-                e = Expr::Field(ExprField {
-                    attrs: Vec::new(),
-                    base: Box::new(e),
-                    dot_token: input.parse()?,
-                    member: input.parse()?,
-                });
+                let dot_token: Token![.] = input.parse()?;
+                let float_token: Option<LitFloat> = input.parse()?;
+                if let Some(float_token) = float_token {
+                    e = multi_index(e, dot_token, float_token)?;
+                } else {
+                    e = Expr::Field(ExprField {
+                        attrs: Vec::new(),
+                        base: Box::new(e),
+                        dot_token,
+                        member: input.parse()?,
+                    });
+                }
             } else if input.peek(token::Bracket) {
                 let content;
                 e = Expr::Index(ExprIndex {
@@ -1695,7 +1798,11 @@ pub(crate) mod parsing {
     // interactions, as they are fully contained.
     #[cfg(feature = "full")]
     fn atom_expr(input: ParseStream, allow_struct: AllowStruct) -> Result<Expr> {
-        if input.peek(token::Group) {
+        if input.peek(token::Group)
+            && !input.peek2(Token![::])
+            && !input.peek2(Token![!])
+            && !input.peek2(token::Brace)
+        {
             input.call(expr_group).map(Expr::Group)
         } else if input.peek(Lit) {
             input.parse().map(Expr::Lit)
@@ -1717,7 +1824,6 @@ pub(crate) mod parsing {
             || input.peek(Token![self])
             || input.peek(Token![Self])
             || input.peek(Token![super])
-            || input.peek(Token![extern])
             || input.peek(Token![crate])
         {
             path_or_macro_or_struct(input, allow_struct)
@@ -1789,7 +1895,6 @@ pub(crate) mod parsing {
             || input.peek(Token![self])
             || input.peek(Token![Self])
             || input.peek(Token![super])
-            || input.peek(Token![extern])
             || input.peek(Token![crate])
         {
             input.parse().map(Expr::Path)
@@ -1927,7 +2032,7 @@ pub(crate) mod parsing {
 
     #[cfg(feature = "full")]
     pub(crate) fn expr_early(input: ParseStream) -> Result<Expr> {
-        let mut attrs = input.call(Attribute::parse_outer)?;
+        let mut attrs = input.call(expr_attrs)?;
         let mut expr = if input.peek(Token![if]) {
             Expr::If(input.parse()?)
         } else if input.peek(Token![while]) {
@@ -2000,7 +2105,16 @@ pub(crate) mod parsing {
 
     #[cfg(feature = "full")]
     fn generic_method_argument(input: ParseStream) -> Result<GenericMethodArgument> {
-        // TODO parse const generics as well
+        if input.peek(Lit) {
+            let lit = input.parse()?;
+            return Ok(GenericMethodArgument::Const(Expr::Lit(lit)));
+        }
+
+        if input.peek(token::Brace) {
+            let block = input.call(expr::parsing::expr_block)?;
+            return Ok(GenericMethodArgument::Const(Expr::Block(block)));
+        }
+
         input.parse().map(GenericMethodArgument::Type)
     }
 
@@ -2011,7 +2125,7 @@ pub(crate) mod parsing {
             let_token: input.parse()?,
             pat: pat::parsing::multi_pat_with_leading_vert(input)?,
             eq_token: input.parse()?,
-            expr: Box::new(input.call(expr_no_struct)?),
+            expr: Box::new(input.call(Expr::parse_without_eager_brace)?),
         })
     }
 
@@ -2022,7 +2136,7 @@ pub(crate) mod parsing {
             Ok(ExprIf {
                 attrs,
                 if_token: input.parse()?,
-                cond: Box::new(input.call(expr_no_struct)?),
+                cond: Box::new(input.call(Expr::parse_without_eager_brace)?),
                 then_branch: input.parse()?,
                 else_branch: {
                     if input.peek(Token![else]) {
@@ -2065,7 +2179,7 @@ pub(crate) mod parsing {
             let pat = pat::parsing::multi_pat_with_leading_vert(input)?;
 
             let in_token: Token![in] = input.parse()?;
-            let expr: Expr = input.call(expr_no_struct)?;
+            let expr: Expr = input.call(Expr::parse_without_eager_brace)?;
 
             let content;
             let brace_token = braced!(content in input);
@@ -2110,7 +2224,7 @@ pub(crate) mod parsing {
         fn parse(input: ParseStream) -> Result<Self> {
             let outer_attrs = input.call(Attribute::parse_outer)?;
             let match_token: Token![match] = input.parse()?;
-            let expr = expr_no_struct(input)?;
+            let expr = Expr::parse_without_eager_brace(input)?;
 
             let content;
             let brace_token = braced!(content in input);
@@ -2320,7 +2434,7 @@ pub(crate) mod parsing {
             let outer_attrs = input.call(Attribute::parse_outer)?;
             let label: Option<Label> = input.parse()?;
             let while_token: Token![while] = input.parse()?;
-            let cond = expr_no_struct(input)?;
+            let cond = Expr::parse_without_eager_brace(input)?;
 
             let content;
             let brace_token = braced!(content in input);
@@ -2463,7 +2577,7 @@ pub(crate) mod parsing {
             }
 
             fields.push(content.parse()?);
-            if !content.peek(Token![,]) {
+            if content.is_empty() {
                 break;
             }
             let punct: Token![,] = content.parse()?;
@@ -2623,6 +2737,20 @@ pub(crate) mod parsing {
                 Err(Error::new(lit.span(), "expected unsuffixed integer"))
             }
         }
+    }
+
+    fn multi_index(mut e: Expr, mut dot_token: Token![.], float: LitFloat) -> Result<Expr> {
+        for part in float.to_string().split('.') {
+            let index = crate::parse_str(part).map_err(|err| Error::new(float.span(), err))?;
+            e = Expr::Field(ExprField {
+                attrs: Vec::new(),
+                base: Box::new(e),
+                dot_token,
+                member: Member::Unnamed(index),
+            });
+            dot_token = Token![.](float.span());
+        }
+        Ok(e)
     }
 
     #[cfg(feature = "full")]

@@ -118,6 +118,27 @@ fn literal_suffix() {
 }
 
 #[test]
+fn literal_iter_negative() {
+    let negative_literal = Literal::i32_suffixed(-3);
+    let tokens = TokenStream::from(TokenTree::Literal(negative_literal));
+    let mut iter = tokens.into_iter();
+    match iter.next().unwrap() {
+        TokenTree::Punct(punct) => {
+            assert_eq!(punct.as_char(), '-');
+            assert_eq!(punct.spacing(), Spacing::Alone);
+        }
+        unexpected => panic!("unexpected token {:?}", unexpected),
+    }
+    match iter.next().unwrap() {
+        TokenTree::Literal(literal) => {
+            assert_eq!(literal.to_string(), "3i32");
+        }
+        unexpected => panic!("unexpected token {:?}", unexpected),
+    }
+    assert!(iter.next().is_none());
+}
+
+#[test]
 fn roundtrip() {
     fn roundtrip(p: &str) {
         println!("parse: {}", p);
@@ -278,11 +299,11 @@ fn raw_identifier() {
 fn test_debug_ident() {
     let ident = Ident::new("proc_macro", Span::call_site());
 
-    #[cfg(not(procmacro2_semver_exempt))]
+    #[cfg(not(span_locations))]
     let expected = "Ident(proc_macro)";
 
-    #[cfg(procmacro2_semver_exempt)]
-    let expected = "Ident { sym: proc_macro, span: bytes(0..0) }";
+    #[cfg(span_locations)]
+    let expected = "Ident { sym: proc_macro }";
 
     assert_eq!(expected, format!("{:?}", ident));
 }
@@ -291,7 +312,7 @@ fn test_debug_ident() {
 fn test_debug_tokenstream() {
     let tts = TokenStream::from_str("[a + 1]").unwrap();
 
-    #[cfg(not(procmacro2_semver_exempt))]
+    #[cfg(not(span_locations))]
     let expected = "\
 TokenStream [
     Group {
@@ -312,7 +333,7 @@ TokenStream [
 ]\
     ";
 
-    #[cfg(not(procmacro2_semver_exempt))]
+    #[cfg(not(span_locations))]
     let expected_before_trailing_commas = "\
 TokenStream [
     Group {
@@ -333,7 +354,7 @@ TokenStream [
 ]\
     ";
 
-    #[cfg(procmacro2_semver_exempt)]
+    #[cfg(span_locations)]
     let expected = "\
 TokenStream [
     Group {
@@ -358,7 +379,7 @@ TokenStream [
 ]\
     ";
 
-    #[cfg(procmacro2_semver_exempt)]
+    #[cfg(span_locations)]
     let expected_before_trailing_commas = "\
 TokenStream [
     Group {

@@ -70,8 +70,8 @@
 //! ```
 //!
 //! ```
-//! extern crate proc_macro;
-//!
+//! # extern crate proc_macro;
+//! #
 //! use proc_macro::TokenStream;
 //! use quote::quote;
 //! use syn::{parse_macro_input, DeriveInput};
@@ -250,24 +250,26 @@
 //!   dynamic library libproc_macro from rustc toolchain.
 
 // Syn types in rustdoc of other crates get linked to here.
-#![doc(html_root_url = "https://docs.rs/syn/1.0.23")]
+#![doc(html_root_url = "https://docs.rs/syn/1.0.35")]
 #![deny(clippy::all, clippy::pedantic)]
 // Ignored clippy lints.
 #![allow(
-    clippy::block_in_if_condition_stmt,
+    clippy::blocks_in_if_conditions,
     clippy::cognitive_complexity,
     clippy::doc_markdown,
     clippy::eval_order_dependence,
     clippy::inherent_to_string,
     clippy::large_enum_variant,
     clippy::manual_non_exhaustive,
+    clippy::match_like_matches_macro,
     clippy::match_on_vec_items,
     clippy::needless_doctest_main,
     clippy::needless_pass_by_value,
     clippy::never_loop,
     clippy::suspicious_op_assign_impl,
     clippy::too_many_arguments,
-    clippy::trivially_copy_pass_by_ref
+    clippy::trivially_copy_pass_by_ref,
+    clippy::unnecessary_unwrap
 )]
 // Ignored clippy_pedantic lints.
 #![allow(
@@ -279,6 +281,7 @@
     clippy::missing_errors_doc,
     clippy::module_name_repetitions,
     clippy::must_use_candidate,
+    clippy::option_if_let_else,
     clippy::shadow_unrelated,
     clippy::similar_names,
     clippy::single_match_else,
@@ -778,7 +781,7 @@ mod lookahead;
 #[cfg(feature = "parsing")]
 pub mod parse;
 
-#[cfg(all(feature = "parsing", feature = "full"))]
+#[cfg(all(any(feature = "full", feature = "derive"), feature = "parsing"))]
 mod verbatim;
 
 #[cfg(all(any(feature = "full", feature = "derive"), feature = "printing"))]
@@ -819,8 +822,8 @@ pub use crate::error::{Error, Result};
 /// # Examples
 ///
 /// ```
-/// extern crate proc_macro;
-///
+/// # extern crate proc_macro;
+/// #
 /// use proc_macro::TokenStream;
 /// use quote::quote;
 /// use syn::DeriveInput;

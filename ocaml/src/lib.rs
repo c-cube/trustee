@@ -182,14 +182,23 @@ pub fn trustee_ot_parse(
         ocaml::Error::raise_failure(&msg)
     });
     eprintln!("got OT article");
-    let open_theory::Article { defs: v1, assumptions: v2, theorems: v3 } =
-        vm.into_article();
-    let v1: Vec<_> =
-        v1.into_iter().map(|e| Pointer::alloc_custom(Expr(e.1))).collect();
-    let v2: Vec<_> =
-        v2.into_iter().map(|e| Pointer::alloc_custom(Thm(e))).collect();
-    let v3: Vec<_> =
-        v3.into_iter().map(|e| Pointer::alloc_custom(Thm(e))).collect();
+    let open_theory::Article {
+        defs: v1,
+        assumptions: v2,
+        theorems: v3,
+    } = vm.into_article();
+    let v1: Vec<_> = v1
+        .into_iter()
+        .map(|e| Pointer::alloc_custom(Expr(e.1)))
+        .collect();
+    let v2: Vec<_> = v2
+        .into_iter()
+        .map(|e| Pointer::alloc_custom(Thm(e)))
+        .collect();
+    let v3: Vec<_> = v3
+        .into_iter()
+        .map(|e| Pointer::alloc_custom(Thm(e)))
+        .collect();
     (v1, v2, v3).into()
 }
 

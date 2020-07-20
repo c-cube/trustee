@@ -26,8 +26,8 @@
 //! [`parse_macro_input!`]: ../macro.parse_macro_input.html
 //!
 //! ```
-//! extern crate proc_macro;
-//!
+//! # extern crate proc_macro;
+//! #
 //! use proc_macro::TokenStream;
 //! use syn::{braced, parse_macro_input, token, Field, Ident, Result, Token};
 //! use syn::parse::{Parse, ParseStream};
@@ -153,8 +153,8 @@
 //! [`Parser`]: trait.Parser.html
 //!
 //! ```
-//! extern crate proc_macro;
-//!
+//! # extern crate proc_macro;
+//! #
 //! use proc_macro::TokenStream;
 //! use syn::parse::Parser;
 //! use syn::punctuated::Punctuated;
@@ -215,6 +215,11 @@ pub use crate::lookahead::{Lookahead1, Peek};
 
 /// Parsing interface implemented by all types that can be parsed in a default
 /// way from a token stream.
+///
+/// Refer to the [module documentation] for details about implementing and using
+/// the `Parse` trait.
+///
+/// [module documentation]: self
 pub trait Parse: Sized {
     fn parse(input: ParseStream) -> Result<Self>;
 }
@@ -1212,8 +1217,8 @@ pub(crate) fn parse_stream<F: Parser>(f: F, input: ParseStream) -> Result<F::Out
 /// provided any attribute args.
 ///
 /// ```
-/// extern crate proc_macro;
-///
+/// # extern crate proc_macro;
+/// #
 /// use proc_macro::TokenStream;
 /// use syn::parse_macro_input;
 /// use syn::parse::Nothing;

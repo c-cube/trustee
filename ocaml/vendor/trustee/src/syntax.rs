@@ -917,7 +917,7 @@ impl Printer {
                     self.pp_var_ty_(&v, k, out)?
                 }
             }
-            EV::EBoundVar(v) => write!(out, "x{}", k - v.idx() as isize)?,
+            EV::EBoundVar(v) => write!(out, "x{}", k - v.idx() as isize - 1)?,
             EV::EApp(_, _) => {
                 let (f, args) = e.unfold_app();
                 let fv = match f.as_const() {

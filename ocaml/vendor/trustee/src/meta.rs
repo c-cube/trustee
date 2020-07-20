@@ -133,8 +133,6 @@ enum Instr {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InstrCore {
     Def,
-    If,
-    IfElse,
     Dup,
     Swap,
     Drop,
@@ -394,9 +392,9 @@ mod ml {
     const INSTR_CORE: &'static [InstrCore] = {
         use InstrCore::*;
         &[
-            Def, If, IfElse, Dup, Swap, Drop, Rot, Eq, Lt, Gt, Leq, Geq, Add,
-            Mul, Sub, Div, Mod, PrintStack, Clear, PrintPop, Inspect, Source,
-            LoadFile, Begin, End,
+            Def, Dup, Swap, Drop, Rot, Eq, Lt, Gt, Leq, Geq, Add, Mul, Sub,
+            Div, Mod, PrintStack, Clear, PrintPop, Inspect, Source, LoadFile,
+            Begin, End,
         ]
     };
 
@@ -406,8 +404,6 @@ mod ml {
 
             match self {
                 I::Def => "def",
-                I::If => "if",
-                I::IfElse => "ifelse",
                 I::Dup => "dup",
                 I::Swap => "swap",
                 I::Drop => "drop",
@@ -441,25 +437,6 @@ mod ml {
                     let c = st.pop1()?;
                     let sym = st.pop1_sym()?;
                     st.scopes[0].0.insert(sym.clone(), c);
-                }
-                I::If => {
-                    let c = st.pop1_codearray()?;
-                    let b = st.pop1_bool()?;
-                    if b {
-                        st.exec_codearray_(&c);
-                        st.exec_loop_()?;
-                    }
-                }
-                I::IfElse => {
-                    let else_ = st.pop1_codearray()?;
-                    let then_ = st.pop1_codearray()?;
-                    let b = st.pop1_bool()?;
-                    if b {
-                        st.exec_codearray_(&then_);
-                    } else {
-                        st.exec_codearray_(&else_);
-                    }
-                    st.exec_loop_()?;
                 }
                 I::Dup => match st.stack.last() {
                     Some(v) => {

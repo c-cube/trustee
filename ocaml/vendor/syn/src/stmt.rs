@@ -163,7 +163,7 @@ pub mod parsing {
             stmt_local(input, attrs).map(Stmt::Local)
         } else if input.peek(Token![pub])
             || input.peek(Token![crate]) && !input.peek2(Token![::])
-            || input.peek(Token![extern]) && !input.peek2(Token![::])
+            || input.peek(Token![extern])
             || input.peek(Token![use])
             || input.peek(Token![static]) && (input.peek2(Token![mut]) || input.peek2(Ident))
             || input.peek(Token![const])
@@ -252,8 +252,12 @@ pub mod parsing {
     ) -> Result<Stmt> {
         let mut e = expr::parsing::expr_early(input)?;
 
-        attrs.extend(e.replace_attrs(Vec::new()));
-        e.replace_attrs(attrs);
+        let mut attr_target = &mut e;
+        while let Expr::Binary(e) = attr_target {
+            attr_target = &mut e.left;
+        }
+        attrs.extend(attr_target.replace_attrs(Vec::new()));
+        attr_target.replace_attrs(attrs);
 
         if input.peek(Token![;]) {
             return Ok(Stmt::Semi(e, input.parse()?));

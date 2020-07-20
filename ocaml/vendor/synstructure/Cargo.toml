@@ -13,7 +13,7 @@
 [package]
 edition = "2018"
 name = "synstructure"
-version = "0.12.3"
+version = "0.12.4"
 authors = ["Nika Layzell <nika@thelayzells.com>"]
 include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 description = "Helper methods and macros for custom derives"
