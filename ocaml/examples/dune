@@ -1,4 +1,5 @@
 (executables
   (names load_ot)
-  (flags :standard -warn-error -a+8)
+  (flags :standard -warn-error -a+8 -linkall)
+  ;(c_library_flags -link-all)
   (libraries trustee))
