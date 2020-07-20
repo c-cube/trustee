@@ -299,10 +299,14 @@ mod ml {
     }
 
     impl Chunk {
-        /// Access the content.
-        #[inline]
-        fn get(&self) -> &ChunkImpl {
-            &*self.0
+        /// Trivial chunk that returns `nil`
+        pub fn retnil() -> Self {
+            Chunk(k::Ref::new(ChunkImpl {
+                name: None,
+                instrs: vec![Instr::Ret(SlotIdx(0))].into(),
+                locals: Box::new([]),
+                n_slots: 1,
+            }))
         }
     }
 
@@ -927,24 +931,37 @@ mod ml {
             use parser::*;
 
             self.reset();
-            let mut p = Parser::new(self.ctx, s);
-
-            logdebug!("stack len: {}", self.stack.len());
             logdebug!("meta.run {}", s);
+            let mut lexer = lexer::Lexer::new(s);
+            let mut last_r = Value::Nil;
 
-            let c = p.parse_top()?;
-            logdebug!("chunk: {:?}", &c);
+            loop {
+                let p = Parser::new(self.ctx, &mut lexer);
 
-            let res = self.exec_top_chunk_(c);
-            if res.is_err() {
-                let mut s = vec![];
-                self.print_trace_(&mut s).unwrap();
-                logerr!(
-                    "error during execution\n{}",
-                    std::str::from_utf8(&s).unwrap_or("<err>")
-                );
+                match p.parse_top_statement() {
+                    Err(e) => {
+                        logerr!("error while parsing: {}", e);
+                        return Err(e);
+                    }
+                    Ok(Some(c)) => {
+                        logdebug!("chunk: {:?}", &c);
+                        match self.exec_top_chunk_(c) {
+                            Ok(x) => last_r = x,
+                            Err(e) => {
+                                let mut s = vec![];
+                                self.print_trace_(&mut s).unwrap();
+                                logerr!(
+                                    "error during execution\n{}",
+                                    std::str::from_utf8(&s).unwrap_or("<err>")
+                                );
+
+                                return Err(e);
+                            }
+                        }
+                    }
+                    Ok(None) => return Ok(last_r),
+                };
             }
-            res
         }
     }
 }
@@ -1379,8 +1396,8 @@ pub(crate) mod parser {
     }
 
     /// A parser.
-    pub struct Parser<'a> {
-        pub(crate) lexer: lexer::Lexer<'a>,
+    pub struct Parser<'a, 'b, 'c> {
+        pub(crate) lexer: &'c mut lexer::Lexer<'b>,
         ctx: &'a mut k::Ctx,
     }
 
@@ -1490,41 +1507,10 @@ pub(crate) mod parser {
         };
     }
 
-    impl<'a> Parser<'a> {
+    impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
         /// Create a new parser for source string `s`.
-        pub fn new(ctx: &'a mut k::Ctx, s: &'a str) -> Self {
-            Self {
-                ctx,
-                lexer: lexer::Lexer::new(s),
-            }
-        }
-
-        /// Parse the string given at creation time into a chunk.
-        pub fn parse_top(&mut self) -> Result<Chunk> {
-            let mut c = Compiler {
-                instrs: vec![],
-                locals: vec![],
-                n_slots: 0,
-                name: None,
-                slots: vec![],
-                parent: None,
-            };
-            let res = c.allocate_temporary_()?;
-
-            loop {
-                let t = self.lexer.cur();
-
-                if t == Tok::Eof {
-                    break;
-                }
-
-                self.parse_top_statement_(&mut c, res.slot)?;
-            }
-
-            // TODO: load nil if no statement assigned `sl`
-            c.emit_instr_(I::Ret(res.slot));
-            c.free(&res);
-            Ok(c.into_chunk())
+        pub fn new(ctx: &'a mut k::Ctx, lexer: &'c mut lexer::Lexer<'b>) -> Self {
+            Self { ctx, lexer }
         }
 
         /// Current token
@@ -1539,19 +1525,38 @@ pub(crate) mod parser {
             self.lexer.next()
         }
 
-        /// Parse a toplevel statement in a file or CLI input.
-        fn parse_top_statement_(&mut self, c: &mut Compiler, sl_res: SlotIdx) -> Result<()> {
+        /// Parse a toplevel statement in the string passed at creation time.
+        ///
+        /// Returns `Ok(None)` if no more statements could be read.
+        /// Otherwise returns `Ok((chunk, lexer))`.
+        pub(super) fn parse_top_statement(mut self) -> Result<Option<Chunk>> {
             let t = self.lexer.cur();
             let loc = self.lexer.loc();
+
+            macro_rules! newcompiler {
+                () => {
+                    Compiler {
+                        instrs: vec![],
+                        locals: vec![],
+                        n_slots: 0,
+                        name: None,
+                        slots: vec![],
+                        parent: None,
+                    }
+                };
+            };
+
             match t {
-                Tok::Eof => return Err(perror!(loc, "unexpected EOF")),
+                Tok::Eof => Ok(None),
                 Tok::Id(_)
                 | Tok::QuotedString(..)
                 | Tok::QuotedExpr(..)
                 | Tok::Int(..)
                 | Tok::ColonId(..) => {
-                    let r = self.parse_expr_(c, Some(sl_res))?;
-                    c.free(&r);
+                    let mut c = newcompiler!();
+                    let r = self.parse_expr_(&mut c, None)?;
+                    c.emit_instr_(I::Ret(r.slot));
+                    Ok(Some(c.into_chunk()))
                 }
                 Tok::LParen | Tok::LBracket => {
                     let closing = get_closing!(t);
@@ -1582,15 +1587,18 @@ pub(crate) mod parser {
                             Some(f_name.clone()),
                             b_closing,
                             closing,
-                            &*c,
+                            None,
                         )?;
 
                         // define the function.
                         logdebug!("define {} as {:?}", &f_name, sub_c);
                         self.ctx.define_meta_chunk(f_name, sub_c);
+                        Ok(Some(Chunk::retnil()))
                     } else {
-                        let r = self.parse_expr_app_(c, closing, Some(sl_res))?;
-                        c.free(&r);
+                        let mut c = newcompiler!();
+                        let r = self.parse_expr_app_(&mut c, closing, None)?;
+                        c.emit_instr_(I::Ret(r.slot));
+                        Ok(Some(c.into_chunk()))
                     }
                 }
                 Tok::RParen => {
@@ -1608,8 +1616,7 @@ pub(crate) mod parser {
                 Tok::Invalid(c) => {
                     return Err(perror!(loc, "invalid charachter '{}'", c));
                 }
-            };
-            Ok(())
+            }
         }
 
         fn parse_fn_args_and_body_(
@@ -1617,7 +1624,7 @@ pub(crate) mod parser {
             f_name: Option<RStr>,
             var_closing: Tok,
             closing: Tok,
-            parent: &Compiler,
+            parent: Option<&Compiler>,
         ) -> Result<Chunk> {
             let mut vars: Vec<RStr> = vec![];
 
@@ -1640,7 +1647,7 @@ pub(crate) mod parser {
                 n_slots: 0,
                 name: f_name.clone(),
                 slots: vec![],
-                parent: Some(parent),
+                parent,
             };
             // add variables to `sub_c`
             for x in vars {

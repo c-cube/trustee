@@ -32,7 +32,7 @@ fn main() -> anyhow::Result<()> {
                 match vm.run(&line) {
                     Ok(meta::Value::Nil) => {}
                     Ok(v) => {
-                        println!("> {}", v);
+                        println!("  {}", v);
                     }
                     Err(e) => {
                         log::error!("err: {}", e);
