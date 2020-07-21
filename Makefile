@@ -14,6 +14,6 @@ doc:
 	@cargo doc
 
 test:
-	@cargo test --release
+	@cargo test
 
 .PHONY: doc clean
