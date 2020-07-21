@@ -2080,10 +2080,12 @@ macro_rules! defbuiltin {
 }
 
 macro_rules! check_arity {
-    ($args: expr, $n: literal) => {
+    ($what: expr, $args: expr, $n: literal) => {
         if $args.len() != $n {
             return Err(Error::new(concat!(
-                "arity mismatch: expected ",
+                "arity mismatch in ",
+                $what,
+                ": expected ",
                 stringify!($n),
                 " args"
             )));
@@ -2106,7 +2108,7 @@ mod basic_primitives {
             "help",
             "print help for an identifier.",
             |_, args: &[Value]| -> Result<_> {
-                check_arity!(args, 1);
+                check_arity!("help", args, 1);
                 let _s = get_arg_str!(args, 0);
                 // TODO: actually display help
                 Ok(Value::Nil)
@@ -2116,7 +2118,7 @@ mod basic_primitives {
             "eval",
             "Takes a string, and returns the value yielded by evaluating it.",
             |ctx, args: &[Value]| -> Result<_> {
-                check_arity!(args, 1);
+                check_arity!("eval", args, 1);
                 let s = get_arg_str!(args, 0);
                 logdebug!("evaluate `{}`", s);
                 let mut vm = VM::new(ctx);
@@ -2131,7 +2133,7 @@ mod basic_primitives {
             "load_file",
             "Takes a string `f`, and returns content of file `f` as a string.",
             |_ctx, args: &[Value]| -> Result<_> {
-                check_arity!(args, 1);
+                check_arity!("load_file", args, 1);
                 let s = get_arg_str!(args, 0);
                 let content = match std::fs::read_to_string(&*s as &str) {
                     Ok(x) => x.into(),
@@ -2158,7 +2160,7 @@ mod logic_builtins {
             the tuple `{c . th}` where `c` is the constant, with name `nc`,
             and `th` is the defining theorem with name `nth`",
             |ctx, args: &[Value]| {
-                check_arity!(args, 3);
+                check_arity!("defconst", args, 3);
                 let nc: k::Symbol = get_arg_str!(args, 0).into();
                 let nthm = get_arg_str!(args, 1);
                 let rhs = get_arg_expr!(args, 2);
@@ -2171,7 +2173,7 @@ mod logic_builtins {
             "defthm",
             "Defines a theorem. Takes `(name, th)`.",
             |ctx, args| {
-                check_arity!(args, 2);
+                check_arity!("defthm", args, 2);
                 let th = get_arg_thm!(args, 1);
                 let name = get_arg_str!(args, 0);
                 ctx.define_lemma(&*name, th.clone());
@@ -2179,7 +2181,7 @@ mod logic_builtins {
             }
         ),
         &defbuiltin!("expr_ty", "Get the type of an expression.", |_ctx, args| {
-            check_arity!(args, 1);
+            check_arity!("expr_ty", args, 1);
             let e = get_arg_expr!(args, 0);
             if e.is_kind() {
                 return Err(Error::new("cannot get type of `kind`"));
@@ -2190,7 +2192,7 @@ mod logic_builtins {
             "findconst",
             "Find the constant with given name.",
             |ctx, args| {
-                check_arity!(args, 1);
+                check_arity!("findconst", args, 1);
                 let name = get_arg_str!(args, 0);
                 let e = ctx
                     .find_const(&name)
@@ -2205,7 +2207,7 @@ mod logic_builtins {
             "Takes a boolean expression and makes it into an axiom.
             Might fail if `pledge_no_new_axiom` was called earlier.",
             |ctx, args| {
-                check_arity!(args, 1);
+                check_arity!("axiom", args, 1);
                 let e = get_arg_expr!(args, 0);
                 let th = ctx.thm_axiom(vec![], e.clone())?;
                 Ok(Value::Thm(th))
@@ -2215,7 +2217,7 @@ mod logic_builtins {
             "assume",
             "Takes a boolean expression and returns the theorem `e|-e`.",
             |ctx, args| {
-                check_arity!(args, 1);
+                check_arity!("assume", args, 1);
                 let e = get_arg_expr!(args, 0);
                 let th = ctx.thm_assume(e.clone())?;
                 Ok(Value::Thm(th))
@@ -2225,7 +2227,7 @@ mod logic_builtins {
             "refl",
             "Takes an expression `e` and returns the theorem `|-e=e`.",
             |ctx, args| {
-                check_arity!(args, 1);
+                check_arity!("refl", args, 1);
                 let e = get_arg_expr!(args, 0);
                 let th = ctx.thm_refl(e.clone());
                 Ok(Value::Thm(th))
@@ -2235,7 +2237,7 @@ mod logic_builtins {
             "sym",
             "Takes a theorem `A|- t=u` and returns the theorem `A|- u=t`.",
             |ctx, args| {
-                check_arity!(args, 1);
+                check_arity!("sym", args, 1);
                 let th1 = get_arg_thm!(args, 0);
                 let th = algo::thm_sym(ctx, th1.clone())?;
                 Ok(Value::Thm(th))
@@ -2245,7 +2247,7 @@ mod logic_builtins {
             "trans",
             "Transitivity", // TODO Takes ` theorem `A|- t=u` and returns the theorem `A|- u=t`.",
             |ctx, args| {
-                check_arity!(args, 2);
+                check_arity!("trans", args, 2);
                 let th1 = get_arg_thm!(args, 0).clone();
                 let th2 = get_arg_thm!(args, 1).clone();
                 let th = ctx.thm_trans(th1, th2)?;
@@ -2256,7 +2258,7 @@ mod logic_builtins {
             "congr",
             "Congruence. Takes `A|- f=g` and `B|- t=u`, returns `A,B|- f t=g u`",
             |ctx, args| {
-                check_arity!(args, 2);
+                check_arity!("congr", args, 2);
                 let th1 = get_arg_thm!(args, 0).clone();
                 let th2 = get_arg_thm!(args, 1).clone();
                 let th = ctx.thm_congr(th1, th2)?;
@@ -2267,7 +2269,7 @@ mod logic_builtins {
             "decl",
             "Declare a symbol. Takes a symbol `n`, and a type.",
             |ctx, args| {
-                check_arity!(args, 2);
+                check_arity!("decl", args, 2);
                 let name = get_arg_str!(args, 0);
                 let ty = get_arg_expr!(args, 1);
                 let e = ctx.mk_new_const(k::Symbol::from_str(name), ty.clone())?;
@@ -2281,7 +2283,7 @@ mod logic_builtins {
             Takes a symbol `n`, and a pair of integers `i`,`j` as left and right
             precedences.",
             |ctx, args| {
-                check_arity!(args, 3);
+                check_arity!("set_infix", args, 3);
                 let c = get_arg_str!(args, 0);
                 let i = get_arg_int!(args, 1);
                 let j = get_arg_int!(args, 2);
@@ -2291,7 +2293,7 @@ mod logic_builtins {
             }
         ),
         &defbuiltin!("set_binder", "Make a symbol a binder.", |ctx, args| {
-            check_arity!(args, 2);
+            check_arity!("set_binder", args, 2);
             let c = get_arg_str!(args, 0);
             let i = get_arg_int!(args, 1);
             let f = syntax::Fixity::Binder((0, *i as u16));
@@ -2303,7 +2305,7 @@ mod logic_builtins {
             "Takes `x`, `ty`, and `A|- t=u`, and returns
             the theorem `A|- \\x:ty. t = \\x:ty. u`.",
             |ctx, args| {
-                check_arity!(args, 3);
+                check_arity!("abs", args, 3);
                 let v = get_arg_str!(args, 0);
                 let ty = get_arg_expr!(args, 1);
                 let th = get_arg_thm!(args, 2);
@@ -2317,7 +2319,7 @@ mod logic_builtins {
             "Takes expr `x`, and `A|- t=u`, and returns
             the theorem `A|- \\x:ty. t = \\x:ty. u`.",
             |ctx, args| {
-                check_arity!(args, 2);
+                check_arity!("abs_expr", args, 2);
                 let e = get_arg_expr!(args, 0);
                 let v = e
                     .as_var()
@@ -2331,7 +2333,7 @@ mod logic_builtins {
             "concl",
             "Takes a theorem `A |- t`, and returns `t`.",
             |_ctx, args| {
-                check_arity!(args, 1);
+                check_arity!("concl", args, 1);
                 let th = get_arg_thm!(args, 0);
                 Ok(Value::Expr(th.concl().clone()))
             }
@@ -2340,7 +2342,7 @@ mod logic_builtins {
             "hol_prelude",
             "Returns the builtin HOL prelude, as a string.",
             |_ctx, args| {
-                check_arity!(args, 0);
+                check_arity!("hol_prelude", args, 0);
                 Ok(Value::Str(super::SRC_PRELUDE_HOL.into()))
             }
         ),
@@ -2348,7 +2350,7 @@ mod logic_builtins {
             "pledge_no_new_axiom",
             "Prevent any further calls to `axiom` to succeed.",
             |ctx, args| {
-                check_arity!(args, 0);
+                check_arity!("pledge_no_new_axiom", args, 0);
                 ctx.pledge_no_new_axiom();
                 Ok(Value::Nil)
             }
@@ -2357,7 +2359,7 @@ mod logic_builtins {
             "congr_ty",
             "Congruence rule on a type argument.",
             |ctx, args| {
-                check_arity!(args, 2);
+                check_arity!("congr_ty", args, 2);
                 let th1 = get_arg_thm!(args, 0);
                 let ty = get_arg_expr!(args, 1);
                 let th = ctx.thm_congr_ty(th1.clone(), &ty)?;
@@ -2365,7 +2367,7 @@ mod logic_builtins {
             }
         ),
         &defbuiltin!("cut", "Cut rule.", |ctx, args| {
-            check_arity!(args, 2);
+            check_arity!("cut", args, 2);
             let th1 = get_arg_thm!(args, 0);
             let th2 = get_arg_thm!(args, 1);
             let th = ctx.thm_cut(th1.clone(), th2.clone())?;
@@ -2375,7 +2377,7 @@ mod logic_builtins {
             "bool_eq",
             "Boolean equality. Takes `A|- t=u` and `B|- t`, returns `A,B|- u`.",
             |ctx, args| {
-                check_arity!(args, 2);
+                check_arity!("bool_eq", args, 2);
                 let th1 = get_arg_thm!(args, 0);
                 let th2 = get_arg_thm!(args, 1);
                 let th = ctx.thm_bool_eq(th1.clone(), th2.clone())?;
@@ -2387,7 +2389,7 @@ mod logic_builtins {
             "Boolean equality introduction.
             Takes `A, t|- u` and `B,u |- t`, returns `A,B|- t=u`.",
             |ctx, args| {
-                check_arity!(args, 2);
+                check_arity!("bool_eq_intro", args, 2);
                 let th1 = get_arg_thm!(args, 0);
                 let th2 = get_arg_thm!(args, 1);
                 let th = ctx.thm_bool_eq_intro(th1.clone(), th2.clone())?;
@@ -2399,7 +2401,7 @@ mod logic_builtins {
             "Beta-conversion rule.
             Takes expr `(\\x. t) u`, returns `|- (\\x. t) u = t[u/x]`.",
             |ctx, args| {
-                check_arity!(args, 1);
+                check_arity!("beta_conv", args, 1);
                 let e = get_arg_expr!(args, 0);
                 let th = ctx.thm_beta_conv(e)?;
                 Ok(Value::Thm(th))

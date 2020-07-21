@@ -3,12 +3,12 @@
 ### The HOL prelude for Trustee.
 
 "T" "def_true"
-  `let f = (\x: bool. x=x) in f=f`
+  `let f = (\x: bool. x) in f=f`
 defconst
 
 # `|- T`
 "true_is_true"
-  `\x: bool. x=x` refl
+  `\x: bool. x` refl
   def_true sym
     bool_eq
 defthm
