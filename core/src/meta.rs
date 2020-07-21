@@ -1774,10 +1774,14 @@ pub(crate) mod parser {
 
                 c.emit_instr_(I::LoadNil(res.slot));
 
+                let mut items = vec![];
                 while self.lexer.cur() != closing {
                     let x = self.parse_expr_(c, None)?;
-                    c.free(&x);
+                    items.push(x);
+                }
+                for x in items.into_iter().rev() {
                     c.emit_instr_(I::Cons(x.slot, res.slot, res.slot));
+                    c.free(&x);
                 }
                 self.lexer.eat_(closing, "list must be closed")?;
                 Ok(res)
