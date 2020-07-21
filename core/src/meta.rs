@@ -126,7 +126,8 @@ struct SlotIdx(u8);
 #[derive(Copy, Clone, PartialEq)]
 struct LocalIdx(u8);
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[must_use]
+#[derive(Debug)]
 struct JumpPosition(usize);
 
 /// ## Instructions
@@ -253,6 +254,15 @@ mod ml {
         pub fn cons(x: Value, y: Value) -> Value {
             Value::Cons(RPtr::new((x, y)))
         }
+
+        /// Build a proper list using `cons`.
+        pub fn list(xs: &[Value]) -> Value {
+            let mut r = Value::Nil;
+            for x in xs.iter().rev() {
+                r = Value::cons(x.clone(), r)
+            }
+            r
+        }
     }
 
     // TODO: extract to a method, and display that with a margin.
@@ -373,10 +383,10 @@ mod ml {
     get_slot_as!(get_slot_int, "int", Value::Int(i), i, i64);
     //get_slot_as!(get_slot_nil, "nil", (_i @ Value::Nil), _i, ());
     get_slot_as!(get_slot_bool, "bool", Value::Bool(i), *i, bool);
-    get_slot_as!(get_slot_str, "string", Value::Str(i), i, &str);
+    //get_slot_as!(get_slot_str, "string", Value::Str(i), i, &str);
     //get_as_of!(get_slot_codearray, "code array", Value::CodeArray(i), i, CodeArray);
-    get_slot_as!(get_slot_expr, "expr", Value::Expr(i), i, k::Expr);
-    get_slot_as!(get_slot_thm, "thm", Value::Thm(i), i, k::Thm);
+    //get_slot_as!(get_slot_expr, "expr", Value::Expr(i), i, k::Expr);
+    //get_slot_as!(get_slot_thm, "thm", Value::Thm(i), i, k::Thm);
     //get_as_of!(get_slot_sym, "sym", Value::Sym(i), i, k::Ref<str>);
 
     macro_rules! abs_offset {
@@ -657,20 +667,20 @@ mod ml {
                     }
                     I::Jump(offset) => {
                         logdebug!("jump from ic={} with offset {}", sf.ic, offset);
-                        sf.ic = ((sf.ic - 1) as isize + offset as isize) as u32
+                        sf.ic = (sf.ic as isize + offset as isize) as u32
                     }
                     I::JumpIfTrue(s0, offset) => {
                         let s0 = get_slot_bool!(self, abs_offset!(sf, s0));
                         if s0 {
                             logdebug!("jump from ic={} with offset {}", sf.ic, offset);
-                            sf.ic = ((sf.ic - 1) as isize + offset as isize) as u32
+                            sf.ic = (sf.ic as isize + offset as isize) as u32
                         }
                     }
                     I::JumpIfFalse(s0, offset) => {
                         let s0 = get_slot_bool!(self, abs_offset!(sf, s0));
                         if !s0 {
                             logdebug!("jump from ic={} with offset {}", sf.ic, offset);
-                            sf.ic = ((sf.ic - 1) as isize + offset as isize) as u32
+                            sf.ic = (sf.ic as isize + offset as isize) as u32
                         }
                     }
                     I::EvalStr(_) => todo!("eval str"), // TODO
@@ -1277,12 +1287,27 @@ pub(crate) mod parser {
                 self.locals.len(),
                 off
             );
+
             self.instrs.push(I::Trap); // reserve space
             JumpPosition(off)
         }
 
-        /// Set a reserve jump
-        pub fn emit_jump(&mut self, pos: JumpPosition, i: Instr) {
+        /// Set the jump instruction for a previously reserved jump slot.
+        pub fn emit_jump(
+            &mut self,
+            pos: JumpPosition,
+            mk_i: impl FnOnce(i16) -> Instr,
+        ) -> Result<()> {
+            let i = if let I::Trap = self.instrs[pos.0] {
+                let j_offset = self.instrs.len() as isize - pos.0 as isize - 1;
+                if j_offset < i16::MIN as isize || j_offset > i16::MAX as isize {
+                    return Err(Error::new("jump is too long"));
+                }
+                mk_i(j_offset as i16)
+            } else {
+                panic!("jump already edited at pos {}", pos.0);
+            };
+
             logdebug!(
                 "compiler(name={:?}, n_locals={}): emit jump {:?} at offset {}",
                 self.name,
@@ -1290,12 +1315,8 @@ pub(crate) mod parser {
                 i,
                 pos.0
             );
-
-            if let I::Trap = self.instrs[pos.0] {
-            } else {
-                panic!("jump already edited at pos {}", pos.0);
-            }
             self.instrs[pos.0] = i;
+            Ok(())
         }
 
         /// Allocate a slot on top of the stack.
@@ -1558,7 +1579,13 @@ pub(crate) mod parser {
                     c.emit_instr_(I::Ret(r.slot));
                     Ok(Some(c.into_chunk()))
                 }
-                Tok::LParen | Tok::LBracket => {
+                Tok::LBrace | Tok::LBracket => {
+                    let mut c = newcompiler!();
+                    let r = self.parse_expr_(&mut c, None)?;
+                    c.emit_instr_(I::Ret(r.slot));
+                    Ok(Some(c.into_chunk()))
+                }
+                Tok::LParen => {
                     let closing = get_closing!(t);
                     self.lexer.next();
                     if let Tok::Id("defn") = self.lexer.cur() {
@@ -1596,7 +1623,7 @@ pub(crate) mod parser {
                         Ok(Some(Chunk::retnil()))
                     } else {
                         let mut c = newcompiler!();
-                        let r = self.parse_expr_app_(&mut c, closing, None)?;
+                        let r = self.parse_expr_app_(&mut c, None)?;
                         c.emit_instr_(I::Ret(r.slot));
                         Ok(Some(c.into_chunk()))
                     }
@@ -1607,14 +1634,11 @@ pub(crate) mod parser {
                 Tok::RBracket => {
                     return Err(perror!(loc, "non-closed ']'"));
                 }
-                Tok::LBrace => {
-                    return Err(perror!(loc, "unexpected '{{'"));
-                }
                 Tok::RBrace => {
                     return Err(perror!(loc, "non-closed '}}'"));
                 }
                 Tok::Invalid(c) => {
-                    return Err(perror!(loc, "invalid charachter '{}'", c));
+                    return Err(perror!(loc, "invalid character '{}'", c));
                 }
             }
         }
@@ -1669,7 +1693,6 @@ pub(crate) mod parser {
         fn parse_expr_app_(
             &mut self,
             c: &mut Compiler,
-            closing: Tok,
             sl_res: Option<SlotIdx>,
         ) -> Result<ExprRes> {
             let loc = self.lexer.loc();
@@ -1682,7 +1705,7 @@ pub(crate) mod parser {
 
                 let a = self.parse_expr_(c, None)?;
                 let b = self.parse_expr_(c, None)?;
-                self.eat_(closing, "expected closing in infix application")?;
+                self.eat_(Tok::RParen, "expected closing ')' in infix application")?;
 
                 // free before allocating result
                 c.free(&a);
@@ -1696,40 +1719,24 @@ pub(crate) mod parser {
                 let res = get_res!(c, sl_res);
                 let res_test = self.parse_expr_(c, None)?;
 
-                let jump_if_false_slot = c.reserve_jump_();
-                let off_before_jump = c.instrs.len() as isize;
+                let jump_if_false = c.reserve_jump_();
 
+                // parse `then`
                 let _e_then = self.parse_expr_(c, Some(res.slot))?;
-                let jump_post_then = c.reserve_jump_();
-                let off_after_then = c.instrs.len() as isize;
+                // jump above `else`
+                let jump_after_then = c.reserve_jump_();
 
-                {
-                    let j_offset = off_after_then - off_before_jump + 1;
-                    if j_offset > i16::MAX as isize {
-                        return Err(perror!(loc, "jump is too long"));
-                    }
-                    // jump here if the test if false
-                    c.emit_jump(
-                        jump_if_false_slot,
-                        I::JumpIfFalse(res_test.slot, j_offset as i16),
-                    );
-                }
+                // jump here if test is false to execute `else`
+                c.emit_jump(jump_if_false, |off| I::JumpIfFalse(res_test.slot, off))?;
+                c.free(&res_test);
 
+                // parse `else`
                 let _e_else = self.parse_expr_(c, Some(res.slot))?;
 
                 // jump here after `then` is done.
-                let off_after_else = c.instrs.len() as isize;
-                {
-                    let j_offset = off_after_else - off_after_then + 1;
-                    if j_offset > i16::MAX as isize {
-                        return Err(perror!(loc, "jump is too long"));
-                    }
-                    // jump here after `then` is done.
-                    c.emit_jump(jump_post_then, I::Jump(j_offset as i16));
-                }
+                c.emit_jump(jump_after_then, |off| I::Jump(off))?;
 
-                self.eat_(closing, "expected closing delimiter after 'if'")?;
-                c.free(&res_test);
+                self.eat_(Tok::RParen, "expected closing ')' after 'if'")?;
                 Ok(res)
             } else if id == "let" {
                 // local definitions.
@@ -1738,7 +1745,7 @@ pub(crate) mod parser {
                 let b_closing = match self.cur_tok_() {
                     Tok::LParen => Tok::RParen,
                     Tok::LBracket => Tok::RBracket,
-                    _ => return Err(perror!(loc, "expecting opening delimiter")),
+                    _ => return Err(perror!(loc, "expecting opening '[' or '(' after 'let'")),
                 };
                 self.next_tok_();
 
@@ -1759,7 +1766,7 @@ pub(crate) mod parser {
                 self.eat_(b_closing, "expected block of bound variables to end")?;
 
                 let res = get_res!(c, sl_res);
-                let res = self.parse_expr_seq_(c, closing, Some(res.slot))?;
+                let res = self.parse_expr_seq_(c, Tok::RParen, Some(res.slot))?;
                 // deallocate locals
                 for x in locals {
                     c.deallocate_slot_(x.slot);
@@ -1768,26 +1775,15 @@ pub(crate) mod parser {
             } else if id == "list" {
                 // parse into a list
                 self.lexer.next();
-
-                let res = get_res!(c, sl_res);
-                logdebug!("parse list (sl_res {:?}, res {:?})", sl_res, res);
-
-                c.emit_instr_(I::LoadNil(res.slot));
-
-                let mut items = vec![];
-                while self.lexer.cur() != closing {
-                    let x = self.parse_expr_(c, None)?;
-                    items.push(x);
-                }
-                for x in items.into_iter().rev() {
-                    c.emit_instr_(I::Cons(x.slot, res.slot, res.slot));
-                    c.free(&x);
-                }
-                self.lexer.eat_(closing, "list must be closed")?;
-                Ok(res)
+                self.parse_list_(c, sl_res, Tok::RParen)
             } else if id == "do" {
+                self.next_tok_();
                 // parse a series of expressions.
-                self.parse_expr_seq_(c, closing, sl_res)
+                self.parse_expr_seq_(c, Tok::RParen, sl_res)
+            } else if id == "become" {
+                self.next_tok_();
+                // TODO: tailcall here; poison branch so we can't parse sth after it
+                return Err(Error::new("todo: become"));
             } else {
                 // make a function call.
 
@@ -1803,7 +1799,7 @@ pub(crate) mod parser {
                 logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
 
                 // parse arguments
-                let args = self.parse_expr_list_(c, closing)?;
+                let args = self.parse_expr_list_(c, Tok::RParen)?;
                 if args.len() > u8::MAX as usize {
                     return Err(perror!(
                         self.lexer.loc(),
@@ -1844,6 +1840,31 @@ pub(crate) mod parser {
             Ok(args)
         }
 
+        /// Parse a list, either from `(list …)` or `[…]`.
+        fn parse_list_(
+            &mut self,
+            c: &mut Compiler,
+            sl_res: Option<SlotIdx>,
+            closing: Tok,
+        ) -> Result<ExprRes> {
+            let res = get_res!(c, sl_res);
+            logdebug!("parse list (sl_res {:?}, res {:?})", sl_res, res);
+
+            c.emit_instr_(I::LoadNil(res.slot));
+
+            let mut items = vec![];
+            while self.lexer.cur() != closing {
+                let x = self.parse_expr_(c, None)?;
+                items.push(x);
+            }
+            for x in items.into_iter().rev() {
+                c.emit_instr_(I::Cons(x.slot, res.slot, res.slot));
+                c.free(&x);
+            }
+            self.lexer.eat_(closing, "list must be closed")?;
+            Ok(res)
+        }
+
         /// Parse a series of expressions.
         ///
         fn parse_expr_seq_(
@@ -1863,18 +1884,6 @@ pub(crate) mod parser {
 
             Ok(res)
         }
-
-        /* TODO: local def?
-        } else if id == "def" {
-            // local definition.
-            self.next_tok_();
-
-            let id = self.cur_tok_as_id_("expect identifier after `def`")?;
-            let sl_x = c.allocate_top_slot_with_(|_, sl| {
-                sl.activated = true;
-                sl.var_name = Some(id.clone());
-            });
-        */
 
         fn parse_infix_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
             logdebug!("parse infix expr");
@@ -1929,11 +1938,11 @@ pub(crate) mod parser {
             match lexer.cur() {
                 Tok::LParen => {
                     lexer.next();
-                    self.parse_expr_app_(c, Tok::RParen, sl_res)
+                    self.parse_expr_app_(c, sl_res)
                 }
                 Tok::LBracket => {
                     lexer.next();
-                    self.parse_expr_app_(c, Tok::RBracket, sl_res)
+                    self.parse_list_(c, sl_res, Tok::RBracket)
                 }
                 Tok::LBrace => {
                     // infix: `{a x b}` is `[0]; a; b; [0]=x; call`
@@ -1966,7 +1975,7 @@ pub(crate) mod parser {
                 Tok::Id("false") => {
                     lexer.next();
                     let res = get_res!(c, sl_res);
-                    c.emit_instr_(I::LoadBool(true, res.slot));
+                    c.emit_instr_(I::LoadBool(false, res.slot));
                     Ok(res)
                 }
                 Tok::Id(id) => {
@@ -2053,7 +2062,7 @@ macro_rules! get_arg_as {
 
 get_arg_as!(get_arg_int, "int", Value::Int(i), i, i64);
 //get_arg_as!(get_arg_nil, "nil", (_i @ Value::Nil), _i, ());
-get_arg_as!(get_arg_bool, "bool", Value::Bool(i), *i, bool);
+//get_arg_as!(get_arg_bool, "bool", Value::Bool(i), *i, bool);
 get_arg_as!(get_arg_str, "string", Value::Str(i), &*i, &str);
 //get_as_of!(get_arg_codearray, "code array", Value::CodeArray(i), i, CodeArray);
 get_arg_as!(get_arg_expr, "expr", Value::Expr(i), i, &k::Expr);
@@ -2605,6 +2614,48 @@ mod test {
             ],
         )];
         lex_test!(a)
+    }
+
+    macro_rules! check_eval {
+        ($e:expr, $val:expr) => {{
+            let mut ctx = Ctx::new();
+            let mut vm = VM::new(&mut ctx);
+            let res_e = vm.run($e)?;
+
+            assert_eq!(res_e, $val);
+        }};
+    }
+
+    #[test]
+    fn test_eval() -> Result<()> {
+        check_eval!("1", Value::Int(1));
+        check_eval!("true", Value::Bool(true));
+        check_eval!("false", Value::Bool(false));
+        check_eval!("nil", Value::Nil);
+        check_eval!("(+ 1 2)", Value::Int(3));
+        check_eval!("(let [x 1] {x + 2})", Value::Int(3));
+        check_eval!(
+            "(list 1 2 3)",
+            Value::list(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+        );
+        check_eval!("(defn f [x] {1 + x})", Value::Nil);
+        check_eval!("(defn f [x] {1 + x}) (f 9)", Value::Int(10));
+        check_eval!("(do true 1)", Value::Int(1));
+        check_eval!("(if true 1 2)", Value::Int(1));
+        check_eval!("(if false 1 2)", Value::Int(2));
+        check_eval!("(let [x {1 + 1}] (if {x == 1} 10 20))", Value::Int(20));
+        check_eval!("(let [x {1 + 1}] (if {x == 2} 10 20))", Value::Int(10));
+        check_eval!(
+            "{1 . {:b . nil}}",
+            Value::list(&[Value::Int(1), Value::Sym("b".into())])
+        );
+        check_eval!(
+            "[1 :b]",
+            Value::list(&[Value::Int(1), Value::Sym("b".into())])
+        );
+        check_eval!(":a", Value::Sym("a".into()));
+
+        Ok(())
     }
 
     /* TODO
