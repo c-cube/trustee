@@ -116,6 +116,8 @@ struct ExprRes {
     slot: SlotIdx,
     /// Was the slot allocated for this expression?
     temporary: bool,
+    /// Does this actually return? If true, it means evaluation exited.
+    exited: bool,
 }
 
 /// Index in the array of slots.
@@ -175,7 +177,9 @@ enum Instr {
     /// evaluates string in `sl[$0]`
     EvalStr(SlotIdx),
     /// Push `sl[$0]` into the call array, before a call.
-    PushCallArg(SlotIdx),
+    PushCallArgCpy(SlotIdx),
+    /// Push `sl[$0]` into the call array and empty it, before a call.
+    PushCallArgMove(SlotIdx),
     // TODO: reinstate `Call1`
     /// Call chunk `sl[$0]` with arguments in `vm.call_args`
     /// and put the result into `sl[$2]`.
@@ -184,7 +188,7 @@ enum Instr {
     Call(SlotIdx, SlotIdx),
     /// Tail-call into chunk `sl[$0]` with arguments in `call_args`.
     /// Does not return.
-    Become(LocalIdx),
+    Become(SlotIdx),
     // TODO: remove argument? should already have set slot
     /// Return from current chunk with value `sl[$0]`.
     Ret(SlotIdx),
@@ -757,9 +761,15 @@ mod ml {
                         }
                     }
                     I::EvalStr(_) => todo!("eval str"), // TODO
-                    I::PushCallArg(sl_arg) => {
+                    I::PushCallArgCpy(sl_arg) => {
                         let sl_f = abs_offset!(sf, sl_arg);
                         let v = self.stack[sl_f].clone();
+                        self.call_args.push(v);
+                    }
+                    I::PushCallArgMove(sl_arg) => {
+                        let sl_f = abs_offset!(sf, sl_arg);
+                        let mut v = Value::Nil;
+                        std::mem::swap(&mut v, &mut self.stack[sl_f]);
                         self.call_args.push(v);
                     }
                     I::Call(sl_f, sl_ret) => {
@@ -788,6 +798,7 @@ mod ml {
                                         self.stack[offset_ret] = ret_value;
                                     }
                                     Err(mut e) => {
+                                        // TODO: proper stack trace instead
                                         e = e.set_source(Error::new_string(format!(
                                             "while calling {}",
                                             b.name
@@ -952,54 +963,6 @@ mod ml {
             self.exec_chunk_(c, 0)?;
             self.exec_loop_()
         }
-
-        /* TODO
-        /// Execute instruction `i`.
-        ///
-        /// This should always be done within or before a `exec_loop_`.
-        fn exec_instr_(&mut self, i: Instr) -> Result<()> {
-            match i {
-                Instr::Im(v) => self.stack.push(v),
-                Instr::Builtin(b) => {
-                    b.run(self)?; // ask the builtin to eval itself
-                }
-                Instr::Call(ca) => self.exec_codearray_(&ca),
-                Instr::Get(s) => {
-                    // Find definition of symbol `s` in `self.scopes`,
-                    // starting from the most recent scope.
-                    if let Some(v) =
-                        self.scopes.iter().rev().find_map(|d| d.0.get(&*s))
-                    {
-                        if let Value::CodeArray(ca) = v {
-                            self.cur_i = Some(ca.0[0].clone());
-                            if ca.0.len() > 1 {
-                                self.ctrl_stack.push((ca.clone(), 1));
-                            }
-                        } else {
-                            self.stack.push(v.clone())
-                        }
-                    } else if let Some(c) = self.ctx.find_const(&*s) {
-                        self.stack.push(Value::Expr(c.0.clone()))
-                    } else if let Some(th) = self.ctx.find_lemma(&*s) {
-                        self.stack.push(Value::Thm(th.clone()))
-                    } else {
-                        return Err(Error::new_string(format!(
-                            "symbol {:?} not found",
-                            s
-                        )));
-                    }
-                }
-                Instr::Core(c) => c.run(self)?,
-            }
-            Ok(())
-        }
-
-        /// Push a value onto the value stack.
-        #[inline]
-        pub fn push_val(&mut self, v: Value) {
-            self.stack.push(v);
-        }
-        */
 
         /// Reset execution state.
         fn reset(&mut self) {
@@ -1293,6 +1256,9 @@ mod lexer {
     }
 }
 
+// TODO: accept `?` tokens, with a list of externally passed args.
+//  This enables: `run_with_args("(mp ? some_def)", &[my_thm])`
+
 pub(crate) mod parser {
     use super::*;
     use lexer::Tok;
@@ -1303,6 +1269,7 @@ pub(crate) mod parser {
             Self {
                 slot: sl,
                 temporary,
+                exited: false,
             }
         }
     }
@@ -1432,27 +1399,18 @@ pub(crate) mod parser {
         pub fn allocate_var_(&mut self, name: RStr) -> Result<ExprRes> {
             let slot = self.allocate_any_slot_(CompilerSlotState::NotActivatedYet)?;
             self.get_slot_(slot).var_name = Some(name);
-            Ok(ExprRes {
-                slot,
-                temporary: false,
-            })
+            Ok(ExprRes::new(slot, false))
         }
 
         /// Allocate a slot on the stack, anywhere, to hold a temporary result.
         pub fn allocate_temporary_(&mut self) -> Result<ExprRes> {
             let slot = self.allocate_any_slot_(CompilerSlotState::Activated)?;
-            Ok(ExprRes {
-                slot,
-                temporary: true,
-            })
+            Ok(ExprRes::new(slot, true))
         }
 
         pub fn allocate_temporary_on_top_(&mut self) -> Result<ExprRes> {
             let slot = self.allocate_top_slot_(CompilerSlotState::Activated)?;
-            Ok(ExprRes {
-                slot,
-                temporary: true,
-            })
+            Ok(ExprRes::new(slot, true))
         }
 
         /// Free expression result.
@@ -1603,6 +1561,17 @@ pub(crate) mod parser {
                 Tok::RBracket
             }
         };
+    }
+
+    /// Push argument `a` onto the `call_args` stack.
+    fn mk_push_arg_instr(arg: &ExprRes) -> Instr {
+        if arg.temporary {
+            I::PushCallArgMove(arg.slot) // can move
+        } else {
+            // could be a variable passed several time as argument,
+            // we cannot move it
+            I::PushCallArgCpy(arg.slot)
+        }
     }
 
     impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
@@ -1866,8 +1835,37 @@ pub(crate) mod parser {
                 self.parse_expr_seq_(c, Tok::RParen, sl_res)
             } else if id == "become" {
                 self.next_tok_();
-                // TODO: tailcall here; poison branch so we can't parse sth after it
-                return Err(Error::new("todo: become"));
+
+                // there is not truly a result for this frame, so this is fake.
+                let mut res = ExprRes::new(SlotIdx(u8::MAX), false);
+                res.exited = true;
+
+                logdebug!("parse tail-application");
+
+                let id_f =
+                    cur_tok_as_id_(&mut self.lexer, "expected function name after `become`")?;
+                let f = c.allocate_temporary_()?;
+                resolve_id_into_slot_(&mut self.ctx, c, id_f, loc, f.slot)?;
+                self.lexer.next();
+                logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
+
+                // parse arguments
+                let args = self.parse_expr_list_(c, Tok::RParen)?;
+                if args.len() > u8::MAX as usize {
+                    return Err(perror!(
+                        self.lexer.loc(),
+                        "maximum number of arguments exceeded"
+                    ));
+                }
+
+                // emit tail-call
+                for a in args {
+                    c.emit_instr_(mk_push_arg_instr(&a));
+                    c.free(&a);
+                }
+                c.emit_instr_(I::Become(f.slot));
+                c.free(&f);
+                Ok(res)
             } else {
                 // make a function call.
 
@@ -1893,7 +1891,7 @@ pub(crate) mod parser {
 
                 // emit call
                 for a in args {
-                    c.emit_instr_(I::PushCallArg(a.slot));
+                    c.emit_instr_(mk_push_arg_instr(&a));
                     c.free(&a);
                 }
                 c.emit_instr_(I::Call(f.slot, res.slot));
@@ -1905,12 +1903,17 @@ pub(crate) mod parser {
         /// Parse a list of expressions, return their slots.
         fn parse_expr_list_(&mut self, c: &mut Compiler, closing: Tok) -> Result<Vec<ExprRes>> {
             let mut args = vec![];
+            let mut has_exited = false;
             loop {
                 if self.cur_tok_() == closing {
                     break;
+                } else if has_exited {
+                    // we just called `return` or `become`, this is unreachable
+                    return Err(perror!(self.lexer.loc(), "unreachable expression"));
                 }
 
                 let arg = self.parse_expr_(c, None)?;
+                has_exited = arg.exited;
                 args.push(arg);
 
                 if args.len() > u8::MAX as usize {
@@ -1995,8 +1998,8 @@ pub(crate) mod parser {
                     let b = self.parse_expr_(c, sl_res)?;
                     self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
 
-                    c.emit_instr_(I::PushCallArg(a.slot));
-                    c.emit_instr_(I::PushCallArg(b.slot));
+                    c.emit_instr_(mk_push_arg_instr(&a));
+                    c.emit_instr_(mk_push_arg_instr(&b));
                     c.emit_instr_(I::Call(f.slot, b.slot));
                     c.free(&a);
                     c.free(&f);
@@ -2071,10 +2074,7 @@ pub(crate) mod parser {
                             // return the existing variable instead.
                             self.next_tok_();
                             c.free(&res);
-                            return Ok(ExprRes {
-                                slot: sl_var,
-                                temporary: false,
-                            });
+                            return Ok(ExprRes::new(sl_var, false));
                         }
                     } else {
                         resolve_id_into_slot_(ctx, c, id, loc, res.slot)?;
