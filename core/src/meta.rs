@@ -155,6 +155,8 @@ enum Instr {
     Cons(SlotIdx, SlotIdx, SlotIdx),
     /// `sl[$2] = (sl[$0] == sl[$1])`
     Eq(SlotIdx, SlotIdx, SlotIdx),
+    /// `sl[$2] = (sl[$0] != sl[$1])`
+    Neq(SlotIdx, SlotIdx, SlotIdx),
     Lt(SlotIdx, SlotIdx, SlotIdx),
     Leq(SlotIdx, SlotIdx, SlotIdx),
     Add(SlotIdx, SlotIdx, SlotIdx),
@@ -162,6 +164,8 @@ enum Instr {
     Sub(SlotIdx, SlotIdx, SlotIdx),
     Div(SlotIdx, SlotIdx, SlotIdx),
     Mod(SlotIdx, SlotIdx, SlotIdx),
+    /// Set `sl[$1]` to `not sl[$0]`
+    Not(SlotIdx, SlotIdx),
     /// Jump to `ic + $1` if `sl[$0]` is false
     JumpIfFalse(SlotIdx, i16),
     /// Jump to `ic + $1` if `sl[$0]` is true
@@ -622,6 +626,13 @@ mod ml {
                         let s2 = abs_offset!(sf, s2);
                         self.stack[s2] = v
                     }
+                    I::Neq(s0, s1, s2) => {
+                        let s0 = abs_offset!(sf, s0);
+                        let s1 = abs_offset!(sf, s1);
+                        let v = Value::Bool(self.stack[s0] != self.stack[s1]);
+                        let s2 = abs_offset!(sf, s2);
+                        self.stack[s2] = v
+                    }
                     I::Lt(s0, s1, s2) => {
                         let s0 = get_slot_int!(self, abs_offset!(sf, s0));
                         let s1 = get_slot_int!(self, abs_offset!(sf, s1));
@@ -635,6 +646,10 @@ mod ml {
                         let v = Value::Bool(s0 <= s1);
                         let s2 = abs_offset!(sf, s2);
                         self.stack[s2] = v;
+                    }
+                    I::Not(s0, s1) => {
+                        let s0 = get_slot_bool!(self, abs_offset!(sf, s0));
+                        self.stack[abs_offset!(sf, s1)] = Value::Bool(!s0);
                     }
                     I::Add(s0, s1, s2) => {
                         let s0 = get_slot_int!(self, abs_offset!(sf, s0));
