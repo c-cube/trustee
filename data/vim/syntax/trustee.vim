@@ -1,6 +1,6 @@
 set expandtab
 
-syn keyword     trusteeKW        def defconst defthm decl findthm
+syn keyword     trusteeKW        def defconst defthm decl findthm let defn
 syn keyword     trusteeKW        findconst set_infix set_binder
 syn keyword     trusteeKW        hol_prelude pledge_no_more_axioms source
 syn keyword     trusteeKW        pstack clear swap rot begin end
