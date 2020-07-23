@@ -1208,7 +1208,7 @@ mod lexer {
                     self.i = j + 1;
                     Tok::QuotedExpr(src_expr)
                 }
-                c if c.is_ascii_digit() || c == b'-' => {
+                c if c.is_ascii_digit() => {
                     let mut j = self.i + 1;
                     while j < self.bytes.len() && self.bytes[j].is_ascii_digit() {
                         j += 1;
@@ -1249,7 +1249,6 @@ mod lexer {
                     Tok::QuotedString(tok)
                 }
                 c if is_id_char(c) => {
-                    assert!(c != b'-'); // number, dealt with above
                     let mut j = self.i + 1;
                     while j < self.bytes.len() && {
                         let c = self.bytes[j];
@@ -1261,7 +1260,10 @@ mod lexer {
                         std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
                     self.col += j - self.i;
                     self.i = j;
-                    Tok::Id(tok)
+                    match str::parse(tok) {
+                        Ok(n) => Tok::Int(n), // if all numerics
+                        Err(_) => Tok::Id(tok),
+                    }
                 }
                 c => Tok::Invalid(std::char::from_u32(c as u32).unwrap()),
             };
@@ -2658,7 +2660,7 @@ mod test {
     fn test_lexer() {
         use lexer::Tok as T;
         let a = vec![(
-            r#" ("a" "b"[mul 2}"d" { 3 } def) 2  "#,
+            r#" ("a" "b"[mul 2}"d" { 3 - 1 } def) 2  "#,
             vec![
                 T::LParen,
                 T::QuotedString("a"),
@@ -2670,6 +2672,8 @@ mod test {
                 T::QuotedString("d"),
                 T::LBrace,
                 T::Int(3),
+                T::Id("-"),
+                T::Int(1),
                 T::RBrace,
                 T::Id("def"),
                 T::RParen,
@@ -2739,6 +2743,12 @@ mod test {
         );
         check_eval!(":a", Value::Sym("a".into()));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_eval_arith() -> Result<()> {
+        check_eval!("(let [a 2 b 4] {a + {{4  * b} - {{a / 2} % 3}}})", 17);
         Ok(())
     }
 
