@@ -1523,6 +1523,8 @@ pub(crate) mod parser {
             ret!(I::Cons)
         } else if s == "==" {
             ret!(I::Eq)
+        } else if s == "!=" {
+            ret!(I::Neq)
         } else if s == "<" {
             ret!(I::Lt)
         } else if s == "<=" {
@@ -1787,6 +1789,13 @@ pub(crate) mod parser {
 
                 c.emit_instr_(binop_instr(a.slot, b.slot, res.slot));
                 Ok(res)
+            } else if id == "not" {
+                self.next_tok_();
+                let e = self.parse_expr_(c, sl_res)?;
+                self.eat_(Tok::RParen, "expected closing ')' after `not`")?;
+                // `e := not e`
+                c.emit_instr_(I::Not(e.slot, e.slot));
+                Ok(e)
             } else if id == "if" {
                 self.next_tok_();
                 let res = get_res!(c, sl_res);
