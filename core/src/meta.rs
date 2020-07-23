@@ -2707,38 +2707,36 @@ mod test {
             let mut vm = VM::new(&mut ctx);
             let res_e = vm.run($e)?;
 
-            assert_eq!(res_e, $val);
+            assert_eq!(res_e, $val.into());
         }};
     }
 
     #[test]
     fn test_eval() -> Result<()> {
-        check_eval!("1", Value::Int(1));
-        check_eval!("true", Value::Bool(true));
-        check_eval!("false", Value::Bool(false));
-        check_eval!("nil", Value::Nil);
-        check_eval!("(+ 1 2)", Value::Int(3));
-        check_eval!("(let [x 1] {x + 2})", Value::Int(3));
+        check_eval!("1", 1);
+        check_eval!("true", true);
+        check_eval!("false", false);
+        check_eval!("nil", ());
+        check_eval!("(+ 1 2)", 3);
+        check_eval!("(let [x 1] {x + 2})", 3);
         check_eval!(
             "(list 1 2 3)",
             Value::list(&[Value::Int(1), Value::Int(2), Value::Int(3)])
         );
         check_eval!("(defn f [x] {1 + x})", Value::Nil);
-        check_eval!("(defn f [x] {1 + x}) (f 9)", Value::Int(10));
-        check_eval!("(do true 1)", Value::Int(1));
-        check_eval!("(if true 1 2)", Value::Int(1));
-        check_eval!("(if false 1 2)", Value::Int(2));
-        check_eval!("(let [x {1 + 1}] (if {x == 1} 10 20))", Value::Int(20));
-        check_eval!("(let [x {1 + 1}] (if {x == 2} 10 20))", Value::Int(10));
-        check_eval!(
-            "{1 . {:b . nil}}",
-            Value::list(&[Value::Int(1), Value::Sym("b".into())])
-        );
-        check_eval!(
-            "[1 :b]",
-            Value::list(&[Value::Int(1), Value::Sym("b".into())])
-        );
+        check_eval!("(defn f [x] {1 + x}) (f 9)", 10);
+        check_eval!("(do true 1)", 1);
+        check_eval!("(if true 1 2)", 1);
+        check_eval!("(if false 1 2)", 2);
+        check_eval!("(let [x {1 + 1}] (if {x == 1} 10 20))", 20);
+        check_eval!("(let [x {1 + 1}] (if {x == 2} 10 20))", 10);
+        check_eval!("{1 . {:b . nil}}", vec![1.into(), Value::Sym("b".into())]);
+        check_eval!("[1 :b]", vec![1.into(), Value::Sym("b".into())]);
         check_eval!(":a", Value::Sym("a".into()));
+        check_eval!("(not true)", false);
+        check_eval!("(not false)", true);
+        check_eval!("{1 != 2}", true);
+        check_eval!("{1 == 2}", false);
 
         Ok(())
     }
