@@ -2747,6 +2747,16 @@ mod test {
         Ok(())
     }
 
+    #[test]
+    fn test_infix_fun() -> Result<()> {
+        check_eval!("(defn f [x y] (+ x (* 2 y))) {1 f 10}", 21);
+        check_eval!(
+            "(defn f [x y] (+ x (* 10 y))) {1 f {2 f 33}}",
+            1 + 10 * (2 + 10 * 33)
+        );
+        Ok(())
+    }
+
     /* TODO
     #[test]
     fn test_basic_ops() -> Result<()> {
