@@ -267,6 +267,19 @@ mod ml {
             }
             r
         }
+
+        /// Build a proper list using `cons`.
+        pub fn list_iter<I, V>(xs: I) -> Value
+        where
+            V: Into<Value>,
+            I: DoubleEndedIterator<Item = V>,
+        {
+            let mut r = Value::Nil;
+            for x in xs.rev() {
+                r = Value::cons(x.into(), r)
+            }
+            r
+        }
     }
 
     // TODO: extract to a method, and display that with a margin.
@@ -365,6 +378,51 @@ mod ml {
                 (Builtin(b1), Builtin(b2)) => std::ptr::eq(&*b1 as *const _, &*b2),
                 _ => false, // other cases are not comparable
             }
+        }
+    }
+
+    impl From<i64> for Value {
+        fn from(x: i64) -> Self {
+            Value::Int(x)
+        }
+    }
+
+    impl From<i32> for Value {
+        fn from(x: i32) -> Self {
+            Value::Int(x as i64)
+        }
+    }
+
+    impl From<bool> for Value {
+        fn from(b: bool) -> Self {
+            Value::Bool(b)
+        }
+    }
+
+    impl From<()> for Value {
+        fn from(_: ()) -> Self {
+            Value::Nil
+        }
+    }
+
+    impl From<k::Expr> for Value {
+        fn from(e: k::Expr) -> Self {
+            Value::Expr(e)
+        }
+    }
+
+    impl From<k::Thm> for Value {
+        fn from(th: k::Thm) -> Self {
+            Value::Thm(th)
+        }
+    }
+
+    impl<T> From<Vec<T>> for Value
+    where
+        T: Into<Value>,
+    {
+        fn from(v: Vec<T>) -> Self {
+            Value::list_iter(v.into_iter())
         }
     }
 
@@ -867,7 +925,7 @@ mod ml {
         /// Call chunk `c` with arguments in `self.call_args`,
         /// put result into slot `offset`.
         fn exec_chunk_(&mut self, c: Chunk, res_offset: u32) -> Result<()> {
-            logdebug!("call chunk {:?}", &c.0.name);
+            logdebug!("call chunk (name={:?})", &c.0.name);
             let start = self.stack.len() as u32;
 
             // push `self.call_args` on top of stack
