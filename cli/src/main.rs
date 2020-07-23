@@ -22,6 +22,10 @@ fn main() -> anyhow::Result<()> {
     }
     // TODO: completion based on dictionary
 
+    if args.contains("--batch") {
+        return Ok(());
+    }
+
     loop {
         let readline = rl.readline("> ");
         match readline {
