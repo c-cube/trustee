@@ -1977,33 +1977,30 @@ pub(crate) mod parser {
             let Self { ctx, lexer, .. } = self;
             if let Tok::Id(op) = lexer.cur() {
                 if let Some(binop_instr) = binary_op_(op) {
-                    // infix primitive operator
+                    // infix primitive operator.
+                    // emit `b = a op b`
                     lexer.next();
-                    let b = self.parse_expr_(c, None)?;
+                    let b = self.parse_expr_(c, sl_res)?;
                     self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
 
+                    c.emit_instr_(binop_instr(a.slot, b.slot, b.slot));
                     c.free(&a);
-                    c.free(&b);
-                    let res = get_res!(c, sl_res);
-                    c.emit_instr_(binop_instr(a.slot, b.slot, res.slot));
-                    Ok(res)
+                    Ok(b)
                 } else {
                     // infix function
                     let f = c.allocate_temporary_on_top_()?;
                     resolve_id_into_slot_(ctx, c, &op, loc, f.slot)?;
 
                     lexer.next();
-                    let b = self.parse_expr_(c, None)?;
+                    let b = self.parse_expr_(c, sl_res)?;
                     self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
 
                     c.emit_instr_(I::PushCallArg(a.slot));
                     c.emit_instr_(I::PushCallArg(b.slot));
-                    c.free(&b);
+                    c.emit_instr_(I::Call(f.slot, b.slot));
                     c.free(&a);
                     c.free(&f);
-                    let res = get_res!(c, sl_res);
-                    c.emit_instr_(I::Call(f.slot, res.slot));
-                    Ok(res)
+                    Ok(b)
                 }
             } else {
                 return Err(perror!(self.lexer.loc(), "expected an infix operator"));
