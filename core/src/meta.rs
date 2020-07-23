@@ -784,7 +784,7 @@ mod ml {
                                 call_args.clear();
                                 match res {
                                     Ok(ret_value) => {
-                                        logdebug!("returned {:?}", ret_value);
+                                        logdebug!("returned {}", ret_value);
                                         self.stack[offset_ret] = ret_value;
                                     }
                                     Err(mut e) => {
@@ -2757,6 +2757,25 @@ mod test {
         Ok(())
     }
 
+    #[test]
+    fn test_more_eval() -> Result<()> {
+        check_eval!(
+            "(list \"coucou\" :abc)",
+            vec![Value::Str("coucou".into()), Value::Sym("abc".into())]
+        );
+        check_eval!(
+            "(defn f [x] (+ x 1)) (defn g [x] {(f x) * 2}) (+ 1 (g 10))",
+            23
+        );
+        check_eval!("(let [x 1 y 2] {x + y})", 3);
+        check_eval!(
+            "(if {1 > 2} (let [x :a y :b] x) (let [x :b] \"oh?\" x))",
+            Value::Sym("b".into())
+        );
+        check_eval!("(if {1 < 2} (let [x 1 y :b] nil x) (let [x :b] x))", 1);
+        Ok(())
+    }
+
     /* TODO
     #[test]
     fn test_basic_ops() -> Result<()> {
@@ -2790,6 +2809,7 @@ mod test {
 
         Ok(())
     }
+    */
 
     #[test]
     fn test_load_hol_prelude() -> Result<()> {
@@ -2798,5 +2818,4 @@ mod test {
         load_prelude_hol(&mut ctx)?; // can we load it twice?
         Ok(())
     }
-    */
 }
