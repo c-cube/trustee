@@ -1,92 +1,43 @@
-# vim:ft=trustee:
+; vim:ft=trustee:
 
-### The HOL prelude for Trustee.
+; ### The HOL prelude for Trustee.
 
-"T" "def_true"
-  `let f = (\x: bool. x) in f=f`
-defconst
+(defconst
+  "T" "def_true"
+  `let f = (\x: bool. x) in f=f`)
 
-# `|- T`
-"true_is_true"
-  `\x: bool. x` refl
-  def_true sym
-    bool_eq
-defthm
+; `|- T`
+(defthm "true_is_true"
+  (bool_eq
+    (refl `\x: bool. x`)
+    (sym def_true)))
 
-# prove `(x=T) = x`
-"eq_true_elim"
-  true_is_true `with x:bool. x=T` assume sym bool_eq
-  true_is_true `with x:bool. x` assume bool_eq_intro
-  bool_eq_intro
-def
+; prove `(x=T) = x`
+(defthm "eq_true_elim"
+  (bool_eq_intro
+    (bool_eq true_is_true (sym (assume `with x:bool. x=T`)))
+    (bool_eq_intro true_is_true (assume `with x:bool. x`))))
 
-# `x = (x=T)`
-"eq_true_intro" eq_true_elim sym def
+;eq_true_elim
 
-"forall" "def_forall"
-  `\(a:type) (f:a -> bool). f = (\x:a. T)`
-defconst
+; prove `(x=T) = x`
+(defthm "eq_true_elim"
+  (bool_eq_intro
+    (bool_eq true_is_true (sym (assume `with x:bool. x=T`)))
+    (bool_eq_intro true_is_true (assume `with x:bool. x`))))
 
-"forall" 20 set_binder
+; `x = (x=T)`
+(defthm "eq_true_intro" (sym eq_true_elim))
 
-"/\" "def_and" `\a b: bool. forall (f:bool->bool->bool). (f a b = f T T)` defconst
-"/\" 60 59 set_infix
+(defconst "forall" "def_forall"
+ `\(a:type) (f:a -> bool). f = (\x:a. T)`)
 
-# theorems on `/\`
-begin
-  # build `a/\b = …` from definition
-  "ab_def"
-    def_and
-    `a:bool` refl congr
-    `b:bool` refl congr
-  def
+(set_binder "forall" 20)
 
-  "goal"
-    `a:bool /\ b:bool` assume
-  def
+(defconst "/\" "def_and"
+  `\a b: bool. forall (f:bool->bool->bool). (f a b = f T T)`)
+(set_infix "/\" 60 59)
 
-  # this gets `a/\b |- \f. f a b = \f. f T T`
-  "f_eq"
-    goal ab_def bool_eq [def_forall "beta"] rw
-  def
-
-  # prove: `a/\b |- a`
-  begin
-    # apply f_eq to `\x y. x=a`
-    "a_true"
-      f_eq `with a:bool. \x y: bool. (a = x)` refl congr "beta" rw
-    def
-
-      a_true eq_true_elim ["x" `with a:bool. (a=a) = (a=T)`] subst bool_eq
-      `a:bool` refl swap bool_eq
-      eq_true_elim ["x" `(a:bool)`] subst bool_eq
-   "bool_elim1" swap defthm
-  end
-
-  # prove: `a/\b |- b`
-  begin
-    # apply f_eq to `\x y. y=b`
-    "b_true"
-      f_eq `with b:bool. \x y: bool. (b = y)` refl congr "beta" rw
-    def
-
-      b_true eq_true_elim ["x" `with b:bool. (b=b) = (b=T)`] subst bool_eq
-      `b:bool` refl swap bool_eq
-      eq_true_elim ["x" `(b:bool)`] subst bool_eq
-   "bool_elim2" swap defthm
-  end
-end
-
-# define `==>`
-"==>" "def_imply" `\a b:bool. (a /\ b) = b` defconst
-"==>" 20 19 set_infix
-
-# declare `select`
-"select" `pi a. (a -> bool) -> a` decl
-"select" 41 set_binder
-
-
-
-# END OF FILE
-# avoid double include
-"hol_prelude_loaded" `bool` decl
+; # END OF FILE
+; # avoid double include
+(decl "hol_prelude_loaded" `bool`)
