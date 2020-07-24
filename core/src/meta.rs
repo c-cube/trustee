@@ -149,6 +149,8 @@ enum Instr {
     LoadLocal(LocalIdx, SlotIdx),
     /// Put the given (small) integer `$0` into `sl[$1]`
     LoadInteger(i16, SlotIdx),
+    /// Load the current chunk into `sl[$0]`
+    LoadSelfChunk(SlotIdx),
     /// Set `sl[$1]` to bool `$0`
     LoadBool(bool, SlotIdx),
     /// Set `sl[$1]` to nil
@@ -217,6 +219,8 @@ pub struct InstrBuiltin {
     /// A one-line help text for this instruction.
     help: &'static str,
 }
+
+// TODO: check `exited` in all subexpressions?
 
 /// The meta-language virtual machine.
 pub struct VM<'a> {
@@ -658,6 +662,10 @@ mod ml {
                     I::LoadLocal(l0, s1) => {
                         let s1 = abs_offset!(sf, s1);
                         self.stack[s1] = sf.chunk.0.locals[l0.0 as usize].clone();
+                    }
+                    I::LoadSelfChunk(s0) => {
+                        let s0 = abs_offset!(sf, s0);
+                        self.stack[s0] = Value::Chunk(sf.chunk.clone());
                     }
                     I::LoadInteger(i, s1) => {
                         let s1 = abs_offset!(sf, s1);
@@ -1259,6 +1267,14 @@ mod lexer {
 // TODO: accept `?` tokens, with a list of externally passed args.
 //  This enables: `run_with_args("(mp ? some_def)", &[my_thm])`
 
+// TODO: enable recursion in `defn` (have `PushSelf` as instr, use it
+//  when parsing `f` in a chunk named `f`)?
+//  *OR* more general case, `PushFromStack(-n)` so we can tailcall from
+//      nested functions?
+
+// TODO: closures (with call_args then `MkClosure(sl_callable, sl_res)`
+//          which makes a Value::Closure with all the call_args)
+
 pub(crate) mod parser {
     use super::*;
     use lexer::Tok;
@@ -1509,6 +1525,9 @@ pub(crate) mod parser {
         if let Some(f_var_slot) = c.find_slot_of_var(s) {
             assert_ne!(f_var_slot, sl);
             c.emit_instr_(I::Move(f_var_slot, sl));
+        } else if c.name.as_ref().filter(|n| n.get() == s).is_some() {
+            // call current function
+            c.emit_instr_(I::LoadSelfChunk(sl))
         } else if let Some(b) = basic_primitives::BUILTINS.iter().find(|b| b.name == s) {
             let lidx = c.allocate_local_(Value::Builtin(b))?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
@@ -1850,19 +1869,17 @@ pub(crate) mod parser {
                 logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
 
                 // parse arguments
-                let args = self.parse_expr_list_(c, Tok::RParen)?;
-                if args.len() > u8::MAX as usize {
+                let len = self.parse_expr_list_(c, Tok::RParen, &|c, a| {
+                    c.emit_instr_(mk_push_arg_instr(&a));
+                    c.free(&a);
+                })?;
+                if len > u8::MAX as usize {
                     return Err(perror!(
                         self.lexer.loc(),
                         "maximum number of arguments exceeded"
                     ));
                 }
 
-                // emit tail-call
-                for a in args {
-                    c.emit_instr_(mk_push_arg_instr(&a));
-                    c.free(&a);
-                }
                 c.emit_instr_(I::Become(f.slot));
                 c.free(&f);
                 Ok(res)
@@ -1881,28 +1898,31 @@ pub(crate) mod parser {
                 logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
 
                 // parse arguments
-                let args = self.parse_expr_list_(c, Tok::RParen)?;
-                if args.len() > u8::MAX as usize {
+                let len = self.parse_expr_list_(c, Tok::RParen, &|c, a| {
+                    c.emit_instr_(mk_push_arg_instr(&a));
+                    c.free(&a);
+                })?;
+                if len > u8::MAX as usize {
                     return Err(perror!(
                         self.lexer.loc(),
                         "maximum number of arguments exceeded"
                     ));
                 }
 
-                // emit call
-                for a in args {
-                    c.emit_instr_(mk_push_arg_instr(&a));
-                    c.free(&a);
-                }
                 c.emit_instr_(I::Call(f.slot, res.slot));
                 c.free(&f);
                 Ok(res)
             }
         }
 
-        /// Parse a list of expressions, return their slots.
-        fn parse_expr_list_(&mut self, c: &mut Compiler, closing: Tok) -> Result<Vec<ExprRes>> {
-            let mut args = vec![];
+        /// Parse a list of expressions, return how many were parsed.
+        fn parse_expr_list_(
+            &mut self,
+            c: &mut Compiler,
+            closing: Tok,
+            f: &dyn Fn(&mut Compiler, &ExprRes),
+        ) -> Result<usize> {
+            let mut n = 0;
             let mut has_exited = false;
             loop {
                 if self.cur_tok_() == closing {
@@ -1914,9 +1934,10 @@ pub(crate) mod parser {
 
                 let arg = self.parse_expr_(c, None)?;
                 has_exited = arg.exited;
-                args.push(arg);
+                f(c, &arg);
 
-                if args.len() > u8::MAX as usize {
+                n += 1;
+                if n > u8::MAX as usize {
                     return Err(perror!(
                         self.lexer.loc(),
                         "maximum number of arguments exceeded"
@@ -1924,7 +1945,7 @@ pub(crate) mod parser {
                 }
             }
             self.eat_(closing, "expected closing delimiter")?;
-            Ok(args)
+            Ok(n)
         }
 
         /// Parse a list, either from `(list …)` or `[…]`.
@@ -2224,6 +2245,18 @@ mod basic_primitives {
                     }
                 };
                 Ok(Value::Str(content))
+            }
+        ),
+        &defbuiltin!(
+            "show_chunk",
+            "shows the bytecode of a chunk",
+            |ctx, args: &[Value]| -> Result<_> {
+                check_arity!("show_chunk", args, 1);
+                let s = get_arg_str!(args, 0);
+                if let Some(c) = ctx.find_meta_chunk(s) {
+                    println!("{:?}", c);
+                }
+                Ok(().into())
             }
         ),
     ];
@@ -2773,6 +2806,17 @@ mod test {
             Value::Sym("b".into())
         );
         check_eval!("(if {1 < 2} (let [x 1 y :b] nil x) (let [x :b] x))", 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_become() -> Result<()> {
+        check_eval!(
+            "
+            (defn f [x y] (if {x == 0} y (become f {x - 1} {y + 1})))
+            (f 1000 0)",
+            1000
+        );
         Ok(())
     }
 
