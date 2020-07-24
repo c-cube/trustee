@@ -35,6 +35,8 @@ macro_rules! logerr{
     }
 }
 
+// TODO: closure
+
 /// # Values
 ///
 /// A value of the language.
@@ -168,6 +170,12 @@ enum Instr {
     Sub(SlotIdx, SlotIdx, SlotIdx),
     Div(SlotIdx, SlotIdx, SlotIdx),
     Mod(SlotIdx, SlotIdx, SlotIdx),
+    /// puts `is-cons sl[$0]` into `sl[$1]`
+    IsPair(SlotIdx, SlotIdx),
+    /// puts `car sl[$0]` into `sl[$1]`
+    Car(SlotIdx, SlotIdx),
+    /// puts `cdr sl[$0]` into `sl[$1]`
+    Cdr(SlotIdx, SlotIdx),
     /// Set `sl[$1]` to `not sl[$0]`
     Not(SlotIdx, SlotIdx),
     /// Jump to `ic + $1` if `sl[$0]` is false
@@ -176,8 +184,6 @@ enum Instr {
     JumpIfTrue(SlotIdx, i16),
     /// Jump to `ic + $1` unconditionally
     Jump(i16),
-    /// evaluates string in `sl[$0]`
-    EvalStr(SlotIdx),
     /// Push `sl[$0]` into the call array, before a call.
     PushCallArgCpy(SlotIdx),
     /// Push `sl[$0]` into the call array and empty it, before a call.
@@ -750,6 +756,33 @@ mod ml {
                         let s1 = get_slot_int!(self, abs_offset!(sf, s1));
                         self.stack[abs_offset!(sf, s2)] = Value::Int(s0 % s1);
                     }
+                    I::IsPair(s0, s1) => {
+                        let b = match &self.stack[abs_offset!(sf, s0)] {
+                            Value::Cons(..) => true,
+                            _ => false,
+                        };
+                        self.stack[abs_offset!(sf, s1)] = Value::Bool(b);
+                    }
+                    I::Car(s0, s1) => {
+                        let v = match &self.stack[abs_offset!(sf, s0)] {
+                            Value::Cons(p) => p.0.clone(),
+                            _ => {
+                                self.result = Err(Error::new("car called on a non-pair"));
+                                break;
+                            }
+                        };
+                        self.stack[abs_offset!(sf, s1)] = v;
+                    }
+                    I::Cdr(s0, s1) => {
+                        let v = match &self.stack[abs_offset!(sf, s0)] {
+                            Value::Cons(p) => p.1.clone(),
+                            _ => {
+                                self.result = Err(Error::new("cdr called on a non-pair"));
+                                break;
+                            }
+                        };
+                        self.stack[abs_offset!(sf, s1)] = v;
+                    }
                     I::Jump(offset) => {
                         logdebug!("jump from ic={} with offset {}", sf.ic, offset);
                         sf.ic = (sf.ic as isize + offset as isize) as u32
@@ -768,7 +801,6 @@ mod ml {
                             sf.ic = (sf.ic as isize + offset as isize) as u32
                         }
                     }
-                    I::EvalStr(_) => todo!("eval str"), // TODO
                     I::PushCallArgCpy(sl_arg) => {
                         let sl_f = abs_offset!(sf, sl_arg);
                         let v = self.stack[sl_f].clone();
@@ -1514,6 +1546,26 @@ pub(crate) mod parser {
         }
     }
 
+    /// A builtin binary operator
+    fn unary_op_(s: &str) -> Option<&'static dyn Fn(SlotIdx, SlotIdx) -> Instr> {
+        macro_rules! ret {
+            ($i: expr) => {
+                Some(&|s1, s2| $i(s1, s2))
+            };
+        };
+        if s == "not" {
+            ret!(I::Not)
+        } else if s == "pair?" {
+            ret!(I::IsPair)
+        } else if s == "car" {
+            ret!(I::Car)
+        } else if s == "cdr" {
+            ret!(I::Cdr)
+        } else {
+            None
+        }
+    }
+
     /// Resolve the ID as a chunk or builtin, and put it into `sl`.
     fn resolve_id_into_slot_(
         ctx: &mut Ctx,
@@ -1779,12 +1831,13 @@ pub(crate) mod parser {
 
                 c.emit_instr_(binop_instr(a.slot, b.slot, res.slot));
                 Ok(res)
-            } else if id == "not" {
+            } else if let Some(unop_instr) = unary_op_(id) {
+                // unary op
                 self.next_tok_();
                 let e = self.parse_expr_(c, sl_res)?;
                 self.eat_(Tok::RParen, "expected closing ')' after `not`")?;
                 // `e := not e`
-                c.emit_instr_(I::Not(e.slot, e.slot));
+                c.emit_instr_(unop_instr(e.slot, e.slot));
                 Ok(e)
             } else if id == "if" {
                 self.next_tok_();
