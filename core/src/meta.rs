@@ -942,7 +942,10 @@ mod ml {
                 }
             }
 
-            self.result.clone()
+            self.call_args.clear();
+            let mut r = Ok(Value::Nil);
+            std::mem::swap(&mut r, &mut self.result);
+            r
         }
 
         /// Print the current state of the VM in case of error.
@@ -1116,6 +1119,7 @@ mod lexer {
             | b'>'
             | b'<'
             | b'\\'
+            | b'?'
             | b';' => true,
             _ => false,
         }
@@ -2859,6 +2863,12 @@ mod test {
             Value::Sym("b".into())
         );
         check_eval!("(if {1 < 2} (let [x 1 y :b] nil x) (let [x :b] x))", 1);
+        check_eval!("(car [1 2])", 1);
+        check_eval!("(car (cdr [1 2]))", 2);
+        check_eval!("(cdr (cdr [1 2]))", ());
+        check_eval!("(pair? [1 2])", true);
+        check_eval!("(pair? nil)", false);
+        check_eval!("(pair? {1 . 2})", true);
         Ok(())
     }
 
