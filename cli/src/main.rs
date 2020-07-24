@@ -13,7 +13,8 @@ fn main() -> anyhow::Result<()> {
 
     let mut vm = meta::VM::new(&mut ctx);
     if let Some(x) = args.opt_value_from_str::<&str, String>("--include")? {
-        vm.run(&format!(r#"(eval (load_file "{}"))"#, &x))?;
+        let file_content = std::fs::read_to_string(x)?;
+        vm.run(&file_content)?;
     }
 
     let mut rl = rustyline::Editor::<()>::new();
