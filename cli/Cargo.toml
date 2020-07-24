@@ -14,3 +14,6 @@ env_logger = { version= "*", default-features=false, features=["termcolor", "att
 anyhow="1.0"
 pico-args="0.3"
 rustyline = "6.0"
+
+[profile.release]
+debug = 1
