@@ -92,7 +92,6 @@ struct Compiler<'a> {
     parent: Option<&'a Compiler<'a>>,
 }
 
-#[derive(Debug)]
 struct CompilerSlot {
     /// If this slot is for a named variable.
     var_name: Option<RStr>,
@@ -112,7 +111,7 @@ enum CompilerSlotState {
 /// The slot might have been allocated for this purpose, in which case
 /// `self.temporary` will be true, meaning the slot can be disposed of
 /// when the expression is not needed anymore.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 struct ExprRes {
     /// Where the result lives.
     slot: SlotIdx,
@@ -146,7 +145,9 @@ struct JumpPosition(usize);
 #[derive(Debug, Copy, Clone)]
 enum Instr {
     /// copy `sl[$0]` into `sl[$1]`
-    Move(SlotIdx, SlotIdx),
+    Copy(SlotIdx, SlotIdx),
+    /// Swap `sl[$0]` and `sl[$1]`
+    Swap(SlotIdx, SlotIdx),
     /// Local a local value into a slot. `sl[$1] = locals[$0]`
     LoadLocal(LocalIdx, SlotIdx),
     /// Put the given (small) integer `$0` into `sl[$1]`
@@ -184,19 +185,15 @@ enum Instr {
     JumpIfTrue(SlotIdx, i16),
     /// Jump to `ic + $1` unconditionally
     Jump(i16),
-    /// Push `sl[$0]` into the call array, before a call.
-    PushCallArgCpy(SlotIdx),
-    /// Push `sl[$0]` into the call array and empty it, before a call.
-    PushCallArgMove(SlotIdx),
     // TODO: reinstate `Call1`
-    /// Call chunk `sl[$0]` with arguments in `vm.call_args`
+    /// Call chunk `sl[$0]` with arguments in `stack[sl[$0]+1 …]`
     /// and put the result into `sl[$2]`.
     ///
     /// `$1` is the number of arguments the function takes.
-    Call(SlotIdx, SlotIdx),
-    /// Tail-call into chunk `sl[$0]` with arguments in `call_args`.
+    Call(SlotIdx, u8, SlotIdx),
+    /// Tail-call into chunk `sl[$0]` with `$1` arguments.
     /// Does not return.
-    Become(SlotIdx),
+    Become(SlotIdx, u8),
     // TODO: remove argument? should already have set slot
     /// Return from current chunk with value `sl[$0]`.
     Ret(SlotIdx),
@@ -240,9 +237,6 @@ pub struct VM<'a> {
     stack: Vec<Value>,
     /// Control stack, for function calls.
     ctrl_stack: Vec<StackFrame>,
-    /// Array of arguments used to pass arguments to a chunk before execution.
-    /// This is typically reset before each function call.
-    call_args: Vec<Value>,
     /// In case of error, the error message lives here.
     result: Result<Value>,
 }
@@ -251,6 +245,7 @@ pub struct VM<'a> {
 ///
 /// Each call to a chunk (function) has its own stack frame that points to
 /// a slice of `vm.stack` of its given number of locals.
+#[derive(Debug)]
 struct StackFrame {
     /// Offset in `vm.stack` where this frame starts.
     /// The size of the stack is determined by `chunk.n_slots`.
@@ -296,23 +291,22 @@ mod ml {
         }
     }
 
-    // TODO: extract to a method, and display that with a margin.
-    // Also get optional `ic` to write ==> next to it.
+    impl fmt::Debug for CompilerSlot {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            let s = match self.state {
+                CompilerSlotState::Activated => "a",
+                CompilerSlotState::NotActivatedYet => "n",
+                CompilerSlotState::Unused => "_",
+            };
+            write!(out, "(slot:{} n:{:?})", s, self.var_name)
+        }
+    }
+
     impl fmt::Debug for Chunk {
         fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-            write!(out, "chunk [\n")?;
-            write!(out, "  name: {:?}\n", &self.0.name)?;
-            write!(out, "  n-slots: {}\n", self.0.n_slots)?;
-            write!(out, "  ================\n")?;
-            for (i, v) in self.0.locals.iter().enumerate() {
-                write!(out, "  local[{:5}]: {}\n", i, &v)?;
-            }
-            write!(out, "  ================\n")?;
-            for (i, c) in self.0.instrs.iter().enumerate() {
-                write!(out, "  instr[{:5}]: {:?}\n", i, &c)?;
-            }
-            write!(out, "]\n")?;
-            Ok(())
+            let full = out.alternate();
+            let s = self.print(full, None).map_err(|_| fmt::Error)?;
+            write!(out, "{}", s)
         }
     }
 
@@ -348,6 +342,37 @@ mod ml {
                 locals: Box::new([]),
                 n_slots: 1,
             }))
+        }
+
+        fn print(&self, full: bool, ic: Option<usize>) -> io::Result<String> {
+            use std::io::Write;
+
+            let mut v = vec![];
+            let out = &mut v;
+            if full {
+                write!(out, "chunk [\n")?;
+                write!(out, "  name: {:?}\n", &self.0.name)?;
+                write!(out, "  n-slots: {}\n", self.0.n_slots)?;
+                write!(out, "  ================================\n")?;
+                for (i, v) in self.0.locals.iter().enumerate() {
+                    write!(out, "  local[{:6}]: {}\n", i, &v)?;
+                }
+                write!(out, "  ================================\n")?;
+                for (i, c) in self.0.instrs.iter().enumerate() {
+                    // account for ic being current instr+1.
+                    let active = ic.filter(|x| *x == i + 1).is_some();
+                    let prefix = if active { ">" } else { " " };
+                    write!(out, "  instr[{}{:5}]: {:?}\n", prefix, i, &c)?;
+                }
+                write!(out, "]\n")?;
+            } else {
+                if self.0.name.is_none() {
+                    write!(out, "<anon chunk>")?;
+                } else {
+                    write!(out, "<chunk {:?}>", &self.0.name.as_ref().unwrap())?;
+                }
+            }
+            Ok(String::from_utf8(v).unwrap())
         }
     }
 
@@ -478,7 +503,6 @@ mod ml {
                 ctx,
                 stack: Vec::with_capacity(256),
                 ctrl_stack: vec![],
-                call_args: vec![],
                 result: Ok(Value::Nil),
             }
         }
@@ -490,18 +514,32 @@ mod ml {
                 assert!((sf.ic as usize) < sf.chunk.0.instrs.len());
                 let instr = sf.chunk.0.instrs[sf.ic as usize];
                 logdebug!(
-                    "exec loop: ic={} stacklen={} instr={:?}",
+                    "exec loop: ic={} start={} stacklen={} instr={:?}",
                     sf.ic,
+                    sf.start,
                     self.stack.len(),
                     instr
                 );
+                logtrace!("  stack: {:?}", &self.stack);
 
                 sf.ic += 1; // ready for next iteration
                 match instr {
-                    I::Move(s0, s1) => {
+                    I::Copy(s0, s1) => {
                         let s0 = abs_offset!(sf, s0);
                         let s1 = abs_offset!(sf, s1);
                         self.stack[s1] = self.stack[s0].clone();
+                    }
+                    I::Swap(s0, s1) => {
+                        let s0 = abs_offset!(sf, s0);
+                        let s1 = abs_offset!(sf, s1);
+                        if s0 != s1 {
+                            let p0: *mut _ = &mut self.stack[s0] as *mut _;
+                            let p1: *mut _ = &mut self.stack[s1] as *mut _;
+                            // safe, because they're disjoint since s0 != s1
+                            unsafe {
+                                std::ptr::swap(p0, p1);
+                            }
+                        }
                     }
                     I::LoadLocal(l0, s1) => {
                         let s1 = abs_offset!(sf, s1);
@@ -639,37 +677,17 @@ mod ml {
                             sf.ic = (sf.ic as isize + offset as isize) as u32
                         }
                     }
-                    I::PushCallArgCpy(sl_arg) => {
-                        let sl_f = abs_offset!(sf, sl_arg);
-                        let v = self.stack[sl_f].clone();
-                        self.call_args.push(v);
-                    }
-                    I::PushCallArgMove(sl_arg) => {
-                        let sl_f = abs_offset!(sf, sl_arg);
-                        let mut v = Value::Nil;
-                        std::mem::swap(&mut v, &mut self.stack[sl_f]);
-                        self.call_args.push(v);
-                    }
-                    I::Call(sl_f, sl_ret) => {
+                    I::Call(sl_f, n_args, sl_ret) => {
                         let sl_f = abs_offset!(sf, sl_f);
                         let offset_ret = abs_offset!(sf, sl_ret);
 
-                        let Self {
-                            stack,
-                            ctx,
-                            call_args,
-                            ..
-                        } = self;
+                        let Self { stack, ctx, .. } = self;
                         match &stack[sl_f] {
                             Value::Builtin(b) => {
-                                logdebug!(
-                                    "call builtin {:?} with {} args",
-                                    &b.name,
-                                    call_args.len()
-                                );
-                                let f = &b.run;
-                                let res = f(ctx, &call_args);
-                                call_args.clear();
+                                logdebug!("call builtin {:?} with {} args", &b.name, n_args);
+                                let args = &stack[sl_f + 1..sl_f + 1 + n_args as usize];
+                                let f = &(b.run);
+                                let res = f(ctx, &args);
                                 match res {
                                     Ok(ret_value) => {
                                         logdebug!("returned {}", ret_value);
@@ -689,7 +707,7 @@ mod ml {
                             Value::Chunk(c) => {
                                 // push frame for `c`
                                 let c = c.clone();
-                                self.exec_chunk_(c, offset_ret as u32)?;
+                                self.exec_chunk_(c, (sl_f + 1) as u32, offset_ret as u32)?;
                             }
                             _ => {
                                 self.result = Err(Error::new("cannot call value"));
@@ -697,7 +715,7 @@ mod ml {
                             }
                         }
                     }
-                    I::Become(sl_f) => {
+                    I::Become(sl_f, n_args) => {
                         if self.ctrl_stack.is_empty() {
                             self.result = Err(Error::new("tailcall from empty stack"));
                             break;
@@ -707,45 +725,52 @@ mod ml {
                             ctrl_stack,
                             ctx,
                             stack,
-                            call_args,
                             ..
                         } = self;
 
-                        // pop last stack frame. the tailcallee will
-                        // do without one, or allocate its own.
-                        let sf = ctrl_stack.pop().unwrap();
+                        // reuse last stack frame.
+                        let sf = ctrl_stack.last_mut().unwrap();
 
                         // fetch function
                         let offset_f = abs_offset!(sf, sl_f);
                         let offset_ret = sf.res_offset;
-                        let f = stack[offset_f].clone();
 
-                        stack.truncate(sf.start as usize);
-                        match f {
-                            Value::Chunk(c) => {
-                                self.exec_chunk_(c, offset_ret as u32)?;
-                            }
-                            Value::Builtin(b) => {
-                                logdebug!("call builtin {:?}", &b.name);
-                                let f = &b.run;
-                                match f(ctx, &call_args) {
-                                    Ok(ret_value) => {
-                                        self.stack[offset_ret as usize] = ret_value;
-                                    }
-                                    Err(e) => {
-                                        self.result = Err(e);
-                                        break;
-                                    }
+                        let f = &stack[offset_f];
+                        if let Value::Chunk(c) = f {
+                            let c = c.clone();
+
+                            // get function + arguments to the beginning of the frame
+                            let stack_frame = &mut stack[sf.start as usize
+                                ..sf.start as usize + sf.chunk.0.n_slots as usize];
+
+                            stack_frame.rotate_right(n_args as usize + 1);
+
+                            // update stack frame
+                            sf.chunk = c;
+                            sf.ic = 0;
+                        } else if let Value::Builtin(b) = f {
+                            logdebug!("call builtin {:?}", &b.name);
+                            let args = &stack[offset_f + 1..offset_f + 1 + n_args as usize];
+                            let f = &b.run;
+                            match f(ctx, &args) {
+                                Ok(ret_value) => {
+                                    self.stack[offset_ret as usize] = ret_value;
+                                    // remove last frame
+                                    self.ctrl_stack.pop().unwrap();
+                                }
+                                Err(e) => {
+                                    self.result = Err(e);
+                                    break;
                                 }
                             }
-                            _ => {
-                                self.result = Err(Error::new("cannot call value"));
-                                break;
-                            }
+                        } else {
+                            self.result = Err(Error::new("cannot call value"));
+                            break;
                         }
                     }
                     I::Ret(sl_v) => {
-                        let sl_v = abs_offset!(sf, sl_v);
+                        let off_v = abs_offset!(sf, sl_v);
+                        logdebug!("ret sl_v={:?} abs_offset={} sf={:?}", sl_v, off_v, &sf);
 
                         // pop frame, get return address and frame offset
                         let res_offset;
@@ -763,7 +788,7 @@ mod ml {
                             break;
                         }
 
-                        let ret_val = self.stack[sl_v].clone();
+                        let ret_val = self.stack[off_v].clone();
 
                         if self.ctrl_stack.is_empty() {
                             self.result = Ok(ret_val); // no more frames, will return
@@ -780,7 +805,6 @@ mod ml {
                 }
             }
 
-            self.call_args.clear();
             let mut r = Ok(Value::Nil);
             std::mem::swap(&mut r, &mut self.result);
             r
@@ -790,7 +814,7 @@ mod ml {
         fn print_trace_(&self, out: &mut dyn io::Write) -> io::Result<()> {
             let mut sf_i = 0;
             let mut stack_i = 0;
-            write!(out, "== begin stack trace ==\n")?;
+            write!(out, "===== begin stack trace =====\n")?;
             while sf_i < self.ctrl_stack.len() {
                 let sf = &self.ctrl_stack[sf_i];
                 write!(
@@ -798,8 +822,10 @@ mod ml {
                     "  frame[i={}, start={}, ic={}]\n",
                     sf_i, sf.start, sf.ic
                 )?;
-                // TODO: only print `ic-5..ic+5` window
-                write!(out, "  frame.chunk {:#?}\n", sf.chunk)?;
+                // TODO: only print `ic-5..ic+5` window?
+                write!(out, "  frame.chunk\n")?;
+                let s = sf.chunk.print(true, Some(sf.ic as usize))?;
+                write!(out, "{}\n", s)?;
                 let next_stack_i = sf.start as usize;
                 for i in stack_i..next_stack_i {
                     write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
@@ -810,29 +836,29 @@ mod ml {
             for i in stack_i..self.stack.len() {
                 write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
             }
-            write!(out, "== end stack trace ==\n")?;
+            write!(out, "===== end stack trace =====\n")?;
             Ok(())
         }
 
         /// Call chunk `c` with arguments in `self.call_args`,
         /// put result into slot `offset`.
-        fn exec_chunk_(&mut self, c: Chunk, res_offset: u32) -> Result<()> {
-            logdebug!("call chunk (name={:?})", &c.0.name);
-            let start = self.stack.len() as u32;
-
-            // push `self.call_args` on top of stack
-            let Self {
-                stack, call_args, ..
-            } = self;
-            stack.extend(call_args.drain(..));
+        fn exec_chunk_(&mut self, c: Chunk, start_offset: u32, res_offset: u32) -> Result<()> {
+            logdebug!(
+                "call chunk (name={:?}, start_offset={}, res_offset={})",
+                &c.0.name,
+                start_offset,
+                res_offset
+            );
+            logtrace!("callee: {:#?}", &c);
 
             // also allocate as many slots as needed by `c`.
-            self.stack
-                .extend(std::iter::repeat(Value::Nil).take(c.0.n_slots as usize));
+            while self.stack.len() < (start_offset + c.0.n_slots) as usize {
+                self.stack.push(Value::Nil)
+            }
             self.ctrl_stack.push(StackFrame {
                 ic: 0,
                 chunk: c,
-                start,
+                start: start_offset,
                 res_offset,
             });
             Ok(())
@@ -840,8 +866,7 @@ mod ml {
 
         /// Call toplevel chunk `c`
         fn exec_top_chunk_(&mut self, c: Chunk) -> Result<Value> {
-            assert_eq!(self.call_args.len(), 0);
-            self.exec_chunk_(c, 0)?;
+            self.exec_chunk_(c, 0, 0)?;
             self.exec_loop_()
         }
 
@@ -849,7 +874,6 @@ mod ml {
         fn reset(&mut self) {
             self.stack.clear();
             self.ctrl_stack.clear();
-            self.call_args.clear();
             self.result = Ok(Value::Nil);
         }
 
@@ -878,7 +902,8 @@ mod ml {
                                 let mut s = vec![];
                                 self.print_trace_(&mut s).unwrap();
                                 logerr!(
-                                    "error during execution\n{}",
+                                    "error during execution\n>>> {} <<<\n{}",
+                                    e,
                                     std::str::from_utf8(&s).unwrap_or("<err>")
                                 );
 
@@ -1268,6 +1293,21 @@ pub(crate) mod parser {
             Ok(SlotIdx(i as u8))
         }
 
+        /// Deallocate the `n` top slots.
+        ///
+        /// Panics if any of these is a variable.
+        fn deallocate_top_slots_(&mut self, n: usize) {
+            for _i in 0..n {
+                let sl = self
+                    .slots
+                    .pop()
+                    .expect("compiler: deallocating non-existing slot");
+                if sl.var_name.is_some() {
+                    panic!("deallocating top slot that is a named var")
+                }
+            }
+        }
+
         /// Allocate or reuse a slot.
         fn allocate_any_slot_(&mut self, st: CompilerSlotState) -> Result<SlotIdx> {
             if let Some((i, sl)) = self
@@ -1301,6 +1341,17 @@ pub(crate) mod parser {
         pub fn allocate_temporary_on_top_(&mut self) -> Result<ExprRes> {
             let slot = self.allocate_top_slot_(CompilerSlotState::Activated)?;
             Ok(ExprRes::new(slot, true))
+        }
+
+        /// Check if `sl` is the top slot.
+        pub fn is_top_of_stack_(&self, sl: SlotIdx) -> bool {
+            if sl.0 as usize + 1 == self.slots.len() {
+                true
+            } else {
+                self.slots[sl.0 as usize..]
+                    .iter()
+                    .all(|s| s.state == CompilerSlotState::Unused)
+            }
         }
 
         /// Free expression result.
@@ -1418,7 +1469,7 @@ pub(crate) mod parser {
     ) -> Result<()> {
         if let Some(f_var_slot) = c.find_slot_of_var(s) {
             assert_ne!(f_var_slot, sl);
-            c.emit_instr_(I::Move(f_var_slot, sl));
+            c.emit_instr_(I::Copy(f_var_slot, sl));
         } else if c.name.as_ref().filter(|n| n.get() == s).is_some() {
             // call current function
             c.emit_instr_(I::LoadSelfChunk(sl))
@@ -1474,17 +1525,6 @@ pub(crate) mod parser {
                 Tok::RBracket
             }
         };
-    }
-
-    /// Push argument `a` onto the `call_args` stack.
-    fn mk_push_arg_instr(arg: &ExprRes) -> Instr {
-        if arg.temporary {
-            I::PushCallArgMove(arg.slot) // can move
-        } else {
-            // could be a variable passed several time as argument,
-            // we cannot move it
-            I::PushCallArgCpy(arg.slot)
-        }
     }
 
     impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
@@ -1577,7 +1617,7 @@ pub(crate) mod parser {
                         )?;
 
                         // define the function.
-                        logdebug!("define {} as {:?}", &f_name, sub_c);
+                        logdebug!("define {} as {:#?}", &f_name, sub_c);
                         self.ctx.define_meta_chunk(f_name, sub_c);
                         Ok(Some(Chunk::retnil()))
                     } else {
@@ -1637,6 +1677,7 @@ pub(crate) mod parser {
                 let sl_x = c.allocate_top_slot_(CompilerSlotState::Activated)?;
                 c.slots[sl_x.0 as usize].var_name = Some(x);
             }
+            logtrace!("compiling {:?}: slots for args: {:?}", &f_name, &c.slots);
             let res = self.parse_expr_seq_(&mut c, closing, None)?;
 
             // return value
@@ -1764,10 +1805,13 @@ pub(crate) mod parser {
                 logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
 
                 // parse arguments
-                let len = self.parse_expr_list_(c, Tok::RParen, &|c, a| {
-                    c.emit_instr_(mk_push_arg_instr(&a));
-                    c.free(&a);
-                })?;
+                let mut args = vec![];
+                let len = self.parse_expr_list_(
+                    c,
+                    Tok::RParen,
+                    &|c| Ok(Some(c.allocate_top_slot_(CompilerSlotState::Activated)?)),
+                    &mut |_c, a| args.push(a.clone()),
+                )?;
                 if len > u8::MAX as usize {
                     return Err(perror!(
                         self.lexer.loc(),
@@ -1775,28 +1819,38 @@ pub(crate) mod parser {
                     ));
                 }
 
-                c.emit_instr_(I::Become(f.slot));
+                c.emit_instr_(I::Become(f.slot, len as u8));
+
+                for a in args {
+                    c.free(&a);
+                }
                 c.free(&f);
                 Ok(res)
             } else {
                 // make a function call.
 
-                let res = match sl_res {
-                    None => c.allocate_temporary_()?,
-                    Some(sl) => ExprRes::new(sl, false),
-                };
+                let res = get_res!(c, sl_res);
                 logdebug!("parse application (res: {:?})", res);
 
-                let f = c.allocate_temporary_()?;
+                // use `res` if it's top of stack, otherwise allocate a temp
+                let (f, f_temp) = if c.is_top_of_stack_(res.slot) {
+                    (res, false)
+                } else {
+                    (c.allocate_temporary_on_top_()?, true)
+                };
                 resolve_id_into_slot_(&mut self.ctx, c, id, loc, f.slot)?;
                 self.lexer.next();
                 logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
 
                 // parse arguments
-                let len = self.parse_expr_list_(c, Tok::RParen, &|c, a| {
-                    c.emit_instr_(mk_push_arg_instr(&a));
-                    c.free(&a);
-                })?;
+                let mut args = vec![];
+                let len = self.parse_expr_list_(
+                    c,
+                    Tok::RParen,
+                    &|c| Ok(Some(c.allocate_temporary_on_top_()?.slot)),
+                    &mut |_c, a| args.push(a.clone()),
+                )?;
+
                 if len > u8::MAX as usize {
                     return Err(perror!(
                         self.lexer.loc(),
@@ -1804,8 +1858,9 @@ pub(crate) mod parser {
                     ));
                 }
 
-                c.emit_instr_(I::Call(f.slot, res.slot));
-                c.free(&f);
+                c.emit_instr_(I::Call(f.slot, len as u8, res.slot));
+                // free temporary slots on top of stack
+                c.deallocate_top_slots_(if f_temp { len + 1 } else { len });
                 Ok(res)
             }
         }
@@ -1815,7 +1870,8 @@ pub(crate) mod parser {
             &mut self,
             c: &mut Compiler,
             closing: Tok,
-            f: &dyn Fn(&mut Compiler, &ExprRes),
+            pre: &dyn Fn(&mut Compiler) -> Result<Option<SlotIdx>>,
+            post: &mut dyn FnMut(&mut Compiler, &ExprRes),
         ) -> Result<usize> {
             let mut n = 0;
             let mut has_exited = false;
@@ -1827,9 +1883,10 @@ pub(crate) mod parser {
                     return Err(perror!(self.lexer.loc(), "unreachable expression"));
                 }
 
-                let arg = self.parse_expr_(c, None)?;
+                let sl = pre(c)?;
+                let arg = self.parse_expr_(c, sl)?;
                 has_exited = arg.exited;
-                f(c, &arg);
+                post(c, &arg);
 
                 n += 1;
                 if n > u8::MAX as usize {
@@ -1890,7 +1947,10 @@ pub(crate) mod parser {
 
         fn parse_infix_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
             logdebug!("parse infix expr");
-            let a = self.parse_expr_(c, None)?;
+            let res = get_res!(c, sl_res); // reserve now, so the top of stack is free
+
+            let sl_a = c.allocate_temporary_on_top_()?;
+            let a = self.parse_expr_(c, Some(sl_a.slot))?;
 
             let loc = self.lexer.loc();
             let Self { ctx, lexer, .. } = self;
@@ -1899,10 +1959,10 @@ pub(crate) mod parser {
                     // infix primitive operator.
                     // emit `b = a op b`
                     lexer.next();
-                    let b = self.parse_expr_(c, sl_res)?;
+                    let b = self.parse_expr_(c, Some(res.slot))?;
                     self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
 
-                    c.emit_instr_(binop_instr(a.slot, b.slot, b.slot));
+                    c.emit_instr_(binop_instr(a.slot, res.slot, res.slot));
                     c.free(&a);
                     Ok(b)
                 } else {
@@ -1911,14 +1971,15 @@ pub(crate) mod parser {
                     resolve_id_into_slot_(ctx, c, &op, loc, f.slot)?;
 
                     lexer.next();
-                    let b = self.parse_expr_(c, sl_res)?;
+                    let sl_b = c.allocate_temporary_on_top_()?;
+                    let b = self.parse_expr_(c, Some(sl_b.slot))?;
                     self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
 
-                    c.emit_instr_(mk_push_arg_instr(&a));
-                    c.emit_instr_(mk_push_arg_instr(&b));
-                    c.emit_instr_(I::Call(f.slot, b.slot));
-                    c.free(&a);
-                    c.free(&f);
+                    // swap a and f, so that the stack looks like `[f, a, b]`
+
+                    c.emit_instr_(I::Swap(sl_a.slot, f.slot));
+                    c.emit_instr_(I::Call(a.slot, 2, res.slot));
+                    c.deallocate_top_slots_(3); // f, a, b
                     Ok(b)
                 }
             } else {
@@ -1984,7 +2045,7 @@ pub(crate) mod parser {
                         if let Some(sl_r) = sl_res {
                             if sl_r != sl_var {
                                 // must copy
-                                c.emit_instr_(I::Move(sl_var, sl_r));
+                                c.emit_instr_(I::Copy(sl_var, sl_r));
                             }
                         } else {
                             // return the existing variable instead.
