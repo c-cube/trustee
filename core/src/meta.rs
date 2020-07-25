@@ -225,6 +225,9 @@ pub struct InstrBuiltin {
 
 // TODO: check `exited` in all subexpressions?
 
+/// Maximum stack size
+const STACK_SIZE: usize = 32 * 1024;
+
 /// The meta-language virtual machine.
 pub struct VM<'a> {
     /// The logical context underlying the VM.
@@ -234,7 +237,7 @@ pub struct VM<'a> {
     /// constants, theorems, and chunks.
     pub ctx: &'a mut Ctx,
     /// The stack where values live.
-    stack: Vec<Value>,
+    stack: Box<[Value; STACK_SIZE]>,
     /// Control stack, for function calls.
     ctrl_stack: Vec<StackFrame>,
     /// In case of error, the error message lives here.
@@ -499,9 +502,21 @@ mod ml {
     impl<'a> VM<'a> {
         /// Create a new VM using the given context.
         pub fn new(ctx: &'a mut Ctx) -> Self {
+            use std::mem::{transmute, MaybeUninit};
+
+            // create the stack.
+            // See https://doc.rust-lang.org/nightly/std/mem/union.MaybeUninit.html
+            let mut stack: Box<[MaybeUninit<Value>; STACK_SIZE]> =
+                Box::new(unsafe { MaybeUninit::uninit().assume_init() });
+
+            for x in &mut stack[..] {
+                *x = MaybeUninit::new(Value::Nil);
+            }
+            let stack = unsafe { transmute::<_, Box<[Value; STACK_SIZE]>>(stack) };
+
             Self {
                 ctx,
-                stack: Vec::with_capacity(256),
+                stack,
                 ctrl_stack: vec![],
                 result: Ok(Value::Nil),
             }
@@ -514,13 +529,15 @@ mod ml {
                 assert!((sf.ic as usize) < sf.chunk.0.instrs.len());
                 let instr = sf.chunk.0.instrs[sf.ic as usize];
                 logdebug!(
-                    "exec loop: ic={} start={} stacklen={} instr={:?}",
+                    "exec loop: ic={} start={} instr={:?}",
                     sf.ic,
                     sf.start,
-                    self.stack.len(),
                     instr
                 );
-                logtrace!("  stack: {:?}", &self.stack);
+                logtrace!(
+                    "  stack: {:?}",
+                    &self.stack[0..(sf.start + sf.chunk.0.n_slots) as usize]
+                );
 
                 sf.ic += 1; // ready for next iteration
                 match instr {
@@ -774,10 +791,8 @@ mod ml {
 
                         // pop frame, get return address and frame offset
                         let res_offset;
-                        let start;
                         if let Some(sf) = self.ctrl_stack.pop() {
                             res_offset = sf.res_offset;
-                            start = sf.start;
                         } else {
                             self.result = Err(Error::new("stack underflow"));
                             break;
@@ -795,8 +810,6 @@ mod ml {
                         } else {
                             self.stack[res_offset as usize] = ret_val;
                         }
-                        // pop slots of the function call
-                        self.stack.truncate(start as usize);
                     }
                     I::Trap => {
                         self.result = Err(Error::new("executed `trap`"));
@@ -851,10 +864,10 @@ mod ml {
             );
             logtrace!("callee: {:#?}", &c);
 
-            // also allocate as many slots as needed by `c`.
-            while self.stack.len() < (start_offset + c.0.n_slots) as usize {
-                self.stack.push(Value::Nil)
+            if (start_offset + c.0.n_slots) as usize > STACK_SIZE {
+                return Err(Error::new("stack overflow"));
             }
+
             self.ctrl_stack.push(StackFrame {
                 ic: 0,
                 chunk: c,
@@ -872,7 +885,9 @@ mod ml {
 
         /// Reset execution state.
         fn reset(&mut self) {
-            self.stack.clear();
+            for i in 0..STACK_SIZE {
+                self.stack[i] = Value::Nil
+            }
             self.ctrl_stack.clear();
             self.result = Ok(Value::Nil);
         }
@@ -1972,15 +1987,16 @@ pub(crate) mod parser {
 
                     lexer.next();
                     let sl_b = c.allocate_temporary_on_top_()?;
-                    let b = self.parse_expr_(c, Some(sl_b.slot))?;
+                    let _b = self.parse_expr_(c, Some(sl_b.slot))?;
                     self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
 
                     // swap a and f, so that the stack looks like `[f, a, b]`
 
+                    assert_ne!(f.slot, res.slot);
                     c.emit_instr_(I::Swap(sl_a.slot, f.slot));
                     c.emit_instr_(I::Call(a.slot, 2, res.slot));
                     c.deallocate_top_slots_(3); // f, a, b
-                    Ok(b)
+                    Ok(res)
                 }
             } else {
                 return Err(perror!(self.lexer.loc(), "expected an infix operator"));
@@ -2167,8 +2183,13 @@ mod basic_primitives {
             "print help for an identifier.",
             |_, args: &[Value]| -> Result<_> {
                 check_arity!("help", args, 1);
-                let _s = get_arg_str!(args, 0);
-                // TODO: actually display help
+                let s = get_arg_str!(args, 0).get();
+
+                if let Some(b) = basic_primitives::BUILTINS.iter().find(|b| b.name == s) {
+                    println!("{}", b.help);
+                } else if let Some(b) = logic_builtins::BUILTINS.iter().find(|b| b.name == s) {
+                    println!("{}", b.help);
+                };
                 Ok(Value::Nil)
             }
         ),
@@ -2733,6 +2754,15 @@ mod test {
     #[test]
     fn test_eval_arith() -> Result<()> {
         check_eval!("(let [a 2 b 4] {a + {{4  * b} - {{a / 2} % 3}}})", 17);
+        Ok(())
+    }
+
+    #[test]
+    fn test_fact() -> Result<()> {
+        check_eval!(
+            "(defn fact [x] (if {x <= 1} 1 {x * (fact {x - 1})})) (list (fact 5) (fact 6))",
+            vec![120, 720i64]
+        );
         Ok(())
     }
 
