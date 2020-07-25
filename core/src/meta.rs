@@ -827,6 +827,7 @@ mod ml {
         fn print_trace_(&self, out: &mut dyn io::Write) -> io::Result<()> {
             let mut sf_i = 0;
             let mut stack_i = 0;
+            let mut frame_len = 0;
             write!(out, "===== begin stack trace =====\n")?;
             while sf_i < self.ctrl_stack.len() {
                 let sf = &self.ctrl_stack[sf_i];
@@ -840,13 +841,14 @@ mod ml {
                 let s = sf.chunk.print(true, Some(sf.ic as usize))?;
                 write!(out, "{}\n", s)?;
                 let next_stack_i = sf.start as usize;
+                frame_len = sf.chunk.0.n_slots as usize;
                 for i in stack_i..next_stack_i {
                     write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
                 }
                 stack_i = next_stack_i;
                 sf_i += 1;
             }
-            for i in stack_i..self.stack.len() {
+            for i in stack_i..stack_i + frame_len {
                 write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
             }
             write!(out, "===== end stack trace =====\n")?;
@@ -2808,6 +2810,17 @@ mod test {
             (defn f [x y] (if {x == 0} y (become f {x - 1} {y + 1})))
             (f 1000 0)",
             1000
+        );
+        check_eval!(
+            "(defn f [x y z w] (if {x == 0} {y + {10 * {z + {10 * w}}}}
+                               (become f {x - 1} {y + 1} {z + 1} {w + 1})))
+            (f 100 0 0 0)",
+            {
+                let y = 100;
+                let z = 100;
+                let w = 100;
+                y + 10 * (z + 10 * w)
+            }
         );
         Ok(())
     }
