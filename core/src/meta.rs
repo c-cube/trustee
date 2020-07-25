@@ -761,7 +761,13 @@ mod ml {
                             let stack_frame = &mut stack[sf.start as usize
                                 ..sf.start as usize + sf.chunk.0.n_slots as usize];
 
-                            stack_frame.rotate_right(n_args as usize + 1);
+                            // move arguments to the beginning of the frame
+                            let shift_left_by = sl_f.0 as usize;
+                            if shift_left_by > 0 {
+                                for i in 0..(n_args as usize) {
+                                    stack_frame.swap(i, i + 1 + shift_left_by);
+                                }
+                            }
 
                             // update stack frame
                             sf.chunk = c;
