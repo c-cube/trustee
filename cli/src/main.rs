@@ -5,14 +5,16 @@ fn main() -> anyhow::Result<()> {
     log::info!("start cli");
 
     let mut ctx = Ctx::new();
-    let mut ml = meta::State::new(&mut ctx);
 
     let mut args = pico_args::Arguments::from_env();
     if args.contains("--hol") {
-        ml.run(&"hol_prelude source")?;
+        meta::load_prelude_hol(&mut ctx)?;
     }
+
+    let mut vm = meta::VM::new(&mut ctx);
     if let Some(x) = args.opt_value_from_str::<&str, String>("--include")? {
-        ml.run(&format!(r#""{}" load_file source"#, &x))?;
+        let file_content = std::fs::read_to_string(x)?;
+        vm.run(&file_content)?;
     }
 
     let mut rl = rustyline::Editor::<()>::new();
@@ -21,6 +23,10 @@ fn main() -> anyhow::Result<()> {
     }
     // TODO: completion based on dictionary
 
+    if args.contains("--batch") {
+        return Ok(());
+    }
+
     loop {
         let readline = rl.readline("> ");
         match readline {
@@ -28,8 +34,11 @@ fn main() -> anyhow::Result<()> {
                 rl.add_history_entry(line.as_str());
 
                 log::info!("parse line {:?}", &line);
-                match ml.run(&line) {
-                    Ok(()) => {}
+                match vm.run(&line) {
+                    Ok(meta::Value::Nil) => {}
+                    Ok(v) => {
+                        println!("  {}", v);
+                    }
                     Err(e) => {
                         log::error!("err: {}", e);
                     }

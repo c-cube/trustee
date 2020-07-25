@@ -1,12 +1,13 @@
 set expandtab
 
-syn keyword     trusteeKW        def defconst defthm decl findthm
+syn keyword     trusteeKW        def defconst defthm decl findthm let defn
 syn keyword     trusteeKW        findconst set_infix set_binder
 syn keyword     trusteeKW        hol_prelude pledge_no_more_axioms source
 syn keyword     trusteeKW        pstack clear swap rot begin end
-syn match       trusteeComment "#.*" contains=trusteeTodo
+syn match       trusteeComment ";.*" contains=trusteeTodo
 
-syn match       trusteeSym      +"[^"]\+"+
+syn match       trusteeStr      +"[^"]\+"+
+syn match       trusteeSym      ":[^ \])]\+"
 
 
 " TODO: handle this only within ``
@@ -20,7 +21,7 @@ syn match       trusteeExpr      "/\\"
 syn match       trusteeExpr      "\\/"
 syn match       trusteeExpr      "\\\>"
 syn match       trusteeExpr      "\."
-syn match       trusteeExpr      ":"
+syn match       trusteeExpr      ":\>"
 syn match       trusteeExpr      "="
 syn match       trusteeExpr      "==>"
 
@@ -45,7 +46,8 @@ if version >= 508 || !exists("did_trustee_syntax_inits")
   HiLink trusteeKW          Keyword
   HiLink trusteeExpr        Constant
   HiLink trusteeThm         Keyword
-  HiLink trusteeSym         String
+  HiLink trusteeStr         String
+  HiLink trusteeSym         Special
   HiLink trusteeTodo        Todo
   HiLink trusteeDelim       Delimiter
   delcommand HiLink
