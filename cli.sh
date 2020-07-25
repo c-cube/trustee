@@ -1,2 +1,2 @@
 #!/bin/sh
-exec cargo run --release -p trustee_cli -- $@
+exec cargo run -p trustee_cli "$CLI_OPT" -- $@

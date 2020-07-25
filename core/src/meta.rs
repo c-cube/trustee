@@ -223,7 +223,8 @@ pub struct InstrBuiltin {
     help: &'static str,
 }
 
-// TODO: check `exited` in all subexpressions?
+// TODO: have `let sc = open_scope(); …  close_scope(sc)` with #[must_use],
+//  for scope management. Use it in `then` and `else`!!
 
 /// Maximum stack size
 const STACK_SIZE: usize = 32 * 1024;
@@ -529,7 +530,7 @@ mod ml {
                 assert!((sf.ic as usize) < sf.chunk.0.instrs.len());
                 let instr = sf.chunk.0.instrs[sf.ic as usize];
                 logdebug!(
-                    "exec loop: ic={} start={} instr={:?}",
+                    "exec loop: ic={} start={} instr=`{:?}`",
                     sf.ic,
                     sf.start,
                     instr
@@ -2819,6 +2820,27 @@ mod test {
                 let y = 100;
                 let z = 100;
                 let w = 100;
+                y + 10 * (z + 10 * w)
+            }
+        );
+        check_eval!(
+            "(defn f [x y z w] (if {x != 0} (become f {x - 1} {y + 1} {z + 1} {w + 1}) {y + {10 * {z + {10 * w}}}}))
+            (f 100 0 0 0)",
+            {
+                let y = 100;
+                let z = 100;
+                let w = 100;
+                y + 10 * (z + 10 * w)
+            }
+        );
+        check_eval!(
+            "(defn f [x y z w] (if {x == 0} {y + {10 * {z + {10 * w}}}}
+                               (become f {x - 1} {y + 1} {z + 1} {w + 1})))
+            (f 10000 0 0 0)",
+            {
+                let y = 10000;
+                let z = 10000;
+                let w = 10000;
                 y + 10 * (z + 10 * w)
             }
         );
