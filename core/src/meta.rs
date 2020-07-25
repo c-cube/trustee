@@ -111,6 +111,7 @@ enum CompilerSlotState {
 /// The slot might have been allocated for this purpose, in which case
 /// `self.temporary` will be true, meaning the slot can be disposed of
 /// when the expression is not needed anymore.
+#[must_use]
 #[derive(Clone, Copy, Debug)]
 struct ExprRes {
     /// Where the result lives.
@@ -1787,7 +1788,7 @@ pub(crate) mod parser {
                     let sl_x = c.allocate_var_(x)?;
                     locals.push(sl_x.clone());
                     self.next_tok_();
-                    self.parse_expr_(c, Some(sl_x.slot))?;
+                    let _ = self.parse_expr_(c, Some(sl_x.slot))?;
                     // now the variable is defined.
                     c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
 
@@ -1823,7 +1824,7 @@ pub(crate) mod parser {
 
                 let id_f =
                     cur_tok_as_id_(&mut self.lexer, "expected function name after `become`")?;
-                let f = c.allocate_temporary_()?;
+                let f = c.allocate_temporary_on_top_()?;
                 resolve_id_into_slot_(&mut self.ctx, c, id_f, loc, f.slot)?;
                 self.lexer.next();
                 logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
@@ -1962,7 +1963,7 @@ pub(crate) mod parser {
                 if self.cur_tok_() == closing {
                     break; // done
                 }
-                self.parse_expr_(c, Some(res.slot))?;
+                let _ = self.parse_expr_(c, Some(res.slot))?;
             }
             self.eat_(closing, "unclosed sequence")?;
 
