@@ -17,7 +17,3 @@ anyhow="1.0"
 [features]
 logging=["log"]
 
-[profile.release]
-debug=1
-opt-level=1
-lto="thin"
