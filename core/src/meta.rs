@@ -420,8 +420,9 @@ mod ml {
                 (Str(i), Str(j)) => i == j,
                 (Cons(i), Cons(j)) => i == j,
                 (Expr(i), Expr(j)) => i == j,
+                (Thm(t1), Thm(t2)) => t1 == t2,
                 (Chunk(c1), Chunk(c2)) => std::ptr::eq(&*c1.0 as *const _, &*c2.0),
-                (Builtin(b1), Builtin(b2)) => std::ptr::eq(&*b1 as *const _, &*b2),
+                (Builtin(b1), Builtin(b2)) => b1.name == b2.name,
                 _ => false, // other cases are not comparable
             }
         }
@@ -1533,11 +1534,6 @@ pub(crate) mod parser {
         } else if let Some(th) = ctx.find_lemma(s) {
             let lidx = c.allocate_local_(Value::Thm(th.clone()))?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
-        // } else if c.defines_const(s) {
-        // TODO: emit `add_local(s); add_local(builtin("find_const")); call
-        //
-        // or:
-        // TODO: parse and eval the top statements one by one.
         } else {
             return Err(perror!(loc, "unknown identifier '{}'", s));
         }

@@ -784,6 +784,12 @@ impl fmt::Debug for Thm {
     }
 }
 
+impl PartialEq for Thm {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0.as_ref() as *const _, other.0.as_ref() as *const _)
+    }
+}
+
 /// A substitution.
 pub type Subst = Vec<(Var, Expr)>;
 
