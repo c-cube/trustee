@@ -84,6 +84,8 @@ struct ChunkImpl {
 struct Compiler<'a> {
     instrs: Vec<Instr>,
     locals: Vec<Value>,
+    /// Local lexical scope.
+    lex_scopes: Vec<Vec<SlotIdx>>,
     /// Maximum size `slots` ever took.
     n_slots: u32,
     name: Option<RStr>,
@@ -1231,6 +1233,21 @@ pub(crate) mod parser {
             &mut self.slots[i.0 as usize]
         }
 
+        pub fn push_local_scope(&mut self) {
+            self.lex_scopes.push(vec![]);
+        }
+
+        pub fn pop_local_scope(&mut self) {
+            match self.lex_scopes.pop() {
+                None => panic!("compiler: unbalanced scopes"),
+                Some(sl) => {
+                    for x in sl {
+                        self.deallocate_slot_(x)
+                    }
+                }
+            }
+        }
+
         /// Ensure the value is in `self.locals`, return its index.
         pub fn allocate_local_(&mut self, v: Value) -> Result<LocalIdx> {
             logdebug!("compiler(name={:?}): push local {}", self.name, v);
@@ -1354,6 +1371,9 @@ pub(crate) mod parser {
         pub fn allocate_var_(&mut self, name: RStr) -> Result<ExprRes> {
             let slot = self.allocate_any_slot_(CompilerSlotState::NotActivatedYet)?;
             self.get_slot_(slot).var_name = Some(name);
+            if let Some(scope) = self.lex_scopes.last_mut() {
+                scope.push(slot); // push into local scope
+            }
             Ok(ExprRes::new(slot, false))
         }
 
@@ -1584,6 +1604,7 @@ pub(crate) mod parser {
                         instrs: vec![],
                         locals: vec![],
                         n_slots: 0,
+                        lex_scopes: vec![],
                         name: None,
                         slots: vec![],
                         parent: None,
@@ -1694,13 +1715,14 @@ pub(crate) mod parser {
                 locals: vec![],
                 n_slots: 0,
                 name: f_name.clone(),
+                lex_scopes: vec![],
                 slots: vec![],
                 parent,
             };
             // add variables to `sub_c`
             for x in vars {
-                let sl_x = c.allocate_top_slot_(CompilerSlotState::Activated)?;
-                c.slots[sl_x.0 as usize].var_name = Some(x);
+                let sl_x = c.allocate_var_(x)?;
+                c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
             }
             logtrace!("compiling {:?}: slots for args: {:?}", &f_name, &c.slots);
             let res = self.parse_expr_seq_(&mut c, closing, None)?;
@@ -1755,7 +1777,9 @@ pub(crate) mod parser {
                 let jump_if_false = c.reserve_jump_();
 
                 // parse `then`
+                c.push_local_scope();
                 let _e_then = self.parse_expr_(c, Some(res.slot))?;
+                c.pop_local_scope();
                 // jump above `else`
                 let jump_after_then = c.reserve_jump_();
 
@@ -1764,13 +1788,33 @@ pub(crate) mod parser {
                 c.free(&res_test);
 
                 // parse `else`
+                c.push_local_scope();
                 let _e_else = self.parse_expr_(c, Some(res.slot))?;
+                c.pop_local_scope();
 
                 // jump here after `then` is done.
                 c.emit_jump(jump_after_then, |off| I::Jump(off))?;
 
                 self.eat_(Tok::RParen, "expected closing ')' after 'if'")?;
                 Ok(res)
+            } else if id == "def" {
+                // definition in current scope
+                self.next_tok_();
+
+                let x: RStr =
+                    cur_tok_as_id_(&mut self.lexer, "expected variable name after `def`")?.into();
+                let sl_x = c.allocate_var_(x)?;
+                self.next_tok_();
+
+                c.push_local_scope();
+                let e = self.parse_expr_seq_(c, Tok::RParen, Some(sl_x.slot));
+                c.pop_local_scope();
+                let _e = e?; // force error
+
+                // now the variable is usable
+                c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
+
+                Ok(sl_x)
             } else if id == "let" {
                 // local definitions.
                 self.next_tok_();
@@ -1782,11 +1826,10 @@ pub(crate) mod parser {
                 };
                 self.next_tok_();
 
-                let mut locals = vec![];
+                c.push_local_scope();
                 loop {
                     let x: RStr = cur_tok_as_id_(&mut self.lexer, "expected variable name")?.into();
                     let sl_x = c.allocate_var_(x)?;
-                    locals.push(sl_x.clone());
                     self.next_tok_();
                     let _ = self.parse_expr_(c, Some(sl_x.slot))?;
                     // now the variable is defined.
@@ -1800,10 +1843,8 @@ pub(crate) mod parser {
 
                 let res = get_res!(c, sl_res);
                 let res = self.parse_expr_seq_(c, Tok::RParen, Some(res.slot))?;
-                // deallocate locals
-                for x in locals {
-                    c.deallocate_slot_(x.slot);
-                }
+                c.pop_local_scope(); // deallocate locals
+
                 Ok(res)
             } else if id == "list" {
                 // parse into a list
@@ -1812,7 +1853,10 @@ pub(crate) mod parser {
             } else if id == "do" {
                 self.next_tok_();
                 // parse a series of expressions.
-                self.parse_expr_seq_(c, Tok::RParen, sl_res)
+                c.push_local_scope();
+                let r = self.parse_expr_seq_(c, Tok::RParen, sl_res);
+                c.pop_local_scope();
+                r
             } else if id == "become" {
                 self.next_tok_();
 
@@ -2851,6 +2895,15 @@ mod test {
                 y + 10 * (z + 10 * w)
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_scope() -> Result<()> {
+        check_eval!("(do (def x 1) (def y 2) {x + y})", 3);
+        check_eval!("(do (def x 1) (do (def x 2) nil) x)", 1);
+        check_eval!("(do (def x 1) (do (def x 2) x))", 2);
+        check_eval!("(do (def x 1) (do (def y 10) (do (def x {1 + y}) x)))", 11);
         Ok(())
     }
 
