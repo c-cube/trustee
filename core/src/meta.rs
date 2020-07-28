@@ -1833,6 +1833,65 @@ pub(crate) mod parser {
                 c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
 
                 Ok(sl_x)
+            } else if id == "and" {
+                // control operator, need special handling
+                self.next_tok_();
+
+                // we build:
+                // e1; if false goto :f
+                // e2; if false goto :f
+                // res = true; goto :end
+                // f: res = false
+                // end:
+
+                let res = get_res!(c, sl_res);
+                let e1 = self.parse_expr_(c, Some(res.slot))?;
+                let j1_false = c.reserve_jump_();
+
+                let e2 = self.parse_expr_(c, Some(res.slot))?;
+                let j2_false = c.reserve_jump_();
+
+                c.emit_instr_(I::LoadBool(true, res.slot));
+                let j_true = c.reserve_jump_();
+
+                // if e1 is false, jump here and return false
+                c.emit_jump(j1_false, |off| I::JumpIfFalse(e1.slot, off))?;
+                c.emit_jump(j2_false, |off| I::JumpIfFalse(e2.slot, off))?;
+                c.emit_instr_(I::LoadBool(false, res.slot));
+
+                c.emit_jump(j_true, |off| I::Jump(off))?;
+
+                self.eat_(Tok::RParen, "missing ')' after and")?;
+                Ok(res)
+            } else if id == "or" {
+                // control operator, need special handling
+                self.next_tok_();
+
+                // we build:
+                // e1; if true goto :t
+                // e2; if true goto :t
+                // res = false; goto :end
+                // t: res = true
+                // end:
+
+                let res = get_res!(c, sl_res);
+                let e1 = self.parse_expr_(c, Some(res.slot))?;
+                let j1_true = c.reserve_jump_();
+
+                let e2 = self.parse_expr_(c, Some(res.slot))?;
+                let j2_true = c.reserve_jump_();
+
+                c.emit_instr_(I::LoadBool(false, res.slot));
+                let j_false = c.reserve_jump_();
+
+                c.emit_jump(j1_true, |off| I::JumpIfTrue(e1.slot, off))?;
+                c.emit_jump(j2_true, |off| I::JumpIfTrue(e2.slot, off))?;
+                c.emit_instr_(I::LoadBool(true, res.slot));
+
+                c.emit_jump(j_false, |off| I::Jump(off))?;
+
+                self.eat_(Tok::RParen, "missing ')' after or")?;
+                Ok(res)
             } else if id == "let" {
                 // local definitions.
                 self.next_tok_();
@@ -2817,8 +2876,6 @@ mod test {
         check_eval!("{1 . {:b . nil}}", vec![1.into(), Value::Sym("b".into())]);
         check_eval!("[1 :b]", vec![1.into(), Value::Sym("b".into())]);
         check_eval!(":a", Value::Sym("a".into()));
-        check_eval!("(not true)", false);
-        check_eval!("(not false)", true);
         check_eval!("{1 != 2}", true);
         check_eval!("{1 == 2}", false);
 
@@ -2925,6 +2982,26 @@ mod test {
         check_eval!("(do (def x 1) (do (def x 2) x))", 2);
         check_eval!("(do (def x 1) (do (def y 10) (do (def x {1 + y}) x)))", 11);
         check_eval!("(let [x 1] (print x) (def y {10 + x}) y)", 11);
+        Ok(())
+    }
+
+    #[test]
+    fn test_bool() -> Result<()> {
+        check_eval!("true", true);
+        check_eval!("false", false);
+        check_eval!("(not true)", false);
+        check_eval!("(not false)", true);
+        check_eval!("(and true false)", false);
+        check_eval!("(and false true)", false);
+        check_eval!("(and true true)", true);
+        check_eval!("(and false false)", false);
+        check_eval!("(or false true)", true);
+        check_eval!("(or true false)", true);
+        check_eval!("(or false false)", false);
+        check_eval!("(or true true)", true);
+
+        // TODO: test short circuit property when we have `ref`
+
         Ok(())
     }
 
