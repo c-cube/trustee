@@ -296,6 +296,27 @@ mod ml {
             }
             r
         }
+
+        pub fn as_str(&self) -> Option<&RStr> {
+            match self {
+                Value::Str(s) => Some(s),
+                _ => None,
+            }
+        }
+
+        pub fn as_cons(&self) -> Option<(&Value, &Value)> {
+            match self {
+                Value::Cons(p) => Some((&p.0, &p.1)),
+                _ => None,
+            }
+        }
+
+        pub fn as_expr(&self) -> Option<&k::Expr> {
+            match self {
+                Value::Expr(e) => Some(e),
+                _ => None,
+            }
+        }
     }
 
     impl fmt::Debug for CompilerSlot {
@@ -708,11 +729,12 @@ mod ml {
                             Value::Builtin(b) => {
                                 logdebug!("call builtin {:?} with {} args", &b.name, n_args);
                                 let args = &stack[sl_f + 1..sl_f + 1 + n_args as usize];
+                                logtrace!("  args: {:?}", &args);
                                 let f = &(b.run);
                                 let res = f(ctx, &args);
                                 match res {
                                     Ok(ret_value) => {
-                                        logdebug!("returned {}", ret_value);
+                                        logdebug!("return[offset {}]: {}", offset_ret, ret_value);
                                         self.stack[offset_ret] = ret_value;
                                     }
                                     Err(mut e) => {
@@ -2294,8 +2316,8 @@ mod logic_builtins {
     use super::*;
 
     /// Builtin functions for manipulating expressions and theorems.
-    pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[
-        &defbuiltin!(
+    pub(super) const BUILTINS: &'static [InstrBuiltin] = &[
+        defbuiltin!(
             "defconst",
             "Defines a logic constant. Takes `(nc, nth, expr_rhs)` and returns
             the tuple `{c . th}` where `c` is the constant, with name `nc`,
@@ -2310,7 +2332,7 @@ mod logic_builtins {
                 Ok(Value::cons(Value::Expr(def.c), Value::Thm(def.thm)))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "defthm",
             "Defines a theorem. Takes `(name, th)`.",
             |ctx, args| {
@@ -2321,7 +2343,7 @@ mod logic_builtins {
                 Ok(Value::Nil)
             }
         ),
-        &defbuiltin!("expr_ty", "Get the type of an expression.", |_ctx, args| {
+        defbuiltin!("expr_ty", "Get the type of an expression.", |_ctx, args| {
             check_arity!("expr_ty", args, 1);
             let e = get_arg_expr!(args, 0);
             if e.is_kind() {
@@ -2329,7 +2351,7 @@ mod logic_builtins {
             }
             Ok(Value::Expr(e.ty().clone()))
         }),
-        &defbuiltin!(
+        defbuiltin!(
             "findconst",
             "Find the constant with given name.",
             |ctx, args| {
@@ -2343,7 +2365,15 @@ mod logic_builtins {
                 Ok(Value::Expr(e))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!("findthm", "looks up a theorem by name", |ctx, args| {
+            check_arity!("findthm", args, 1);
+            let s = get_arg_str!(args, 0);
+            match ctx.find_lemma(s) {
+                Some(t) => Ok(Value::Thm(t.clone())),
+                None => Err(Error::new("cannot find theorem")),
+            }
+        }),
+        defbuiltin!(
             "axiom",
             "Takes a boolean expression and makes it into an axiom.
             Might fail if `pledge_no_new_axiom` was called earlier.",
@@ -2354,7 +2384,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "assume",
             "Takes a boolean expression and returns the theorem `e|-e`.",
             |ctx, args| {
@@ -2364,7 +2394,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "refl",
             "Takes an expression `e` and returns the theorem `|-e=e`.",
             |ctx, args| {
@@ -2374,7 +2404,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "sym",
             "Takes a theorem `A|- t=u` and returns the theorem `A|- u=t`.",
             |ctx, args| {
@@ -2384,7 +2414,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "trans",
             "Transitivity", // TODO Takes ` theorem `A|- t=u` and returns the theorem `A|- u=t`.",
             |ctx, args| {
@@ -2395,7 +2425,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "congr",
             "Congruence. Takes `A|- f=g` and `B|- t=u`, returns `A,B|- f t=g u`",
             |ctx, args| {
@@ -2406,7 +2436,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "decl",
             "Declare a symbol. Takes a symbol `n`, and a type.",
             |ctx, args| {
@@ -2417,7 +2447,7 @@ mod logic_builtins {
                 Ok(Value::Expr(e))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "set_infix",
             "Make a symbol infix.
 
@@ -2433,7 +2463,7 @@ mod logic_builtins {
                 Ok(Value::Nil)
             }
         ),
-        &defbuiltin!("set_binder", "Make a symbol a binder.", |ctx, args| {
+        defbuiltin!("set_binder", "Make a symbol a binder.", |ctx, args| {
             check_arity!("set_binder", args, 2);
             let c = get_arg_str!(args, 0);
             let i = get_arg_int!(args, 1);
@@ -2441,7 +2471,7 @@ mod logic_builtins {
             ctx.set_fixity(&*c, f);
             Ok(Value::Nil)
         }),
-        &defbuiltin!(
+        defbuiltin!(
             "abs",
             "Takes `x`, `ty`, and `A|- t=u`, and returns
             the theorem `A|- \\x:ty. t = \\x:ty. u`.",
@@ -2455,7 +2485,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "abs_expr",
             "Takes expr `x`, and `A|- t=u`, and returns
             the theorem `A|- \\x:ty. t = \\x:ty. u`.",
@@ -2470,7 +2500,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "concl",
             "Takes a theorem `A |- t`, and returns `t`.",
             |_ctx, args| {
@@ -2479,7 +2509,7 @@ mod logic_builtins {
                 Ok(Value::Expr(th.concl().clone()))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "hol_prelude",
             "Returns the builtin HOL prelude, as a string.",
             |_ctx, args| {
@@ -2487,7 +2517,7 @@ mod logic_builtins {
                 Ok(Value::Str(super::SRC_PRELUDE_HOL.into()))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "pledge_no_new_axiom",
             "Prevent any further calls to `axiom` to succeed.",
             |ctx, args| {
@@ -2496,7 +2526,7 @@ mod logic_builtins {
                 Ok(Value::Nil)
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "congr_ty",
             "Congruence rule on a type argument.",
             |ctx, args| {
@@ -2507,14 +2537,14 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!("cut", "Cut rule.", |ctx, args| {
+        defbuiltin!("cut", "Cut rule.", |ctx, args| {
             check_arity!("cut", args, 2);
             let th1 = get_arg_thm!(args, 0);
             let th2 = get_arg_thm!(args, 1);
             let th = ctx.thm_cut(th1.clone(), th2.clone())?;
             Ok(Value::Thm(th))
         }),
-        &defbuiltin!(
+        defbuiltin!(
             "bool_eq",
             "Boolean equality. Takes `A|- t=u` and `B|- t`, returns `A,B|- u`.",
             |ctx, args| {
@@ -2525,7 +2555,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "bool_eq_intro",
             "Boolean equality introduction.
             Takes `A, t|- u` and `B,u |- t`, returns `A,B|- t=u`.",
@@ -2537,7 +2567,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        &defbuiltin!(
+        defbuiltin!(
             "beta_conv",
             "Beta-conversion rule.
             Takes expr `(\\x. t) u`, returns `|- (\\x. t) u = t[u/x]`.",
@@ -2548,103 +2578,97 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
+        defbuiltin!(
+            "subst",
+            r#"Instantiate a theorem with a substitution.
+
+            The substitution is a list of the shape `["x" <expr> "y" <expr>]`."#,
+            |ctx, args| {
+                check_arity!("instantiate", args, 2);
+                let th = get_arg_thm!(args, 0);
+                let mut arg1: &Value = &args[1];
+
+                macro_rules! or_fail {
+                    ($e: expr) => {
+                        $e.ok_or_else(|| Error::new("expected substitution"))?
+                    };
+                }
+
+                let mut subst = vec![];
+                loop {
+                    if let Value::Nil = arg1 {
+                        break;
+                    }
+                    let (x, y) = or_fail!(arg1.as_cons());
+                    let x = or_fail!(x.as_str());
+                    let (e, tl) = or_fail!(y.as_cons());
+                    let e = or_fail!(e.as_expr());
+                    arg1 = tl;
+                    subst.push((k::Var::from_rstr(x, e.ty().clone()), e.clone()))
+                }
+
+                let th = ctx.thm_instantiate(th.clone(), &subst)?;
+                Ok(Value::Thm(th))
+            }
+        ),
+        defbuiltin!(
+            "rw",
+            "Rewrite with a combination of `beta_conv` and theorem names.",
+            |ctx, args| {
+                check_arity!("rw", args, 2);
+                let th = get_arg_thm!(args, 0);
+                let mut arg1 = &args[1];
+
+                macro_rules! or_fail {
+                    ($e: expr) => {
+                        $e.ok_or_else(|| {
+                            Error::new(
+                                r#"rw: expect a list of theorems, or `:beta`, as second parameter"#,
+                            )
+                        })?
+                    };
+                }
+
+                let mut beta = false;
+                let mut rw_rules = algo::RewriteRuleSet::new();
+                loop {
+                    if let Value::Nil = arg1 {
+                        break;
+                    }
+                    let (x, y) = or_fail!(arg1.as_cons());
+                    match x {
+                        Value::Sym(s) if s.name() == "beta" => {
+                            beta = true;
+                        }
+                        Value::Thm(th) => {
+                            let rule = algo::RewriteRule::new(&th)?;
+                            rw_rules.add_rule(rule)
+                        }
+                        _ => or_fail!(None),
+                    }
+
+                    arg1 = y;
+                }
+
+                let rw: Box<dyn algo::Rewriter> = if beta && !rw_rules.is_empty() {
+                    let mut rw = algo::RewriteCombine::new();
+                    rw.add(&algo::RewriterBetaConv);
+                    rw.add(&rw_rules);
+                    Box::new(rw)
+                } else if beta {
+                    Box::new(algo::RewriterBetaConv)
+                } else if !rw_rules.is_empty() {
+                    Box::new(rw_rules)
+                } else {
+                    or_fail!(None)
+                };
+                let th = algo::thm_rw_concl(ctx, th.clone(), &*rw)?;
+                Ok(Value::Thm(th))
+            }
+        ),
     ];
 
     // TODO: defty
-
-    /* TODO
-
-        // th1 th2 -- mp(th1,th2)
-        fn run(&self, st: &mut State) -> Result<()> {
-            match self {
-                R::Findthm => {
-                    let name = st.pop1_sym()?;
-                    let th = st
-                        .ctx
-                        .find_lemma(&name)
-                        .ok_or_else(|| Error::new("unknown theorem"))?
-                        .clone();
-                    st.push_val(Value::Thm(th))
-                }
-                R::Instantiate => {
-                    let a = st.pop1_array()?;
-                    let th = st.pop1_thm()?;
-
-                    // build substitution
-                    let a = a.0.borrow();
-                    if a.len() % 2 != 0 {
-                        return Err(Error::new("invalid subst (odd length)"));
-                    }
-                    let mut subst = vec![];
-                    for ch in a.as_slice().chunks(2) {
-                        match &ch {
-                            &[Value::Sym(x), Value::Expr(e)] => {
-                                let v = k::Var::from_str(&*x, e.ty().clone());
-                                subst.push((v, e.clone()))
-                            }
-                            _ => {
-                                return Err(Error::new("invalid subst binding"))
-                            }
-                        }
-                    }
-
-                    let th = st.ctx.thm_instantiate(th, &subst)?;
-                    st.push_val(Value::Thm(th))
-                }
-                R::Rewrite => {
-                    let rw = st.pop1()?;
-                    let th = st.pop1_thm()?;
-
-                    let fail = || {
-                        Err(Error::new(
-                            r#"rw: expect a theorem, "beta", or an array thereof as second parameter"#,
-                        ))
-                    };
-                    let mut beta = false;
-                    let mut rw_rules = algo::RewriteRuleSet::new();
-                    match rw {
-                        Value::Sym(s) if &*s == "beta" => {
-                            beta = true;
-                        }
-                        Value::Array(a) => {
-                            let a = a.0.borrow();
-                            for x in a.iter() {
-                                match x {
-                                    Value::Sym(s) if &**s == "beta" => {
-                                        beta = true;
-                                    }
-                                    Value::Thm(th) => {
-                                        let rule = algo::RewriteRule::new(&th)?;
-                                        rw_rules.add_rule(rule)
-                                    }
-                                    _ => return fail(),
-                                }
-                            }
-                        }
-                        _ => return fail(),
-                    }
-
-                    let rw: Box<dyn algo::Rewriter> =
-                        if beta && !rw_rules.is_empty() {
-                            let mut rw = algo::RewriteCombine::new();
-                            rw.add(&algo::RewriterBetaConv);
-                            rw.add(&rw_rules);
-                            Box::new(rw)
-                        } else if beta {
-                            Box::new(algo::RewriterBetaConv)
-                        } else if !rw_rules.is_empty() {
-                            Box::new(rw_rules)
-                        } else {
-                            return fail();
-                        };
-                    let th = algo::thm_rw_concl(st.ctx, th, &*rw)?;
-                    st.push_val(Value::Thm(th))
-                }
-            };
-            Ok(())
-        }
-    }
-    */
 }
 
 /// Standard prelude for HOL logic
@@ -2900,6 +2924,7 @@ mod test {
         check_eval!("(do (def x 1) (do (def x 2) nil) x)", 1);
         check_eval!("(do (def x 1) (do (def x 2) x))", 2);
         check_eval!("(do (def x 1) (do (def y 10) (do (def x {1 + y}) x)))", 11);
+        check_eval!("(let [x 1] (print x) (def y {10 + x}) y)", 11);
         Ok(())
     }
 
