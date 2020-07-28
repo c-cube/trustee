@@ -108,6 +108,10 @@ impl Symbol {
         Symbol(a)
     }
 
+    pub fn from_rstr(s: &RStr) -> Self {
+        Symbol(s.clone())
+    }
+
     pub fn from_rc_str(s: &std::rc::Rc<str>) -> Self {
         let a: RStr = RStr::from(s.as_ref());
         Symbol(a)
@@ -292,6 +296,13 @@ impl Var {
     pub fn from_str(name: &str, ty: Type) -> Var {
         Var {
             name: Symbol::from_str(name),
+            ty,
+        }
+    }
+
+    pub fn from_rstr(name: &RStr, ty: Type) -> Var {
+        Var {
+            name: Symbol::from_rstr(name),
             ty,
         }
     }
@@ -751,7 +762,7 @@ impl Thm {
 impl fmt::Display for Thm {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
         if self.hyps().len() == 0 {
-            write!(out, "|- {}", self.concl())
+            write!(out, "`|- {}`", self.concl())
         } else {
             let mut first = true;
             for h in self.hyps() {
@@ -759,14 +770,15 @@ impl fmt::Display for Thm {
                     write!(out, "    {}\n", h)?;
                 } else {
                     if first {
-                        first = false
+                        first = false;
+                        write!(out, "`")?;
                     } else {
                         write!(out, ", ")?;
                     }
                     write!(out, "{}", h)?;
                 }
             }
-            write!(out, " |- {}", self.concl())
+            write!(out, " |- {}`", self.concl())
         }
     }
 }
