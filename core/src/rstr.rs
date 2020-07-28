@@ -7,10 +7,9 @@ use crate::{kernel_of_trust as k, rptr::RPtr};
 use std::{fmt::Debug, ops::Deref, u32};
 
 /// A refcounted string in one block on the heap.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Clone)]
+#[derive(Clone)]
 pub struct RStr(RPtr<RStrImpl>);
 
-#[derive(Eq, Ord)]
 struct RStrImpl {
     len: u32,
     data: *const u8,
@@ -28,15 +27,22 @@ impl std::fmt::Display for RStr {
     }
 }
 
-impl PartialEq for RStrImpl {
+impl Eq for RStr {}
+impl PartialEq for RStr {
     fn eq(&self, other: &Self) -> bool {
-        self.get() == other.get()
+        self.deref() == other.deref()
     }
 }
 
-impl PartialOrd for RStrImpl {
+impl PartialOrd for RStr {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         PartialOrd::partial_cmp(self.deref(), other.deref())
+    }
+}
+
+impl Ord for RStr {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        Ord::cmp(self.deref(), other.deref())
     }
 }
 
