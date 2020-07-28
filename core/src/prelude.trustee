@@ -2,6 +2,7 @@
 
 ; ### The HOL prelude for Trustee.
 
+
 (defconst
   "T" "def_true"
   `let f = (\x: bool. x) in f=f`)
@@ -37,6 +38,61 @@
 (defconst "/\" "def_and"
   `\a b: bool. forall (f:bool->bool->bool). (f a b = f T T)`)
 (set_infix "/\" 60 59)
+
+; theorems on `/\`
+(do
+  (print def_and)
+
+   ; build `a/\b = …` from definition
+  (def ab_def
+    {{def_and congr (refl `a:bool`)} congr (refl `b:bool`)})
+
+  (def goal (assume `a:bool /\ b:bool`))
+
+  ; this gets `a/\b |- \f. f a b = \f. f T T`
+  (def f_eq
+    (rw (bool_eq goal ab_def) [def_forall :beta]))
+
+  ; prove: `a/\b |- a`
+
+  ; apply f_eq to `\x y. x=a`
+  (def a_true
+    (rw (congr f_eq (refl `with a:bool. \x y: bool. (a = x)`)) [:beta]))
+
+  (defthm "bool_elim1"
+    (bool_eq
+      (bool_eq
+       (refl `a:bool`)
+       (bool_eq a_true
+         (subst eq_true_elim ["x" `with a:bool. (a=a) = (a=T)`])))
+      (subst eq_true_elim ["x" `a:bool`])))
+
+  ;(print (findthm "bool_elim1"))
+
+  ; prove: `a/\b |- b`
+  (def b_true
+    ; apply f_eq to `\x y. y=b`
+    (rw (congr f_eq (refl `with b:bool. \x y:bool. (b=y)`)) [:beta]))
+
+  (defthm "bool_elim2"
+    (bool_eq
+      (bool_eq
+       (refl `b:bool`)
+       (bool_eq b_true (subst eq_true_elim ["x" `with b:bool. (b=b)=(b=T)`])))
+      (subst eq_true_elim ["x" `b:bool`])))
+
+  ;(print (findthm "bool_elim2"))
+)
+
+; define implication
+(defconst "==>" "def_imply" `\a b:bool. (a /\ b) = b`)
+(set_infix "==>" 20 19)
+; # TODO: go from `|- a ==> b` to `a |- b`, and conversely
+
+; declare `select`
+(decl "select" `pi a. (a -> bool) -> a`)
+(set_binder "select" 40 41)
+
 
 ; # END OF FILE
 ; # avoid double include
