@@ -41,9 +41,7 @@
 
 ; theorems on `/\`
 (do
-  (print def_and)
-
-   ; build `a/\b = …` from definition
+  ; build `a/\b = …` from definition
   (def ab_def
     {{def_and congr (refl `a:bool`)} congr (refl `b:bool`)})
 
@@ -91,7 +89,7 @@
 
 ; declare `select`
 (decl "select" `pi a. (a -> bool) -> a`)
-(set_binder "select" 40 41)
+(set_binder "select" 41)
 
 
 ; # END OF FILE
