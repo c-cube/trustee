@@ -27,8 +27,24 @@
     (bool_eq true_is_true (sym (assume `with x:bool. x=T`)))
     (bool_eq_intro true_is_true (assume `with x:bool. x`))))
 
+; rule from `A |- x=T` to `A |- x`
+; TODO: we need a way of turning `(concl th)` into `x=T` and get `x`,
+;  i.e. primitives to open exprs.
+;(defn R_eq_true_elim [th]
+;  (def x (concl th))
+;  (def th1 (subst eq_true_elim ["x" x]))
+;  (print th th1)
+;  (bool_eq th th1))
+; (print (R_eq_true_elim (assume `x:bool = T`)))
+
 ; `x = (x=T)`
 (defthm "eq_true_intro" (sym eq_true_elim))
+
+; rule from `A |- x` to `A |- x=T`
+(defn R_eq_true_intro [th]
+  (def x (concl th))
+  (def th1 (subst eq_true_intro ["x" x]))
+  (bool_eq th th1))
 
 (defconst "forall" "def_forall"
  `\(a:type) (f:a -> bool). f = (\x:a. T)`)
@@ -43,21 +59,21 @@
 (do
   ; build `a/\b = …` from definition
   (def ab_def
-    {{def_and congr (refl `a:bool`)} congr (refl `b:bool`)})
+    (congr def_and (refl `a:bool`) (refl `b:bool`)))
 
   (def goal (assume `a:bool /\ b:bool`))
 
   ; this gets `a/\b |- \f. f a b = \f. f T T`
   (def f_eq
-    (rw (bool_eq goal ab_def) [def_forall :beta]))
+    (rw [def_forall :beta] (bool_eq goal ab_def)))
 
   ; prove: `a/\b |- a`
 
   ; apply f_eq to `\x y. x=a`
   (def a_true
-    (rw (congr f_eq (refl `with a:bool. \x y: bool. (a = x)`)) [:beta]))
+    (rw [:beta] (congr f_eq (refl `with a:bool. \x y: bool. (a = x)`))))
 
-  (defthm "bool_elim1"
+  (defthm "and_elim1"
     (bool_eq
       (bool_eq
        (refl `a:bool`)
@@ -70,9 +86,9 @@
   ; prove: `a/\b |- b`
   (def b_true
     ; apply f_eq to `\x y. y=b`
-    (rw (congr f_eq (refl `with b:bool. \x y:bool. (b=y)`)) [:beta]))
+    (rw [:beta] (congr f_eq (refl `with b:bool. \x y:bool. (b=y)`))))
 
-  (defthm "bool_elim2"
+  (defthm "and_elim2"
     (bool_eq
       (bool_eq
        (refl `b:bool`)
@@ -81,6 +97,67 @@
 
   ;(print (findthm "bool_elim2"))
 )
+
+; rule from `A |- a /\ b` to `A |- a`
+(defn R_and_elim1 [th]
+  (def c (concl th))
+  (def a (app_rhs (app_lhs c)))
+  (def b (app_rhs c))
+  (subst and_elim1 ["a" a "b" b]))
+
+
+; rule from `A |- a /\ b` to `A |- b`
+(defn R_and_elim2 [th]
+  (def c (concl th))
+  (def a (app_rhs (app_lhs c)))
+  (def b (app_rhs c))
+  (subst and_elim2 ["a" a "b" b]))
+
+; theorem `a, b |- a /\ b`
+(defthm "and_intro"
+  (do
+    (def tha (R_eq_true_intro (assume `a:bool`)))
+    (def thb (R_eq_true_intro (assume `b:bool`)))
+    (def th1 (rw [def_forall :beta] (congr def_and tha thb)))
+    ; prove `(\f. f T T = f T T) = (\f. T)`
+    (def lemma1
+      (def lhs (refl `with f: bool->bool->bool. f T T`))
+      (def c (R_eq_true_intro lhs))
+      (absv `f:(bool->bool->bool)` c))
+    (bool_eq lemma1 (sym th1)))
+)
+
+; rule from `A |- a`, `B |- b` to `A, B |- a /\ b`
+(defn R_and_intro [tha thb]
+  (def a (concl tha))
+  (def b (concl thb))
+  (subst and_intro ["a" a "b" b]))
+
+; example:
+; (print (cut true_is_true (R_and_intro (assume `T`) (assume `b:bool`))))
+; print: `with (b : bool). b |- with (b : bool). T /\ b`
+
+; prove `(a /\ b) /\ c) = a /\ (b /\ c)`
+(defthm "and_assoc"
+  (do
+    ; direct direction
+    (def goal1 (assume `with a b c: bool. (a /\ b) /\ c`))
+    (def th_c (R_and_elim2 goal1))
+    (def th_ab (R_and_elim1 goal1))
+    (def th_a (cut th_ab (R_and_elim1 th_ab)))
+    (def th_b (cut th_ab (R_and_elim2 th_ab)))
+    (def th_bc (cut th_b th_c (R_and_intro th_b th_c)))
+    (def th1 (cut th_a th_bc (R_and_intro th_a th_bc)))
+
+    (def goal2 (assume `with a b c: bool. a /\ (b /\ c)`))
+    (def th_a (R_and_elim1 goal2))
+    (def th_bc (R_and_elim2 goal2))
+    (def th_b (cut th_bc (R_and_elim1 th_bc)))
+    (def th_c (cut th_bc (R_and_elim2 th_bc)))
+    (def th_ab (cut th_a th_b (R_and_intro th_a th_b)))
+    (def th2 (cut th_c th_ab (R_and_intro th_ab th_c)))
+
+    (bool_eq_intro th1 th2)))
 
 ; define implication
 (defconst "==>" "def_imply" `\a b:bool. (a /\ b) = b`)
