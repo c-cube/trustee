@@ -15,13 +15,17 @@ impl open_theory::Callbacks for LogCB {
     }
 }
 
+const PRELUDE: &'static str = r#"
+(decl "ind" `type`)
+"#;
+
 fn parse_all() -> trustee::Result<()> {
     let mut ctx = Ctx::new();
+    meta::run_code(&mut ctx, PRELUDE)?; // declare basics
     let mut vm = open_theory::VM::new_with(&mut ctx, LogCB);
     for f in args().skip(1) {
         info!("# parsing file {:?}", f);
-        let file =
-            File::open(f).map_err(|e| Error::new_string(format!("{:?}", e)))?;
+        let file = File::open(f).map_err(|e| Error::new_string(format!("{:?}", e)))?;
         let mut read = BufReader::new(file);
         vm.parse_str(&mut read)?;
     }
