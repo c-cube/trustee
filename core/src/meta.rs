@@ -107,6 +107,10 @@ enum CompilerSlotState {
     Activated,
 }
 
+/// A "global scope" that can carry global variable bindings.
+#[derive(Debug)]
+pub struct GlobalScope(crate::fnv::FnvHashMap<RStr, Value>);
+
 /// Result of parsing an expression into the current chunk.
 ///
 /// All expressions return a value, which lives in a slot (`self.slot`).
@@ -151,7 +155,7 @@ enum Instr {
     Copy(SlotIdx, SlotIdx),
     /// Swap `sl[$0]` and `sl[$1]`
     Swap(SlotIdx, SlotIdx),
-    /// Local a local value into a slot. `sl[$1] = locals[$0]`
+    /// Load a local value into a slot. `sl[$1] = locals[$0]`
     LoadLocal(LocalIdx, SlotIdx),
     /// Put the given (small) integer `$0` into `sl[$1]`
     LoadInteger(i16, SlotIdx),
@@ -244,6 +248,8 @@ pub struct VM<'a> {
     stack: Box<[Value; STACK_SIZE]>,
     /// Control stack, for function calls.
     ctrl_stack: Vec<StackFrame>,
+    /// Toplevel lexical scope.
+    global_scope: Option<&'a mut GlobalScope>,
     /// In case of error, the error message lives here.
     result: Result<Value>,
 }
@@ -404,6 +410,13 @@ mod ml {
         }
     }
 
+    impl GlobalScope {
+        /// New global scope.
+        pub fn new() -> Self {
+            GlobalScope(crate::fnv::new_table_with_cap(16))
+        }
+    }
+
     /// Print a value.
     impl fmt::Display for Value {
         fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
@@ -527,7 +540,7 @@ mod ml {
 
     impl<'a> VM<'a> {
         /// Create a new VM using the given context.
-        pub fn new(ctx: &'a mut Ctx) -> Self {
+        pub fn new(ctx: &'a mut Ctx, global_scope: Option<&'a mut GlobalScope>) -> Self {
             use std::mem::{transmute, MaybeUninit};
 
             // create the stack.
@@ -543,6 +556,7 @@ mod ml {
             Self {
                 ctx,
                 stack,
+                global_scope,
                 ctrl_stack: vec![],
                 result: Ok(Value::Nil),
             }
@@ -937,7 +951,7 @@ mod ml {
             let mut last_r = Value::Nil;
 
             loop {
-                let p = Parser::new(self.ctx, &mut lexer);
+                let p = Parser::new(self.ctx, &mut lexer, self.global_scope.as_deref_mut());
 
                 match p.parse_top_statement() {
                     Err(e) => {
@@ -1256,6 +1270,11 @@ pub(crate) mod parser {
             &mut self.slots[i.0 as usize]
         }
 
+        /// Are we in a local scope?
+        pub fn is_in_local_scope(&self) -> bool {
+            !self.lex_scopes.is_empty()
+        }
+
         pub fn push_local_scope(&mut self) {
             self.lex_scopes.push(vec![]);
         }
@@ -1461,6 +1480,7 @@ pub(crate) mod parser {
     /// A parser.
     pub struct Parser<'a, 'b, 'c> {
         pub(crate) lexer: &'c mut lexer::Lexer<'b>,
+        global_scope: Option<&'a mut GlobalScope>,
         ctx: &'a mut k::Ctx,
     }
 
@@ -1530,6 +1550,7 @@ pub(crate) mod parser {
     /// Resolve the ID as a chunk or builtin, and put it into `sl`.
     fn resolve_id_into_slot_(
         ctx: &mut Ctx,
+        globals: &mut Option<&mut GlobalScope>,
         c: &mut Compiler,
         s: &str,
         loc: (usize, usize),
@@ -1538,6 +1559,9 @@ pub(crate) mod parser {
         if let Some(f_var_slot) = c.find_slot_of_var(s) {
             assert_ne!(f_var_slot, sl);
             c.emit_instr_(I::Copy(f_var_slot, sl));
+        } else if let Some(v) = globals.and_then(|g| g.0.get(s)) {
+            let lidx = c.allocate_local_(v.clone())?;
+            c.emit_instr_(I::LoadLocal(lidx, sl));
         } else if c.name.as_ref().filter(|n| n.get() == s).is_some() {
             // call current function
             c.emit_instr_(I::LoadSelfChunk(sl))
@@ -1592,8 +1616,16 @@ pub(crate) mod parser {
 
     impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
         /// Create a new parser for source string `s`.
-        pub fn new(ctx: &'a mut k::Ctx, lexer: &'c mut lexer::Lexer<'b>) -> Self {
-            Self { ctx, lexer }
+        pub fn new(
+            ctx: &'a mut k::Ctx,
+            lexer: &'c mut lexer::Lexer<'b>,
+            global_scope: Option<&'a mut GlobalScope>,
+        ) -> Self {
+            Self {
+                ctx,
+                global_scope,
+                lexer,
+            }
         }
 
         /// Current token
@@ -1821,7 +1853,9 @@ pub(crate) mod parser {
 
                 let x: RStr =
                     cur_tok_as_id_(&mut self.lexer, "expected variable name after `def`")?.into();
-                let sl_x = c.allocate_var_(x)?;
+                let is_toplevel = !c.is_in_local_scope();
+
+                let sl_x = c.allocate_var_(x.clone())?;
                 self.next_tok_();
 
                 c.push_local_scope();
@@ -1831,6 +1865,16 @@ pub(crate) mod parser {
 
                 // now the variable is usable
                 c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
+
+                if is_toplevel && self.global_scope.is_some() {
+                    // TODO: emit some instruction instead
+                    //
+                    // maybe have a notion of table, and emit
+                    // `(set_tbl (global) "x" sl_x.slot)`?
+                    //
+                    self.global_scope.as_deref_mut().unwrap().insert(x, 
+
+                }
 
                 Ok(sl_x)
             } else if id == "and" {
@@ -1946,7 +1990,7 @@ pub(crate) mod parser {
                 let id_f =
                     cur_tok_as_id_(&mut self.lexer, "expected function name after `become`")?;
                 let f = c.allocate_temporary_on_top_()?;
-                resolve_id_into_slot_(&mut self.ctx, c, id_f, loc, f.slot)?;
+                resolve_id_into_slot_(&mut self.ctx, &mut self.global_scope, c, id_f, loc, f.slot)?;
                 self.lexer.next();
                 logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
 
@@ -2141,7 +2185,12 @@ pub(crate) mod parser {
             logdebug!("parse expr (cur {:?})", self.lexer.cur());
             logtrace!("> slots {:?}", c.slots);
 
-            let Self { ctx, lexer, .. } = self;
+            let Self {
+                ctx,
+                global_scope,
+                lexer,
+                ..
+            } = self;
             let loc = lexer.loc();
             match lexer.cur() {
                 Tok::LParen => {
@@ -2201,7 +2250,7 @@ pub(crate) mod parser {
                             return Ok(ExprRes::new(sl_var, false));
                         }
                     } else {
-                        resolve_id_into_slot_(ctx, c, id, loc, res.slot)?;
+                        resolve_id_into_slot_(ctx, global_scope, c, id, loc, res.slot)?;
                     }
                     lexer.next();
                     Ok(res)
@@ -2331,7 +2380,7 @@ mod basic_primitives {
                 check_arity!("eval", args, 1);
                 let s = get_arg_str!(args, 0);
                 logdebug!("evaluate `{}`", s);
-                let mut vm = VM::new(ctx);
+                let mut vm = VM::new(ctx, None);
                 // evaluate `s` in a new VM.
                 let v = vm.run(s).map_err(|e| {
                     e.set_source(Error::new_string(format!("while evaluating {}", s)))
@@ -2737,8 +2786,8 @@ pub const SRC_PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
 ///
 /// This has some overhead, if you want to execute a lot of code efficienty
 /// (e.g. in a CLI) consider creating a `VM` and re-using it.
-pub fn run_code(ctx: &mut Ctx, s: &str) -> Result<Value> {
-    let mut st = VM::new(ctx);
+pub fn run_code(ctx: &mut Ctx, s: &str, glob: Option<&mut GlobalScope>) -> Result<Value> {
+    let mut st = VM::new(ctx, glob);
     st.run(s)
 }
 
@@ -2747,7 +2796,8 @@ pub fn run_code(ctx: &mut Ctx, s: &str) -> Result<Value> {
 /// This uses a temporary VM. See `run_code` for more details.
 pub fn load_prelude_hol(ctx: &mut Ctx) -> Result<()> {
     if ctx.find_const("hol_prelude_loaded").is_none() {
-        run_code(ctx, SRC_PRELUDE_HOL)?;
+        let mut glob = GlobalScope::new();
+        run_code(ctx, SRC_PRELUDE_HOL, Some(&mut glob))?;
     }
     Ok(())
 }
@@ -2847,7 +2897,7 @@ mod test {
     macro_rules! check_eval {
         ($e:expr, $val:expr) => {{
             let mut ctx = Ctx::new();
-            let mut vm = VM::new(&mut ctx);
+            let mut vm = VM::new(&mut ctx, None);
             let res_e = vm.run($e)?;
 
             assert_eq!(res_e, $val.into());
