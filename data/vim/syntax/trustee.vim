@@ -1,6 +1,7 @@
 set expandtab
 
 syn keyword     trusteeKW        def defconst defthm decl findthm let defn
+syn keyword     trusteeKW        expr_ty app_lhs app_rhs
 syn keyword     trusteeKW        findconst set_infix set_binder become do eval
 syn keyword     trusteeKW        hol_prelude pledge_no_more_axioms source print
 syn match       trusteeKW        "=="
@@ -19,7 +20,7 @@ syn match       trusteeComment ";.*" contains=trusteeTodo
 
 syn match       trusteeStr      +"[^"]\+"+
 syn match       trusteeSym      ":[^ \])]\+"
-syn match       trusteeNum      "[0-9]\+"
+syn match       trusteeNum      "\<[0-9]\+\>"
 
 
 " TODO: handle this only within ``
@@ -41,7 +42,7 @@ syn match       trusteeExpr      "==>"
 "syn match       trusteeDelim      ")"
 
 syn keyword trusteeThm   assume axiom mp bool_eq bool_eq_intro congr
-syn keyword trusteeThm   trans refl abs abs_expr congr_ty beta_conv sym
+syn keyword trusteeThm   trans refl abs absv congr_ty beta_conv sym cut
 syn keyword trusteeThm   subst abs rw concl
 
 syn keyword  trusteeTodo  contained TODO BUG FIX FIXME NOTE
