@@ -159,6 +159,24 @@
 
     (bool_eq_intro th1 th2)))
 
+; prove `a /\ b = b /\ a`
+(defthm "and_comm"
+  (do
+    (def goal1 (assume `with a b: bool. a /\ b`))
+    (def th_a (R_and_elim1 goal1))
+    (def th_b (R_and_elim2 goal1))
+    (def th1 (R_and_intro th_b th_a))
+    (print "th1" th1)
+    (def th2 (subst th1 ["a" `b:bool` "b" `a:bool`]))
+    (bool_eq_intro th1 th2)))
+
+; prove `a |- a /\ T` and `a |- T /\ a`
+(do
+  (def th_a (assume `a:bool`))
+  (defthm "and_true_right" (R_and_intro th_a true_is_true))
+  (defthm "and_true_left" (R_and_intro true_is_true th_a))
+)
+
 ; define implication
 (defconst "==>" "def_imply" `\a b:bool. (a /\ b) = b`)
 (set_infix "==>" 20 19)
