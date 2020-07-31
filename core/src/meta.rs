@@ -2285,6 +2285,18 @@ macro_rules! defbuiltin {
 }
 
 macro_rules! check_arity {
+    ($what: expr, $args: expr, >= $n: literal) => {
+        if $args.len() < $n {
+            return Err(Error::new(concat!(
+                "arity mismatch in ",
+                $what,
+                ": expected at least ",
+                stringify!($n),
+                " args"
+            )));
+        }
+    };
+
     ($what: expr, $args: expr, $n: literal) => {
         if $args.len() != $n {
             return Err(Error::new(concat!(
@@ -2303,7 +2315,7 @@ mod basic_primitives {
 
     /// Builtin functions.
     pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[
-        &defbuiltin!("print", "print a value.", |_, args: &[Value]| {
+        &defbuiltin!("print", "print value(s).", |_, args: &[Value]| {
             for x in args {
                 println!("print: {}", x)
             }
@@ -2486,13 +2498,16 @@ mod logic_builtins {
         ),
         defbuiltin!(
             "congr",
-            "Congruence. Takes `A|- f=g` and `B|- t=u`, returns `A,B|- f t=g u`",
+            "Congruence. Takes `A|- f=g` and `B|- t=u`, returns `A,B|- f t=g u`.
+            `(congr C1…Cn)` is like `(…((congr C1 C2) C3)…Cn)`.",
             |ctx, args| {
-                check_arity!("congr", args, 2);
-                let th1 = get_arg_thm!(args, 0).clone();
-                let th2 = get_arg_thm!(args, 1).clone();
-                let th = ctx.thm_congr(th1, th2)?;
-                Ok(Value::Thm(th))
+                check_arity!("congr", args, >= 2);
+                let mut th_res = get_arg_thm!(args, 0).clone();
+                for i in 1..args.len() {
+                    let th2 = get_arg_thm!(args, i).clone();
+                    th_res = ctx.thm_congr(th_res, th2)?;
+                }
+                Ok(Value::Thm(th_res))
             }
         ),
         defbuiltin!(
@@ -2545,15 +2560,15 @@ mod logic_builtins {
             }
         ),
         defbuiltin!(
-            "abs_expr",
+            "absv",
             "Takes expr `x`, and `A|- t=u`, and returns
             the theorem `A|- \\x:ty. t = \\x:ty. u`.",
             |ctx, args| {
-                check_arity!("abs_expr", args, 2);
+                check_arity!("absv", args, 2);
                 let e = get_arg_expr!(args, 0);
                 let v = e
                     .as_var()
-                    .ok_or_else(|| Error::new("abs_expr: expression must be a variable"))?;
+                    .ok_or_else(|| Error::new("absv: expression must be a variable"))?;
                 let th = get_arg_thm!(args, 1);
                 let th = ctx.thm_abs(v, th.clone())?;
                 Ok(Value::Thm(th))
@@ -2568,6 +2583,24 @@ mod logic_builtins {
                 Ok(Value::Expr(th.concl().clone()))
             }
         ),
+        defbuiltin!("app_lhs", "Takes `f t` and returns `f`", |_ctx, args| {
+            check_arity!("app_lhs", args, 1);
+            let e = get_arg_expr!(args, 0);
+            if let k::EApp(f, _) = e.view() {
+                Ok(Value::Expr(f.clone()))
+            } else {
+                Err(Error::new("app_lhs: expression is not an application"))
+            }
+        }),
+        defbuiltin!("app_rhs", "Takes `f t` and returns `t`", |_ctx, args| {
+            check_arity!("app_lhs", args, 1);
+            let e = get_arg_expr!(args, 0);
+            if let k::EApp(_, t) = e.view() {
+                Ok(Value::Expr(t.clone()))
+            } else {
+                Err(Error::new("app_rhs: expression is not an application"))
+            }
+        }),
         defbuiltin!(
             "hol_prelude",
             "Returns the builtin HOL prelude, as a string.",
@@ -2596,16 +2629,24 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
-        defbuiltin!("cut", "Cut rule.", |ctx, args| {
-            check_arity!("cut", args, 2);
-            let th1 = get_arg_thm!(args, 0);
-            let th2 = get_arg_thm!(args, 1);
-            let th = ctx.thm_cut(th1.clone(), th2.clone())?;
-            Ok(Value::Thm(th))
-        }),
+        defbuiltin!(
+            "cut",
+            "Cut rule.
+            `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`.
+            `cut C_1…C_n d` is `cut C1 (cut C2 … (cut C_n d) …)).`",
+            |ctx, args| {
+                check_arity!("cut", args, >= 2);
+                let mut th_res = get_arg_thm!(args, args.len() - 1).clone();
+                for i in 0..args.len() - 1 {
+                    let th1 = get_arg_thm!(args, i).clone();
+                    th_res = ctx.thm_cut(th1, th_res)?;
+                }
+                Ok(Value::Thm(th_res))
+            }
+        ),
         defbuiltin!(
             "bool_eq",
-            "Boolean equality. Takes `A|- t=u` and `B|- t`, returns `A,B|- u`.",
+            "Boolean equality. Takes `A|- t` and `B|- t=u`, returns `A,B|- u`.",
             |ctx, args| {
                 check_arity!("bool_eq", args, 2);
                 let th1 = get_arg_thm!(args, 0);
@@ -2675,14 +2716,14 @@ mod logic_builtins {
             "Rewrite with a combination of `beta_conv` and theorem names.",
             |ctx, args| {
                 check_arity!("rw", args, 2);
-                let th = get_arg_thm!(args, 0);
-                let mut arg1 = &args[1];
+                let mut arg1 = &args[0];
+                let th = get_arg_thm!(args, 1);
 
                 macro_rules! or_fail {
                     ($e: expr) => {
                         $e.ok_or_else(|| {
                             Error::new(
-                                r#"rw: expect a list of theorems, or `:beta`, as second parameter"#,
+                                r#"rw: expect a list of theorems, or `:beta`, as first parameter"#,
                             )
                         })?
                     };
