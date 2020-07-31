@@ -817,6 +817,8 @@ pub struct Ctx {
     tbl: fnv::FnvHashMap<ExprView, WExpr>,
     builtins: Option<ExprBuiltins>,
     consts: fnv::FnvHashMap<Symbol, Expr>,
+    /// Temporary used to merge sets of hypotheses
+    tmp_hyps: fnv::FnvHashSet<Expr>,
     lemmas: fnv::FnvHashMap<Symbol, Thm>,
     /// The defined chunks of code. These comprise some user defined tactics,
     /// derived rules, etc.
@@ -910,6 +912,7 @@ impl Ctx {
             tbl,
             builtins: None,
             consts: fnv::new_table_with_cap(n),
+            tmp_hyps: fnv::new_set_with_cap(16),
             lemmas: fnv::new_table_with_cap(n),
             meta_chunks: fnv::new_table_with_cap(16),
             next_cleanup: CLEANUP_PERIOD,
@@ -1623,24 +1626,30 @@ impl Ctx {
             ));
         }
         let th2_c = th2.0.concl.clone();
-        {
-            let thref = Ref::make_mut(&mut th1.0);
-            match Ref::get_mut(&mut th2.0) {
-                Some(thref2) => {
-                    // can't move out of thref2, so we just steal
-                    let mut v = vec![];
-                    std::mem::swap(&mut v, &mut thref2.hyps);
-                    thref.hyps.extend(v.into_iter().filter(|u| *u != th1_c));
-                }
-                None => {
-                    thref
-                        .hyps
-                        .extend(th2.0.hyps.iter().filter(|u| *u != &th1_c).cloned());
-                }
+
+        let hyps: Vec<_> = {
+            self.tmp_hyps.clear();
+
+            if let Some(th1m) = Ref::get_mut(&mut th1.0) {
+                self.tmp_hyps.extend(th1m.hyps.drain(..))
+            } else {
+                // must clone
+                self.tmp_hyps.extend(th1.0.hyps.iter().cloned())
             }
-            thref.concl = th2_c;
-        }
-        Ok(th1)
+
+            if let Some(th2m) = Ref::get_mut(&mut th2.0) {
+                self.tmp_hyps
+                    .extend(th2m.hyps.drain(..).filter(|u| *u != th1_c))
+            } else {
+                // must clone
+                self.tmp_hyps
+                    .extend(th2.0.hyps.iter().filter(|u| **u != th1_c).cloned())
+            }
+
+            self.tmp_hyps.drain().collect()
+        };
+        let th_res = Thm::make_(th2_c, self.uid, hyps);
+        Ok(th_res)
     }
 
     /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
@@ -1658,7 +1667,7 @@ impl Ctx {
             })?;
         if a != &th1.0.concl {
             return Err(Error::new(
-                "bool-eq: the conclusion of th1 is not compatible with th2",
+                "bool-eq: the conclusion of th1 is not compatible with th2's concl LHS",
             ));
         }
         let b = b.clone();
@@ -1674,6 +1683,7 @@ impl Ctx {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
+        // TODO: use self.tmp_hyps
         {
             let th1_c = th1.0.concl.clone();
             let thref1 = Ref::make_mut(&mut th1.0);
