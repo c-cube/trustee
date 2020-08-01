@@ -863,12 +863,27 @@ impl Printer {
 
     fn pp_var_ty_(&self, v: &k::Var, k: isize, out: &mut fmt::Formatter) -> fmt::Result {
         write!(out, "({} : ", v.name.name())?;
-        self.pp_expr(&v.ty, k, 0, out)?;
+        self.pp_expr(&v.ty, k, 0, 0, out)?;
         write!(out, ")")
     }
 
-    fn pp_expr(&self, e: &k::Expr, k: isize, p: u16, out: &mut fmt::Formatter) -> fmt::Result {
+    /// pretty print `e`.
+    ///
+    /// - `k` is the number of surroundings binders, used to print bound
+    ///     variables using on-the-fly conversion to De Bruijn level
+    /// - `pl` is the surrounding precedence on the left.
+    /// - `pr` is the surrounding precedence on the right.
+    fn pp_expr(
+        &self,
+        e: &k::Expr,
+        k: isize,
+        pl: u16,
+        pr: u16,
+        out: &mut fmt::Formatter,
+    ) -> fmt::Result {
         use k::ExprView as EV;
+        const P_MAX: u16 = u16::MAX;
+
         match e.view() {
             EV::EKind => write!(out, "kind")?,
             EV::EType => write!(out, "type")?,
@@ -887,15 +902,15 @@ impl Printer {
                     Some(fv) => fv,
                     _ => {
                         // prefix. Print sub-members with maximum binding power.
-                        if p > 0 {
+                        if pl > 0 || pr > 0 {
                             write!(out, "(")?;
                         }
-                        self.pp_expr(f, k, u16::MAX, out)?;
+                        self.pp_expr(f, k, P_MAX, P_MAX, out)?;
                         for x in &args {
                             write!(out, " ")?;
-                            self.pp_expr(x, k, u16::MAX, out)?;
+                            self.pp_expr(x, k, P_MAX, P_MAX, out)?;
                         }
-                        if p > 0 {
+                        if pl > 0 || pr > 0 {
                             write!(out, ")")?;
                         }
                         return Ok(());
@@ -905,80 +920,118 @@ impl Printer {
                 match fv.fixity() {
                     Fixity::Infix((l, r)) if args.len() >= 2 => {
                         let n = args.len();
-                        let need_p = p >= l || p >= r;
+                        let need_p = pl >= l || pr >= r;
                         if need_p {
                             write!(out, "(")?;
                         }
-                        self.pp_expr(&args[n - 2], k, l, out)?;
+                        let pl = if need_p { 0 } else { pl };
+                        let pr = if need_p { 0 } else { pr };
+                        self.pp_expr(&args[n - 2], k, pl, l, out)?;
                         write!(out, " {} ", f_name)?;
-                        self.pp_expr(&args[n - 1], k, r, out)?;
+                        self.pp_expr(&args[n - 1], k, r, pr, out)?;
                         if need_p {
                             write!(out, ")")?;
                         }
                     }
-                    Fixity::Binder(..)
-                    | Fixity::Infix(..)
+                    Fixity::Binder((_, r))
+                        if args.len() > 0
+                            && args[args.len() - 1].as_lambda().is_some()
+                            && args[0..args.len() - 1].iter().all(|x| x.ty().is_type()) =>
+                    {
+                        // `binder ty…ty (\x:ty. body)` printed as `binder x:ty. body`
+                        let (ty_x, body) = args[args.len() - 1].as_lambda().unwrap();
+                        let need_p = pr >= r;
+                        if need_p {
+                            write!(out, "(")?;
+                        }
+                        write!(out, "{} x{}:", f_name, k)?;
+                        self.pp_expr(ty_x, k, 0, 0, out)?;
+                        write!(out, ". ")?;
+                        let pr = if need_p { 0 } else { pr };
+                        self.pp_expr(body, k + 1, r, pr, out)?;
+                        if need_p {
+                            write!(out, ")")?;
+                        }
+                    }
+                    Fixity::Prefix((_, r)) if args.len() == 1 => {
+                        let arg = &args[0];
+                        let need_p = pr >= r;
+                        if need_p {
+                            write!(out, "(")?;
+                        }
+                        let pr = if need_p { 0 } else { pr };
+                        write!(out, "{} ", f_name)?;
+                        self.pp_expr(arg, k, r, pr, out)?;
+                        if need_p {
+                            write!(out, ")")?;
+                        }
+                    }
+                    Fixity::Infix(..)
+                    | Fixity::Binder(..)
                     | Fixity::Prefix(..)
                     | Fixity::Postfix(..) => {
-                        // TODO: print as binder, etc.
-                        // for now we just print using `$`
+                        // default, safe case: print using `$` as prefix.
                         write!(out, "($")?;
-                        self.pp_expr(f, k, u16::MAX, out)?;
+                        self.pp_expr(f, k, P_MAX, P_MAX, out)?;
                         for x in &args {
                             write!(out, " ")?;
-                            self.pp_expr(x, k, u16::MAX, out)?;
+                            self.pp_expr(x, k, P_MAX, P_MAX, out)?;
                         }
                         write!(out, ")")?;
                     }
-                    // TODO: postfix, prefix, binder
-                    _ => {
+                    Fixity::Nullary => {
                         // prefix
-                        if p > 0 {
+                        if pl > 0 || pr > 0 {
                             write!(out, "(")?;
                         }
-                        self.pp_expr(f, k, u16::MAX, out)?;
+                        self.pp_expr(f, k, P_MAX, P_MAX, out)?;
                         for x in &args {
                             write!(out, " ")?;
-                            self.pp_expr(x, k, u16::MAX, out)?;
+                            self.pp_expr(x, k, P_MAX, P_MAX, out)?;
                         }
-                        if p > 0 {
+                        if pl > 0 || pr > 0 {
                             write!(out, ")")?;
                         }
                     }
                 }
             }
             EV::ELambda(ty_v, body) => {
-                let need_p = p >= k::FIXITY_LAM.bp().1;
+                let p_lam = k::FIXITY_LAM.bp().1;
+                let need_p = pl >= p_lam || pr >= p_lam;
                 if need_p {
                     write!(out, "(")?;
                 }
                 write!(out, r#"\x{} : "#, k)?;
-                self.pp_expr(&ty_v, k, 0, out)?;
+                self.pp_expr(&ty_v, k, 0, 0, out)?;
                 write!(out, ". ")?;
-                self.pp_expr(&body, k + 1, k::FIXITY_LAM.bp().1, out)?;
+                // no binding power on the left because of '.'
+                self.pp_expr(&body, k + 1, 0, p_lam, out)?;
                 if need_p {
                     write!(out, ")")?;
                 }
             }
             EV::EPi(ty_v, body) => {
                 let is_arrow = body.is_closed();
-                let myp = if is_arrow {
-                    k::FIXITY_ARROW.bp().1
+                let (mypl, mypr) = if is_arrow {
+                    let p = k::FIXITY_ARROW.bp();
+                    (p.0, p.1)
                 } else {
-                    k::FIXITY_PI.bp().1
+                    (0, k::FIXITY_PI.bp().1)
                 };
-                let need_p = p >= myp;
+                let need_p = pl >= mypl || pr >= mypr;
                 if need_p {
                     write!(out, "(")?;
                 }
-                if body.is_closed() {
+                let pl = if need_p { 0 } else { pl };
+                let pr = if need_p { 0 } else { pr };
+                if is_arrow {
                     // just print a lambda
-                    self.pp_expr(&ty_v, k, p, out)?;
+                    self.pp_expr(&ty_v, k, pl, mypl, out)?;
                     write!(out, " -> ")?;
-                    self.pp_expr(&body, k + 1, myp, out)?;
+                    self.pp_expr(&body, k + 1, mypr, pr, out)?;
                 } else {
                     write!(out, r#"pi x{}."#, k)?;
-                    self.pp_expr(&body, k + 1, myp, out)?;
+                    self.pp_expr(&body, k + 1, 0, mypr, out)?;
                 }
                 if need_p {
                     write!(out, ")")?;
@@ -989,7 +1042,10 @@ impl Printer {
     }
 
     fn pp_expr_top(&mut self, e: &k::Expr, out: &mut fmt::Formatter) -> fmt::Result {
+        // to print a self-contained expression, we declare all free
+        // variables using `with a b:ty1. with c: ty2. <the expr>`.
         let mut fvars: Vec<_> = e.free_vars().collect();
+
         // group by type first, then name
         fvars.sort_by_key(|v| (v.ty.clone(), v.name.name()));
         fvars.dedup();
@@ -1013,8 +1069,8 @@ impl Printer {
             for v in &fvars[i..j] {
                 write!(out, " {}", v.name.name())?;
             }
-            write!(out, ": ")?;
-            self.pp_expr(&fvars[i].ty, 0, 0, out)?;
+            write!(out, ":")?;
+            self.pp_expr(&fvars[i].ty, 0, 0, 0, out)?;
             write!(out, ". ")?;
 
             i = j;
@@ -1022,7 +1078,7 @@ impl Printer {
 
         let n_scope = self.scope.len();
         self.scope.extend(fvars.into_iter().cloned());
-        let r = self.pp_expr(e, 0, 0, out);
+        let r = self.pp_expr(e, 0, 0, 0, out);
         self.scope.truncate(n_scope);
 
         r
@@ -1118,16 +1174,16 @@ mod test {
         let pairs = [
             (
                 "with a:bool. myb x:bool. x=a",
-                "(myb bool (λx0 : bool. (= bool x0 a)))",
+                "(myb bool (\\x0 : bool. (= bool x0 a)))",
             ),
             (
                 r#"with a:bool. $myb bool (\x:bool. x=a)"#,
-                "(myb bool (λx0 : bool. (= bool x0 a)))",
+                "(myb bool (\\x0 : bool. (= bool x0 a)))",
             ),
-            (r#"(\x:bool. x= x) "#, "(λx0 : bool. (= bool x0 x0))"),
+            (r#"(\x:bool. x= x) "#, "(\\x0 : bool. (= bool x0 x0))"),
             (
                 r#"(\x y:bool. x= y) "#,
-                "(λx0 : bool. (λx1 : bool. (= bool x0 x1)))",
+                "(\\x0 : bool. (\\x1 : bool. (= bool x0 x1)))",
             ),
             (
                 "with a:bool. with b:bool. (a=b) = (b=a)",
@@ -1162,31 +1218,17 @@ mod test {
         )> = vec![
             (
                 "with a:?. myb x:?. x=a",
-                "(myb bool (λx0 : bool. (= bool x0 a)))",
+                "(myb bool (\\x0 : bool. (= bool x0 a)))",
                 &|ctx: &mut Ctx| Ok(vec![ctx.mk_bool(), ctx.mk_bool()]),
             ),
             (
                 r#"(\x:bool. ?= x) "#,
-                "(λx0 : bool. (= bool x0 x0))",
+                "(\\x0 : bool. (= bool x0 x0))",
                 &|ctx: &mut Ctx| {
                     let b = ctx.mk_bool();
                     Ok(vec![ctx.mk_var_str("x", b)])
                 },
             ),
-            /*
-            (
-                r#"(\x y:bool. x= y) "#,
-                "(λx0 : bool. (λx1 : bool. (= bool x0 x1)))",
-            ),
-            (
-                "with a:bool. with b:bool. (a=b) = (b=a)",
-                "(= bool (= bool a b) (= bool b a))",
-            ),
-            (
-                "with (a b:bool). (a=b) = (b=a)",
-                "(= bool (= bool a b) (= bool b a))",
-            ),
-             */
         ];
 
         for (x, y, f) in &cases {
@@ -1197,6 +1239,69 @@ mod test {
                 .map_err(|e| e.set_source(Error::new_string(format!("parsing {:?}", x))))?;
             let r2 = format!("{:?}", r);
             assert_eq!(&r2, *y);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_with_prelude() -> Result<()> {
+        let pairs = [
+            (
+                "forall x:bool. F ==> ~ ~ x",
+                r#"(forall bool (\x0 : bool. (==> F (~ (~ x0)))))"#,
+            ),
+            (
+                "with a: bool. a ==> T ==> (a ==> T) ==> T",
+                "(==> a (==> T (==> (==> a T) T)))",
+            ),
+            (
+                r#" with a: (bool).  a /\ T ==>  ~ ~ T"#,
+                r#"(==> (/\ a T) (~ (~ T)))"#,
+            ),
+        ];
+
+        for (x, y) in &pairs {
+            let mut ctx = Ctx::new();
+            crate::meta::load_prelude_hol(&mut ctx)?;
+            let r = parse_expr(&mut ctx, x)
+                .map_err(|e| e.set_source(Error::new_string(format!("parsing {:?}", x))))?;
+            let r2 = format!("{:?}", r);
+            assert_eq!(&r2, *y);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_printer() -> Result<()> {
+        let pairs = [
+            ("with a: type. (a -> a) -> a", "with a:type. (a -> a) -> a"),
+            (
+                // test that /\ is printed as right-assoc
+                r#"with a b : bool. a /\ (a/\ T) /\ b"#,
+                r#"with a b:bool. a /\ (a /\ T) /\ b"#,
+            ),
+            (
+                r#"with a b : bool. (a /\ (a/\ T)) /\ b"#,
+                r#"with a b:bool. (a /\ a /\ T) /\ b"#,
+            ),
+            (
+                "forall x:bool. F ==> ~ ~ x",
+                r#"forall x0:bool. F ==> ~ ~ x0"#,
+            ),
+            (
+                "(forall x:bool. x ==> x) ==> (forall y:bool. T = F ==> ~ ~ y)",
+                r#"(forall x0:bool. x0 ==> x0) ==> forall x0:bool. T = F ==> ~ ~ x0"#,
+            ),
+        ];
+
+        for (x, s) in &pairs {
+            let mut ctx = Ctx::new();
+            crate::meta::load_prelude_hol(&mut ctx)?;
+            let r = parse_expr(&mut ctx, x)
+                .map_err(|e| e.set_source(Error::new_string(format!("parsing {:?}", x))))?;
+            // use pretty printer
+            let r2 = format!("{}", r);
+            assert_eq!(&r2, *s);
         }
         Ok(())
     }

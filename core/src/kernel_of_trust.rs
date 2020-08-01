@@ -640,10 +640,10 @@ impl Expr {
             }
             ELambda(ty_x, body) => {
                 if full {
-                    write!(out, "(λx{} : ", k)?;
+                    write!(out, "(\\x{} : ", k)?;
                     ty_x.pp_(k, out, full)?;
                 } else {
-                    write!(out, "(λx{}", k)?;
+                    write!(out, "(\\x{}", k)?;
                 }
                 write!(out, ". ")?;
                 body.pp_(k + 1, out, full)?;
@@ -1236,7 +1236,7 @@ impl Ctx {
 }
 
 pub(crate) const FIXITY_EQ: Fixity = Fixity::Infix((30, 31));
-pub(crate) const FIXITY_LAM: Fixity = Fixity::Binder((20, 21));
+pub(crate) const FIXITY_LAM: Fixity = Fixity::Binder((10, 11));
 pub(crate) const FIXITY_PI: Fixity = Fixity::Binder((24, 25));
 pub(crate) const FIXITY_ARROW: Fixity = Fixity::Infix((81, 80));
 
