@@ -1,6 +1,8 @@
 use trustee::*;
 
 use gumdrop::Options;
+use liner::{self, Context as LinerCtx};
+use std::io;
 
 #[derive(Options)]
 struct Opts {
@@ -12,6 +14,81 @@ struct Opts {
     batch: bool,
     #[options(help = "print help")]
     help: bool,
+}
+
+/// Completion for CLI
+struct CliCompleter<'a> {
+    ctx: &'a Ctx,
+}
+
+impl<'a> liner::Completer for CliCompleter<'a> {
+    fn completions(&mut self, start: &str) -> Vec<String> {
+        use trustee::meta::lexer::Tok as T;
+
+        let mut last_tok = None;
+        let mut off = 0; // offset at which last_tok starts
+
+        {
+            let mut lexer = meta::lexer::Lexer::new(start);
+            loop {
+                let t = lexer.cur().clone();
+                if t == T::Eof {
+                    break;
+                }
+                last_tok = Some(t);
+                off = lexer.offset();
+                lexer.next();
+            }
+        }
+
+        let mut compls: Vec<String> = vec![];
+
+        let token = match last_tok {
+            Some(T::Id(pre)) => pre,
+            _ => return compls,
+        };
+
+        let completion_prefix = {
+            // completion will replace `pre`
+            let off = off - token.as_bytes().len();
+            &start.as_bytes()[..off]
+        };
+
+        let mut add_compl = |s: &str| {
+            // TODO: instead use `prefix` and restore it afterwards
+            let mut buf = vec![];
+            buf.extend_from_slice(completion_prefix);
+            buf.extend_from_slice(s.as_bytes());
+            match std::str::from_utf8(&buf[..]) {
+                Ok(s) => compls.push(s.to_string()),
+                Err(e) => {
+                    log::warn!("non utf8 completion for '{}': {}", s, e);
+                }
+            }
+        };
+
+        for (s, _e) in self.ctx.iter_consts() {
+            if s.starts_with(token) {
+                add_compl(&format!("`{}`", s))
+            }
+        }
+        for (s, _) in self.ctx.iter_lemmas() {
+            if s.starts_with(token) {
+                add_compl(s)
+            }
+        }
+        for (s, _) in self.ctx.iter_meta_chunks() {
+            if s.starts_with(token) {
+                add_compl(s)
+            }
+        }
+        for s in meta::all_builtin_names() {
+            if s.starts_with(token) {
+                add_compl(s)
+            }
+        }
+        compls
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -32,23 +109,28 @@ fn main() -> anyhow::Result<()> {
         vm.run(&file_content)?;
     }
 
-    let mut rl = rustyline::Editor::<()>::new();
-    if rl.load_history(".history.txt").is_err() {
+    let mut rl = LinerCtx::new();
+    if rl
+        .history
+        .set_file_name_and_load_history(".history.txt")
+        .is_err()
+    {
         log::info!("No previous history.");
     }
-    // TODO: completion based on dictionary
+    rl.history.append_duplicate_entries = false;
+    rl.history.set_max_file_size(32 * 1024 * 1024);
 
     if opts.batch {
         return Ok(());
     }
 
     loop {
-        let readline = rl.readline("> ");
+        let mut compl = CliCompleter { ctx: vm.ctx };
+        let readline = rl.read_line("> ", None, &mut compl);
         match readline {
             Ok(line) => {
-                rl.add_history_entry(line.as_str());
-
                 log::info!("parse line {:?}", &line);
+
                 match vm.run(&line) {
                     Ok(meta::Value::Nil) => {}
                     Ok(v) => {
@@ -58,22 +140,27 @@ fn main() -> anyhow::Result<()> {
                         log::error!("err: {}", e);
                     }
                 }
+                rl.history.push(line.into())?;
             }
-            Err(rustyline::error::ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                break;
-            }
-            Err(rustyline::error::ReadlineError::Eof) => {
-                println!("CTRL-D");
-                break;
-            }
-            Err(err) => {
-                println!("Error: {:?}", err);
-                break;
-            }
+            //Err(liner::error::ReadlineError::Interrupted) => {
+            //    println!("CTRL-C");
+            //    break;
+            //}
+            Err(e) => match e.kind() {
+                io::ErrorKind::Interrupted => continue,
+                io::ErrorKind::UnexpectedEof => {
+                    println!("CTRL-D");
+                    break;
+                }
+                _ => {
+                    println!("Error: {:?}", e);
+                    break;
+                }
+            },
         }
     }
-    rl.save_history(".history.txt").unwrap();
+
+    rl.history.commit_to_file();
 
     Ok(())
 }
