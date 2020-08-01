@@ -887,7 +887,6 @@ impl Printer {
         match e.view() {
             EV::EKind => write!(out, "kind")?,
             EV::EType => write!(out, "type")?,
-            EV::EConst(c) => write!(out, "{}", c.name.name())?,
             EV::EVar(v) => {
                 if self.scope.iter().any(|v2| v == v2) {
                     write!(out, "{}", v.name.name())?;
@@ -896,6 +895,13 @@ impl Printer {
                 }
             }
             EV::EBoundVar(v) => write!(out, "x{}", k - v.idx() as isize - 1)?,
+            EV::EConst(c) => match c.fixity() {
+                Fixity::Infix(..) | Fixity::Prefix(..) | Fixity::Binder(..) => {
+                    // must escape that.
+                    write!(out, "${}", c.name.name())?
+                }
+                _ => write!(out, "{}", c.name.name())?,
+            },
             EV::EApp(_, _) => {
                 let (f, args) = e.unfold_app();
                 let fv = match f.as_const() {
@@ -1275,6 +1281,7 @@ mod test {
     fn test_printer() -> Result<()> {
         let pairs = [
             ("with a: type. (a -> a) -> a", "with a:type. (a -> a) -> a"),
+            ("$~", "$~"),
             (
                 // test that /\ is printed as right-assoc
                 r#"with a b : bool. a /\ (a/\ T) /\ b"#,
