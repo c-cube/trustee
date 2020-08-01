@@ -990,16 +990,34 @@ impl Printer {
 
     fn pp_expr_top(&mut self, e: &k::Expr, out: &mut fmt::Formatter) -> fmt::Result {
         let mut fvars: Vec<_> = e.free_vars().collect();
-        fvars.sort_unstable();
+        // group by type first, then name
+        fvars.sort_by_key(|v| (v.ty.clone(), v.name.name()));
         fvars.dedup();
 
-        if fvars.len() > 0 {
+        let mut i = 0;
+        while i < fvars.len() {
             write!(out, "with")?;
-            for v in &fvars {
-                write!(out, " ")?;
-                self.pp_var_ty_(v, 0, out)?
+
+            // gather all the variables with the same type
+            let mut j = i + 1;
+            while j < fvars.len() {
+                if &fvars[i].ty != &fvars[j].ty {
+                    break;
+                }
+
+                j += 1;
             }
+
+            assert!(fvars[i..j].iter().all(|v2| &v2.ty == &fvars[i].ty));
+
+            for v in &fvars[i..j] {
+                write!(out, " {}", v.name.name())?;
+            }
+            write!(out, ": ")?;
+            self.pp_expr(&fvars[i].ty, 0, 0, out)?;
             write!(out, ". ")?;
+
+            i = j;
         }
 
         let n_scope = self.scope.len();
