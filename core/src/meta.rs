@@ -980,7 +980,7 @@ macro_rules! perror {
     };
 }
 
-mod lexer {
+pub mod lexer {
     use super::*;
 
     /// A parser for RPN-like syntax, inspired from postscript.
@@ -1044,8 +1044,14 @@ mod lexer {
             self.i >= self.bytes.len()
         }
 
+        /// Current `(line, column)`.
         pub fn loc(&self) -> (usize, usize) {
             (self.line, self.col)
+        }
+
+        /// Current offset in the string.
+        pub fn offset(&self) -> usize {
+            self.i
         }
 
         fn skip_white_(&mut self) {
@@ -2250,6 +2256,13 @@ pub(crate) mod parser {
     }
 }
 
+/// Names of all the builtin constructs.
+pub fn all_builtin_names() -> impl Iterator<Item = &'static str> {
+    let i1 = basic_primitives::BUILTINS.iter().map(|b| b.name);
+    let i2 = logic_builtins::BUILTINS.iter().map(|b| b.name);
+    i1.chain(i2)
+}
+
 macro_rules! get_arg_as {
     ($f: ident, $what: literal, $p: pat, $v: expr, $ret_ty: ty) => {
         macro_rules! $f {
@@ -2390,8 +2403,8 @@ mod logic_builtins {
     pub(super) const BUILTINS: &'static [InstrBuiltin] = &[
         defbuiltin!(
             "defconst",
-            "Defines a logic constant. Takes `(nc, nth, expr_rhs)` and returns
-            the tuple `{c . th}` where `c` is the constant, with name `nc`,
+            "Defines a logic constant. Takes `(nc, nth, expr_rhs)` and returns\
+            the tuple `{c . th}` where `c` is the constant, with name `nc`,\n\
             and `th` is the defining theorem with name `nth`",
             |ctx, args: &[Value]| {
                 check_arity!("defconst", args, 3);
@@ -2446,7 +2459,7 @@ mod logic_builtins {
         }),
         defbuiltin!(
             "axiom",
-            "Takes a boolean expression and makes it into an axiom.
+            "Takes a boolean expression and makes it into an axiom.\n\
             Might fail if `pledge_no_new_axiom` was called earlier.",
             |ctx, args| {
                 check_arity!("axiom", args, 1);
@@ -2498,7 +2511,7 @@ mod logic_builtins {
         ),
         defbuiltin!(
             "congr",
-            "Congruence. Takes `A|- f=g` and `B|- t=u`, returns `A,B|- f t=g u`.
+            "Congruence. Takes `A|- f=g` and `B|- t=u`, returns `A,B|- f t=g u`.\n\
             `(congr C1…Cn)` is like `(…((congr C1 C2) C3)…Cn)`.",
             |ctx, args| {
                 check_arity!("congr", args, >= 2);
@@ -2523,9 +2536,9 @@ mod logic_builtins {
         ),
         defbuiltin!(
             "set_infix",
-            "Make a symbol infix.
-
-            Takes a symbol `n`, and a pair of integers `i`,`j` as left and right
+            "Make a symbol infix.\n\
+            \n\
+            Takes a symbol `n`, and a pair of integers `i`,`j` as left and right\
             precedences.",
             |ctx, args| {
                 check_arity!("set_infix", args, 3);
@@ -2547,7 +2560,7 @@ mod logic_builtins {
         }),
         defbuiltin!(
             "abs",
-            "Takes `x`, `ty`, and `A|- t=u`, and returns
+            "Takes `x`, `ty`, and `A|- t=u`, and returns\
             the theorem `A|- \\x:ty. t = \\x:ty. u`.",
             |ctx, args| {
                 check_arity!("abs", args, 3);
@@ -2561,7 +2574,7 @@ mod logic_builtins {
         ),
         defbuiltin!(
             "absv",
-            "Takes expr `x`, and `A|- t=u`, and returns
+            "Takes expr `x`, and `A|- t=u`, and returns\n\
             the theorem `A|- \\x:ty. t = \\x:ty. u`.",
             |ctx, args| {
                 check_arity!("absv", args, 2);
@@ -2631,8 +2644,8 @@ mod logic_builtins {
         ),
         defbuiltin!(
             "cut",
-            "Cut rule.
-            `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`.
+            "Cut rule.\n\
+            `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`.\n\
             `cut C_1…C_n d` is `cut C1 (cut C2 … (cut C_n d) …)).`",
             |ctx, args| {
                 check_arity!("cut", args, >= 2);
@@ -2657,7 +2670,7 @@ mod logic_builtins {
         ),
         defbuiltin!(
             "bool_eq_intro",
-            "Boolean equality introduction.
+            "Boolean equality introduction.\n\
             Takes `A, t|- u` and `B,u |- t`, returns `A,B|- t=u`.",
             |ctx, args| {
                 check_arity!("bool_eq_intro", args, 2);
@@ -2669,7 +2682,7 @@ mod logic_builtins {
         ),
         defbuiltin!(
             "beta_conv",
-            "Beta-conversion rule.
+            "Beta-conversion rule.\n\
             Takes expr `(\\x. t) u`, returns `|- (\\x. t) u = t[u/x]`.",
             |ctx, args| {
                 check_arity!("beta_conv", args, 1);
@@ -2680,9 +2693,10 @@ mod logic_builtins {
         ),
         defbuiltin!(
             "subst",
-            r#"Instantiate a theorem with a substitution.
-
-            The substitution is a list of the shape `["x" <expr> "y" <expr>]`."#,
+            "Instantiate a theorem with a substitution.\n\
+            \n\
+            Shape: `subst th subst`.\n\
+            The substitution is a list of the shape `[\"x\" <expr> \"y\" <expr>]`.",
             |ctx, args| {
                 check_arity!("instantiate", args, 2);
                 let th = get_arg_thm!(args, 0);
@@ -2713,7 +2727,9 @@ mod logic_builtins {
         ),
         defbuiltin!(
             "rw",
-            "Rewrite with a combination of `beta_conv` and theorem names.",
+            "Rewrite with a combination of `beta_conv` and theorem names.\n\
+            \n\
+            Shape `rw [:beta th1 th2] th_to_rewrite`.",
             |ctx, args| {
                 check_arity!("rw", args, 2);
                 let mut arg1 = &args[0];

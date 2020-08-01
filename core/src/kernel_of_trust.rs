@@ -1456,6 +1456,10 @@ impl Ctx {
         })
     }
 
+    pub fn iter_consts(&self) -> impl Iterator<Item = (&str, &Expr)> {
+        self.consts.iter().map(|(k, e)| (k.name(), e))
+    }
+
     /// Find a meta-language chunk by name. Returns `None` if no such constant exists.
     pub fn find_meta_chunk(&self, s: &str) -> Option<&meta::Chunk> {
         self.meta_chunks.get(s)
@@ -1468,6 +1472,11 @@ impl Ctx {
         self.meta_chunks.insert(s.into(), c);
     }
 
+    /// Iterate over all meta chunks.
+    pub fn iter_meta_chunks(&self) -> impl Iterator<Item = (&str, &meta::Chunk)> {
+        self.meta_chunks.iter().map(|(s, c)| (s.get(), c))
+    }
+
     /// Define a named lemma.
     ///
     /// If another lemma with the same name exists, it will be replaced.
@@ -1478,6 +1487,11 @@ impl Ctx {
     /// Find a lemma by name. Returns `None` if no such theorem exists.
     pub fn find_lemma(&self, s: &str) -> Option<&Thm> {
         self.lemmas.get(s)
+    }
+
+    /// Iterate over all lemmas.
+    pub fn iter_lemmas(&self) -> impl Iterator<Item = (&str, &Thm)> {
+        self.lemmas.iter().map(|(s, t)| (s.name(), t))
     }
 
     /// `assume F` is `F |- F`.
