@@ -49,7 +49,7 @@
 (defconst "forall" "def_forall"
  `\(a:type) (f:a -> bool). f = (\x:a. T)`)
 
-(set_binder "forall" 20)
+(set_binder "forall" 12) ; lower than ==>
 
 (defconst "/\" "def_and"
   `\a b: bool. forall (f:bool->bool->bool). (f a b = f T T)`)
@@ -166,7 +166,6 @@
     (def th_a (R_and_elim1 goal1))
     (def th_b (R_and_elim2 goal1))
     (def th1 (R_and_intro th_b th_a))
-    (print "th1" th1)
     (def th2 (subst th1 ["a" `b:bool` "b" `a:bool`]))
     (bool_eq_intro th1 th2)))
 
@@ -177,10 +176,20 @@
   (defthm "and_true_left" (R_and_intro true_is_true th_a))
 )
 
+; false
+(defconst "F" "def_false" `forall p:bool. p`)
+
+; TODO: false intro, false elim
+
 ; define implication
 (defconst "==>" "def_imply" `\a b:bool. (a /\ b) = b`)
 (set_infix "==>" 20 19)
 ; # TODO: go from `|- a ==> b` to `a |- b`, and conversely
+
+; negation
+
+(defconst "~" "def_not" `\p:bool. p ==> F`)
+(set_prefix "~" 60)
 
 ; declare `select`
 (decl "select" `pi a. (a -> bool) -> a`)
