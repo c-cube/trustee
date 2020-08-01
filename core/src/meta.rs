@@ -2550,6 +2550,14 @@ mod logic_builtins {
                 Ok(Value::Nil)
             }
         ),
+        defbuiltin!("set_prefix", "Make a symbol prefix.", |ctx, args| {
+            check_arity!("set_prefix", args, 2);
+            let c = get_arg_str!(args, 0);
+            let i = get_arg_int!(args, 1);
+            let f = syntax::Fixity::Prefix((*i as u16, *i as u16));
+            ctx.set_fixity(&*c, f);
+            Ok(Value::Nil)
+        }),
         defbuiltin!("set_binder", "Make a symbol a binder.", |ctx, args| {
             check_arity!("set_binder", args, 2);
             let c = get_arg_str!(args, 0);
