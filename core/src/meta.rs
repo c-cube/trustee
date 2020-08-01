@@ -950,7 +950,10 @@ mod ml {
                             Ok(x) => last_r = x,
                             Err(e) => {
                                 let mut s = vec![];
-                                self.print_trace_(&mut s).unwrap();
+                                if let Some("1") = std::env::var("TRUSTEE_TRACE").ok().as_deref() {
+                                    // only print stacktrace if `TRUSTEE_TRACE=1`
+                                    self.print_trace_(&mut s).unwrap();
+                                }
                                 logerr!(
                                     "error during execution\n>>> {} <<<\n{}",
                                     e,
