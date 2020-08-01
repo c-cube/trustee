@@ -909,15 +909,12 @@ impl Printer {
                     _ => {
                         // prefix. Print sub-members with maximum binding power.
                         if pl > 0 || pr > 0 {
-                            write!(out, "(")?;
+                            return self.pp_expr_paren_(e, k, out);
                         }
                         self.pp_expr(f, k, P_MAX, P_MAX, out)?;
                         for x in &args {
                             write!(out, " ")?;
                             self.pp_expr(x, k, P_MAX, P_MAX, out)?;
-                        }
-                        if pl > 0 || pr > 0 {
-                            write!(out, ")")?;
                         }
                         return Ok(());
                     }
@@ -926,18 +923,12 @@ impl Printer {
                 match fv.fixity() {
                     Fixity::Infix((l, r)) if args.len() >= 2 => {
                         let n = args.len();
-                        let need_p = pl >= l || pr >= r;
-                        if need_p {
-                            write!(out, "(")?;
+                        if pl >= l || pr >= r {
+                            return self.pp_expr_paren_(e, k, out);
                         }
-                        let pl = if need_p { 0 } else { pl };
-                        let pr = if need_p { 0 } else { pr };
                         self.pp_expr(&args[n - 2], k, pl, l, out)?;
                         write!(out, " {} ", f_name)?;
                         self.pp_expr(&args[n - 1], k, r, pr, out)?;
-                        if need_p {
-                            write!(out, ")")?;
-                        }
                     }
                     Fixity::Binder((_, r))
                         if args.len() > 0
@@ -946,31 +937,21 @@ impl Printer {
                     {
                         // `binder ty…ty (\x:ty. body)` printed as `binder x:ty. body`
                         let (ty_x, body) = args[args.len() - 1].as_lambda().unwrap();
-                        let need_p = pr >= r;
-                        if need_p {
-                            write!(out, "(")?;
+                        if pr >= r {
+                            return self.pp_expr_paren_(e, k, out);
                         }
                         write!(out, "{} x{}:", f_name, k)?;
                         self.pp_expr(ty_x, k, 0, 0, out)?;
                         write!(out, ". ")?;
-                        let pr = if need_p { 0 } else { pr };
                         self.pp_expr(body, k + 1, r, pr, out)?;
-                        if need_p {
-                            write!(out, ")")?;
-                        }
                     }
                     Fixity::Prefix((_, r)) if args.len() == 1 => {
                         let arg = &args[0];
-                        let need_p = pr >= r;
-                        if need_p {
-                            write!(out, "(")?;
+                        if pr >= r {
+                            return self.pp_expr_paren_(e, k, out);
                         }
-                        let pr = if need_p { 0 } else { pr };
                         write!(out, "{} ", f_name)?;
                         self.pp_expr(arg, k, r, pr, out)?;
-                        if need_p {
-                            write!(out, ")")?;
-                        }
                     }
                     Fixity::Infix(..)
                     | Fixity::Binder(..)
@@ -988,33 +969,26 @@ impl Printer {
                     Fixity::Nullary => {
                         // prefix
                         if pl > 0 || pr > 0 {
-                            write!(out, "(")?;
+                            return self.pp_expr_paren_(e, k, out);
                         }
                         self.pp_expr(f, k, P_MAX, P_MAX, out)?;
                         for x in &args {
                             write!(out, " ")?;
                             self.pp_expr(x, k, P_MAX, P_MAX, out)?;
                         }
-                        if pl > 0 || pr > 0 {
-                            write!(out, ")")?;
-                        }
                     }
                 }
             }
             EV::ELambda(ty_v, body) => {
                 let p_lam = k::FIXITY_LAM.bp().1;
-                let need_p = pl >= p_lam || pr >= p_lam;
-                if need_p {
-                    write!(out, "(")?;
+                if pl >= p_lam || pr >= p_lam {
+                    return self.pp_expr_paren_(e, k, out);
                 }
                 write!(out, r#"\x{} : "#, k)?;
                 self.pp_expr(&ty_v, k, 0, 0, out)?;
                 write!(out, ". ")?;
                 // no binding power on the left because of '.'
                 self.pp_expr(&body, k + 1, 0, p_lam, out)?;
-                if need_p {
-                    write!(out, ")")?;
-                }
             }
             EV::EPi(ty_v, body) => {
                 let is_arrow = body.is_closed();
@@ -1024,12 +998,9 @@ impl Printer {
                 } else {
                     (0, k::FIXITY_PI.bp().1)
                 };
-                let need_p = pl >= mypl || pr >= mypr;
-                if need_p {
-                    write!(out, "(")?;
+                if pl >= mypl || pr >= mypr {
+                    return self.pp_expr_paren_(e, k, out);
                 }
-                let pl = if need_p { 0 } else { pl };
-                let pr = if need_p { 0 } else { pr };
                 if is_arrow {
                     // just print a lambda
                     self.pp_expr(&ty_v, k, pl, mypl, out)?;
@@ -1039,12 +1010,16 @@ impl Printer {
                     write!(out, r#"pi x{}."#, k)?;
                     self.pp_expr(&body, k + 1, 0, mypr, out)?;
                 }
-                if need_p {
-                    write!(out, ")")?;
-                }
             }
         }
         Ok(())
+    }
+
+    /// Same as `pp_expr` but between "()".
+    fn pp_expr_paren_(&self, e: &k::Expr, k: isize, out: &mut fmt::Formatter) -> fmt::Result {
+        write!(out, "(")?;
+        self.pp_expr(e, k, 0, 0, out)?;
+        write!(out, ")")
     }
 
     fn pp_expr_top(&mut self, e: &k::Expr, out: &mut fmt::Formatter) -> fmt::Result {
@@ -1290,6 +1265,10 @@ mod test {
             (
                 r#"with a b : bool. (a /\ (a/\ T)) /\ b"#,
                 r#"with a b:bool. (a /\ a /\ T) /\ b"#,
+            ),
+            (
+                r#"with a b : bool. (a ==> T /\ (T ==> a ==> b/\ ~T)) /\ b"#,
+                r#"with a b:bool. (a ==> T /\ (T ==> a ==> b /\ ~ T)) /\ b"#,
             ),
             (
                 "forall x:bool. F ==> ~ ~ x",
