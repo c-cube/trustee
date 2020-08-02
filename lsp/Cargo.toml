@@ -1,0 +1,15 @@
+[package]
+name = "trustee_lsp"
+version = "0.1.0"
+authors = ["Simon Cruanes <simon.cruanes.2007@m4x.org>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+trustee = {path="../core"}
+gen_lsp_server="0.2"
+lsp-types="0.57.2"
+crossbeam-channel="0.3.9"
+failure="0.1.8"
+flexi_logger={version="0.15", default-features=false, features=["colors"]}
