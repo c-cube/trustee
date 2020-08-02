@@ -923,7 +923,7 @@ impl Printer {
                 match fv.fixity() {
                     Fixity::Infix((l, r)) if args.len() >= 2 => {
                         let n = args.len();
-                        if pl >= l || pr >= r {
+                        if (pl > 0 && pl >= l) || (pr > 0 && pr >= r) {
                             return self.pp_expr_paren_(e, k, out);
                         }
                         self.pp_expr(&args[n - 2], k, pl, l, out)?;
@@ -937,7 +937,7 @@ impl Printer {
                     {
                         // `binder ty…ty (\x:ty. body)` printed as `binder x:ty. body`
                         let (ty_x, body) = args[args.len() - 1].as_lambda().unwrap();
-                        if pr >= r {
+                        if r > 0 && pr >= r {
                             return self.pp_expr_paren_(e, k, out);
                         }
                         write!(out, "{} x{}:", f_name, k)?;
@@ -947,7 +947,7 @@ impl Printer {
                     }
                     Fixity::Prefix((_, r)) if args.len() == 1 => {
                         let arg = &args[0];
-                        if pr >= r {
+                        if pr > 0 && pr >= r {
                             return self.pp_expr_paren_(e, k, out);
                         }
                         write!(out, "{} ", f_name)?;
@@ -981,7 +981,7 @@ impl Printer {
             }
             EV::ELambda(ty_v, body) => {
                 let p_lam = k::FIXITY_LAM.bp().1;
-                if pl >= p_lam || pr >= p_lam {
+                if (pr > 0 && pl >= p_lam) || (pr > 0 && pr >= p_lam) {
                     return self.pp_expr_paren_(e, k, out);
                 }
                 write!(out, r#"\x{} : "#, k)?;
@@ -998,7 +998,7 @@ impl Printer {
                 } else {
                     (0, k::FIXITY_PI.bp().1)
                 };
-                if pl >= mypl || pr >= mypr {
+                if (pl > 0 && pl >= mypl) || (pr > 0 && pr >= mypr) {
                     return self.pp_expr_paren_(e, k, out);
                 }
                 if is_arrow {
@@ -1267,7 +1267,7 @@ mod test {
                 r#"with a b:bool. (a /\ a /\ T) /\ b"#,
             ),
             (
-                r#"with a b : bool. (a ==> T /\ (T ==> a ==> b/\ ~T)) /\ b"#,
+                r#"with a b : bool. (a ==> T /\ (T ==> a ==> (b/\ ~T))) /\ b"#,
                 r#"with a b:bool. (a ==> T /\ (T ==> a ==> b /\ ~ T)) /\ b"#,
             ),
             (
@@ -1287,7 +1287,7 @@ mod test {
                 .map_err(|e| e.set_source(Error::new_string(format!("parsing {:?}", x))))?;
             // use pretty printer
             let r2 = format!("{}", r);
-            assert_eq!(&r2, *s);
+            assert_eq!(&r2, *s, "left: actual, right: expected");
         }
         Ok(())
     }

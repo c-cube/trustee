@@ -189,7 +189,7 @@
 ; negation
 
 (defconst "~" "def_not" `\p:bool. p ==> F`)
-(set_prefix "~" 60)
+(set_prefix "~" 62)
 
 ; declare `select`
 (decl "select" `pi a. (a -> bool) -> a`)
