@@ -4,28 +4,28 @@
 
 
 (defconst
-  "T" "def_true"
+  "T" "DefTrue"
   `let f = (\x: bool. x) in f=f`)
 
 ; `|- T`
-(defthm "true_is_true"
+(defthm "TrueIsTrue"
   (bool_eq
     (refl `\x: bool. x`)
-    (sym def_true)))
+    (sym DefTrue)))
 
 ; prove `(x=T) = x`
-(defthm "eq_true_elim"
+(defthm "EqTrueElim"
   (bool_eq_intro
-    (bool_eq true_is_true (sym (assume `with x:bool. x=T`)))
-    (bool_eq_intro true_is_true (assume `with x:bool. x`))))
+    (bool_eq TrueIsTrue (sym (assume `with x:bool. x=T`)))
+    (bool_eq_intro TrueIsTrue (assume `with x:bool. x`))))
 
 ;eq_true_elim
 
 ; prove `(x=T) = x`
-(defthm "eq_true_elim"
+(defthm "EqTrueElim"
   (bool_eq_intro
-    (bool_eq true_is_true (sym (assume `with x:bool. x=T`)))
-    (bool_eq_intro true_is_true (assume `with x:bool. x`))))
+    (bool_eq TrueIsTrue (sym (assume `with x:bool. x=T`)))
+    (bool_eq_intro TrueIsTrue (assume `with x:bool. x`))))
 
 ; rule from `A |- x=T` to `A |- x`
 ; TODO: we need a way of turning `(concl th)` into `x=T` and get `x`,
@@ -38,20 +38,20 @@
 ; (print (R_eq_true_elim (assume `x:bool = T`)))
 
 ; `x = (x=T)`
-(defthm "eq_true_intro" (sym eq_true_elim))
+(defthm "EqTrueIntro" (sym EqTrueElim))
 
 ; rule from `A |- x` to `A |- x=T`
-(defn R_eq_true_intro [th]
+(defn REqTrueIntro [th]
   (def x (concl th))
-  (def th1 (subst eq_true_intro ["x" x]))
+  (def th1 (subst EqTrueIntro ["x" x]))
   (bool_eq th th1))
 
-(defconst "forall" "def_forall"
+(defconst "forall" "DefForall"
  `\(a:type) (f:a -> bool). f = (\x:a. T)`)
 
 (set_binder "forall" 12) ; lower than ==>
 
-(defconst "/\" "def_and"
+(defconst "/\" "DefAnd"
   `\a b: bool. forall (f:bool->bool->bool). (f a b = f T T)`)
 (set_infix "/\" 60 59)
 
@@ -59,13 +59,13 @@
 (do
   ; build `a/\b = …` from definition
   (def ab_def
-    (congr def_and (refl `a:bool`) (refl `b:bool`)))
+    (congr DefAnd (refl `a:bool`) (refl `b:bool`)))
 
   (def goal (assume `a:bool /\ b:bool`))
 
   ; this gets `a/\b |- \f. f a b = \f. f T T`
   (def f_eq
-    (rw [def_forall :beta] (bool_eq goal ab_def)))
+    (rw [DefForall :beta] (bool_eq goal ab_def)))
 
   ; prove: `a/\b |- a`
 
@@ -73,13 +73,13 @@
   (def a_true
     (rw [:beta] (congr f_eq (refl `with a:bool. \x y: bool. (a = x)`))))
 
-  (defthm "and_elim1"
+  (defthm "AndElim1"
     (bool_eq
       (bool_eq
        (refl `a:bool`)
        (bool_eq a_true
-         (subst eq_true_elim ["x" `with a:bool. (a=a) = (a=T)`])))
-      (subst eq_true_elim ["x" `a:bool`])))
+         (subst EqTrueElim ["x" `with a:bool. (a=a) = (a=T)`])))
+      (subst EqTrueElim ["x" `a:bool`])))
 
   ;(print (findthm "bool_elim1"))
 
@@ -88,74 +88,74 @@
     ; apply f_eq to `\x y. y=b`
     (rw [:beta] (congr f_eq (refl `with b:bool. \x y:bool. (b=y)`))))
 
-  (defthm "and_elim2"
+  (defthm "AndElim2"
     (bool_eq
       (bool_eq
        (refl `b:bool`)
-       (bool_eq b_true (subst eq_true_elim ["x" `with b:bool. (b=b)=(b=T)`])))
-      (subst eq_true_elim ["x" `b:bool`])))
+       (bool_eq b_true (subst EqTrueElim ["x" `with b:bool. (b=b)=(b=T)`])))
+      (subst EqTrueElim ["x" `b:bool`])))
 
   ;(print (findthm "bool_elim2"))
 )
 
 ; rule from `A |- a /\ b` to `A |- a`
-(defn R_and_elim1 [th]
+(defn RAndElim1 [th]
   (def c (concl th))
   (def a (app_rhs (app_lhs c)))
   (def b (app_rhs c))
-  (subst and_elim1 ["a" a "b" b]))
+  (subst AndElim1 ["a" a "b" b]))
 
 
 ; rule from `A |- a /\ b` to `A |- b`
-(defn R_and_elim2 [th]
+(defn RAndElim2 [th]
   (def c (concl th))
   (def a (app_rhs (app_lhs c)))
   (def b (app_rhs c))
-  (subst and_elim2 ["a" a "b" b]))
+  (subst AndElim2 ["a" a "b" b]))
 
 ; theorem `a, b |- a /\ b`
-(defthm "and_intro"
+(defthm "AndIntro"
   (do
-    (def tha (R_eq_true_intro (assume `a:bool`)))
-    (def thb (R_eq_true_intro (assume `b:bool`)))
-    (def th1 (rw [def_forall :beta] (congr def_and tha thb)))
+    (def tha (REqTrueIntro (assume `a:bool`)))
+    (def thb (REqTrueIntro (assume `b:bool`)))
+    (def th1 (rw [DefForall :beta] (congr DefAnd tha thb)))
     ; prove `(\f. f T T = f T T) = (\f. T)`
     (def lemma1
       (def lhs (refl `with f: bool->bool->bool. f T T`))
-      (def c (R_eq_true_intro lhs))
+      (def c (REqTrueIntro lhs))
       (absv `f:(bool->bool->bool)` c))
     (bool_eq lemma1 (sym th1)))
 )
 
 ; rule from `A |- a`, `B |- b` to `A, B |- a /\ b`
-(defn R_and_intro [tha thb]
+(defn RAndIntro [tha thb]
   (def a (concl tha))
   (def b (concl thb))
-  (subst and_intro ["a" a "b" b]))
+  (subst AndIntro ["a" a "b" b]))
 
 ; example:
-; (print (cut true_is_true (R_and_intro (assume `T`) (assume `b:bool`))))
+; (print (cut TrueIsTrue (RAndIntro (assume `T`) (assume `b:bool`))))
 ; print: `with (b : bool). b |- with (b : bool). T /\ b`
 
 ; prove `(a /\ b) /\ c) = a /\ (b /\ c)`
-(defthm "and_assoc"
+(defthm "AndAssoc"
   (do
     ; direct direction
     (def goal1 (assume `with a b c: bool. (a /\ b) /\ c`))
-    (def th_c (R_and_elim2 goal1))
-    (def th_ab (R_and_elim1 goal1))
-    (def th_a (cut th_ab (R_and_elim1 th_ab)))
-    (def th_b (cut th_ab (R_and_elim2 th_ab)))
-    (def th_bc (cut th_b th_c (R_and_intro th_b th_c)))
-    (def th1 (cut th_a th_bc (R_and_intro th_a th_bc)))
+    (def th_c (RAndElim2 goal1))
+    (def th_ab (RAndElim1 goal1))
+    (def th_a (cut th_ab (RAndElim1 th_ab)))
+    (def th_b (cut th_ab (RAndElim2 th_ab)))
+    (def th_bc (cut th_b th_c (RAndIntro th_b th_c)))
+    (def th1 (cut th_a th_bc (RAndIntro th_a th_bc)))
 
     (def goal2 (assume `with a b c: bool. a /\ (b /\ c)`))
-    (def th_a (R_and_elim1 goal2))
-    (def th_bc (R_and_elim2 goal2))
-    (def th_b (cut th_bc (R_and_elim1 th_bc)))
-    (def th_c (cut th_bc (R_and_elim2 th_bc)))
-    (def th_ab (cut th_a th_b (R_and_intro th_a th_b)))
-    (def th2 (cut th_c th_ab (R_and_intro th_ab th_c)))
+    (def th_a (RAndElim1 goal2))
+    (def th_bc (RAndElim2 goal2))
+    (def th_b (cut th_bc (RAndElim1 th_bc)))
+    (def th_c (cut th_bc (RAndElim2 th_bc)))
+    (def th_ab (cut th_a th_b (RAndIntro th_a th_b)))
+    (def th2 (cut th_c th_ab (RAndIntro th_ab th_c)))
 
     (bool_eq_intro th1 th2)))
 
@@ -163,32 +163,32 @@
 (defthm "and_comm"
   (do
     (def goal1 (assume `with a b: bool. a /\ b`))
-    (def th_a (R_and_elim1 goal1))
-    (def th_b (R_and_elim2 goal1))
-    (def th1 (R_and_intro th_b th_a))
+    (def th_a (RAndElim1 goal1))
+    (def th_b (RAndElim2 goal1))
+    (def th1 (RAndIntro th_b th_a))
     (def th2 (subst th1 ["a" `b:bool` "b" `a:bool`]))
     (bool_eq_intro th1 th2)))
 
 ; prove `a |- a /\ T` and `a |- T /\ a`
 (do
   (def th_a (assume `a:bool`))
-  (defthm "and_true_right" (R_and_intro th_a true_is_true))
-  (defthm "and_true_left" (R_and_intro true_is_true th_a))
+  (defthm "and_true_right" (RAndIntro th_a TrueIsTrue))
+  (defthm "and_true_left" (RAndIntro TrueIsTrue th_a))
 )
 
 ; false
-(defconst "F" "def_false" `forall p:bool. p`)
+(defconst "F" "DefFalse" `forall p:bool. p`)
 
 ; TODO: false intro, false elim
 
 ; define implication
-(defconst "==>" "def_imply" `\a b:bool. (a /\ b) = b`)
+(defconst "==>" "DefImply" `\a b:bool. (a /\ b) = b`)
 (set_infix "==>" 20 19)
 ; # TODO: go from `|- a ==> b` to `a |- b`, and conversely
 
 ; negation
 
-(defconst "~" "def_not" `\p:bool. p ==> F`)
+(defconst "~" "DefNot" `\p:bool. p ==> F`)
 (set_prefix "~" 62)
 
 ; declare `select`
