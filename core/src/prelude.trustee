@@ -172,8 +172,8 @@
 ; prove `a |- a /\ T` and `a |- T /\ a`
 (do
   (def th_a (assume `a:bool`))
-  (defthm "and_true_right" (RAndIntro th_a TrueIsTrue))
-  (defthm "and_true_left" (RAndIntro TrueIsTrue th_a))
+  (defthm "AndTrueRight" (RAndIntro th_a TrueIsTrue))
+  (defthm "AndTrueLeft" (RAndIntro TrueIsTrue th_a))
 )
 
 ; false
@@ -185,6 +185,10 @@
 (defconst "==>" "DefImply" `\a b:bool. (a /\ b) = b`)
 (set_infix "==>" 20 19)
 ; # TODO: go from `|- a ==> b` to `a |- b`, and conversely
+
+(defconst "\/" "DefOr" `\a b: bool. forall t: bool. (a ==> t) ==> (b ==> t) ==> t`)
+(set_infix "\/" 22 21)
+; TODO: lemmas about \/
 
 ; negation
 
