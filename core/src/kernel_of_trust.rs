@@ -1690,6 +1690,7 @@ impl Ctx {
         Ok(Thm::make_(b, self.uid, hyps))
     }
 
+    // FIXME: deduplicate hyps
     /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
     /// This is a way of building a boolean `a=b` from proofs of
     ///  `a|-b` and `b|-a`.
