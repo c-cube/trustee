@@ -479,10 +479,6 @@ pub mod cc {
                 let na = self.add(a);
                 let nb = self.add(b);
                 if self.find(na) != self.find(nb) {
-                    eprintln!(
-                        "cc: merge {:?} and {:?} from add thm {:?}",
-                        na, nb, &th
-                    );
                     // merge the two classes
                     self.tasks.push_front(Task::Merge(
                         na,
