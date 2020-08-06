@@ -1991,7 +1991,8 @@ pub(crate) mod parser {
                 let (f, f_temp) = if c.is_top_of_stack_(res.slot) {
                     (res, false)
                 } else {
-                    (c.allocate_temporary_on_top_()?, true)
+                    let slot = c.allocate_temporary_on_top_()?;
+                    (slot, true)
                 };
                 resolve_id_into_slot_(&mut self.ctx, c, id, loc, f.slot)?;
                 self.lexer.next();
@@ -2181,6 +2182,7 @@ pub(crate) mod parser {
                     lexer.next();
                     let res = get_res!(c, sl_res);
                     c.emit_instr_(I::LoadNil(res.slot));
+
                     Ok(res)
                 }
                 Tok::Id("true") => {
