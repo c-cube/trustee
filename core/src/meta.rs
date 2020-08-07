@@ -873,13 +873,13 @@ mod ml {
 
         /// Print the current state of the VM in case of error.
         fn print_trace_(&self, out: &mut dyn io::Write, full: bool) -> io::Result<()> {
-            let mut sf_i = 0;
-            let mut stack_i = 0;
-            let mut frame_len = 0;
+            let mut sf_i = self.ctrl_stack.len();
             write!(out, "===== begin stack trace =====\n")?;
-            while sf_i < self.ctrl_stack.len() {
+            while sf_i > 0 {
+                sf_i -= 1;
                 let sf = &self.ctrl_stack[sf_i];
-                let next_stack_i = sf.start as usize;
+                let stack_i = sf.start as usize;
+                let next_stack_i = (sf.start + sf.chunk.0.n_slots) as usize;
                 write!(
                     out,
                     "in chunk {:?} (file {:?} starting at line {})\n",
@@ -894,18 +894,11 @@ mod ml {
                     // TODO: only print `ic-5..ic+5` window?
                     write!(out, "  frame.chunk\n")?;
                     let s = sf.chunk.print(true, Some(sf.ic as usize))?;
-                    frame_len = sf.chunk.0.n_slots as usize;
-                    write!(out, "{}\n", s)?;
+                    write!(out, "{}stack frame [\n", s)?;
                     for i in stack_i..next_stack_i {
                         write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
                     }
-                }
-                stack_i = next_stack_i;
-                sf_i += 1;
-            }
-            if full {
-                for i in stack_i..stack_i + frame_len {
-                    write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
+                    write!(out, "]\n")?;
                 }
             }
             write!(out, "===== end stack trace =====\n")?;
