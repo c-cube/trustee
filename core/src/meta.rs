@@ -78,6 +78,17 @@ struct ChunkImpl {
     n_slots: u32,
     /// Name of this chunk, if any.
     name: Option<RStr>,
+    /// Debug info: file name
+    file_name: Option<RStr>,
+    /// Debug info: initial line
+    first_line: u32,
+}
+
+enum LexScope {
+    /// Slots for local variables
+    Local(Vec<SlotIdx>),
+    /// Parsing function call arguments, cannot use `def`
+    CallArgs,
 }
 
 /// Compiler for a given chunk.
@@ -85,13 +96,15 @@ struct Compiler<'a> {
     instrs: Vec<Instr>,
     locals: Vec<Value>,
     /// Local lexical scope.
-    lex_scopes: Vec<Vec<SlotIdx>>,
+    lex_scopes: Vec<LexScope>,
     /// Maximum size `slots` ever took.
     n_slots: u32,
     name: Option<RStr>,
     slots: Vec<CompilerSlot>,
     /// Parent compiler, used to resolve values from outer scopes.
     parent: Option<&'a Compiler<'a>>,
+    file_name: Option<RStr>,
+    first_line: u32,
 }
 
 struct CompilerSlot {
@@ -369,6 +382,8 @@ mod ml {
                 instrs: vec![Instr::Ret(SlotIdx(0))].into(),
                 locals: Box::new([]),
                 n_slots: 1,
+                file_name: None,
+                first_line: 0,
             }))
         }
 
@@ -928,12 +943,12 @@ mod ml {
         }
 
         /// Parse and execute the given code.
-        pub fn run(&mut self, s: &str) -> Result<Value> {
+        pub fn run(&mut self, s: &str, file_name: Option<RStr>) -> Result<Value> {
             use parser::*;
 
             self.reset();
             logdebug!("meta.run {}", s);
-            let mut lexer = lexer::Lexer::new(s);
+            let mut lexer = lexer::Lexer::new(s, file_name);
             let mut last_r = Value::Nil;
 
             loop {
@@ -986,12 +1001,13 @@ macro_rules! perror {
 pub mod lexer {
     use super::*;
 
-    /// A parser for RPN-like syntax, inspired from postscript.
+    /// Basic lexer.
     pub struct Lexer<'b> {
         col: usize,
         line: usize,
         i: usize,
         bytes: &'b [u8],
+        pub(crate) file_name: Option<RStr>,
         cur_: Option<Tok<'b>>,
     }
 
@@ -1209,14 +1225,15 @@ pub mod lexer {
             }
         }
 
-        /// New parser.
-        pub fn new(s: &'b str) -> Self {
+        /// New lexer.
+        pub fn new(s: &'b str, file_name: Option<RStr>) -> Self {
             Self {
                 col: 1,
                 line: 1,
                 i: 0,
                 bytes: s.as_bytes(),
                 cur_: None,
+                file_name,
             }
         }
     }
@@ -1248,6 +1265,10 @@ pub(crate) mod parser {
         }
     }
 
+    /// Token used to remember to close scopes.
+    #[must_use]
+    pub(crate) struct Scope(usize);
+
     impl<'a> Compiler<'a> {
         /// Convert the compiler's state into a proper chunk.
         pub fn into_chunk(self) -> Chunk {
@@ -1256,6 +1277,8 @@ pub(crate) mod parser {
                 locals: self.locals.into_boxed_slice(),
                 n_slots: self.n_slots,
                 name: self.name,
+                first_line: self.first_line,
+                file_name: self.file_name,
             };
             Chunk(k::Ref::new(c))
         }
@@ -1265,18 +1288,23 @@ pub(crate) mod parser {
             &mut self.slots[i.0 as usize]
         }
 
-        pub fn push_local_scope(&mut self) {
-            self.lex_scopes.push(vec![]);
+        pub(crate) fn push_local_scope(&mut self) -> Scope {
+            self.lex_scopes.push(LexScope::Local(vec![]));
+            let len = self.lex_scopes.len();
+            Scope(len)
         }
 
-        pub fn pop_local_scope(&mut self) {
+        pub(crate) fn pop_local_scope(&mut self, sc: Scope) {
+            if self.lex_scopes.len() != sc.0 {
+                panic!("unbalanced scopes");
+            }
             match self.lex_scopes.pop() {
-                None => panic!("compiler: unbalanced scopes"),
-                Some(sl) => {
+                Some(LexScope::Local(sl)) => {
                     for x in sl {
                         self.deallocate_slot_(x)
                     }
                 }
+                _ => panic!("compiler: unbalanced scopes"),
             }
         }
 
@@ -1403,7 +1431,11 @@ pub(crate) mod parser {
         pub fn allocate_var_(&mut self, name: RStr) -> Result<ExprRes> {
             let slot = self.allocate_any_slot_(CompilerSlotState::NotActivatedYet)?;
             self.get_slot_(slot).var_name = Some(name);
-            if let Some(scope) = self.lex_scopes.last_mut() {
+            if let Some(LexScope::CallArgs) = self.lex_scopes.last() {
+                return Err(Error::new(
+                    "cannot bind variable in the list of arguments of a function call",
+                ));
+            } else if let Some(LexScope::Local(scope)) = self.lex_scopes.last_mut() {
                 scope.push(slot); // push into local scope
             }
             Ok(ExprRes::new(slot, false))
@@ -1635,6 +1667,8 @@ pub(crate) mod parser {
                         name: None,
                         slots: vec![],
                         parent: None,
+                        first_line: self.lexer.loc().0 as u32,
+                        file_name: self.lexer.file_name.clone(),
                     }
                 };
             };
@@ -1745,6 +1779,8 @@ pub(crate) mod parser {
                 lex_scopes: vec![],
                 slots: vec![],
                 parent,
+                first_line: self.lexer.loc().0 as u32,
+                file_name: self.lexer.file_name.clone(),
             };
             // add variables to `sub_c`
             for x in vars {
@@ -1804,9 +1840,9 @@ pub(crate) mod parser {
                 let jump_if_false = c.reserve_jump_();
 
                 // parse `then`
-                c.push_local_scope();
+                let scope = c.push_local_scope();
                 let _e_then = self.parse_expr_(c, Some(res.slot))?;
-                c.pop_local_scope();
+                c.pop_local_scope(scope);
                 // jump above `else`
                 let jump_after_then = c.reserve_jump_();
 
@@ -1815,9 +1851,9 @@ pub(crate) mod parser {
                 c.free(&res_test);
 
                 // parse `else`
-                c.push_local_scope();
+                let scope = c.push_local_scope();
                 let _e_else = self.parse_expr_(c, Some(res.slot))?;
-                c.pop_local_scope();
+                c.pop_local_scope(scope);
 
                 // jump here after `then` is done.
                 c.emit_jump(jump_after_then, |off| I::Jump(off))?;
@@ -1833,9 +1869,9 @@ pub(crate) mod parser {
                 let sl_x = c.allocate_var_(x)?;
                 self.next_tok_();
 
-                c.push_local_scope();
+                let scope = c.push_local_scope();
                 let e = self.parse_expr_seq_(c, Tok::RParen, Some(sl_x.slot));
-                c.pop_local_scope();
+                c.pop_local_scope(scope);
                 let _e = e?; // force error
 
                 // now the variable is usable
@@ -1912,7 +1948,7 @@ pub(crate) mod parser {
                 };
                 self.next_tok_();
 
-                c.push_local_scope();
+                let scope = c.push_local_scope();
                 loop {
                     let x: RStr = cur_tok_as_id_(&mut self.lexer, "expected variable name")?.into();
                     let sl_x = c.allocate_var_(x)?;
@@ -1929,7 +1965,7 @@ pub(crate) mod parser {
 
                 let res = get_res!(c, sl_res);
                 let res = self.parse_expr_seq_(c, Tok::RParen, Some(res.slot))?;
-                c.pop_local_scope(); // deallocate locals
+                c.pop_local_scope(scope); // deallocate locals
 
                 Ok(res)
             } else if id == "list" {
@@ -1939,9 +1975,9 @@ pub(crate) mod parser {
             } else if id == "do" {
                 self.next_tok_();
                 // parse a series of expressions.
-                c.push_local_scope();
+                let scope = c.push_local_scope();
                 let r = self.parse_expr_seq_(c, Tok::RParen, sl_res);
-                c.pop_local_scope();
+                c.pop_local_scope(scope);
                 r
             } else if id == "become" {
                 self.next_tok_();
@@ -1987,6 +2023,8 @@ pub(crate) mod parser {
                 let res = get_res!(c, sl_res);
                 logdebug!("parse application (res: {:?})", res);
 
+                c.lex_scopes.push(LexScope::CallArgs); // forbid `def`
+
                 // use `res` if it's top of stack, otherwise allocate a temp
                 let (f, f_temp) = if c.is_top_of_stack_(res.slot) {
                     (res, false)
@@ -2013,6 +2051,12 @@ pub(crate) mod parser {
                         "maximum number of arguments exceeded"
                     ));
                 }
+
+                let _sc = c.lex_scopes.pop().unwrap();
+                debug_assert!(match _sc {
+                    LexScope::CallArgs => true,
+                    _ => false,
+                });
 
                 c.emit_instr_(I::Call(f.slot, len as u8, res.slot));
                 // free temporary slots on top of stack
@@ -2362,8 +2406,8 @@ mod basic_primitives {
                 let s = get_arg_str!(args, 0);
                 logdebug!("evaluate `{}`", s);
                 let mut vm = VM::new(ctx);
-                // evaluate `s` in a new VM.
-                let v = vm.run(s).map_err(|e| {
+                // evaluate `s` in a new VM. Directly use `s` for the file name.
+                let v = vm.run(s, Some(s.clone())).map_err(|e| {
                     e.set_source(Error::new_string(format!("while evaluating {}", s)))
                 })?;
                 Ok(v)
@@ -2807,9 +2851,9 @@ pub const SRC_PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
 ///
 /// This has some overhead, if you want to execute a lot of code efficienty
 /// (e.g. in a CLI) consider creating a `VM` and re-using it.
-pub fn run_code(ctx: &mut Ctx, s: &str) -> Result<Value> {
+pub fn run_code(ctx: &mut Ctx, s: &str, file_name: Option<RStr>) -> Result<Value> {
     let mut st = VM::new(ctx);
-    st.run(s)
+    st.run(s, file_name)
 }
 
 /// Load the HOL prelude into this context.
@@ -2817,7 +2861,7 @@ pub fn run_code(ctx: &mut Ctx, s: &str) -> Result<Value> {
 /// This uses a temporary VM. See `run_code` for more details.
 pub fn load_prelude_hol(ctx: &mut Ctx) -> Result<()> {
     if ctx.find_const("hol_prelude_loaded").is_none() {
-        run_code(ctx, SRC_PRELUDE_HOL)?;
+        run_code(ctx, SRC_PRELUDE_HOL, Some("prelude.trustee".into()))?;
     }
     Ok(())
 }
@@ -2851,7 +2895,7 @@ mod test {
     macro_rules! lex_test {
         ($a:expr) => {
             for (s, v) in $a {
-                let mut p = lexer::Lexer::new(s);
+                let mut p = lexer::Lexer::new(s, None);
                 let mut toks = vec![];
                 loop {
                     let t = p.cur().clone();
@@ -2914,12 +2958,17 @@ mod test {
         lex_test!(a)
     }
 
-    macro_rules! check_eval {
-        ($e:expr, $val:expr) => {{
+    macro_rules! eval {
+        ($e:expr) => {{
             let mut ctx = Ctx::new();
             let mut vm = VM::new(&mut ctx);
-            let res_e = vm.run($e)?;
+            vm.run($e, None)
+        }};
+    }
 
+    macro_rules! check_eval {
+        ($e:expr, $val:expr) => {{
+            let res_e = eval!($e)?;
             assert_eq!(res_e, $val.into());
         }};
     }
@@ -3042,6 +3091,17 @@ mod test {
                 y + 10 * (z + 10 * w)
             }
         );
+        Ok(())
+    }
+
+    // check that `def` in a call argument does not lead to a compiler error
+    #[test]
+    fn test_call_def() -> Result<()> {
+        check_eval!("(defn f [x y] (+ 1 (+ x y)))  (f 1 1)", 3);
+        // `def` is forbidden here
+        assert!(eval!("(defn f [x y] (+ 1 (+ x y)))  (f (def y 1) y)").is_err());
+        check_eval!("(defn f [x y] (+ 1 (+ x y))) (do (def x 5) (f x x))", 11);
+        check_eval!("(defn f [x y] (+ 1 (+ x y))) (f (let [x 2] x) 10)", 13);
         Ok(())
     }
 
