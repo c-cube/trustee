@@ -29,7 +29,7 @@ impl<'a> liner::Completer for CliCompleter<'a> {
         let mut off = 0; // offset at which last_tok starts
 
         {
-            let mut lexer = meta::lexer::Lexer::new(start);
+            let mut lexer = meta::lexer::Lexer::new(start, None);
             loop {
                 let t = lexer.cur().clone();
                 if t == T::Eof {
@@ -106,7 +106,7 @@ fn main() -> anyhow::Result<()> {
     let mut vm = meta::VM::new(&mut ctx);
     for x in &opts.include {
         let file_content = std::fs::read_to_string(x)?;
-        vm.run(&file_content)?;
+        vm.run(&file_content, None)?;
     }
 
     let mut rl = LinerCtx::new();
@@ -131,7 +131,7 @@ fn main() -> anyhow::Result<()> {
             Ok(line) => {
                 log::info!("parse line {:?}", &line);
 
-                match vm.run(&line) {
+                match vm.run(&line, None) {
                     Ok(meta::Value::Nil) => {}
                     Ok(v) => {
                         println!("  {}", v);

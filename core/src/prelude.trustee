@@ -59,7 +59,7 @@
 (set_infix "/\" 60 59)
 
 ; theorems on `/\`
-(do
+{
   ; build `a/\b = …` from definition
   (def ab_def
     (congr DefAnd (refl `a:bool`) (refl `b:bool`)))
@@ -99,7 +99,7 @@
       (subst EqTrueElim ["x" `b:bool`])))
 
   ;(print (findthm "bool_elim2"))
-)
+}
 
 ; rule from `A |- a /\ b` to `A |- a`
 (defn RAndElim1 [th]
@@ -117,7 +117,7 @@
 
 ; theorem `a, b |- a /\ b`
 (defthm "AndIntro"
-  (do
+  {
     (def tha (REqTrueIntro (assume `a:bool`)))
     (def thb (REqTrueIntro (assume `b:bool`)))
     (def th1 (rw [DefForall :beta] (congr DefAnd tha thb)))
@@ -126,7 +126,8 @@
       (def lhs (refl `with f: bool->bool->bool. f T T`))
       (def c (REqTrueIntro lhs))
       (absv `f:(bool->bool->bool)` c))
-    (bool_eq lemma1 (sym th1))))
+    (bool_eq lemma1 (sym th1))
+  })
 
 ; rule from `A |- a`, `B |- b` to `A, B |- a /\ b`
 (defn RAndIntro [tha thb]
@@ -140,7 +141,7 @@
 
 ; prove `(a /\ b) /\ c) = a /\ (b /\ c)`
 (defthm "AndAssoc"
-  (do
+  {
     ; direct direction
     (def goal1 (assume `with a b c: bool. (a /\ b) /\ c`))
     (def th_c (RAndElim2 goal1))
@@ -158,26 +159,28 @@
     (def th_ab (cut th_a th_b (RAndIntro th_a th_b)))
     (def th2 (cut th_c th_ab (RAndIntro th_ab th_c)))
 
-    (bool_eq_intro th1 th2)))
+    (bool_eq_intro th1 th2)
+  })
 
 ; prove `a /\ b = b /\ a`
 (defthm "AndComm"
-  (do
+  {
     (def goal1 (assume `with a b: bool. a /\ b`))
     (def th_a (RAndElim1 goal1))
     (def th_b (RAndElim2 goal1))
     (def th1 (RAndIntro th_b th_a))
     (def th2 (subst th1 ["a" `b:bool` "b" `a:bool`]))
-    (bool_eq_intro th1 th2)))
+    (bool_eq_intro th1 th2)
+  })
 
 ; prove `a |- a /\ T` and `a |- T /\ a`
-(do
+{
   (def th_a (assume `a:bool`))
   (defthm "AndTrueRight" (RAndIntro th_a TrueIsTrue))
   (defthm "AndTrueLeft" (RAndIntro TrueIsTrue th_a))
-)
+}
 
-(do
+{
   (def hypa (assume `a:bool`))
   (def hypb (assume `b:bool`))
   (def hypab (assume `a:bool /\ b:bool`))
@@ -207,8 +210,7 @@
   ; `b, a/\b |- a`
   (defthm "CutAndLeft"
     (bool_eq (assume `b:bool`) (bool_eq b_true (sym b_eq_a1))))
-
-)
+}
 
 ; takes `a` and `b` and returns `a, a/\b |- b`
 (defn RCutAndRight [a b]
@@ -220,14 +222,14 @@
 
 
 ; `a |- (a/\b) = b`
-(do
+{
   (def h1 (assume `a:bool`))
   ; prove `a |- (a/\b)=b`
 
   (def ltor (RCutAndRight `a:bool` `b:bool`))
   (def rtol (RAndIntro (assume `a:bool`) (assume `b:bool`)))
   (defthm "AImpAAndBEqB" (bool_eq_intro ltor rtol))
-)
+}
 
 ; false
 (defconst "F" "DefFalse" `forall p:bool. p`)

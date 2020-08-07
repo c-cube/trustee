@@ -872,32 +872,41 @@ mod ml {
         }
 
         /// Print the current state of the VM in case of error.
-        fn print_trace_(&self, out: &mut dyn io::Write) -> io::Result<()> {
+        fn print_trace_(&self, out: &mut dyn io::Write, full: bool) -> io::Result<()> {
             let mut sf_i = 0;
             let mut stack_i = 0;
             let mut frame_len = 0;
             write!(out, "===== begin stack trace =====\n")?;
             while sf_i < self.ctrl_stack.len() {
                 let sf = &self.ctrl_stack[sf_i];
+                let next_stack_i = sf.start as usize;
                 write!(
                     out,
-                    "  frame[i={}, start={}, ic={}]\n",
-                    sf_i, sf.start, sf.ic
+                    "in chunk {:?} (file {:?} starting at line {})\n",
+                    sf.chunk.0.name, sf.chunk.0.file_name, sf.chunk.0.first_line
                 )?;
-                // TODO: only print `ic-5..ic+5` window?
-                write!(out, "  frame.chunk\n")?;
-                let s = sf.chunk.print(true, Some(sf.ic as usize))?;
-                write!(out, "{}\n", s)?;
-                let next_stack_i = sf.start as usize;
-                frame_len = sf.chunk.0.n_slots as usize;
-                for i in stack_i..next_stack_i {
-                    write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
+                if full {
+                    write!(
+                        out,
+                        "  frame[i={}, start={}, ic={}]\n",
+                        sf_i, sf.start, sf.ic
+                    )?;
+                    // TODO: only print `ic-5..ic+5` window?
+                    write!(out, "  frame.chunk\n")?;
+                    let s = sf.chunk.print(true, Some(sf.ic as usize))?;
+                    frame_len = sf.chunk.0.n_slots as usize;
+                    write!(out, "{}\n", s)?;
+                    for i in stack_i..next_stack_i {
+                        write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
+                    }
                 }
                 stack_i = next_stack_i;
                 sf_i += 1;
             }
-            for i in stack_i..stack_i + frame_len {
-                write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
+            if full {
+                for i in stack_i..stack_i + frame_len {
+                    write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
+                }
             }
             write!(out, "===== end stack trace =====\n")?;
             Ok(())
@@ -965,12 +974,12 @@ mod ml {
                             Ok(x) => last_r = x,
                             Err(e) => {
                                 let mut s = vec![];
-                                if let Some("1") = std::env::var("TRUSTEE_TRACE").ok().as_deref() {
-                                    // only print stacktrace if `TRUSTEE_TRACE=1`
-                                    self.print_trace_(&mut s).unwrap();
-                                }
+                                // only print full stacktrace if `TRUSTEE_TRACE=1`
+                                let full_tr =
+                                    std::env::var("TRUSTEE_TRACE").ok().as_deref() == Some("1");
+                                self.print_trace_(&mut s, full_tr).unwrap();
                                 logerr!(
-                                    "error during execution\n>>> {} <<<\n{}",
+                                    "error during execution:\n>> {}\n{}",
                                     e,
                                     std::str::from_utf8(&s).unwrap_or("<err>")
                                 );
@@ -1507,42 +1516,52 @@ pub(crate) mod parser {
 
     use Instr as I;
 
+    enum BinOpAssoc {
+        LAssoc,
+        NonAssoc,
+    }
+
     /// A builtin binary operator
-    fn binary_op_(s: &str) -> Option<&'static dyn Fn(SlotIdx, SlotIdx, SlotIdx) -> Instr> {
+    fn binary_op_(
+        s: &str,
+    ) -> Option<(
+        &'static dyn Fn(SlotIdx, SlotIdx, SlotIdx) -> Instr,
+        BinOpAssoc,
+    )> {
         macro_rules! ret {
-            ($i: expr) => {
-                Some(&|s1, s2, s3| $i(s1, s2, s3))
+            ($i: expr, $a: expr) => {
+                Some(((&|s1, s2, s3| $i(s1, s2, s3)), $a))
             };
         };
         macro_rules! ret_swap {
-            ($i: expr) => {
-                Some(&|s1, s2, s3| $i(s2, s1, s3))
+            ($i: expr, $a: expr) => {
+                Some(((&|s1, s2, s3| $i(s2, s1, s3)), $a))
             };
         };
         if s == "+" {
-            ret!(I::Add)
+            ret!(I::Add, BinOpAssoc::LAssoc)
         } else if s == "-" {
-            ret!(I::Sub)
+            ret!(I::Sub, BinOpAssoc::LAssoc)
         } else if s == "*" {
-            ret!(I::Mul)
+            ret!(I::Mul, BinOpAssoc::LAssoc)
         } else if s == "/" {
-            ret!(I::Div)
+            ret!(I::Div, BinOpAssoc::LAssoc)
         } else if s == "%" {
-            ret!(I::Mod)
+            ret!(I::Mod, BinOpAssoc::NonAssoc)
         } else if s == "." {
-            ret!(I::Cons)
+            ret!(I::Cons, BinOpAssoc::NonAssoc)
         } else if s == "==" {
-            ret!(I::Eq)
+            ret!(I::Eq, BinOpAssoc::NonAssoc)
         } else if s == "!=" {
-            ret!(I::Neq)
+            ret!(I::Neq, BinOpAssoc::NonAssoc)
         } else if s == "<" {
-            ret!(I::Lt)
+            ret!(I::Lt, BinOpAssoc::NonAssoc)
         } else if s == "<=" {
-            ret!(I::Leq)
+            ret!(I::Leq, BinOpAssoc::NonAssoc)
         } else if s == ">" {
-            ret_swap!(I::Lt)
+            ret_swap!(I::Lt, BinOpAssoc::NonAssoc)
         } else if s == ">=" {
-            ret_swap!(I::Leq)
+            ret_swap!(I::Leq, BinOpAssoc::NonAssoc)
         } else {
             None
         }
@@ -1621,16 +1640,6 @@ pub(crate) mod parser {
         };
     }
 
-    macro_rules! get_closing {
-        ($t: expr) => {
-            if $t == Tok::LParen {
-                Tok::RParen
-            } else {
-                Tok::RBracket
-            }
-        };
-    }
-
     impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
         /// Create a new parser for source string `s`.
         pub fn new(ctx: &'a mut k::Ctx, lexer: &'c mut lexer::Lexer<'b>) -> Self {
@@ -1692,7 +1701,7 @@ pub(crate) mod parser {
                     Ok(Some(c.into_chunk()))
                 }
                 Tok::LParen => {
-                    let closing = get_closing!(t);
+                    let closing = Tok::RParen;
                     self.lexer.next();
                     if let Tok::Id("defn") = self.lexer.cur() {
                         self.lexer.next();
@@ -1809,20 +1818,34 @@ pub(crate) mod parser {
             let id = cur_tok_as_id_(&mut self.lexer, "expect an identifier after opening")?;
             logdebug!("parse expr app id={:?}", id);
 
-            if let Some(binop_instr) = binary_op_(id) {
-                // binary operator
+            if let Some((binop_instr, assoc)) = binary_op_(id) {
+                // primitive binary operator.
+                // emit `res = a op b`
                 self.next_tok_();
+                let res = get_res!(c, sl_res);
 
                 let a = self.parse_expr_(c, None)?;
                 let b = self.parse_expr_(c, None)?;
-                self.eat_(Tok::RParen, "expected closing ')' in infix application")?;
+                c.emit_instr_(binop_instr(a.slot, b.slot, res.slot));
 
-                // free before allocating result
+                if let BinOpAssoc::LAssoc = assoc {
+                    // parse more arguments, like in `(+ a b c)`
+                    loop {
+                        if self.cur_tok_() == Tok::RParen {
+                            break;
+                        }
+
+                        // parse next operand: `res = res op b`
+                        let b = self.parse_expr_(c, Some(b.slot))?;
+                        c.emit_instr_(binop_instr(res.slot, b.slot, res.slot));
+                    }
+                }
+
+                self.eat_(Tok::RParen, "expected closing ')' in application")?;
+
                 c.free(&a);
                 c.free(&b);
-                let res = get_res!(c, sl_res);
 
-                c.emit_instr_(binop_instr(a.slot, b.slot, res.slot));
                 Ok(res)
             } else if let Some(unop_instr) = unary_op_(id) {
                 // unary op
@@ -1973,8 +1996,8 @@ pub(crate) mod parser {
                 self.lexer.next();
                 self.parse_list_(c, sl_res, Tok::RParen)
             } else if id == "do" {
-                self.next_tok_();
                 // parse a series of expressions.
+                self.next_tok_();
                 let scope = c.push_local_scope();
                 let r = self.parse_expr_seq_(c, Tok::RParen, sl_res);
                 c.pop_local_scope(scope);
@@ -2145,49 +2168,6 @@ pub(crate) mod parser {
             Ok(res)
         }
 
-        fn parse_infix_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
-            logdebug!("parse infix expr");
-            let res = get_res!(c, sl_res); // reserve now, so the top of stack is free
-
-            let sl_a = c.allocate_temporary_on_top_()?;
-            let a = self.parse_expr_(c, Some(sl_a.slot))?;
-
-            let loc = self.lexer.loc();
-            let Self { ctx, lexer, .. } = self;
-            if let Tok::Id(op) = lexer.cur() {
-                if let Some(binop_instr) = binary_op_(op) {
-                    // infix primitive operator.
-                    // emit `b = a op b`
-                    lexer.next();
-                    let b = self.parse_expr_(c, Some(res.slot))?;
-                    self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
-
-                    c.emit_instr_(binop_instr(a.slot, res.slot, res.slot));
-                    c.free(&a);
-                    Ok(b)
-                } else {
-                    // infix function
-                    let f = c.allocate_temporary_on_top_()?;
-                    resolve_id_into_slot_(ctx, c, &op, loc, f.slot)?;
-
-                    lexer.next();
-                    let sl_b = c.allocate_temporary_on_top_()?;
-                    let _b = self.parse_expr_(c, Some(sl_b.slot))?;
-                    self.eat_(Tok::RBrace, "expected '}' to close infix '{'-expr")?;
-
-                    // swap a and f, so that the stack looks like `[f, a, b]`
-
-                    assert_ne!(f.slot, res.slot);
-                    c.emit_instr_(I::Swap(sl_a.slot, f.slot));
-                    c.emit_instr_(I::Call(a.slot, 2, res.slot));
-                    c.deallocate_top_slots_(3); // f, a, b
-                    Ok(res)
-                }
-            } else {
-                return Err(perror!(self.lexer.loc(), "expected an infix operator"));
-            }
-        }
-
         /// Parse an expression and return its result's slot.
         ///
         /// `sl_res` is an optional pre-provided slot.
@@ -2207,9 +2187,13 @@ pub(crate) mod parser {
                     self.parse_list_(c, sl_res, Tok::RBracket)
                 }
                 Tok::LBrace => {
-                    // infix: `{a x b}` is `[0]; a; b; [0]=x; call`
-                    lexer.next();
-                    self.parse_infix_(c, sl_res)
+                    // see: `do`
+                    // parse a series of expressions.
+                    self.next_tok_();
+                    let scope = c.push_local_scope();
+                    let r = self.parse_expr_seq_(c, Tok::RBrace, sl_res);
+                    c.pop_local_scope(scope);
+                    r
                 }
                 Tok::Int(i) => {
                     lexer.next();
@@ -2980,48 +2964,40 @@ mod test {
         check_eval!("false", false);
         check_eval!("nil", ());
         check_eval!("(+ 1 2)", 3);
-        check_eval!("(let [x 1] {x + 2})", 3);
+        check_eval!("(let [x 1] (+ x 2))", 3);
         check_eval!(
             "(list 1 2 3)",
             Value::list(&[Value::Int(1), Value::Int(2), Value::Int(3)])
         );
-        check_eval!("(defn f [x] {1 + x})", Value::Nil);
-        check_eval!("(defn f [x] {1 + x}) (f 9)", 10);
+        check_eval!("(defn f [x] (+ 1 x))", Value::Nil);
+        check_eval!("(defn f [x] (+ 1 x)) (f 9)", 10);
+        check_eval!("(+ 1 2 3 4 5)", 1 + 2 + 3 + 4 + 5);
+        check_eval!("(- 1 2 3 4 5)", 1 - 2 - 3 - 4 - 5);
         check_eval!("(do true 1)", 1);
         check_eval!("(if true 1 2)", 1);
         check_eval!("(if false 1 2)", 2);
-        check_eval!("(let [x {1 + 1}] (if {x == 1} 10 20))", 20);
-        check_eval!("(let [x {1 + 1}] (if {x == 2} 10 20))", 10);
-        check_eval!("{1 . {:b . nil}}", vec![1.into(), Value::Sym("b".into())]);
+        check_eval!("(let [x (+ 1 1)] (if (== x 1) 10 20))", 20);
+        check_eval!("(let [x (+ 1 1)] (if (== x 2) 10 20))", 10);
+        check_eval!("(. 1 (. :b nil))", vec![1.into(), Value::Sym("b".into())]);
         check_eval!("[1 :b]", vec![1.into(), Value::Sym("b".into())]);
         check_eval!(":a", Value::Sym("a".into()));
-        check_eval!("{1 != 2}", true);
-        check_eval!("{1 == 2}", false);
+        check_eval!("(!= 1 2)", true);
+        check_eval!("(== 1 2)", false);
 
         Ok(())
     }
 
     #[test]
     fn test_eval_arith() -> Result<()> {
-        check_eval!("(let [a 2 b 4] {a + {{4  * b} - {{a / 2} % 3}}})", 17);
+        check_eval!("(let [a 2 b 4] (+ a (- (* 4 b) (% (/ a 2) 3))))", 17);
         Ok(())
     }
 
     #[test]
     fn test_fact() -> Result<()> {
         check_eval!(
-            "(defn fact [x] (if {x <= 1} 1 {x * (fact {x - 1})})) (list (fact 5) (fact 6))",
+            "(defn fact [x] (if (<= x 1) 1 (* x (fact (- x 1))))) (list (fact 5) (fact 6))",
             vec![120, 720i64]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_infix_fun() -> Result<()> {
-        check_eval!("(defn f [x y] (+ x (* 2 y))) {1 f 10}", 21);
-        check_eval!(
-            "(defn f [x y] (+ x (* 10 y))) {1 f {2 f 33}}",
-            1 + 10 * (2 + 10 * 33)
         );
         Ok(())
     }
@@ -3033,21 +3009,21 @@ mod test {
             vec![Value::Str("coucou".into()), Value::Sym("abc".into())]
         );
         check_eval!(
-            "(defn f [x] (+ x 1)) (defn g [x] {(f x) * 2}) (+ 1 (g 10))",
+            "(defn f [x] (+ x 1)) (defn g [x] (* (f x) 2)) (+ 1 (g 10))",
             23
         );
-        check_eval!("(let [x 1 y 2] {x + y})", 3);
+        check_eval!("(let [x 1 y 2] (+ x y))", 3);
         check_eval!(
-            "(if {1 > 2} (let [x :a y :b] x) (let [x :b] \"oh?\" x))",
+            "(if (> 1 2) (let [x :a y :b] x) (let [x :b] \"oh?\" x))",
             Value::Sym("b".into())
         );
-        check_eval!("(if {1 < 2} (let [x 1 y :b] nil x) (let [x :b] x))", 1);
+        check_eval!("(if (< 1 2) (let [x 1 y :b] nil x) (let [x :b] x))", 1);
         check_eval!("(car [1 2])", 1);
         check_eval!("(car (cdr [1 2]))", 2);
         check_eval!("(cdr (cdr [1 2]))", ());
         check_eval!("(pair? [1 2])", true);
         check_eval!("(pair? nil)", false);
-        check_eval!("(pair? {1 . 2})", true);
+        check_eval!("(pair? (. 1 2))", true);
         Ok(())
     }
 
@@ -3055,13 +3031,13 @@ mod test {
     fn test_become() -> Result<()> {
         check_eval!(
             "
-            (defn f [x y] (if {x == 0} y (become f {x - 1} {y + 1})))
+            (defn f [x y] (if (== x 0) y (become f (- x 1) (+ 1 y))))
             (f 1000 0)",
             1000
         );
         check_eval!(
-            "(defn f [x y z w] (if {x == 0} {y + {10 * {z + {10 * w}}}}
-                               (become f {x - 1} {y + 1} {z + 1} {w + 1})))
+            "(defn f [x y z w] (if (== x 0) (+ y (* 10 (+ z (* 10 w))))
+                               (become f (- x 1) (+ y 1) (+ z 1) (+ w 1))))
             (f 100 0 0 0)",
             {
                 let y = 100;
@@ -3071,7 +3047,9 @@ mod test {
             }
         );
         check_eval!(
-            "(defn f [x y z w] (if {x != 0} (become f {x - 1} {y + 1} {z + 1} {w + 1}) {y + {10 * {z + {10 * w}}}}))
+            "(defn f [x y z w] (if (!= x 0)
+                (become f (- x 1) (+ y 1) (+ z 1) (+ w 1))
+                (+ y (* 10 (+ z (* 10 w))))))
             (f 100 0 0 0)",
             {
                 let y = 100;
@@ -3081,8 +3059,8 @@ mod test {
             }
         );
         check_eval!(
-            "(defn f [x y z w] (if {x == 0} {y + {10 * {z + {10 * w}}}}
-                               (become f {x - 1} {y + 1} {z + 1} {w + 1})))
+            "(defn f [x y z w] (if (== x 0) (+ y (* 10 (+ z (* 10 w))))
+                               (become f (- x 1) (+ y 1) (+ z 1) (+ w 1))))
             (f 10000 0 0 0)",
             {
                 let y = 10000;
@@ -3106,12 +3084,22 @@ mod test {
     }
 
     #[test]
-    fn test_scope() -> Result<()> {
-        check_eval!("(do (def x 1) (def y 2) {x + y})", 3);
+    fn test_scope_do() -> Result<()> {
+        check_eval!("(do (def x 1) (def y 2) (+ x y))", 3);
         check_eval!("(do (def x 1) (do (def x 2) nil) x)", 1);
         check_eval!("(do (def x 1) (do (def x 2) x))", 2);
-        check_eval!("(do (def x 1) (do (def y 10) (do (def x {1 + y}) x)))", 11);
-        check_eval!("(let [x 1] (print x) (def y {10 + x}) y)", 11);
+        check_eval!("(do (def x 1) (do (def y 10) (do (def x (+ 1 y)) x)))", 11);
+        check_eval!("(let [x 1] (print x) (def y (+ 10 x)) y)", 11);
+        Ok(())
+    }
+
+    #[test]
+    fn test_scope_brace() -> Result<()> {
+        check_eval!("{ (def x 1) (def y 2) (+ x y) }", 3);
+        check_eval!("{ (def x 1) (do (def x 2) nil) x}", 1);
+        check_eval!("{ (def x 1) (do (def x 2) x)}", 2);
+        check_eval!("{ (def x 1) { (def y 10) { (def x (+ 1 y)) x}}}", 11);
+        check_eval!("(let [x 1] (print x) (def y (+ 10 x)) y)", 11);
         Ok(())
     }
 
