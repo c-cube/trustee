@@ -1,7 +1,7 @@
 set expandtab
 
 syn keyword     trusteeKW        def defconst defthm decl findthm let defn
-syn keyword     trusteeKW        expr_ty app_lhs app_rhs
+syn keyword     trusteeKW        expr_ty app_lhs app_rhs parse_expr
 syn keyword     trusteeKW        findconst set_infix set_binder set_prefix become do eval
 syn keyword     trusteeKW        hol_prelude pledge_no_more_axioms source print
 syn match       trusteeKW        "=="
@@ -27,6 +27,7 @@ syn match       trusteeNum      "\<[0-9]\+\>"
 syn match       trusteeExpr      "\blet\b"
 syn match       trusteeExpr      "\bin\b"
 syn match       trusteeExpr      "\bpi\b"
+syn match       trusteeExpr      "\bwith\b"
 syn match       trusteeExpr      "\bforall\b"
 syn match       trusteeExpr      "\bexists\b"
 syn match       trusteeExpr      "\~"
