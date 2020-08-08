@@ -1276,15 +1276,41 @@ pub(crate) mod parser {
             &mut self.slots[i.0 as usize]
         }
 
+        pub(crate) fn enter_call_args(&mut self) -> Scope {
+            logdebug!("enter call args scope");
+            self.lex_scopes.push(LexScope::CallArgs);
+            Scope(self.lex_scopes.len())
+        }
+
+        pub(crate) fn exit_call_args(&mut self, sc: Scope) {
+            logdebug!("exit call args scope");
+            if self.lex_scopes.len() != sc.0 {
+                panic!(
+                    "unbalanced scopes in call args (expect len {}, got {})",
+                    sc.0,
+                    self.lex_scopes.len()
+                );
+            }
+            match self.lex_scopes.pop() {
+                Some(LexScope::CallArgs) => (),
+                _ => panic!("unbalanced scope in call args"),
+            }
+        }
+
         pub(crate) fn push_local_scope(&mut self) -> Scope {
+            logdebug!("push local scope");
             self.lex_scopes.push(LexScope::Local(vec![]));
-            let len = self.lex_scopes.len();
-            Scope(len)
+            Scope(self.lex_scopes.len())
         }
 
         pub(crate) fn pop_local_scope(&mut self, sc: Scope) {
+            logdebug!("pop local scope");
             if self.lex_scopes.len() != sc.0 {
-                panic!("unbalanced scopes");
+                panic!(
+                    "unbalanced scopes (expect len {}, got {})",
+                    sc.0,
+                    self.lex_scopes.len()
+                );
             }
             match self.lex_scopes.pop() {
                 Some(LexScope::Local(sl)) => {
@@ -1596,6 +1622,7 @@ pub(crate) mod parser {
             let lidx = c.allocate_local_(Value::Thm(th.clone()))?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
         } else {
+            logdebug!("unknown id '{}'", s);
             return Err(perror!(loc, "unknown identifier '{}'", s));
         }
         Ok(())
@@ -1872,9 +1899,8 @@ pub(crate) mod parser {
                 self.next_tok_();
 
                 let scope = c.push_local_scope();
-                let e = self.parse_expr_seq_(c, Tok::RParen, Some(sl_x.slot));
+                let _e = self.parse_expr_seq_(c, Tok::RParen, Some(sl_x.slot))?;
                 c.pop_local_scope(scope);
-                let _e = e?; // force error
 
                 // now the variable is usable
                 c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
@@ -2025,7 +2051,7 @@ pub(crate) mod parser {
                 let res = get_res!(c, sl_res);
                 logdebug!("parse application (res: {:?})", res);
 
-                c.lex_scopes.push(LexScope::CallArgs); // forbid `def`
+                let scope = c.enter_call_args(); // forbid `def`
 
                 // use `res` if it's top of stack, otherwise allocate a temp
                 let (f, f_temp) = if c.is_top_of_stack_(res.slot) {
@@ -2054,11 +2080,7 @@ pub(crate) mod parser {
                     ));
                 }
 
-                let _sc = c.lex_scopes.pop().unwrap();
-                debug_assert!(match _sc {
-                    LexScope::CallArgs => true,
-                    _ => false,
-                });
+                c.exit_call_args(scope);
 
                 c.emit_instr_(I::Call(f.slot, len as u8, res.slot));
                 // free temporary slots on top of stack
@@ -2170,9 +2192,9 @@ pub(crate) mod parser {
                     // parse a series of expressions.
                     self.next_tok_();
                     let scope = c.push_local_scope();
-                    let r = self.parse_expr_seq_(c, Tok::RBrace, sl_res);
+                    let r = self.parse_expr_seq_(c, Tok::RBrace, sl_res)?;
                     c.pop_local_scope(scope);
-                    r
+                    Ok(r)
                 }
                 Tok::Int(i) => {
                     lexer.next();
@@ -2711,6 +2733,7 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
+        // FIXME: use `(subst "x" x "y" y <somethm>)` instead, avoid list allocs.
         defbuiltin!(
             "subst",
             "Instantiate a theorem with a substitution.\n\
