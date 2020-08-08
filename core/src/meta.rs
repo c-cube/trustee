@@ -162,8 +162,6 @@ struct JumpPosition(usize);
 enum Instr {
     /// copy `sl[$0]` into `sl[$1]`
     Copy(SlotIdx, SlotIdx),
-    /// Swap `sl[$0]` and `sl[$1]`
-    Swap(SlotIdx, SlotIdx),
     /// Local a local value into a slot. `sl[$1] = locals[$0]`
     LoadLocal(LocalIdx, SlotIdx),
     /// Put the given (small) integer `$0` into `sl[$1]`
@@ -586,18 +584,6 @@ mod ml {
                         let s0 = abs_offset!(sf, s0);
                         let s1 = abs_offset!(sf, s1);
                         self.stack[s1] = self.stack[s0].clone();
-                    }
-                    I::Swap(s0, s1) => {
-                        let s0 = abs_offset!(sf, s0);
-                        let s1 = abs_offset!(sf, s1);
-                        if s0 != s1 {
-                            let p0: *mut _ = &mut self.stack[s0] as *mut _;
-                            let p1: *mut _ = &mut self.stack[s1] as *mut _;
-                            // safe, because they're disjoint since s0 != s1
-                            unsafe {
-                                std::ptr::swap(p0, p1);
-                            }
-                        }
                     }
                     I::LoadLocal(l0, s1) => {
                         let s1 = abs_offset!(sf, s1);
