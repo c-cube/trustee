@@ -332,6 +332,13 @@ mod ml {
                 _ => None,
             }
         }
+
+        pub fn as_thm(&self) -> Option<&k::Thm> {
+            match self {
+                Value::Thm(th) => Some(th),
+                _ => None,
+            }
+        }
     }
 
     impl fmt::Debug for CompilerSlot {
@@ -3250,6 +3257,29 @@ mod test {
             assert!(v3_err.contains("arity"));
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_mp() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        load_prelude_hol(&mut ctx)?;
+        run_code(
+            &mut ctx,
+            r#"
+            (decl "tau" `type`)
+            (decl "a0" `tau`)
+            (decl "b0" `tau`)
+            (decl "c0" `tau`)
+            (decl "p0" `bool`)
+            (decl "q0" `bool`)
+            (decl "r0" `bool`)
+            (decl "p1" `tau -> bool`)
+            "#,
+            None,
+        )?;
+        let v = run_code(&mut ctx, "(MP (assume `p0 ==> q0`) (assume `p0`))", None)?;
+        assert_eq!(v.as_thm().expect("thm").concl().clone().to_string(), "q0");
         Ok(())
     }
 }
