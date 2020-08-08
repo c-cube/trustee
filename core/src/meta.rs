@@ -3126,7 +3126,10 @@ mod test {
         check_eval!("(if false 1 2)", 2);
         check_eval!("(let [x (+ 1 1)] (if (== x 1) 10 20))", 20);
         check_eval!("(let [x (+ 1 1)] (if (== x 2) 10 20))", 10);
-        check_eval!("(. 1 (. :b nil))", vec![1.into(), Value::Sym("b".into())]);
+        check_eval!(
+            "(cons 1 (cons :b nil))",
+            vec![1.into(), Value::Sym("b".into())]
+        );
         check_eval!("[1 :b]", vec![1.into(), Value::Sym("b".into())]);
         check_eval!(":a", Value::Sym("a".into()));
         check_eval!("(!= 1 2)", true);
@@ -3171,7 +3174,7 @@ mod test {
         check_eval!("(cdr (cdr [1 2]))", ());
         check_eval!("(pair? [1 2])", true);
         check_eval!("(pair? nil)", false);
-        check_eval!("(pair? (. 1 2))", true);
+        check_eval!("(pair? (cons 1 2))", true);
         Ok(())
     }
 

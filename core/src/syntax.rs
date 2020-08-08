@@ -1145,7 +1145,7 @@ mod test {
             // declare a binder
             let ty = parse_expr(&mut ctx, "pi a. (a -> bool) -> a")?;
             ctx.mk_new_const(k::Symbol::from_str("myb"), ty)?;
-            ctx.set_fixity("myb", Fixity::Binder((20, 21)));
+            ctx.set_fixity("myb", Fixity::Binder((20, 21)))?;
         }
         Ok(ctx)
     }
