@@ -112,6 +112,10 @@ impl Symbol {
         Symbol(s.clone())
     }
 
+    pub fn to_rstr(&self) -> RStr {
+        self.0.clone()
+    }
+
     pub fn from_rc_str(s: &std::rc::Rc<str>) -> Self {
         let a: RStr = RStr::from(s.as_ref());
         Symbol(a)
@@ -193,6 +197,8 @@ pub struct ConstContent {
     pub name: Symbol,
     pub ty: Expr,
     tag: ConstTag,
+    /// Generation of this constant, incremented to handle shadowing.
+    gen: u32,
     fix: std::cell::Cell<Fixity>,
 }
 
@@ -368,6 +374,7 @@ impl ExprView {
             EConst(c) => EConst(Box::new(ConstContent {
                 ty: f(&c.ty, k)?,
                 name: c.name.clone(),
+                gen: c.gen,
                 tag: c.tag,
                 fix: c.fix.clone(),
             })),
@@ -816,13 +823,13 @@ pub struct Ctx {
     /// Hashconsing table, with weak semantics.
     tbl: fnv::FnvHashMap<ExprView, WExpr>,
     builtins: Option<ExprBuiltins>,
-    consts: fnv::FnvHashMap<Symbol, Expr>,
+    /// Generation for constants
+    c_gen: u32,
     /// Temporary used to merge sets of hypotheses
     tmp_hyps: Vec<Expr>,
-    lemmas: fnv::FnvHashMap<Symbol, Thm>,
     /// The defined chunks of code. These comprise some user defined tactics,
     /// derived rules, etc.
-    meta_chunks: fnv::FnvHashMap<RStr, meta::Chunk>,
+    meta_values: fnv::FnvHashMap<RStr, meta::Value>,
     eq: Option<Expr>,
     next_cleanup: usize,
     axioms: Vec<Thm>,
@@ -879,10 +886,9 @@ impl Ctx {
         let mut ctx = Ctx {
             tbl,
             builtins: None,
-            consts: fnv::new_table_with_cap(n),
             tmp_hyps: vec![],
-            lemmas: fnv::new_table_with_cap(n),
-            meta_chunks: fnv::new_table_with_cap(16),
+            c_gen: 0,
+            meta_values: fnv::new_table_with_cap(16),
             next_cleanup: CLEANUP_PERIOD,
             axioms: vec![],
             uid: uid as u32,
@@ -900,6 +906,7 @@ impl Ctx {
                 EConst(Box::new(ConstContent {
                     name,
                     ty: ty.clone(),
+                    gen: 0,
                     tag: ConstTag::None,
                     fix: std::cell::Cell::new(Fixity::Nullary),
                 })),
@@ -972,14 +979,13 @@ impl Ctx {
     }
 
     fn add_const_(&mut self, e: Expr) {
-        let consts = &mut self.consts;
         let name = if let EConst(c) = &e.0.view {
             c.name.clone()
         } else {
             unreachable!("not a constant: {:?}", e);
         };
         self.tbl.insert(e.view().clone(), e.weak());
-        consts.insert(name, e);
+        self.meta_values.insert(name.to_rstr(), e.into());
     }
 
     fn hashcons_builtin_(&mut self, ev: ExprView, ty: Option<Expr>) -> Expr {
@@ -992,15 +998,19 @@ impl Ctx {
 
     fn mk_const_with_(&mut self, s: Symbol, ty: Type, tag: ConstTag, f: Fixity) -> Result<Expr> {
         self.check_uid_(&ty);
-        if self.consts.contains_key(&s) {
-            return Err(Error::new("a constant with this name already exists"));
-        }
         if !ty.is_closed() || ty.free_vars().next().is_some() {
             return Err(Error::new("cannot create constant with non-closed type"));
         }
+        if self.c_gen == u32::MAX {
+            // cannot allocate more than u32::MAX constants!
+            return Err(Error::new("reached maximum number of constants"));
+        }
+        self.c_gen += 1;
+        let gen = self.c_gen;
         let c = self.hashcons_(EConst(Box::new(ConstContent {
             name: s.clone(),
             ty,
+            gen,
             tag,
             fix: std::cell::Cell::new(f),
         })))?;
@@ -1405,61 +1415,69 @@ impl Ctx {
     /// Change the fixity of a given constant.
     ///
     /// Does nothing if the constant is not defined.
-    pub fn set_fixity(&mut self, s: &str, f: Fixity) {
-        if let Some(t) = self.consts.get_mut(s) {
+    pub fn set_fixity(&mut self, s: &str, f: Fixity) -> Result<()> {
+        if let Some(meta::Value::Expr(t)) = self.meta_values.get_mut(s) {
             match t.view() {
-                EConst(c) => c.fix.set(f),
-                _ => panic!("expected constant"),
+                EConst(c) => {
+                    c.fix.set(f);
+                    return Ok(());
+                }
+                _ => (),
             }
         }
+        Err(Error::new("expected constant"))
+    }
+
+    /// Find a meta value by name. Returns `None` if the binding is absent.
+    #[inline]
+    pub fn find_meta_value(&self, s: &str) -> Option<&meta::Value> {
+        self.meta_values.get(s)
+    }
+
+    /// Set a meta value by name.
+    #[inline]
+    pub fn set_meta_value(&mut self, s: impl Into<RStr>, v: meta::Value) {
+        self.meta_values.insert(s.into(), v);
+    }
+
+    /// Iterate over all meta values.
+    pub fn iter_meta_values(&self) -> impl Iterator<Item = (&str, &meta::Value)> {
+        self.meta_values.iter().map(|(s, v)| (s.get(), v))
     }
 
     /// Find a constant by name. Returns `None` if no such constant exists.
     ///
     /// Use `as_const` on the expression to get its content.
     pub fn find_const(&self, s: &str) -> Option<(&Expr, Fixity)> {
-        self.consts.get(s).map(|e| {
-            let f = e.as_const().unwrap().fixity();
-            (e, f)
-        })
+        if let Some(meta::Value::Expr(t)) = self.meta_values.get(s) {
+            if let Some(c) = t.as_const() {
+                return Some((t, c.fixity()));
+            }
+        }
+        None
     }
 
     pub fn iter_consts(&self) -> impl Iterator<Item = (&str, &Expr)> {
-        self.consts.iter().map(|(k, e)| (k.name(), e))
-    }
-
-    /// Find a meta-language chunk by name. Returns `None` if no such constant exists.
-    pub fn find_meta_chunk(&self, s: &str) -> Option<&meta::Chunk> {
-        self.meta_chunks.get(s)
-    }
-
-    /// Define a meta-language chunk.
-    ///
-    /// Will erase previous binding if existing.
-    pub fn define_meta_chunk(&mut self, s: impl Into<RStr>, c: meta::Chunk) {
-        self.meta_chunks.insert(s.into(), c);
-    }
-
-    /// Iterate over all meta chunks.
-    pub fn iter_meta_chunks(&self) -> impl Iterator<Item = (&str, &meta::Chunk)> {
-        self.meta_chunks.iter().map(|(s, c)| (s.get(), c))
+        self.iter_meta_values()
+            .filter_map(|(k, v)| v.as_expr().map(move |e| (k, e)))
     }
 
     /// Define a named lemma.
     ///
     /// If another lemma with the same name exists, it will be replaced.
-    pub fn define_lemma(&mut self, name: impl Into<Symbol>, th: Thm) {
-        self.lemmas.insert(name.into(), th);
+    pub fn define_lemma(&mut self, name: impl Into<RStr>, th: Thm) {
+        self.meta_values.insert(name.into(), meta::Value::Thm(th));
     }
 
     /// Find a lemma by name. Returns `None` if no such theorem exists.
     pub fn find_lemma(&self, s: &str) -> Option<&Thm> {
-        self.lemmas.get(s)
+        self.meta_values.get(s).and_then(|v| v.as_thm())
     }
 
     /// Iterate over all lemmas.
     pub fn iter_lemmas(&self) -> impl Iterator<Item = (&str, &Thm)> {
-        self.lemmas.iter().map(|(s, t)| (s.name(), t))
+        self.iter_meta_values()
+            .filter_map(|(s, v)| v.as_thm().map(move |v| (s, v)))
     }
 
     /// `assume F` is `F |- F`.
@@ -1801,7 +1819,9 @@ impl Ctx {
     /// Fails if `pledge_no_new_axiom` was called earlier on this context.
     pub fn thm_axiom(&mut self, hyps: Vec<Expr>, concl: Expr) -> Result<Thm> {
         if !self.allow_new_axioms {
-            return Err(Error::new("this context has pledge to not take new axioms"));
+            return Err(Error::new(
+                "this context has pledged to not take new axioms",
+            ));
         }
         self.check_uid_(&concl);
         hyps.iter().for_each(|e| self.check_uid_(e));

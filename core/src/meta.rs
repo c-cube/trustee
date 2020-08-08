@@ -203,6 +203,10 @@ enum Instr {
     JumpIfTrue(SlotIdx, i16),
     /// Jump to `ic + $1` unconditionally
     Jump(i16),
+    /// Set `sl[$1]` to `ctx[local[$0]]`
+    GetGlob(LocalIdx, SlotIdx),
+    /// Set `ctx[local[$0]]` to value `$1`
+    SetGlob(LocalIdx, SlotIdx),
     // TODO: reinstate `Call1`
     /// Call chunk `sl[$0]` with arguments in `stack[sl[$0]+1 …]`
     /// and put the result into `sl[$2]`.
@@ -326,6 +330,20 @@ mod ml {
             }
         }
 
+        pub fn as_chunk(&self) -> Option<&Chunk> {
+            match self {
+                Value::Chunk(c) => Some(c),
+                _ => None,
+            }
+        }
+
+        pub fn as_bool(&self) -> Option<bool> {
+            match self {
+                Value::Bool(b) => Some(*b),
+                _ => None,
+            }
+        }
+
         pub fn as_expr(&self) -> Option<&k::Expr> {
             match self {
                 Value::Expr(e) => Some(e),
@@ -437,7 +455,35 @@ mod ml {
                 Value::Int(i) => write!(out, "{}", i),
                 Value::Bool(b) => write!(out, "{}", b),
                 Value::Sym(s) => write!(out, ":{}", s.name()),
-                Value::Cons(v) => write!(out, "{{{} . {}}}", v.0, v.1),
+                Value::Cons(..) => {
+                    let mut args = vec![];
+                    let mut cur = self;
+
+                    while let Value::Cons(v) = cur {
+                        args.push(v.0.clone());
+                        cur = &v.1;
+                    }
+
+                    if let Value::Nil = cur {
+                        // proper list
+                        write!(out, "(list")?;
+                        for x in args {
+                            write!(out, " {}", x)?;
+                        }
+                        write!(out, ")")?
+                    } else {
+                        // conses
+                        let n = args.len();
+                        for x in args {
+                            write!(out, "(cons {} ", x)?;
+                        }
+                        write!(out, "{}", cur)?;
+                        for _x in 0..n {
+                            write!(out, ")")?;
+                        }
+                    }
+                    Ok(())
+                }
                 Value::Str(s) => write!(out, "{:?}", s),
                 Value::Expr(e) => write!(out, "`{}`", e),
                 Value::Thm(th) => write!(out, "{}", th),
@@ -732,6 +778,25 @@ mod ml {
                             logdebug!("jump from ic={} with offset {}", sf.ic, offset);
                             sf.ic = (sf.ic as isize + offset as isize) as u32
                         }
+                    }
+                    I::GetGlob(x, s1) => {
+                        let l = match &sf.chunk.0.locals[x.0 as usize] {
+                            Value::Str(s) => s,
+                            _ => return Err(Error::new("get: expected a string")),
+                        };
+                        let s1 = abs_offset!(sf, s1);
+                        match self.ctx.find_meta_value(l) {
+                            Some(v) => self.stack[s1] = v.clone(),
+                            None => return Err(Error::new("cannot find global")),
+                        }
+                    }
+                    I::SetGlob(x, s1) => {
+                        let l = match &sf.chunk.0.locals[x.0 as usize] {
+                            Value::Str(s) => s,
+                            _ => return Err(Error::new("set: expected a string")),
+                        };
+                        let s1 = abs_offset!(sf, s1);
+                        self.ctx.set_meta_value(l.clone(), self.stack[s1].clone())
                     }
                     I::Call(sl_f, n_args, sl_ret) => {
                         let sl_f = abs_offset!(sf, sl_f);
@@ -1570,7 +1635,7 @@ pub(crate) mod parser {
             ret!(I::Div, BinOpAssoc::LAssoc)
         } else if s == "%" {
             ret!(I::Mod, BinOpAssoc::NonAssoc)
-        } else if s == "." {
+        } else if s == "cons" {
             ret!(I::Cons, BinOpAssoc::NonAssoc)
         } else if s == "==" {
             ret!(I::Eq, BinOpAssoc::NonAssoc)
@@ -1629,14 +1694,8 @@ pub(crate) mod parser {
         } else if let Some(b) = logic_builtins::BUILTINS.iter().find(|b| b.name == s) {
             let lidx = c.allocate_local_(Value::Builtin(b))?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
-        } else if let Some(ch) = ctx.find_meta_chunk(s) {
-            let lidx = c.allocate_local_(Value::Chunk(ch.clone()))?;
-            c.emit_instr_(I::LoadLocal(lidx, sl));
-        } else if let Some(e) = ctx.find_const(s) {
-            let lidx = c.allocate_local_(Value::Expr(e.0.clone()))?;
-            c.emit_instr_(I::LoadLocal(lidx, sl));
-        } else if let Some(th) = ctx.find_lemma(s) {
-            let lidx = c.allocate_local_(Value::Thm(th.clone()))?;
+        } else if let Some(v) = ctx.find_meta_value(s) {
+            let lidx = c.allocate_local_(v.clone())?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
         } else {
             logdebug!("unknown id '{}'", s);
@@ -1758,7 +1817,7 @@ pub(crate) mod parser {
 
                         // define the function.
                         logdebug!("define {} as {:#?}", &f_name, sub_c);
-                        self.ctx.define_meta_chunk(f_name, sub_c);
+                        self.ctx.set_meta_value(f_name, Value::Chunk(sub_c));
                         Ok(Some(Chunk::retnil()))
                     } else {
                         let mut c = newcompiler!();
@@ -2023,13 +2082,27 @@ pub(crate) mod parser {
                 // parse into a list
                 self.lexer.next();
                 self.parse_list_(c, sl_res, Tok::RParen)
-            } else if id == "do" {
-                // parse a series of expressions.
+            } else if id == "set" {
                 self.next_tok_();
+
+                // parse a variable name
+                let x = cur_tok_as_id_(self.lexer, "expect variable name after 'set'")?;
+                let sl_x = c.allocate_local_(Value::Str(x.into()))?;
+                self.next_tok_();
+
                 let scope = c.push_local_scope();
-                let r = self.parse_expr_seq_(c, Tok::RParen, sl_res);
+                let r = self.parse_expr_seq_(c, Tok::RParen, sl_res)?;
                 c.pop_local_scope(scope);
-                r
+                c.emit_instr_(I::SetGlob(sl_x, r.slot));
+                Ok(r)
+            } else if id == "get" {
+                self.next_tok_();
+                // parse a variable name
+                let x = cur_tok_as_id_(self.lexer, "expect variable name after 'set'")?;
+                let sl_x = c.allocate_local_(Value::Str(x.into()))?;
+                let res = get_res!(c, sl_res);
+                c.emit_instr_(I::GetGlob(sl_x, res.slot));
+                Ok(res)
             } else if id == "become" {
                 self.next_tok_();
 
@@ -2438,12 +2511,22 @@ mod basic_primitives {
             }
         ),
         &defbuiltin!(
+            "show",
+            "return a string representing the argument value",
+            |_ctx, args: &[Value]| -> Result<_> {
+                check_arity!("show", args, 1);
+                let v = &args[0];
+                let s = format!("{}", v);
+                Ok(Value::Str(RStr::from_string(s)))
+            }
+        ),
+        &defbuiltin!(
             "show_chunk",
             "shows the bytecode of a chunk",
             |ctx, args: &[Value]| -> Result<_> {
                 check_arity!("show_chunk", args, 1);
                 let s = get_arg_str!(args, 0);
-                if let Some(c) = ctx.find_meta_chunk(s) {
+                if let Some(c) = ctx.find_meta_value(s).and_then(|v| v.as_chunk()) {
                     println!("{:?}", c);
                 }
                 Ok(().into())
@@ -2459,6 +2542,30 @@ mod logic_builtins {
     /// Builtin functions for manipulating expressions and theorems.
     pub(super) const BUILTINS: &'static [InstrBuiltin] = &[
         defbuiltin!(
+            "set_glob",
+            "`(set_glob \"x\" v)` binds `v` in the toplevel table.\n\
+            Later, `(get \"x\")` or simply `x` will retrieve it.",
+            |ctx, args: &[Value]| {
+                check_arity!("set_glob", args, 2);
+                let s = get_arg_str!(args, 0);
+                let v = args[1].clone();
+                ctx.set_meta_value(s.clone(), v);
+                Ok(Value::Nil)
+            }
+        ),
+        defbuiltin!(
+            "get_glob",
+            "`(get_glob \"x\")` retrieves the toplevel value \"x\".",
+            |ctx, args: &[Value]| {
+                check_arity!("get_glob", args, 1);
+                let s = get_arg_str!(args, 0);
+                match ctx.find_meta_value(s) {
+                    Some(v) => Ok(v.clone()),
+                    None => Err(Error::new("value not found")),
+                }
+            }
+        ),
+        defbuiltin!(
             "defconst",
             "Defines a logic constant. Takes `(nc, nth, expr_rhs)` and returns\
             the tuple `{c . th}` where `c` is the constant, with name `nc`,\n\
@@ -2469,7 +2576,7 @@ mod logic_builtins {
                 let nthm = get_arg_str!(args, 1);
                 let rhs = get_arg_expr!(args, 2);
                 let def = algo::thm_new_poly_definition(ctx, &nc.name(), rhs.clone())?;
-                ctx.define_lemma(nthm, def.thm.clone());
+                ctx.define_lemma(nthm.clone(), def.thm.clone());
                 Ok(Value::cons(Value::Expr(def.c), Value::Thm(def.thm)))
             }
         ),
@@ -2478,9 +2585,9 @@ mod logic_builtins {
             "Defines a theorem. Takes `(name, th)`.",
             |ctx, args| {
                 check_arity!("defthm", args, 2);
-                let th = get_arg_thm!(args, 1);
                 let name = get_arg_str!(args, 0);
-                ctx.define_lemma(&*name, th.clone());
+                let th = get_arg_thm!(args, 1);
+                ctx.define_lemma(name.clone(), th.clone());
                 Ok(Value::Nil)
             }
         ),
@@ -2603,7 +2710,7 @@ mod logic_builtins {
                 let i = get_arg_int!(args, 1);
                 let j = get_arg_int!(args, 2);
                 let f = syntax::Fixity::Infix((*i as u16, *j as u16));
-                ctx.set_fixity(&*c, f);
+                ctx.set_fixity(&*c, f)?;
                 Ok(Value::Nil)
             }
         ),
@@ -2612,7 +2719,7 @@ mod logic_builtins {
             let c = get_arg_str!(args, 0);
             let i = get_arg_int!(args, 1);
             let f = syntax::Fixity::Prefix((*i as u16, *i as u16));
-            ctx.set_fixity(&*c, f);
+            ctx.set_fixity(&*c, f)?;
             Ok(Value::Nil)
         }),
         defbuiltin!("set_binder", "Make a symbol a binder.", |ctx, args| {
@@ -2620,7 +2727,7 @@ mod logic_builtins {
             let c = get_arg_str!(args, 0);
             let i = get_arg_int!(args, 1);
             let f = syntax::Fixity::Binder((0, *i as u16));
-            ctx.set_fixity(&*c, f);
+            ctx.set_fixity(&*c, f)?;
             Ok(Value::Nil)
         }),
         defbuiltin!(
@@ -2881,7 +2988,11 @@ pub fn run_code(ctx: &mut Ctx, s: &str, file_name: Option<RStr>) -> Result<Value
 ///
 /// This uses a temporary VM. See `run_code` for more details.
 pub fn load_prelude_hol(ctx: &mut Ctx) -> Result<()> {
-    if ctx.find_const("hol_prelude_loaded").is_none() {
+    let loaded = ctx
+        .find_meta_value("hol_prelude_loaded")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !loaded {
         run_code(ctx, SRC_PRELUDE_HOL, Some("prelude.trustee".into()))?;
     }
     Ok(())
@@ -3010,7 +3121,7 @@ mod test {
         check_eval!("(defn f [x] (+ 1 x)) (f 9)", 10);
         check_eval!("(+ 1 2 3 4 5)", 1 + 2 + 3 + 4 + 5);
         check_eval!("(- 1 2 3 4 5)", 1 - 2 - 3 - 4 - 5);
-        check_eval!("(do true 1)", 1);
+        check_eval!("{ true 1 }", 1);
         check_eval!("(if true 1 2)", 1);
         check_eval!("(if false 1 2)", 2);
         check_eval!("(let [x (+ 1 1)] (if (== x 1) 10 20))", 20);
@@ -3115,17 +3226,17 @@ mod test {
         check_eval!("(defn f [x y] (+ 1 (+ x y)))  (f 1 1)", 3);
         // `def` is forbidden here
         assert!(eval!("(defn f [x y] (+ 1 (+ x y)))  (f (def y 1) y)").is_err());
-        check_eval!("(defn f [x y] (+ 1 (+ x y))) (do (def x 5) (f x x))", 11);
+        check_eval!("(defn f [x y] (+ 1 (+ x y))) { (def x 5) (f x x) }", 11);
         check_eval!("(defn f [x y] (+ 1 (+ x y))) (f (let [x 2] x) 10)", 13);
         Ok(())
     }
 
     #[test]
     fn test_scope_do() -> Result<()> {
-        check_eval!("(do (def x 1) (def y 2) (+ x y))", 3);
-        check_eval!("(do (def x 1) (do (def x 2) nil) x)", 1);
-        check_eval!("(do (def x 1) (do (def x 2) x))", 2);
-        check_eval!("(do (def x 1) (do (def y 10) (do (def x (+ 1 y)) x)))", 11);
+        check_eval!("{ (def x 1) (def y 2) (+ x y) }", 3);
+        check_eval!("{ (def x 1) { (def x 2) nil} x}", 1);
+        check_eval!("{ (def x 1) { (def x 2) x}}", 2);
+        check_eval!("{ (def x 1) { (def y 10) { (def x (+ 1 y)) x }}}", 11);
         check_eval!("(let [x 1] (print x) (def y (+ 10 x)) y)", 11);
         Ok(())
     }
@@ -3133,8 +3244,8 @@ mod test {
     #[test]
     fn test_scope_brace() -> Result<()> {
         check_eval!("{ (def x 1) (def y 2) (+ x y) }", 3);
-        check_eval!("{ (def x 1) (do (def x 2) nil) x}", 1);
-        check_eval!("{ (def x 1) (do (def x 2) x)}", 2);
+        check_eval!("{ (def x 1) { (def x 2) nil} x}", 1);
+        check_eval!("{ (def x 1) { (def x 2) x}}", 2);
         check_eval!("{ (def x 1) { (def y 10) { (def x (+ 1 y)) x}}}", 11);
         check_eval!("(let [x 1] (print x) (def y (+ 10 x)) y)", 11);
         Ok(())
@@ -3239,6 +3350,12 @@ mod test {
             assert!(v3_err.contains("arity"));
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_set() -> Result<()> {
+        check_eval!("(set x 1) (set y 2) (+ x y)", 3);
         Ok(())
     }
 

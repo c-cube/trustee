@@ -8,19 +8,19 @@
   `let f = (\x: bool. x) in f=f`)
 
 ; `|- T`
-(defthm "TrueIsTrue"
+(set TrueIsTrue
   (bool_eq
     (refl `\x: bool. x`)
     (sym DefTrue)))
 
 ; prove `(x=T) = x`
-(defthm "EqTrueElim"
+(set EqTrueElim
   (bool_eq_intro
     (bool_eq TrueIsTrue (sym (assume `with x:bool. x=T`)))
     (bool_eq_intro TrueIsTrue (assume `with x:bool. x`))))
 
 ; `x = (x=T)`
-(defthm "EqTrueIntro" (sym EqTrueElim))
+(set EqTrueIntro (sym EqTrueElim))
 
 ; rule from `A |- x` to `A |- x=T`
 (defn REqTrueIntro [th]
@@ -80,7 +80,7 @@
   (def a_true
     (rw (congr f_eq (refl `with a:bool. \x y: bool. (a = x)`)) :beta))
 
-  (defthm "AndElim1"
+  (set AndElim1
     (bool_eq
       (bool_eq
        (refl `a:bool`)
@@ -93,7 +93,7 @@
     ; apply f_eq to `\x y. y=b`
     (rw (congr f_eq (refl `with b:bool. \x y:bool. (b=y)`)) :beta))
 
-  (defthm "AndElim2"
+  (set AndElim2
     (bool_eq
       (bool_eq
        (refl `b:bool`)
@@ -116,7 +116,7 @@
   (subst AndElim2 "a" a "b" b))
 
 ; theorem `a, b |- a /\ b`
-(defthm "AndIntro"
+(set AndIntro
   {
     (def tha (REqTrueIntro (assume `a:bool`)))
     (def thb (REqTrueIntro (assume `b:bool`)))
@@ -140,7 +140,7 @@
 ; print: `with (b : bool). b |- with (b : bool). T /\ b`
 
 ; prove `(a /\ b) /\ c) = a /\ (b /\ c)`
-(defthm "AndAssoc"
+(set AndAssoc
   {
     ; direct direction
     (def goal1 (assume `with a b c: bool. (a /\ b) /\ c`))
@@ -163,7 +163,7 @@
   })
 
 ; prove `a /\ b = b /\ a`
-(defthm "AndComm"
+(set AndComm
   {
     (def goal1 (assume `with a b: bool. a /\ b`))
     (def th_a (RAndElim1 goal1))
@@ -176,8 +176,8 @@
 ; prove `a |- a /\ T` and `a |- T /\ a`
 {
   (def th_a (assume `a:bool`))
-  (defthm "AndTrueRight" (RAndIntro th_a TrueIsTrue))
-  (defthm "AndTrueLeft" (RAndIntro TrueIsTrue th_a))
+  (set AndTrueRight (RAndIntro th_a TrueIsTrue))
+  (set AndTrueLeft (RAndIntro TrueIsTrue th_a))
 }
 
 {
@@ -198,14 +198,14 @@
     (rw (RForallSubst thforall `with a:bool. \x y:bool. a = y`) :beta))
 
   ; `a, a/\b |- b`
-  (defthm "CutAndRight"
+  (set CutAndRight
     (bool_eq (assume `a:bool`) (bool_eq a_true (sym a_eq_b1))))
 
   (def b_eq_a1
     (rw (RForallSubst thforall `with b:bool. \x y:bool. b = x`) :beta))
 
   ; `b, a/\b |- a`
-  (defthm "CutAndLeft"
+  (set CutAndLeft
     (bool_eq (assume `b:bool`) (bool_eq b_true (sym b_eq_a1))))
 }
 
@@ -225,7 +225,7 @@
 
   (def ltor (RCutAndRight `a:bool` `b:bool`))
   (def rtol (RAndIntro (assume `a:bool`) (assume `b:bool`)))
-  (defthm "AProveAAndBEqB" (bool_eq_intro ltor rtol))
+  (set AProveAAndBEqB (bool_eq_intro ltor rtol))
 }
 
 ; define false
@@ -245,7 +245,7 @@
 ; # TODO: go from `|- a ==> b` to `a |- b`, and conversely
 
 ; prove `a, a ==> b |- b`
-(defthm "ImplyElim" {
+(set ImplyElim {
   (def ha (assume `a:bool`))
   (def hypab (assume `a:bool ==> b:bool`))
   (def def_exp
@@ -286,4 +286,4 @@
 
 ; # END OF FILE
 ; # avoid double include
-(decl "hol_prelude_loaded" `bool`)
+(set hol_prelude_loaded true)

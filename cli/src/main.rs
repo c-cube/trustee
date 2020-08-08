@@ -67,17 +67,7 @@ impl<'a> liner::Completer for CliCompleter<'a> {
             }
         };
 
-        for (s, _e) in self.ctx.iter_consts() {
-            if s.starts_with(token) {
-                add_compl(&format!("`{}`", s))
-            }
-        }
-        for (s, _) in self.ctx.iter_lemmas() {
-            if s.starts_with(token) {
-                add_compl(s)
-            }
-        }
-        for (s, _) in self.ctx.iter_meta_chunks() {
+        for (s, _e) in self.ctx.iter_meta_values() {
             if s.starts_with(token) {
                 add_compl(s)
             }
