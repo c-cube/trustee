@@ -1,5 +1,5 @@
 #!/bin/sh
-cargo run --example parse_ot $@ \
+cargo run -p trustee_opentheory --example parse_ot $@ \
   "ot-data/data/opentheory/bool-def-1.11/bool-def.art" \
   "ot-data/data/opentheory/axiom-choice-1.8/axiom-choice.art" \
   "ot-data/data/opentheory/axiom-extensionality-1.9/axiom-extensionality.art" \
