@@ -2825,6 +2825,36 @@ mod logic_builtins {
                 Ok(Value::Thm(th))
             }
         ),
+        defbuiltin!(
+            "parse_expr",
+            r#"`(parse_expr "? /\ ?" e1 e2)` parses the expression
+            given as the first argument, interpolating each '?' with
+            the corresponding of the following arguments."#,
+            |ctx, args| {
+                check_arity!("parse_with", args, >= 1);
+                let e = get_arg_str!(args, 0);
+                let n_args = e.as_bytes().iter().filter(|&&x| x == b'?').count();
+
+                // check arity
+                if args[1..].len() != n_args {
+                    return Err(Error::new_string(format!(
+                        "interpolating expression requires {} arguments,\
+                            but here it receives {}",
+                        n_args,
+                        args[1..].len()
+                    )));
+                }
+
+                // convert arguments to expressions
+                let mut e_args = vec![];
+                for i in 0..n_args {
+                    e_args.push(get_arg_expr!(args, i + 1).into());
+                }
+
+                let e = syntax::parse_expr_with_args(ctx, e, &e_args[..])?;
+                Ok(e.into())
+            }
+        ),
     ];
 
     // TODO: defty
@@ -3122,6 +3152,21 @@ mod test {
 
         // TODO: test short circuit property when we have `ref`
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_expr() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        let prelude = r#"
+        (decl "a" `bool`)
+        (decl "b" `bool`)
+        (decl "f" `bool->bool->bool`)
+        "#;
+        run_code(&mut ctx, prelude, None)?;
+        let v1 = run_code(&mut ctx, "(parse_expr \"(f ? ?)\" `a` `b`)", None)?;
+        let v2 = run_code(&mut ctx, "`f a b`", None)?;
+        assert_eq!(v1, v2);
         Ok(())
     }
 
