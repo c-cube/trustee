@@ -74,7 +74,9 @@ struct ChunkImpl {
     /// Local values, typically chunks, theorems, or terms,
     /// used during the evaluation.
     locals: Box<[Value]>,
-    /// Number of local slots required.
+    /// Number of arguments required.
+    n_args: u8,
+    /// Number of local slots required (arguments included).
     n_slots: u32,
     /// Name of this chunk, if any.
     name: Option<RStr>,
@@ -97,7 +99,9 @@ struct Compiler<'a> {
     locals: Vec<Value>,
     /// Local lexical scope.
     lex_scopes: Vec<LexScope>,
-    /// Maximum size `slots` ever took.
+    /// Number of input arguments. invariant: `<= n_slots`.
+    n_args: u8,
+    /// Maximum size `slots` ever took, including `n_args`.
     n_slots: u32,
     name: Option<RStr>,
     slots: Vec<CompilerSlot>,
@@ -380,6 +384,7 @@ mod ml {
                 instrs: vec![Instr::Ret(SlotIdx(0))].into(),
                 locals: Box::new([]),
                 n_slots: 1,
+                n_args: 0,
                 file_name: None,
                 first_line: 0,
             }))
@@ -750,6 +755,10 @@ mod ml {
                                 }
                             }
                             Value::Chunk(c) => {
+                                if c.0.n_args != n_args {
+                                    return Err(Error::new("arity mismatch"));
+                                }
+
                                 // push frame for `c`
                                 let c = c.clone();
                                 self.exec_chunk_(c, (sl_f + 1) as u32, offset_ret as u32)?;
@@ -1263,6 +1272,7 @@ pub(crate) mod parser {
             let c = ChunkImpl {
                 instrs: self.instrs.into_boxed_slice(),
                 locals: self.locals.into_boxed_slice(),
+                n_args: self.n_args,
                 n_slots: self.n_slots,
                 name: self.name,
                 first_line: self.first_line,
@@ -1678,6 +1688,7 @@ pub(crate) mod parser {
                         instrs: vec![],
                         locals: vec![],
                         n_slots: 0,
+                        n_args: 0,
                         lex_scopes: vec![],
                         name: None,
                         slots: vec![],
@@ -1773,6 +1784,7 @@ pub(crate) mod parser {
         ) -> Result<Chunk> {
             let mut vars: Vec<RStr> = vec![];
 
+            let loc = self.lexer.loc();
             while self.cur_tok_() != var_closing {
                 let e = cur_tok_as_id_(
                     &mut self.lexer,
@@ -1784,12 +1796,16 @@ pub(crate) mod parser {
                 vars.push(e);
             }
             self.eat_(var_closing, "expected closing delimiter after variables")?;
+            if vars.len() > u8::MAX as usize {
+                return Err(perror!(loc, "maximum number of arguments exceeded"));
+            }
 
             // make a compiler for this chunk.
             let mut c = Compiler {
                 instrs: vec![],
                 locals: vec![],
                 n_slots: 0,
+                n_args: vars.len() as u8,
                 name: f_name.clone(),
                 lex_scopes: vec![],
                 slots: vec![],
@@ -3210,6 +3226,30 @@ mod test {
         let mut ctx = k::Ctx::new();
         load_prelude_hol(&mut ctx)?;
         load_prelude_hol(&mut ctx)?; // can we load it twice?
+        Ok(())
+    }
+
+    #[test]
+    fn test_arity_err() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        run_code(&mut ctx, "(defn f [x y] (+ x y))", None)?;
+        let v = run_code(&mut ctx, "(f 1 2)", None)?;
+        assert_eq!(v, 3.into());
+
+        {
+            let v2 = run_code(&mut ctx, "(f 1)", None);
+            assert!(v2.is_err());
+            let v2_err = format!("{}", v2.unwrap_err());
+            assert!(v2_err.contains("arity"));
+        }
+
+        {
+            let v3 = run_code(&mut ctx, "(f 1 2 3)", None);
+            assert!(v3.is_err());
+            let v3_err = format!("{}", v3.unwrap_err());
+            assert!(v3_err.contains("arity"));
+        }
+
         Ok(())
     }
 }
