@@ -36,9 +36,11 @@ pub fn thm_new_poly_definition(
     vars_ty_rhs.dedup();
 
     if vars_ty_rhs.iter().any(|v| !v.ty.is_type()) {
-        return Err(Error::new_string(format!("thm_new_poly_definition: cannot make a polymorphic \
+        return Err(Error::new_string(format!(
+            "thm_new_poly_definition: cannot make a polymorphic \
         definition for {}\nusing rhs = {:?}\nrhs contains non-type free variables",
-        c, rhs)));
+            c, rhs
+        )));
     }
 
     let ty_closed = ctx.mk_pi_l(&vars_ty_rhs, rhs.ty().clone())?;
@@ -72,7 +74,13 @@ pub fn thm_new_poly_definition(
         thm
     };
 
-    Ok(NewPolyDef { thm, c, ty_vars: vars_ty_rhs, thm_applied, c_applied })
+    Ok(NewPolyDef {
+        thm,
+        c,
+        ty_vars: vars_ty_rhs,
+        thm_applied,
+        c_applied,
+    })
 }
 
 /// Data used to rename variables, if needed, prior to implementation.
@@ -386,8 +394,9 @@ pub fn thm_mp(ctx: &mut Ctx, th1: Thm, th2: Thm) -> Result<Thm> {
 pub fn thm_sym_conv(ctx: &mut Ctx, e: Expr) -> Result<Thm> {
     // start with `t=u |- t=u`.
     // apply thm_sym to get `t=u |- u=t`.
-    let (t, u) =
-        e.unfold_eq().ok_or_else(|| Error::new("sym: expect an equation"))?;
+    let (t, u) = e
+        .unfold_eq()
+        .ok_or_else(|| Error::new("sym: expect an equation"))?;
     let th1 = {
         let hyp = ctx.thm_assume(e.clone())?;
         thm_sym(ctx, hyp)?
@@ -869,7 +878,7 @@ pub mod rw {
                         }
                     }
                 }
-            }
+            };
         };
 
         loop {
@@ -926,7 +935,7 @@ pub mod rw {
     }
 
     impl RewriteRule {
-        fn new_(th: &Thm, ordered: bool) -> Result<Self> {
+        fn new_(th: &Thm, oriented: bool) -> Result<Self> {
             let (lhs, rhs) = th.concl().unfold_eq().ok_or_else(|| {
                 Error::new("rewrite rule conclusion must be an equation")
             })?;
@@ -939,26 +948,27 @@ pub mod rw {
             }
             match vr.iter().find(|v| !vl.contains(v)) {
                 None => (),
-                Some(v) => {
-                    return Err(Error::new_string(format!(
+                Some(v) => return Err(Error::new_string(format!(
                     "variable {:?} occurs freely in RHS of rule but not LHS",
                     v
-                )))
-                }
+                ))),
             };
             // TODO: not used for now?
-            if !ordered {
+            if !oriented {
                 match vl.iter().find(|v| !vr.contains(v)) {
                     None => (),
                     Some(v) => {
                         return Err(Error::new_string(format!(
-                            "variable {:?} occurs freely in LHS of unordered rule but not RHS",
-                            v
-                        )))
+                        "variable {:?} occurs freely in LHS of non-oriented rule but not in RHS",
+                        v
+                    )))
                     }
                 };
             }
-            Ok(Self { lhs: lhs.clone(), th: th.clone() })
+            Ok(Self {
+                lhs: lhs.clone(),
+                th: th.clone(),
+            })
         }
 
         /// Create a rewrite rule from a theorem `|- lhs=rhs`.
@@ -967,9 +977,10 @@ pub mod rw {
         /// free variables of `rhs` are not in `lhs`, or if the theorem has
         /// assumptions.
         pub fn new(th: &Thm) -> Result<Self> {
-            Self::new_(th, false)
+            Self::new_(th, true)
         }
 
+        // TODO
         /// Create an unordered rewrite rule from a theorem `|- t1=t2`.
         ///
         /// This can rewrite both `t1σ` into `t2σ`, or `t2σ` into `t1σ`
@@ -979,8 +990,8 @@ pub mod rw {
         /// do not have the same set of free `t1` and `t2`
         /// do not have the same set of free variables.
         /// free variables of `rhs` are not in `lhs`.
-        pub fn new_unordered(th: &Thm) -> Result<Self> {
-            Self::new_(th, true)
+        pub fn new_non_oriented(th: &Thm) -> Result<Self> {
+            Self::new_(th, false)
         }
     }
 

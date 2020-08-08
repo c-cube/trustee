@@ -2761,30 +2761,24 @@ mod logic_builtins {
             "subst",
             "Instantiate a theorem with a substitution.\n\
             \n\
-            Shape: `subst th subst`.\n\
-            The substitution is a list of the shape `[\"x\" <expr> \"y\" <expr>]`.",
+            Shape: `(subst th \"x\" e1 \"y\" y)`.\n",
             |ctx, args| {
-                check_arity!("instantiate", args, 2);
+                check_arity!("instantiate", args, >= 1);
                 let th = get_arg_thm!(args, 0);
-                let mut arg1: &Value = &args[1];
-
-                macro_rules! or_fail {
-                    ($e: expr) => {
-                        $e.ok_or_else(|| Error::new("expected substitution"))?
-                    };
-                }
 
                 let mut subst = vec![];
-                loop {
-                    if let Value::Nil = arg1 {
-                        break;
-                    }
-                    let (x, y) = or_fail!(arg1.as_cons());
-                    let x = or_fail!(x.as_str());
-                    let (e, tl) = or_fail!(y.as_cons());
-                    let e = or_fail!(e.as_expr());
-                    arg1 = tl;
-                    subst.push((k::Var::from_rstr(x, e.ty().clone()), e.clone()))
+                let mut args = &args[1..];
+                if args.len() % 2 != 0 {
+                    return Err(Error::new(
+                        "subst requires an even number of arguments after the theorem",
+                    ));
+                }
+
+                while args.len() > 0 {
+                    let x = get_arg_str!(args, 0);
+                    let e = get_arg_expr!(args, 1);
+                    subst.push((k::Var::from_rstr(x, e.ty().clone()), e.clone()));
+                    args = &args[2..];
                 }
 
                 let th = ctx.thm_instantiate(th.clone(), &subst)?;
@@ -2795,29 +2789,15 @@ mod logic_builtins {
             "rw",
             "Rewrite with a combination of `beta_conv` and theorem names.\n\
             \n\
-            Shape `rw [:beta th1 th2] th_to_rewrite`.",
+            Shape: `(rw th_to_rewrite :beta th1 th2)`.\n\
+            Each rule is either an equational theorem, or `:beta`.",
             |ctx, args| {
-                check_arity!("rw", args, 2);
-                let mut arg1 = &args[0];
-                let th = get_arg_thm!(args, 1);
-
-                macro_rules! or_fail {
-                    ($e: expr) => {
-                        $e.ok_or_else(|| {
-                            Error::new(
-                                r#"rw: expect a list of theorems, or `:beta`, as first parameter"#,
-                            )
-                        })?
-                    };
-                }
+                check_arity!("rw", args, >= 1);
+                let th = get_arg_thm!(args, 0);
 
                 let mut beta = false;
                 let mut rw_rules = algo::RewriteRuleSet::new();
-                loop {
-                    if let Value::Nil = arg1 {
-                        break;
-                    }
-                    let (x, y) = or_fail!(arg1.as_cons());
+                for x in &args[1..] {
                     match x {
                         Value::Sym(s) if s.name() == "beta" => {
                             beta = true;
@@ -2826,10 +2806,12 @@ mod logic_builtins {
                             let rule = algo::RewriteRule::new(&th)?;
                             rw_rules.add_rule(rule)
                         }
-                        _ => or_fail!(None),
+                        _ => {
+                            return Err(Error::new(
+                                "expected `:beta` or an equational theorem in `rw`",
+                            ))
+                        }
                     }
-
-                    arg1 = y;
                 }
 
                 let rw: Box<dyn algo::Rewriter> = if beta && !rw_rules.is_empty() {
@@ -2842,7 +2824,7 @@ mod logic_builtins {
                 } else if !rw_rules.is_empty() {
                     Box::new(rw_rules)
                 } else {
-                    or_fail!(None)
+                    return Ok(Value::Thm(th.clone()));
                 };
                 let th = algo::thm_rw_concl(ctx, th.clone(), &*rw)?;
                 Ok(Value::Thm(th))
@@ -3260,26 +3242,49 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn test_mp() -> Result<()> {
-        let mut ctx = k::Ctx::new();
-        load_prelude_hol(&mut ctx)?;
-        run_code(
-            &mut ctx,
-            r#"
+    const PRELUDE: &'static str = r#"
             (decl "tau" `type`)
             (decl "a0" `tau`)
             (decl "b0" `tau`)
             (decl "c0" `tau`)
+            (decl "f1" `tau -> tau`)
+            (decl "g1" `tau -> tau`)
+            (decl "f2" `tau -> tau -> tau`)
             (decl "p0" `bool`)
             (decl "q0" `bool`)
             (decl "r0" `bool`)
             (decl "p1" `tau -> bool`)
-            "#,
-            None,
-        )?;
+            (decl "q1" `tau -> bool`)
+            (decl "p2" `tau -> tau -> bool`)
+            "#;
+
+    #[test]
+    fn test_mp() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        load_prelude_hol(&mut ctx)?;
+        run_code(&mut ctx, PRELUDE, None)?;
         let v = run_code(&mut ctx, "(MP (assume `p0 ==> q0`) (assume `p0`))", None)?;
         assert_eq!(v.as_thm().expect("thm").concl().clone().to_string(), "q0");
+        Ok(())
+    }
+
+    #[test]
+    fn test_rw() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        load_prelude_hol(&mut ctx)?;
+        run_code(&mut ctx, PRELUDE, None)?;
+        run_code(
+            &mut ctx,
+            r#"(defthm "F1" (axiom `f2 (x:tau) (g1 (y:tau)) = f1 y`))
+                (defthm "TH" (axiom `p1 (f2 a0 (g1 c0))`))
+                "#,
+            None,
+        )?;
+        let v = run_code(&mut ctx, "(rw TH F1)", None)?;
+        assert_eq!(
+            v.as_thm().expect("thm").concl().clone(),
+            syntax::parse_expr(&mut ctx, "p1 (f1 c0)")?
+        );
         Ok(())
     }
 }
