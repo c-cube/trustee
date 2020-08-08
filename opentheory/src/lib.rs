@@ -161,7 +161,9 @@ impl Name {
         let mut toks: Vec<&str> = s.split(".").collect();
         let base = toks.pop().unwrap().to_string();
         let pre = toks.into_iter().map(|s| s.to_string()).collect();
-        Some(Name { ptr: Rc::new((pre, base)) })
+        Some(Name {
+            ptr: Rc::new((pre, base)),
+        })
     }
 }
 
@@ -259,9 +261,7 @@ impl OConst for CustomConst {
         let mut c_ty_vars: Expr = self.c_ty_vars.clone();
         let mut ty_vars = Cow::Borrowed(&self.ty_vars);
         // rename if needed
-        if let Some(mut data) =
-            algo::need_to_rename_before_unif(&c_ty_vars, &ty)
-        {
+        if let Some(mut data) = algo::need_to_rename_before_unif(&c_ty_vars, &ty) {
             //eprintln!(
             //    "need to rename in const {:?}:{:?}, to unify with type {:?}",
             //    self.c, self.c_ty_vars, ty
@@ -319,7 +319,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             eprintln!("cannot load HOL prelude into the context: {}", e)
         }
         // declare `ind`
-        if let Err(e) = meta::run_code(ctx, r#" "ind" `type` decl "#) {
+        if let Err(e) = meta::run_code(ctx, r#" "ind" `type` decl "#, None) {
             eprintln!("cannot declare `ind`: {}", e)
         }
         VM {
@@ -338,13 +338,23 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
     /// Turn into an article.
     pub fn into_article(self) -> Article {
-        let VM { defs, assumptions, theorems, ctx, .. } = self;
+        let VM {
+            defs,
+            assumptions,
+            theorems,
+            ctx,
+            ..
+        } = self;
         let defs = defs
             .into_iter()
             .map(|(n, oc)| (n.to_string(), oc.expr(ctx).clone()))
             .collect();
         let theorems: Vec<_> = theorems.into_iter().map(|x| x.1).collect();
-        Article { defs, assumptions, theorems }
+        Article {
+            defs,
+            assumptions,
+            theorems,
+        }
     }
 
     #[inline]
@@ -362,10 +372,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         F: Fn(&mut Self, Obj) -> Result<A>,
     {
         if self.stack.len() < 1 {
-            return Err(Error::new_string(format!(
-                "OT.pop1.{}: empty stack",
-                what
-            )));
+            return Err(Error::new_string(format!("OT.pop1.{}: empty stack", what)));
         }
         let x = self.stack.pop().unwrap();
         f(self, x)
@@ -376,10 +383,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         F: Fn(&mut Self, Obj, Obj) -> Result<A>,
     {
         if self.stack.len() < 2 {
-            return Err(Error::new_string(format!(
-                "OT.pop2.{}: empty stack",
-                what
-            )));
+            return Err(Error::new_string(format!("OT.pop2.{}: empty stack", what)));
         }
         let x = self.stack.pop().unwrap();
         let y = self.stack.pop().unwrap();
@@ -391,10 +395,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         F: Fn(&mut Self, Obj, Obj, Obj) -> Result<A>,
     {
         if self.stack.len() < 3 {
-            return Err(Error::new_string(format!(
-                "OT.pop3.{}: empty stack",
-                what
-            )));
+            return Err(Error::new_string(format!("OT.pop3.{}: empty stack", what)));
         }
         let x = self.stack.pop().unwrap();
         let y = self.stack.pop().unwrap();
@@ -410,9 +411,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Term(e));
             Ok(())
         })
-        .map_err(|e| {
-            e.set_source(Error::new("OT: failure in abs_term(<term,var>)"))
-        })
+        .map_err(|e| e.set_source(Error::new("OT: failure in abs_term(<term,var>)")))
     }
 
     fn abs_thm(&mut self) -> Result<()> {
@@ -423,9 +422,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| {
-            e.set_source(Error::new("OT: failure in abs_thm(<thm,var>)"))
-        })
+        .map_err(|e| e.set_source(Error::new("OT: failure in abs_thm(<thm,var>)")))
     }
 
     fn app_term(&mut self) -> Result<()> {
@@ -436,9 +433,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Term(e));
             Ok(())
         })
-        .map_err(|e| {
-            e.set_source(Error::new("OT: failure in app_term(<term,term>)"))
-        })
+        .map_err(|e| e.set_source(Error::new("OT: failure in app_term(<term,term>)")))
     }
 
     fn app_thm(&mut self) -> Result<()> {
@@ -449,9 +444,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| {
-            e.set_source(Error::new("OT: failure in app_thm(<thm,thm>)"))
-        })
+        .map_err(|e| e.set_source(Error::new("OT: failure in app_thm(<thm,thm>)")))
     }
 
     fn assume(&mut self) -> Result<()> {
@@ -471,9 +464,9 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 .as_list()?
                 .into_iter()
                 .map(|x| {
-                    let t = x.as_term().map_err(|e| {
-                        e.set_source(Error::new("axiom: hyps contain non-term"))
-                    })?;
+                    let t = x
+                        .as_term()
+                        .map_err(|e| e.set_source(Error::new("axiom: hyps contain non-term")))?;
                     Ok(t.clone())
                 })
                 .collect::<Result<_>>()?;
@@ -492,9 +485,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(ax));
             Ok(())
         })
-        .map_err(|e| {
-            e.set_source(Error::new("OT: failure in axiom(<term,list>)"))
-        })
+        .map_err(|e| e.set_source(Error::new("OT: failure in axiom(<term,list>)")))
     }
 
     fn version(&mut self) -> Result<()> {
@@ -533,11 +524,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         #[derive(Debug, Clone)]
         struct TyOpArrow;
         impl OTypeOp for TyOpArrow {
-            fn apply(
-                &self,
-                em: &mut k::Ctx,
-                mut args: Vec<Expr>,
-            ) -> Result<Expr> {
+            fn apply(&self, em: &mut k::Ctx, mut args: Vec<Expr>) -> Result<Expr> {
                 if args.len() != 2 {
                     return Err(Error::new("-> takes 2 arguments"));
                 };
@@ -676,10 +663,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             fn apply(&self, em: &mut k::Ctx, ty: Expr) -> Result<Expr> {
                 let args = ty.unfold_pi().0;
                 if args.len() != 2 {
-                    Err(Error::new_string(format!(
-                        "`=` cannot take type {:?}",
-                        ty
-                    )))?
+                    Err(Error::new_string(format!("`=` cannot take type {:?}", ty)))?
                 }
                 let e = em.mk_eq();
                 em.mk_app(e, args[0].clone())
@@ -689,16 +673,16 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         struct ConstSelect;
         impl OConst for ConstSelect {
             fn expr(&self, em: &mut k::Ctx) -> Expr {
-                em.find_const("select").expect("cannot find select").0.clone()
+                em.find_const("select")
+                    .expect("cannot find select")
+                    .0
+                    .clone()
             }
             fn apply(&self, em: &mut k::Ctx, ty: Expr) -> Result<Expr> {
                 let a = ty
                     .as_pi()
                     .ok_or_else(|| {
-                        Error::new_string(format!(
-                            "`select` cannot take type {:?}",
-                            ty
-                        ))
+                        Error::new_string(format!("`select` cannot take type {:?}", ty))
                     })?
                     .1;
                 let e = em
@@ -713,12 +697,8 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop1("const", |vm, o| match &*o {
             O::Name(n) => {
                 let oc = match n.base() {
-                    "=" if n.len_pre() == 0 => {
-                        Rc::new(ConstEq) as Rc<dyn OConst>
-                    }
-                    "select" if n.len_pre() == 0 => {
-                        Rc::new(ConstSelect) as Rc<dyn OConst>
-                    }
+                    "=" if n.len_pre() == 0 => Rc::new(ConstEq) as Rc<dyn OConst>,
+                    "select" if n.len_pre() == 0 => Rc::new(ConstSelect) as Rc<dyn OConst>,
                     _ => {
                         // lookup in definitions
                         if let Some(d) = vm.defs.get(n) {
@@ -777,11 +757,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.pop2("define const", |vm, x, y| match (&*x, &*y) {
             (O::Term(rhs), O::Name(n)) => {
                 // make a definition `n := t`
-                let def = algo::thm_new_poly_definition(
-                    vm.ctx,
-                    &n.to_string(),
-                    rhs.clone(),
-                )?;
+                let def = algo::thm_new_poly_definition(vm.ctx, &n.to_string(), rhs.clone())?;
                 vm.cb.debug(|| {
                     format!(
                         "define const {:?}\n  with thm {:#?}\n  and vars {:?}",
@@ -822,19 +798,23 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                         debug_assert_eq!(vec.len(), 0);
                         Ok((n, v))
                     }
-                    _ => Err(Error::new(
-                        "in define_const_list: expected pair (name,var)",
-                    )),
+                    _ => Err(Error::new("in define_const_list: expected pair (name,var)")),
                 })
                 .collect::<Result<Vec<_>>>()?;
             // find subst
-            let subst = thm.hyps().iter().map(|e| {
-                let (v, rhs) = e.unfold_eq()
-                    .ok_or_else(|| Error::new("theorem ypothesis must be equations"))?;
-                let v = v.as_var()
-                    .ok_or_else(|| Error::new("in theorem hypothesis, equations must have a variable as LHS"))?;
-                Ok((v.clone(), rhs.clone()))
-            }).collect::<Result<Vec<(Var,Expr)>>>()?;
+            let subst = thm
+                .hyps()
+                .iter()
+                .map(|e| {
+                    let (v, rhs) = e
+                        .unfold_eq()
+                        .ok_or_else(|| Error::new("theorem ypothesis must be equations"))?;
+                    let v = v.as_var().ok_or_else(|| {
+                        Error::new("in theorem hypothesis, equations must have a variable as LHS")
+                    })?;
+                    Ok((v.clone(), rhs.clone()))
+                })
+                .collect::<Result<Vec<(Var, Expr)>>>()?;
 
             vm.cb.debug(|| {
                 format!(
@@ -853,33 +833,50 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             };
 
             // define each constant
-            let c_l = renaming.into_iter().map(|(n, v)| {
-                let rhs = subst.iter().find(|(ref v2,_)| &v==v2).ok_or_else(||
-                    Error::new_string(format!("define_const_list: no binding for variable {:?}", &v)))?.1.clone();
-                let def = algo::thm_new_poly_definition(vm.ctx, &n.to_string(), rhs)?;
-                // now build the constant building closure
-                let c_ty_vars = def.c_applied.ty().clone();
-                let c = Rc::new(CustomConst {
-                    c: def.c.clone(),
-                    c_vars: def.c_applied.clone(),
-                    ty_vars: def.ty_vars,
-                    c_ty_vars,
-                    n: n.clone(),
-                });
+            let c_l = renaming
+                .into_iter()
+                .map(|(n, v)| {
+                    let rhs = subst
+                        .iter()
+                        .find(|(ref v2, _)| &v == v2)
+                        .ok_or_else(|| {
+                            Error::new_string(format!(
+                                "define_const_list: no binding for variable {:?}",
+                                &v
+                            ))
+                        })?
+                        .1
+                        .clone();
+                    let def = algo::thm_new_poly_definition(vm.ctx, &n.to_string(), rhs)?;
+                    // now build the constant building closure
+                    let c_ty_vars = def.c_applied.ty().clone();
+                    let c = Rc::new(CustomConst {
+                        c: def.c.clone(),
+                        c_vars: def.c_applied.clone(),
+                        ty_vars: def.ty_vars,
+                        c_ty_vars,
+                        n: n.clone(),
+                    });
 
-                // define and push
-                vm.defs.insert(n.clone(), c.clone());
-                vm.theorems.insert(ThmKey::new(&def.thm), def.thm.clone());
-                Ok(LocalConst{
-                    c_applied: def.c_applied, v:v.clone(), n: n.clone(),
-                    thm_applied: def.thm_applied, cst: c
+                    // define and push
+                    vm.defs.insert(n.clone(), c.clone());
+                    vm.theorems.insert(ThmKey::new(&def.thm), def.thm.clone());
+                    Ok(LocalConst {
+                        c_applied: def.c_applied,
+                        v: v.clone(),
+                        n: n.clone(),
+                        thm_applied: def.thm_applied,
+                        cst: c,
+                    })
                 })
-            }).collect::<Result<Vec<LocalConst>>>()?;
+                .collect::<Result<Vec<LocalConst>>>()?;
 
             // instantiate `thm` with `v_i := c_i`
             thm = {
-                let subst: Vec<_> = c_l.iter()
-                    .map(|ldef| (ldef.v.clone(),ldef.c_applied.clone())).collect();
+                let subst: Vec<_> = c_l
+                    .iter()
+                    .map(|ldef| (ldef.v.clone(), ldef.c_applied.clone()))
+                    .collect();
                 vm.ctx.thm_instantiate(thm, &subst)?
             };
 
@@ -891,8 +888,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
             // push list of constants
             {
-                let l = c_l.into_iter()
-                    .map(|ldef| Obj::new(O::Const(ldef.n, ldef.cst))).collect();
+                let l = c_l
+                    .into_iter()
+                    .map(|ldef| Obj::new(O::Const(ldef.n, ldef.cst)))
+                    .collect();
                 vm.push_obj(O::List(l))
             }
 
@@ -953,10 +952,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                         }
                     })
                     .ok_or_else(|| {
-                        Error::new_string(format!(
-                            "cannot find variable with name {}",
-                            n
-                        ))
+                        Error::new_string(format!("cannot find variable with name {}", n))
                     })
             })
             .collect::<Result<Vec<usize>>>()?;
@@ -972,8 +968,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                     return Err(Error::new("bad arity"));
                 }
                 // re-shuffle args
-                let args2: Vec<Expr> =
-                    self.0.iter().map(|i| args[*i].clone()).collect();
+                let args2: Vec<Expr> = self.0.iter().map(|i| args[*i].clone()).collect();
 
                 em.mk_app_l(self.1.tau.clone(), &args2[..])
             }
@@ -987,8 +982,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         self.ty_defs.insert(ty_name.clone(), ty_op.clone());
         self.push_obj(O::TypeOp(ty_name, ty_op));
 
-        let fvars_exprs: Vec<_> =
-            def.fvars.iter().map(|v| self.ctx.mk_var(v.clone())).collect();
+        let fvars_exprs: Vec<_> = def
+            .fvars
+            .iter()
+            .map(|v| self.ctx.mk_var(v.clone()))
+            .collect();
 
         // define and push abs
         {
@@ -1042,9 +1040,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
     fn define_type_op(&mut self) -> Result<()> {
         if self.stack.len() < 5 {
-            return Err(Error::new(
-                "define_type_op: not enough elements in stack",
-            ));
+            return Err(Error::new("define_type_op: not enough elements in stack"));
         }
         self.define_type_op_()
             .map_err(|e| e.set_source(Error::new("define_type_op")))
@@ -1086,7 +1082,8 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 }
             })?;
             // TODO?: alpha rename with [terms] and [phi]? does it make any sense?
-            vm.cb.debug(|| format!("## add theorem {:?} phi={:?}", thm, _phi));
+            vm.cb
+                .debug(|| format!("## add theorem {:?} phi={:?}", thm, _phi));
             let k = ThmKey::new(&thm);
             vm.theorems.insert(k, thm.clone());
             Ok(())
@@ -1169,9 +1166,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| {
-            e.set_source(Error::new("OT: failure in trans(<thm,thm>)"))
-        })
+        .map_err(|e| e.set_source(Error::new("OT: failure in trans(<thm,thm>)")))
     }
 
     fn sym(&mut self) -> Result<()> {
@@ -1195,9 +1190,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| {
-            e.set_source(Error::new("OT: failure in eq_mp(<thm,thm>)"))
-        })
+        .map_err(|e| e.set_source(Error::new("OT: failure in eq_mp(<thm,thm>)")))
     }
 
     fn beta_conv(&mut self) -> Result<()> {
@@ -1218,9 +1211,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| {
-            e.set_source(Error::new("OT: failure in deduct_antisym(<thm,thm>)"))
-        })
+        .map_err(|e| e.set_source(Error::new("OT: failure in deduct_antisym(<thm,thm>)")))
     }
 
     fn prove_hyp(&mut self) -> Result<()> {
@@ -1234,11 +1225,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| {
-            e.set_source(Error::new(
-                "OT: failure in prove_hyp(<thm,thm>):\n {}",
-            ))
-        })
+        .map_err(|e| e.set_source(Error::new("OT: failure in prove_hyp(<thm,thm>):\n {}")))
     }
 
     /// Parse the given reader.
@@ -1246,18 +1233,14 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         // skip empty lines and comments
 
         for line in buf.lines() {
-            let line =
-                line.map_err(|e| Error::new_string(format!("error {:?}", e)))?;
+            let line = line.map_err(|e| Error::new_string(format!("error {:?}", e)))?;
             let line = line.trim();
             self.cb.debug(|| format!("// parse line {}", line));
             if line.starts_with("#") {
                 continue;
             } else if line.starts_with("\"") {
                 let name = Name::parse(line).ok_or_else(|| {
-                    Error::new_string(format!(
-                        "cannot parse name from line {:?}",
-                        line
-                    ))
+                    Error::new_string(format!("cannot parse name from line {:?}", line))
                 })?;
                 self.push_obj(ObjImpl::Name(name))
             } else if let Ok(i) = line.parse::<usize>() {
@@ -1297,10 +1280,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                     "deductAntisym" => self.deduct_antisym()?,
                     "proveHyp" => self.prove_hyp()?,
                     "defineTypeOp" => self.define_type_op()?,
-                    _ => Err(Error::new_string(format!(
-                        "unknown command {:?}",
-                        line
-                    )))?,
+                    _ => Err(Error::new_string(format!("unknown command {:?}", line)))?,
                 }
             }
         }
@@ -1310,8 +1290,8 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
     /// Parse the given file.
     pub fn parse_file(&mut self, file: &str) -> Result<()> {
-        let file = std::fs::File::open(file)
-            .map_err(|e| Error::new_string(format!("error {:?}", e)))?;
+        let file =
+            std::fs::File::open(file).map_err(|e| Error::new_string(format!("error {:?}", e)))?;
         let mut buf = std::io::BufReader::new(file);
         self.parse_str(&mut buf)
     }

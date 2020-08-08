@@ -21,7 +21,7 @@ const PRELUDE: &'static str = r#"
 
 fn parse_all() -> trustee::Result<()> {
     let mut ctx = Ctx::new();
-    meta::run_code(&mut ctx, PRELUDE)?; // declare basics
+    meta::run_code(&mut ctx, PRELUDE, Some(PRELUDE.into()))?; // declare basics
     let mut vm = open_theory::VM::new_with(&mut ctx, LogCB);
     for f in args().skip(1) {
         info!("# parsing file {:?}", f);
