@@ -818,7 +818,7 @@ pub struct Ctx {
     builtins: Option<ExprBuiltins>,
     consts: fnv::FnvHashMap<Symbol, Expr>,
     /// Temporary used to merge sets of hypotheses
-    tmp_hyps: fnv::FnvHashSet<Expr>,
+    tmp_hyps: Vec<Expr>,
     lemmas: fnv::FnvHashMap<Symbol, Thm>,
     /// The defined chunks of code. These comprise some user defined tactics,
     /// derived rules, etc.
@@ -863,38 +863,6 @@ struct ExprBuiltins {
     bool: Expr,
 }
 
-fn hyps_merge(th1: &mut Thm, th2: &mut Thm) -> Vec<Expr> {
-    use std::mem::swap;
-    let mut v = vec![];
-    if th1.0.hyps.len() == 0 {
-        match Ref::get_mut(&mut th2.0) {
-            None => th2.0.hyps.clone(),
-            Some(th) => {
-                swap(&mut v, &mut th.hyps);
-                v
-            }
-        }
-    } else if th2.0.hyps.len() == 0 {
-        match Ref::get_mut(&mut th1.0) {
-            None => th1.0.hyps.clone(),
-            Some(th) => {
-                swap(&mut v, &mut th.hyps);
-                v
-            }
-        }
-    } else {
-        let mut v = match Ref::get_mut(&mut th1.0) {
-            None => th1.0.hyps.clone(),
-            Some(th) => {
-                swap(&mut v, &mut th.hyps);
-                v
-            }
-        };
-        v.extend_from_slice(&th2.0.hyps[..]);
-        v
-    }
-}
-
 // used to allocate unique ExprManager IDs
 static EM_ID: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
 
@@ -912,7 +880,7 @@ impl Ctx {
             tbl,
             builtins: None,
             consts: fnv::new_table_with_cap(n),
-            tmp_hyps: fnv::new_set_with_cap(16),
+            tmp_hyps: vec![],
             lemmas: fnv::new_table_with_cap(n),
             meta_chunks: fnv::new_table_with_cap(16),
             next_cleanup: CLEANUP_PERIOD,
@@ -1515,7 +1483,7 @@ impl Ctx {
     /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
     ///
     /// Can fail if the conclusions don't match properly.
-    pub fn thm_trans(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+    pub fn thm_trans(&mut self, th1: Thm, th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let (a, b) = th1
@@ -1531,13 +1499,13 @@ impl Ctx {
         }
 
         let eq_a_c = self.mk_eq_app(a.clone(), c.clone())?;
-        let hyps = hyps_merge(&mut th1, &mut th2);
+        let hyps = self.merge_hyps_th(th1, th2);
         let th = Thm::make_(eq_a_c, self.uid, hyps);
         Ok(th)
     }
 
     /// `congr (F1 |- f=g) (F2 |- t=u)` is `F1, F2 |- f t=g u`
-    pub fn thm_congr(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+    pub fn thm_congr(&mut self, th1: Thm, th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let (f, g) = th1
@@ -1551,7 +1519,7 @@ impl Ctx {
         let ft = self.mk_app(f.clone(), t.clone())?;
         let gu = self.mk_app(g.clone(), u.clone())?;
         let eq = self.mk_eq_app(ft, gu)?;
-        let hyps = hyps_merge(&mut th1, &mut th2);
+        let hyps = self.merge_hyps_th(th1, th2);
         Ok(Thm::make_(eq, self.uid, hyps))
     }
 
@@ -1623,6 +1591,99 @@ impl Ctx {
         Ok(thm)
     }
 
+    /// Merge sets of hypothesis in a sorted fashion.
+    fn merge_hyps_iter_<I1, I2>(&mut self, mut i1: I1, mut i2: I2) -> Vec<Expr>
+    where
+        I1: Iterator<Item = Expr>,
+        I2: Iterator<Item = Expr>,
+    {
+        self.tmp_hyps.clear();
+
+        let mut cur1 = i1.next();
+        let mut cur2 = i2.next();
+
+        loop {
+            match (cur1, cur2) {
+                (None, None) => break,
+                (Some(x), None) => {
+                    self.tmp_hyps.push(x);
+                    cur1 = i1.next();
+                    cur2 = None;
+                }
+                (None, Some(x)) => {
+                    self.tmp_hyps.push(x);
+                    cur1 = None;
+                    cur2 = i2.next();
+                }
+                (Some(x1), Some(x2)) => {
+                    if x1 == x2 {
+                        // deduplication
+                        self.tmp_hyps.push(x1);
+                        cur1 = i1.next();
+                        cur2 = i2.next();
+                    } else if x1 < x2 {
+                        self.tmp_hyps.push(x1);
+                        cur1 = i1.next();
+                        cur2 = Some(x2);
+                    } else {
+                        self.tmp_hyps.push(x2);
+                        cur1 = Some(x1);
+                        cur2 = i2.next();
+                    }
+                }
+            }
+        }
+        self.tmp_hyps.clone()
+    }
+
+    /// Merge sets of hypothesis of the two theorems.
+    fn merge_hyps_th(&mut self, mut th1: Thm, mut th2: Thm) -> Vec<Expr> {
+        use std::mem::swap;
+
+        let mut v1 = vec![];
+        let mut v2 = vec![];
+
+        if th1.0.hyps.len() == 0 {
+            // take or copy th2.hyps
+            match Ref::get_mut(&mut th2.0) {
+                None => th2.0.hyps.clone(),
+                Some(th) => {
+                    swap(&mut v2, &mut th.hyps);
+                    v2
+                }
+            }
+        } else if th2.0.hyps.len() == 0 {
+            // take or copy th1.hyps
+            match Ref::get_mut(&mut th1.0) {
+                None => th1.0.hyps.clone(),
+                Some(th) => {
+                    swap(&mut v1, &mut th.hyps);
+                    v1
+                }
+            }
+        } else {
+            // try to reuse th1.hyps and th2.hyps
+            match (Ref::get_mut(&mut th1.0), Ref::get_mut(&mut th2.0)) {
+                (Some(th1), Some(th2)) => {
+                    swap(&mut v1, &mut th1.hyps);
+                    swap(&mut v2, &mut th2.hyps);
+                    self.merge_hyps_iter_(v1.into_iter(), v2.into_iter())
+                }
+                (Some(th1), None) => {
+                    swap(&mut v1, &mut th1.hyps);
+                    self.merge_hyps_iter_(v1.into_iter(), th2.0.hyps.iter().cloned())
+                }
+                (None, Some(th2)) => {
+                    swap(&mut v2, &mut th2.hyps);
+                    self.merge_hyps_iter_(th1.0.hyps.iter().cloned(), v2.into_iter())
+                }
+                (None, None) => {
+                    self.merge_hyps_iter_(th1.0.hyps.iter().cloned(), th2.0.hyps.iter().cloned())
+                }
+            }
+        }
+    }
+
     /// `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`
     ///
     /// This fails if `b` does not occur _syntactically_ in the hypothesis
@@ -1630,7 +1691,7 @@ impl Ctx {
     ///
     /// NOTE: this is not strictly necessary, as it's not an axiom in HOL light,
     /// but we include it here anyway.
-    pub fn thm_cut(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+    pub fn thm_cut(&mut self, th1: Thm, th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let th1_c = th1.0.concl.clone();
@@ -1641,26 +1702,11 @@ impl Ctx {
         }
         let th2_c = th2.0.concl.clone();
 
-        let hyps: Vec<_> = {
-            self.tmp_hyps.clear();
-
-            if let Some(th1m) = Ref::get_mut(&mut th1.0) {
-                self.tmp_hyps.extend(th1m.hyps.drain(..))
-            } else {
-                // must clone
-                self.tmp_hyps.extend(th1.0.hyps.iter().cloned())
-            }
-
-            if let Some(th2m) = Ref::get_mut(&mut th2.0) {
-                self.tmp_hyps
-                    .extend(th2m.hyps.drain(..).filter(|u| *u != th1_c))
-            } else {
-                // must clone
-                self.tmp_hyps
-                    .extend(th2.0.hyps.iter().filter(|u| **u != th1_c).cloned())
-            }
-
-            self.tmp_hyps.drain().collect()
+        let hyps = {
+            self.merge_hyps_iter_(
+                th1.0.hyps.iter().cloned(),
+                th2.0.hyps.iter().filter(|u| **u != th1_c).cloned(),
+            )
         };
         let th_res = Thm::make_(th2_c, self.uid, hyps);
         Ok(th_res)
@@ -1668,7 +1714,7 @@ impl Ctx {
 
     /// `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
     /// This is the boolean equivalent of transitivity.
-    pub fn thm_bool_eq(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+    pub fn thm_bool_eq(&mut self, th1: Thm, th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let th2_c = &th2.0.concl;
@@ -1686,38 +1732,23 @@ impl Ctx {
         }
         let b = b.clone();
 
-        let hyps = hyps_merge(&mut th1, &mut th2);
+        let hyps = self.merge_hyps_th(th1, th2);
         Ok(Thm::make_(b, self.uid, hyps))
     }
 
-    // FIXME: deduplicate hyps
     /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
     /// This is a way of building a boolean `a=b` from proofs of
     ///  `a|-b` and `b|-a`.
-    pub fn thm_bool_eq_intro(&mut self, mut th1: Thm, mut th2: Thm) -> Result<Thm> {
+    pub fn thm_bool_eq_intro(&mut self, th1: Thm, th2: Thm) -> Result<Thm> {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
-        // TODO: use self.tmp_hyps
-        {
-            let th1_c = th1.0.concl.clone();
-            let thref1 = Ref::make_mut(&mut th1.0);
-            thref1.hyps.retain(|x| x != &th2.0.concl);
-            match Ref::get_mut(&mut th2.0) {
-                None => {
-                    thref1
-                        .hyps
-                        .extend(th2.hyps().iter().filter(|x| *x != &th1_c).cloned());
-                }
-                Some(thref2) => {
-                    let mut v = vec![]; // steal thref2.hyps
-                    std::mem::swap(&mut v, &mut thref2.hyps);
-                    thref1.hyps.extend(v.into_iter().filter(|x| x != &th1_c));
-                }
-            }
-            thref1.concl = eq;
-        }
-        Ok(th1)
+        let hyps = self.merge_hyps_iter_(
+            th1.0.hyps.iter().filter(|x| *x != &th2.0.concl).cloned(),
+            th2.0.hyps.iter().filter(|x| *x != &th1.0.concl).cloned(),
+        );
+        let th = Thm::make_(eq, self.uid, hyps);
+        Ok(th)
     }
 
     /// `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
@@ -1971,5 +2002,19 @@ mod test {
         let th = em.thm_assume(pa.clone()).unwrap();
         assert_eq!(th.concl(), &pa);
         assert_eq!(th.hyps().len(), 1);
+    }
+
+    #[test]
+    fn test_bool_eq_intro() -> Result<()> {
+        let mut ctx = Ctx::new();
+        let b = ctx.mk_bool();
+        let e1 = ctx.mk_var_str("a", b.clone());
+        let e2 = ctx.mk_var_str("b", b.clone());
+        let th1 = ctx.thm_axiom(vec![e1.clone()], e2.clone())?;
+        let th_a_a = ctx.thm_bool_eq_intro(th1.clone(), th1.clone())?;
+        assert_eq!(th_a_a.concl(), &ctx.mk_eq_app(e2.clone(), e2.clone())?);
+        assert_eq!(th_a_a.hyps().len(), 1);
+        assert_eq!(th_a_a.hyps()[0].clone(), e1);
+        Ok(())
     }
 }
