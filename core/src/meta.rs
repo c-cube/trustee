@@ -54,11 +54,18 @@ pub enum Value {
     /// Cons: a pair of values. This is the basis for lists.
     Cons(RPtr<(Value, Value)>),
     Thm(k::Thm),
-    /// An executable chunk.
-    Chunk(Chunk),
+    /// An executable closure (chunks + upvalues).
+    Closure(Closure),
     /// A builtin instruction implemented in rust.
     Builtin(&'static InstrBuiltin),
     //Array(ValueArray),
+}
+
+/// A closure, i.e. a function (chunk) associated with some captured values.
+#[derive(Clone)]
+pub struct Closure {
+    c: Chunk,
+    upvalues: Option<k::Ref<[Value]>>,
 }
 
 /// A chunk of code.
@@ -66,7 +73,7 @@ pub enum Value {
 /// Each derived rule, expression, etc. is compiled to a self-contained chunk.
 /// Chunks can be evaluated several times.
 #[derive(Clone)]
-pub struct Chunk(k::Ref<ChunkImpl>);
+struct Chunk(k::Ref<ChunkImpl>);
 
 struct ChunkImpl {
     /// Instructions to execute.
@@ -76,6 +83,8 @@ struct ChunkImpl {
     locals: Box<[Value]>,
     /// Number of arguments required.
     n_args: u8,
+    /// Number of captured variables.
+    n_captured: u8,
     /// Number of local slots required (arguments included).
     n_slots: u32,
     /// Name of this chunk, if any.
@@ -97,6 +106,8 @@ enum LexScope {
 struct Compiler<'a> {
     instrs: Vec<Instr>,
     locals: Vec<Value>,
+    /// Captured variables from outer scopes, with their names.
+    captured: Vec<RStr>,
     /// Local lexical scope.
     lex_scopes: Vec<LexScope>,
     /// Number of input arguments. invariant: `<= n_slots`.
@@ -106,7 +117,7 @@ struct Compiler<'a> {
     name: Option<RStr>,
     slots: Vec<CompilerSlot>,
     /// Parent compiler, used to resolve values from outer scopes.
-    parent: Option<&'a Compiler<'a>>,
+    parent: Option<&'a mut Compiler<'a>>,
     file_name: Option<RStr>,
     first_line: u32,
 }
@@ -149,6 +160,10 @@ struct SlotIdx(u8);
 #[derive(Copy, Clone, PartialEq)]
 struct LocalIdx(u8);
 
+/// Index in the array of upvalues.
+#[derive(Copy, Clone, PartialEq)]
+struct UpvalueIdx(u8);
+
 #[must_use]
 #[derive(Debug)]
 struct JumpPosition(usize);
@@ -161,6 +176,7 @@ struct JumpPosition(usize);
 /// into. Abbreviations:
 /// - `sl` is the slots
 /// - `args` is the VM's argument stack.
+/// - `upv` is the closure's array of upvalues
 /// - `$3` is argument number 3 (numbered from 0)`
 #[derive(Debug, Copy, Clone)]
 enum Instr {
@@ -171,7 +187,7 @@ enum Instr {
     /// Put the given (small) integer `$0` into `sl[$1]`
     LoadInteger(i16, SlotIdx),
     /// Load the current chunk into `sl[$0]`
-    LoadSelfChunk(SlotIdx),
+    LoadSelfClosure(SlotIdx),
     /// Set `sl[$1]` to bool `$0`
     LoadBool(bool, SlotIdx),
     /// Set `sl[$1]` to nil
@@ -207,6 +223,15 @@ enum Instr {
     GetGlob(LocalIdx, SlotIdx),
     /// Set `ctx[local[$0]]` to value `$1`
     SetGlob(LocalIdx, SlotIdx),
+    /// Set `sl[$1]` to content of `upv[$0]`
+    LoadUpvalue(UpvalueIdx, SlotIdx),
+    /// Push a value from `sl[$0]` into the upvalue stack
+    PushLocalToUpvalue(SlotIdx),
+    /// Push a value from `upv[$0]` into the upvalue stack
+    PushUpvalueToUpvalue(UpvalueIdx),
+    /// Create a closure from the upvalue stack and the (empty) closure
+    /// in `local[$0]`, and put the resulting closure in `sl[$1]`
+    CreateClosure(LocalIdx, SlotIdx),
     // TODO: reinstate `Call1`
     /// Call chunk `sl[$0]` with arguments in `stack[sl[$0]+1 …]`
     /// and put the result into `sl[$2]`.
@@ -261,6 +286,8 @@ pub struct VM<'a> {
     pub ctx: &'a mut Ctx,
     /// The stack where values live.
     stack: Box<[Value; STACK_SIZE]>,
+    /// Stack of upvalues for the next closure to create.
+    upvalue_stack: Vec<Value>,
     /// Control stack, for function calls.
     ctrl_stack: Vec<StackFrame>,
     /// In case of error, the error message lives here.
@@ -278,8 +305,8 @@ struct StackFrame {
     start: u32,
     /// Instruction pointer within `chunk`.
     ic: u32,
-    /// Chunk being executed.
-    chunk: Chunk,
+    /// Closure being executed.
+    closure: Closure,
     /// Offset to put the returned value into.
     res_offset: u32,
 }
@@ -330,9 +357,9 @@ mod ml {
             }
         }
 
-        pub fn as_chunk(&self) -> Option<&Chunk> {
+        pub fn as_closure(&self) -> Option<&Closure> {
             match self {
-                Value::Chunk(c) => Some(c),
+                Value::Closure(c) => Some(c),
                 _ => None,
             }
         }
@@ -378,6 +405,14 @@ mod ml {
         }
     }
 
+    impl fmt::Debug for Closure {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            let full = out.alternate();
+            let s = self.print(full, None).map_err(|_| fmt::Error)?;
+            write!(out, "{}", s)
+        }
+    }
+
     impl Default for Value {
         fn default() -> Self {
             Value::Nil
@@ -400,6 +435,11 @@ mod ml {
             write!(out, "loc[{}]", self.0)
         }
     }
+    impl fmt::Debug for UpvalueIdx {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            write!(out, "upv[{}]", self.0)
+        }
+    }
 
     impl Chunk {
         /// Trivial chunk that returns `nil`
@@ -410,6 +450,7 @@ mod ml {
                 locals: Box::new([]),
                 n_slots: 1,
                 n_args: 0,
+                n_captured: 0,
                 file_name: None,
                 first_line: 0,
             }))
@@ -443,6 +484,46 @@ mod ml {
                     write!(out, "<chunk {:?}>", &self.0.name.as_ref().unwrap())?;
                 }
             }
+            Ok(String::from_utf8(v).unwrap())
+        }
+    }
+
+    impl Closure {
+        /// Make a new closure.
+        pub fn new(c: Chunk, upvalues: Option<k::Ref<[Value]>>) -> Self {
+            Closure { c, upvalues }
+        }
+
+        /// Closure that just returns `nil`.
+        pub fn retnil() -> Self {
+            Self::new(Chunk::retnil(), None)
+        }
+
+        /// Get the upvalues.
+        pub fn upvalues(&self) -> &[Value] {
+            match &self.upvalues {
+                None => &[],
+                Some(v) => &v[..],
+            }
+        }
+
+        /// Name of the chunk.
+        pub fn name(&self) -> Option<&str> {
+            self.c.0.name.as_deref()
+        }
+
+        fn print(&self, full: bool, ic: Option<usize>) -> io::Result<String> {
+            use std::io::Write;
+
+            let mut v = vec![];
+            let out = &mut v;
+
+            write!(out, "closure [\n")?;
+            for (i, x) in self.upvalues().iter().enumerate() {
+                write!(out, "  up[{:5}] = {}\n", i, x)?;
+            }
+            write!(out, "{}", self.c.print(full, ic)?);
+            write!(out, "]\n")?;
             Ok(String::from_utf8(v).unwrap())
         }
     }
@@ -487,11 +568,12 @@ mod ml {
                 Value::Str(s) => write!(out, "{:?}", s),
                 Value::Expr(e) => write!(out, "`{}`", e),
                 Value::Thm(th) => write!(out, "{}", th),
-                Value::Chunk(c) => {
-                    if let Some(n) = &c.0.name {
-                        write!(out, "<chunk {:?}>", n)
+                Value::Closure(cl) => {
+                    let nup = cl.upvalues().len();
+                    if let Some(n) = &cl.c.0.name {
+                        write!(out, "<closure[{}] {:?}>", nup, n)
                     } else {
-                        write!(out, "<chunk>")
+                        write!(out, "<closure[{}]>", nup)
                     }
                 }
                 Value::Builtin(b) => write!(out, "<builtin {}>", b.name),
@@ -513,7 +595,9 @@ mod ml {
                 (Cons(i), Cons(j)) => i == j,
                 (Expr(i), Expr(j)) => i == j,
                 (Thm(t1), Thm(t2)) => t1 == t2,
-                (Chunk(c1), Chunk(c2)) => std::ptr::eq(&*c1.0 as *const _, &*c2.0),
+                (Closure(c1), Closure(c2)) => {
+                    std::ptr::eq(&c1.c.0 as *const _, &c2.c.0) && c1.upvalues() == c2.upvalues()
+                }
                 (Builtin(b1), Builtin(b2)) => b1.name == b2.name,
                 _ => false, // other cases are not comparable
             }
@@ -614,6 +698,7 @@ mod ml {
             Self {
                 ctx,
                 stack,
+                upvalue_stack: vec![],
                 ctrl_stack: vec![],
                 result: Ok(Value::Nil),
             }
@@ -623,8 +708,8 @@ mod ml {
         fn exec_loop_(&mut self) -> Result<Value> {
             use Instr as I;
             while let Some(sf) = self.ctrl_stack.last_mut() {
-                assert!((sf.ic as usize) < sf.chunk.0.instrs.len());
-                let instr = sf.chunk.0.instrs[sf.ic as usize];
+                assert!((sf.ic as usize) < sf.closure.c.0.instrs.len());
+                let instr = sf.closure.c.0.instrs[sf.ic as usize];
                 logdebug!(
                     "exec loop: ic={} start={} instr=`{:?}`",
                     sf.ic,
@@ -633,7 +718,7 @@ mod ml {
                 );
                 logtrace!(
                     "  stack: {:?}",
-                    &self.stack[0..(sf.start + sf.chunk.0.n_slots) as usize]
+                    &self.stack[0..(sf.start + sf.closure.c.0.n_slots) as usize]
                 );
 
                 sf.ic += 1; // ready for next iteration
@@ -645,11 +730,15 @@ mod ml {
                     }
                     I::LoadLocal(l0, s1) => {
                         let s1 = abs_offset!(sf, s1);
-                        self.stack[s1] = sf.chunk.0.locals[l0.0 as usize].clone();
+                        self.stack[s1] = sf.closure.c.0.locals[l0.0 as usize].clone();
                     }
-                    I::LoadSelfChunk(s0) => {
+                    I::LoadUpvalue(up0, s1) => {
+                        let s1 = abs_offset!(sf, s1);
+                        self.stack[s1] = sf.closure.upvalues()[up0.0 as usize].clone();
+                    }
+                    I::LoadSelfClosure(s0) => {
                         let s0 = abs_offset!(sf, s0);
-                        self.stack[s0] = Value::Chunk(sf.chunk.clone());
+                        self.stack[s0] = Value::Closure(sf.closure.clone());
                     }
                     I::LoadInteger(i, s1) => {
                         let s1 = abs_offset!(sf, s1);
@@ -780,7 +869,7 @@ mod ml {
                         }
                     }
                     I::GetGlob(x, s1) => {
-                        let l = match &sf.chunk.0.locals[x.0 as usize] {
+                        let l = match &sf.closure.c.0.locals[x.0 as usize] {
                             Value::Str(s) => s,
                             _ => return Err(Error::new("get: expected a string")),
                         };
@@ -791,12 +880,39 @@ mod ml {
                         }
                     }
                     I::SetGlob(x, s1) => {
-                        let l = match &sf.chunk.0.locals[x.0 as usize] {
+                        let l = match &sf.closure.c.0.locals[x.0 as usize] {
                             Value::Str(s) => s,
                             _ => return Err(Error::new("set: expected a string")),
                         };
                         let s1 = abs_offset!(sf, s1);
                         self.ctx.set_meta_value(l.clone(), self.stack[s1].clone())
+                    }
+                    I::PushLocalToUpvalue(s0) => {
+                        let s0 = abs_offset!(sf, s0);
+                        self.upvalue_stack.push(self.stack[s0].clone())
+                    }
+                    I::PushUpvalueToUpvalue(up0) => {
+                        let u = sf.closure.upvalues()[up0.0 as usize].clone();
+                        self.upvalue_stack.push(u)
+                    }
+                    I::CreateClosure(l0, s1) => {
+                        // find chunk
+                        let c0 = match &sf.closure.c.0.locals[l0.0 as usize] {
+                            Value::Closure(c) => c,
+                            _ => return Err(Error::new("set: expected a string")),
+                        };
+                        debug_assert_eq!(c0.upvalues().len(), 0); // proper chunk
+                        let s1 = abs_offset!(sf, s1);
+                        let upvalues = {
+                            if self.upvalue_stack.is_empty() {
+                                None
+                            } else {
+                                let v: Vec<_> = self.upvalue_stack.drain(..).collect();
+                                Some(v.into_boxed_slice().into())
+                            }
+                        };
+                        let cl = Closure::new(c0.c.clone(), upvalues);
+                        self.stack[s1] = Value::Closure(cl);
                     }
                     I::Call(sl_f, n_args, sl_ret) => {
                         let sl_f = abs_offset!(sf, sl_f);
@@ -826,14 +942,14 @@ mod ml {
                                     }
                                 }
                             }
-                            Value::Chunk(c) => {
-                                if c.0.n_args != n_args {
+                            Value::Closure(cl) => {
+                                if cl.c.0.n_args != n_args {
                                     return Err(Error::new("arity mismatch"));
                                 }
 
-                                // push frame for `c`
-                                let c = c.clone();
-                                self.exec_chunk_(c, (sl_f + 1) as u32, offset_ret as u32)?;
+                                // push frame for `cl`
+                                let cl = cl.clone();
+                                self.exec_closure_(cl, (sl_f + 1) as u32, offset_ret as u32)?;
                             }
                             _ => {
                                 self.result = Err(Error::new("cannot call value"));
@@ -862,12 +978,12 @@ mod ml {
                         let offset_ret = sf.res_offset;
 
                         let f = &stack[offset_f];
-                        if let Value::Chunk(c) = f {
-                            let c = c.clone();
+                        if let Value::Closure(cl) = f {
+                            let cl = cl.clone();
 
                             // get function + arguments to the beginning of the frame
                             let stack_frame = &mut stack[sf.start as usize
-                                ..sf.start as usize + sf.chunk.0.n_slots as usize];
+                                ..sf.start as usize + sf.closure.c.0.n_slots as usize];
 
                             // move arguments to the beginning of the frame
                             let shift_left_by = sl_f.0 as usize;
@@ -878,7 +994,7 @@ mod ml {
                             }
 
                             // update stack frame
-                            sf.chunk = c;
+                            sf.closure = cl;
                             sf.ic = 0;
                         } else if let Value::Builtin(b) = f {
                             logdebug!("call builtin {:?}", &b.name);
@@ -946,11 +1062,11 @@ mod ml {
                 sf_i -= 1;
                 let sf = &self.ctrl_stack[sf_i];
                 let stack_i = sf.start as usize;
-                let next_stack_i = (sf.start + sf.chunk.0.n_slots) as usize;
+                let next_stack_i = (sf.start + sf.closure.c.0.n_slots) as usize;
                 write!(
                     out,
-                    "in chunk {:?} (file {:?} starting at line {})\n",
-                    sf.chunk.0.name, sf.chunk.0.file_name, sf.chunk.0.first_line
+                    "in closure {:?} (file {:?} starting at line {})\n",
+                    sf.closure.c.0.name, sf.closure.c.0.file_name, sf.closure.c.0.first_line
                 )?;
                 if full {
                     write!(
@@ -960,7 +1076,7 @@ mod ml {
                     )?;
                     // TODO: only print `ic-5..ic+5` window?
                     write!(out, "  frame.chunk\n")?;
-                    let s = sf.chunk.print(true, Some(sf.ic as usize))?;
+                    let s = sf.closure.print(true, Some(sf.ic as usize))?;
                     write!(out, "{}stack frame [\n", s)?;
                     for i in stack_i..next_stack_i {
                         write!(out, "  st[{:5}] = {}\n", i, &self.stack[i])?;
@@ -972,33 +1088,33 @@ mod ml {
             Ok(())
         }
 
-        /// Call chunk `c` with arguments in `self.call_args`,
+        /// Call closure `c` with arguments in `self.call_args`,
         /// put result into slot `offset`.
-        fn exec_chunk_(&mut self, c: Chunk, start_offset: u32, res_offset: u32) -> Result<()> {
+        fn exec_closure_(&mut self, cl: Closure, start_offset: u32, res_offset: u32) -> Result<()> {
             logdebug!(
-                "call chunk (name={:?}, start_offset={}, res_offset={})",
-                &c.0.name,
+                "call closure (name={:?}, start_offset={}, res_offset={})",
+                &cl.c.0.name,
                 start_offset,
                 res_offset
             );
-            logtrace!("callee: {:#?}", &c);
+            logtrace!("callee: {:#?}", &cl);
 
-            if (start_offset + c.0.n_slots) as usize > STACK_SIZE {
+            if (start_offset + cl.c.0.n_slots) as usize > STACK_SIZE {
                 return Err(Error::new("stack overflow"));
             }
 
             self.ctrl_stack.push(StackFrame {
                 ic: 0,
-                chunk: c,
+                closure: cl,
                 start: start_offset,
                 res_offset,
             });
             Ok(())
         }
 
-        /// Call toplevel chunk `c`
-        fn exec_top_chunk_(&mut self, c: Chunk) -> Result<Value> {
-            self.exec_chunk_(c, 0, 0)?;
+        /// Call toplevel closure `c`
+        fn exec_top_closure_(&mut self, c: Closure) -> Result<Value> {
+            self.exec_closure_(c, 0, 0)?;
             self.exec_loop_()
         }
 
@@ -1030,7 +1146,9 @@ mod ml {
                     }
                     Ok(Some(c)) => {
                         logdebug!("chunk: {:?}", &c);
-                        match self.exec_top_chunk_(c) {
+                        debug_assert_eq!(c.0.n_captured, 0); // no parent to capture from
+                        let cl = Closure::new(c, None);
+                        match self.exec_top_closure_(cl) {
                             Ok(x) => last_r = x,
                             Err(e) => {
                                 let mut s = vec![];
@@ -1338,6 +1456,14 @@ pub(crate) mod parser {
     #[must_use]
     pub(crate) struct Scope(usize);
 
+    #[derive(Copy, Clone)]
+    enum VarSlot {
+        /// Local variable
+        Local(SlotIdx),
+        /// Upvalue
+        Captured(UpvalueIdx),
+    }
+
     impl<'a> Compiler<'a> {
         /// Convert the compiler's state into a proper chunk.
         pub fn into_chunk(self) -> Chunk {
@@ -1346,6 +1472,7 @@ pub(crate) mod parser {
                 locals: self.locals.into_boxed_slice(),
                 n_args: self.n_args,
                 n_slots: self.n_slots,
+                n_captured: self.captured.len() as u8,
                 name: self.name,
                 first_line: self.first_line,
                 file_name: self.file_name,
@@ -1578,20 +1705,43 @@ pub(crate) mod parser {
             }
         }
 
-        // TODO: also look in parents scopes, and return an upvalue
         /// Find slot for the given variable `v`.
-        pub fn find_slot_of_var(&self, v: &str) -> Option<SlotIdx> {
+        pub fn find_slot_of_var(&mut self, v: &str) -> Result<Option<VarSlot>> {
             for (i, s) in self.slots.iter().enumerate().rev() {
                 if s.state != CompilerSlotState::Activated {
-                    continue; // slot is not actually ready
+                    continue; // slot is not actually ready yet
                 }
                 if let Some(v2) = &s.var_name {
                     if v2.get() == v {
-                        return Some(SlotIdx(i as u8));
+                        return Ok(Some(VarSlot::Local(SlotIdx(i as u8))));
                     }
                 }
             }
-            None
+            // look in already captured variables
+            for (i, s) in self.captured.iter().enumerate() {
+                if v == s.get() {
+                    return Ok(Some(VarSlot::Captured(UpvalueIdx(i as u8))));
+                }
+            }
+            // look in parent scope to see if we close over `v`
+            if let Some(parent) = &mut self.parent {
+                if let Some(parent_var) = parent.find_slot_of_var(v)? {
+                    // capture `v` from parent scope
+                    if self.captured.len() > u8::MAX as usize {
+                        return Err(Error::new("too many captured variables"));
+                    }
+                    let upidx = UpvalueIdx(self.captured.len() as u8);
+                    logdebug!("capture var {} from parent (upidx {})", v, upidx.0);
+                    self.captured.push(v.into());
+                    match parent_var {
+                        VarSlot::Local(sl) => parent.emit_instr_(I::PushLocalToUpvalue(sl)),
+                        VarSlot::Captured(u) => parent.emit_instr_(I::PushUpvalueToUpvalue(u)),
+                    }
+                    return Ok(Some(VarSlot::Captured(upidx)));
+                }
+            }
+
+            Ok(None) // not in scope
         }
     }
 
@@ -1682,12 +1832,18 @@ pub(crate) mod parser {
         loc: (usize, usize),
         sl: SlotIdx,
     ) -> Result<()> {
-        if let Some(f_var_slot) = c.find_slot_of_var(s) {
-            assert_ne!(f_var_slot, sl);
-            c.emit_instr_(I::Copy(f_var_slot, sl));
+        if let Some(var) = c.find_slot_of_var(s)? {
+            // local or captured variable
+            match var {
+                VarSlot::Local(f_var_slot) => {
+                    assert_ne!(f_var_slot, sl);
+                    c.emit_instr_(I::Copy(f_var_slot, sl));
+                }
+                VarSlot::Captured(upidx) => c.emit_instr_(I::LoadUpvalue(upidx, sl)),
+            }
         } else if c.name.as_ref().filter(|n| n.get() == s).is_some() {
             // call current function
-            c.emit_instr_(I::LoadSelfChunk(sl))
+            c.emit_instr_(I::LoadSelfClosure(sl))
         } else if let Some(b) = basic_primitives::BUILTINS.iter().find(|b| b.name == s) {
             let lidx = c.allocate_local_(Value::Builtin(b))?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
@@ -1695,6 +1851,7 @@ pub(crate) mod parser {
             let lidx = c.allocate_local_(Value::Builtin(b))?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
         } else if let Some(v) = ctx.find_meta_value(s) {
+            // look in the `ctx` current set of values
             let lidx = c.allocate_local_(v.clone())?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
         } else {
@@ -1753,6 +1910,7 @@ pub(crate) mod parser {
                     Compiler {
                         instrs: vec![],
                         locals: vec![],
+                        captured: vec![],
                         n_slots: 0,
                         n_args: 0,
                         lex_scopes: vec![],
@@ -1794,7 +1952,7 @@ pub(crate) mod parser {
                             cur_tok_as_id_(&mut self.lexer, "expected function name")?.into();
                         self.next_tok_();
 
-                        // get bound variables
+                        // parse function
                         let b_closing = match self.cur_tok_() {
                             Tok::LParen => Tok::RParen,
                             Tok::LBracket => Tok::RBracket,
@@ -1807,7 +1965,6 @@ pub(crate) mod parser {
                         };
                         self.next_tok_();
 
-                        // parse function
                         let sub_c = self.parse_fn_args_and_body_(
                             Some(f_name.clone()),
                             b_closing,
@@ -1817,7 +1974,8 @@ pub(crate) mod parser {
 
                         // define the function.
                         logdebug!("define {} as {:#?}", &f_name, sub_c);
-                        self.ctx.set_meta_value(f_name, Value::Chunk(sub_c));
+                        let sub_c = Closure::new(sub_c, None);
+                        self.ctx.set_meta_value(f_name, Value::Closure(sub_c));
                         Ok(Some(Chunk::retnil()))
                     } else {
                         let mut c = newcompiler!();
@@ -1841,12 +1999,12 @@ pub(crate) mod parser {
             }
         }
 
-        fn parse_fn_args_and_body_(
+        fn parse_fn_args_and_body_<'p>(
             &mut self,
             f_name: Option<RStr>,
             var_closing: Tok,
             closing: Tok,
-            parent: Option<&Compiler>,
+            parent: Option<&'p mut Compiler<'p>>,
         ) -> Result<Chunk> {
             let mut vars: Vec<RStr> = vec![];
 
@@ -1867,9 +2025,10 @@ pub(crate) mod parser {
             }
 
             // make a compiler for this chunk.
-            let mut c = Compiler {
+            let mut c: Compiler<'p> = Compiler {
                 instrs: vec![],
                 locals: vec![],
+                captured: vec![],
                 n_slots: 0,
                 n_args: vars.len() as u8,
                 name: f_name.clone(),
@@ -1897,9 +2056,9 @@ pub(crate) mod parser {
         /// Parse an application-type expression, closed with `closing`.
         ///
         /// Put the result into slot `sl_res` if provided.
-        fn parse_expr_app_(
+        fn parse_expr_app_<'comp>(
             &mut self,
-            c: &mut Compiler,
+            c: &'comp mut Compiler<'comp>,
             sl_res: Option<SlotIdx>,
         ) -> Result<ExprRes> {
             let loc = self.lexer.loc();
@@ -2078,6 +2237,45 @@ pub(crate) mod parser {
                 c.pop_local_scope(scope); // deallocate locals
 
                 Ok(res)
+            } else if id == "fn" {
+                // anonymous function
+                self.next_tok_();
+                let res = get_res!(c, sl_res);
+
+                // parse function
+                let b_closing = match self.cur_tok_() {
+                    Tok::LParen => Tok::RParen,
+                    Tok::LBracket => Tok::RBracket,
+                    _ => {
+                        return Err(perror!(
+                            self.lexer.loc(),
+                            "expect '(' or '[' after `defn <id>`"
+                        ))
+                    }
+                };
+                self.next_tok_();
+
+                // compile anonymous function in an inner compiler
+                let sub_c = self.parse_fn_args_and_body_(
+                    None, // nameless
+                    b_closing,
+                    Tok::RParen,
+                    Some(c),
+                )?;
+                let n_captured = sub_c.0.n_captured;
+
+                // push function into a local
+                let loc_sub = c.allocate_local_(Value::Closure(Closure::new(sub_c, None)))?;
+
+                if n_captured > 0 {
+                    // `sub_c` is a true closure, close over captured vars
+                    c.emit_instr_(I::CreateClosure(loc_sub, res.slot));
+                } else {
+                    // just copy the chunk
+                    c.emit_instr_(I::LoadLocal(loc_sub, res.slot))
+                }
+
+                Ok(res)
             } else if id == "list" {
                 // parse into a list
                 self.lexer.next();
@@ -2186,9 +2384,9 @@ pub(crate) mod parser {
         }
 
         /// Parse a list of expressions, return how many were parsed.
-        fn parse_expr_list_(
+        fn parse_expr_list_<'comp>(
             &mut self,
-            c: &mut Compiler,
+            c: &'comp mut Compiler<'comp>,
             closing: Tok,
             pre: &dyn Fn(&mut Compiler) -> Result<Option<SlotIdx>>,
             post: &mut dyn FnMut(&mut Compiler, &ExprRes),
@@ -2221,9 +2419,9 @@ pub(crate) mod parser {
         }
 
         /// Parse a list, either from `(list …)` or `[…]`.
-        fn parse_list_(
+        fn parse_list_<'comp>(
             &mut self,
-            c: &mut Compiler,
+            c: &'comp mut Compiler<'comp>,
             sl_res: Option<SlotIdx>,
             closing: Tok,
         ) -> Result<ExprRes> {
@@ -2247,9 +2445,9 @@ pub(crate) mod parser {
 
         /// Parse a series of expressions.
         ///
-        fn parse_expr_seq_(
+        fn parse_expr_seq_<'comp>(
             &mut self,
-            c: &mut Compiler,
+            c: &'comp mut Compiler<'comp>,
             closing: Tok,
             sl_res: Option<SlotIdx>,
         ) -> Result<ExprRes> {
@@ -2268,7 +2466,11 @@ pub(crate) mod parser {
         /// Parse an expression and return its result's slot.
         ///
         /// `sl_res` is an optional pre-provided slot.
-        fn parse_expr_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
+        fn parse_expr_<'comp>(
+            &mut self,
+            c: &'comp mut Compiler<'comp>,
+            sl_res: Option<SlotIdx>,
+        ) -> Result<ExprRes> {
             logdebug!("parse expr (cur {:?})", self.lexer.cur());
             logtrace!("> slots {:?}", c.slots);
 
@@ -2324,17 +2526,27 @@ pub(crate) mod parser {
                 }
                 Tok::Id(id) => {
                     let res = get_res!(c, sl_res);
-                    if let Some(sl_var) = c.find_slot_of_var(id) {
-                        if let Some(sl_r) = sl_res {
-                            if sl_r != sl_var {
-                                // must copy
-                                c.emit_instr_(I::Copy(sl_var, sl_r));
+                    if let Some(var) = c.find_slot_of_var(id)? {
+                        match var {
+                            VarSlot::Local(sl_var) => {
+                                if let Some(sl_r) = sl_res {
+                                    if sl_r != sl_var {
+                                        // must copy
+                                        c.emit_instr_(I::Copy(sl_var, sl_r));
+                                    }
+                                } else {
+                                    // return the existing variable instead.
+                                    self.next_tok_();
+                                    c.free(&res);
+                                    return Ok(ExprRes::new(sl_var, false));
+                                }
                             }
-                        } else {
-                            // return the existing variable instead.
-                            self.next_tok_();
-                            c.free(&res);
-                            return Ok(ExprRes::new(sl_var, false));
+                            VarSlot::Captured(upidx) => {
+                                // copy from upvalue
+                                let res = get_res!(c, sl_res);
+                                c.emit_instr_(I::LoadUpvalue(upidx, res.slot));
+                                return Ok(res);
+                            }
                         }
                     } else {
                         resolve_id_into_slot_(ctx, c, id, loc, res.slot)?;
@@ -2522,11 +2734,11 @@ mod basic_primitives {
         ),
         &defbuiltin!(
             "show_chunk",
-            "shows the bytecode of a chunk",
+            "shows the bytecode of a closure",
             |ctx, args: &[Value]| -> Result<_> {
                 check_arity!("show_chunk", args, 1);
                 let s = get_arg_str!(args, 0);
-                if let Some(c) = ctx.find_meta_value(s).and_then(|v| v.as_chunk()) {
+                if let Some(c) = ctx.find_meta_value(s).and_then(|v| v.as_closure()) {
                     println!("{:?}", c);
                 }
                 Ok(().into())
