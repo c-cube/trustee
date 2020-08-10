@@ -1198,7 +1198,7 @@ pub mod lexer {
         cur_: Option<Tok<'b>>,
     }
 
-    /// A token for the RPN syntax..
+    /// A token for the meta-language syntax.
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum Tok<'b> {
         Eof,
@@ -1825,9 +1825,9 @@ pub(crate) mod parser {
     }
 
     /// Resolve the ID as a chunk or builtin, and put it into `sl`.
-    fn resolve_id_into_slot_(
-        ctx: &mut Ctx,
-        c: &mut Compiler,
+    fn resolve_id_into_slot_<'slf, 'comp>(
+        ctx: &'slf mut Ctx,
+        c: &'slf mut Compiler<'comp>,
         s: &str,
         loc: (usize, usize),
         sl: SlotIdx,
@@ -1999,13 +1999,17 @@ pub(crate) mod parser {
             }
         }
 
-        fn parse_fn_args_and_body_<'p>(
-            &mut self,
+        fn parse_fn_args_and_body_<'slf, 'comp1, 'comp>(
+            &'slf mut self,
             f_name: Option<RStr>,
-            var_closing: Tok,
-            closing: Tok,
-            parent: Option<&'p mut Compiler<'p>>,
-        ) -> Result<Chunk> {
+            var_closing: Tok<'b>,
+            closing: Tok<'b>,
+            parent: Option<&'comp1 mut Compiler<'comp>>,
+        ) -> Result<Chunk>
+        where
+            'comp: 'comp1,
+            'comp1: 'slf,
+        {
             let mut vars: Vec<RStr> = vec![];
 
             let loc = self.lexer.loc();
@@ -2024,43 +2028,59 @@ pub(crate) mod parser {
                 return Err(perror!(loc, "maximum number of arguments exceeded"));
             }
 
-            // make a compiler for this chunk.
-            let mut c: Compiler<'p> = Compiler {
-                instrs: vec![],
-                locals: vec![],
-                captured: vec![],
-                n_slots: 0,
-                n_args: vars.len() as u8,
-                name: f_name.clone(),
-                lex_scopes: vec![],
-                slots: vec![],
-                parent,
-                first_line: self.lexer.loc().0 as u32,
-                file_name: self.lexer.file_name.clone(),
+            let ch = {
+                let parent: Option<&'comp1 mut Compiler<'comp1>> = match parent {
+                    None => None,
+                    Some(p) => Some(unsafe { &mut *p as *mut _ as &mut _ }),
+                };
+                let p = Parser {
+                    lexer: &mut *self.lexer,
+                    ctx: &mut *self.ctx,
+                };
+
+                // make a compiler for this chunk.
+                let mut c: Compiler<'_> = Compiler {
+                    instrs: vec![],
+                    locals: vec![],
+                    captured: vec![],
+                    n_slots: 0,
+                    n_args: vars.len() as u8,
+                    name: f_name.clone(),
+                    lex_scopes: vec![],
+                    slots: vec![],
+                    parent,
+                    first_line: self.lexer.loc().0 as u32,
+                    file_name: self.lexer.file_name.clone(),
+                };
+                // add variables to `sub_c`
+                for x in vars {
+                    let sl_x = c.allocate_var_(x)?;
+                    c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
+                }
+                logtrace!("compiling {:?}: slots for args: {:?}", &f_name, &c.slots);
+                let res = p.parse_expr_seq_(&mut c, closing, None)?;
+
+                // return value
+                c.emit_instr_(I::Ret(res.slot));
+                c.free(&res);
+                c.into_chunk()
             };
-            // add variables to `sub_c`
-            for x in vars {
-                let sl_x = c.allocate_var_(x)?;
-                c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
-            }
-            logtrace!("compiling {:?}: slots for args: {:?}", &f_name, &c.slots);
-            let res = self.parse_expr_seq_(&mut c, closing, None)?;
 
-            // return value
-            c.emit_instr_(I::Ret(res.slot));
-            c.free(&res);
-
-            Ok(c.into_chunk())
+            Ok(ch)
         }
 
         /// Parse an application-type expression, closed with `closing`.
         ///
         /// Put the result into slot `sl_res` if provided.
-        fn parse_expr_app_<'comp>(
-            &mut self,
-            c: &'comp mut Compiler<'comp>,
+        fn parse_expr_app_<'slf, 'comp1, 'comp>(
+            &'slf mut self,
+            c: &'comp1 mut Compiler<'comp>,
             sl_res: Option<SlotIdx>,
-        ) -> Result<ExprRes> {
+        ) -> Result<ExprRes>
+        where
+            'comp: 'comp1,
+            'comp1: 'slf,
+        {
             let loc = self.lexer.loc();
             let id = cur_tok_as_id_(&mut self.lexer, "expect an identifier after opening")?;
             logdebug!("parse expr app id={:?}", id);
@@ -2255,17 +2275,24 @@ pub(crate) mod parser {
                 };
                 self.next_tok_();
 
-                // compile anonymous function in an inner compiler
-                let sub_c = self.parse_fn_args_and_body_(
-                    None, // nameless
-                    b_closing,
-                    Tok::RParen,
-                    Some(c),
-                )?;
-                let n_captured = sub_c.0.n_captured;
+                let (loc_sub, n_captured) = {
+                    let p = Parser {
+                        lexer: &mut *self.lexer,
+                        ctx: &mut *self.ctx,
+                    };
+                    // compile anonymous function in an inner compiler
+                    let sub_c = p.parse_fn_args_and_body_(
+                        None, // nameless
+                        b_closing,
+                        Tok::RParen,
+                        Some(c),
+                    )?;
+                    let n_captured = sub_c.0.n_captured;
 
-                // push function into a local
-                let loc_sub = c.allocate_local_(Value::Closure(Closure::new(sub_c, None)))?;
+                    // push function into a local
+                    let loc_sub = c.allocate_local_(Value::Closure(Closure::new(sub_c, None)))?;
+                    (loc_sub, n_captured)
+                };
 
                 if n_captured > 0 {
                     // `sub_c` is a true closure, close over captured vars
@@ -2384,12 +2411,12 @@ pub(crate) mod parser {
         }
 
         /// Parse a list of expressions, return how many were parsed.
-        fn parse_expr_list_<'comp>(
-            &mut self,
-            c: &'comp mut Compiler<'comp>,
-            closing: Tok,
-            pre: &dyn Fn(&mut Compiler) -> Result<Option<SlotIdx>>,
-            post: &mut dyn FnMut(&mut Compiler, &ExprRes),
+        fn parse_expr_list_<'slf, 'comp>(
+            &'slf mut self,
+            c: &'slf mut Compiler<'comp>,
+            closing: Tok<'b>,
+            pre: &dyn for<'sub> Fn(&'sub mut Compiler<'comp>) -> Result<Option<SlotIdx>>,
+            post: &mut dyn for<'sub> FnMut(&'sub mut Compiler<'comp>, &ExprRes),
         ) -> Result<usize> {
             let mut n = 0;
             let mut has_exited = false;
@@ -2419,11 +2446,11 @@ pub(crate) mod parser {
         }
 
         /// Parse a list, either from `(list …)` or `[…]`.
-        fn parse_list_<'comp>(
-            &mut self,
-            c: &'comp mut Compiler<'comp>,
+        fn parse_list_<'slf, 'comp>(
+            &'slf mut self,
+            c: &'slf mut Compiler<'comp>,
             sl_res: Option<SlotIdx>,
-            closing: Tok,
+            closing: Tok<'b>,
         ) -> Result<ExprRes> {
             let res = get_res!(c, sl_res);
             logdebug!("parse list (sl_res {:?}, res {:?})", sl_res, res);
@@ -2445,9 +2472,9 @@ pub(crate) mod parser {
 
         /// Parse a series of expressions.
         ///
-        fn parse_expr_seq_<'comp>(
-            &mut self,
-            c: &'comp mut Compiler<'comp>,
+        fn parse_expr_seq_<'slf, 'comp>(
+            &'slf mut self,
+            c: &'slf mut Compiler<'comp>,
             closing: Tok,
             sl_res: Option<SlotIdx>,
         ) -> Result<ExprRes> {
@@ -2466,11 +2493,15 @@ pub(crate) mod parser {
         /// Parse an expression and return its result's slot.
         ///
         /// `sl_res` is an optional pre-provided slot.
-        fn parse_expr_<'comp>(
-            &mut self,
-            c: &'comp mut Compiler<'comp>,
+        fn parse_expr_<'slf, 'comp1, 'comp>(
+            &'slf mut self,
+            c: &'comp1 mut Compiler<'comp>,
             sl_res: Option<SlotIdx>,
-        ) -> Result<ExprRes> {
+        ) -> Result<ExprRes>
+        where
+            'comp: 'comp1,
+            'comp1: 'slf,
+        {
             logdebug!("parse expr (cur {:?})", self.lexer.cur());
             logtrace!("> slots {:?}", c.slots);
 
