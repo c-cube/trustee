@@ -284,6 +284,13 @@
 (set_binder "select" 41)
 
 
+; Map over a list
+(defn map [f l] (if (nil? l) nil (cons (f (car l)) (map f (cdr l)))))
+
+(defn fold [f acc l]
+  (if (nil? l) acc
+    (become fold f (f acc (car l)) (cdr l))))
+
 ; # END OF FILE
 ; # avoid double include
 (set hol_prelude_loaded true)

@@ -958,7 +958,10 @@ mod ml {
                             }
                             Value::Closure(cl) => {
                                 if cl.0.c.0.n_args != n_args {
-                                    return Err(Error::new("arity mismatch"));
+                                    return Err(Error::new_string(format!(
+                                        "arity mismatch when calling {}",
+                                        cl.0.c.0.name.as_deref().unwrap_or("<anon>")
+                                    )));
                                 }
 
                                 // push frame for `cl`
@@ -3564,6 +3567,11 @@ mod test {
                 let acc = acc + 4 + off;
                 acc
             }
+        );
+        check_eval!(
+            "(defn map [f l] (if (nil? l) nil (cons (f (car l)) (map f (cdr l)))))
+            (let [y 1] (map (fn [x] (+ y x)) [1 2 3 4]))",
+            Value::list(&[2i64.into(), 3.into(), 4.into(), 5.into()])
         );
         Ok(())
     }
