@@ -1126,8 +1126,23 @@ mod ml {
             Ok(())
         }
 
-        /// Call toplevel closure `c`
-        fn exec_top_closure_(&mut self, c: Closure) -> Result<Value> {
+        /// Call closure `c`
+        pub fn exec_closure(&mut self, c: Closure, args: &[Value]) -> Result<Value> {
+            if c.0.c.0.n_args as usize != args.len() {
+                return Err(Error::new("arity mismatch"));
+            }
+            for i in 0..args.len() {
+                self.stack[i] = args[i].clone();
+            }
+            self.exec_closure_(c, 0, 0)?;
+            self.exec_loop_()
+        }
+
+        /// Call closure `c` without arguments.
+        pub fn exec_top_closure_(&mut self, c: Closure) -> Result<Value> {
+            if c.0.c.0.n_args as usize != 0 {
+                return Err(Error::new("arity mismatch"));
+            }
             self.exec_closure_(c, 0, 0)?;
             self.exec_loop_()
         }
@@ -1859,9 +1874,9 @@ pub(crate) mod parser {
     }
 
     /// Resolve the ID as a chunk or builtin, and put it into `sl`.
-    fn resolve_id_into_slot_<'slf, 'comp>(
-        ctx: &'slf mut Ctx,
-        c: &'slf mut Compiler<'comp>,
+    fn resolve_id_into_slot_(
+        ctx: &mut Ctx,
+        c: &mut Compiler,
         s: &str,
         loc: (usize, usize),
         sl: SlotIdx,
@@ -2037,17 +2052,13 @@ pub(crate) mod parser {
             }
         }
 
-        fn parse_fn_args_and_body_<'slf, 'comp1, 'comp>(
-            &'slf mut self,
+        fn parse_fn_args_and_body_(
+            &mut self,
             f_name: Option<RStr>,
             var_closing: Tok<'b>,
             closing: Tok<'b>,
-            parent: Option<&'comp1 mut Compiler<'comp>>,
-        ) -> Result<Chunk>
-        where
-            'comp: 'comp1,
-            'comp1: 'slf,
-        {
+            parent: Option<&mut Compiler>,
+        ) -> Result<Chunk> {
             let mut vars: Vec<RStr> = vec![];
 
             let loc = self.lexer.loc();
@@ -2107,15 +2118,11 @@ pub(crate) mod parser {
         /// Parse an application-type expression, closed with `closing`.
         ///
         /// Put the result into slot `sl_res` if provided.
-        fn parse_expr_app_<'slf, 'comp1, 'comp>(
-            &'slf mut self,
-            c: &'comp1 mut Compiler<'comp>,
+        fn parse_expr_app_(
+            &mut self,
+            c: &mut Compiler,
             sl_res: Option<SlotIdx>,
-        ) -> Result<ExprRes>
-        where
-            'comp: 'comp1,
-            'comp1: 'slf,
-        {
+        ) -> Result<ExprRes> {
             let loc = self.lexer.loc();
             let id = cur_tok_as_id_(&mut self.lexer, "expect an identifier after opening")?;
             logdebug!("parse expr app id={:?}", id);
@@ -2444,12 +2451,12 @@ pub(crate) mod parser {
         }
 
         /// Parse a list of expressions, return how many were parsed.
-        fn parse_expr_list_<'slf, 'comp>(
-            &'slf mut self,
-            c: &'slf mut Compiler<'comp>,
+        fn parse_expr_list_(
+            &mut self,
+            c: &mut Compiler,
             closing: Tok<'b>,
-            pre: &dyn for<'sub> Fn(&'sub mut Compiler<'comp>) -> Result<Option<SlotIdx>>,
-            post: &mut dyn for<'sub> FnMut(&'sub mut Compiler<'comp>, &ExprRes),
+            pre: &dyn Fn(&mut Compiler) -> Result<Option<SlotIdx>>,
+            post: &mut dyn FnMut(&mut Compiler, &ExprRes),
         ) -> Result<usize> {
             let mut n = 0;
             let mut has_exited = false;
@@ -2479,9 +2486,9 @@ pub(crate) mod parser {
         }
 
         /// Parse a list, either from `(list …)` or `[…]`.
-        fn parse_list_<'slf, 'comp>(
-            &'slf mut self,
-            c: &'slf mut Compiler<'comp>,
+        fn parse_list_(
+            &mut self,
+            c: &mut Compiler,
             sl_res: Option<SlotIdx>,
             closing: Tok<'b>,
         ) -> Result<ExprRes> {
@@ -2504,10 +2511,9 @@ pub(crate) mod parser {
         }
 
         /// Parse a series of expressions.
-        ///
-        fn parse_expr_seq_<'slf, 'comp>(
-            &'slf mut self,
-            c: &'slf mut Compiler<'comp>,
+        fn parse_expr_seq_(
+            &mut self,
+            c: &mut Compiler,
             closing: Tok,
             sl_res: Option<SlotIdx>,
         ) -> Result<ExprRes> {
@@ -2526,15 +2532,7 @@ pub(crate) mod parser {
         /// Parse an expression and return its result's slot.
         ///
         /// `sl_res` is an optional pre-provided slot.
-        fn parse_expr_<'slf, 'comp1, 'comp>(
-            &'slf mut self,
-            c: &'comp1 mut Compiler<'comp>,
-            sl_res: Option<SlotIdx>,
-        ) -> Result<ExprRes>
-        where
-            'comp: 'comp1,
-            'comp1: 'slf,
-        {
+        fn parse_expr_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
             logdebug!("parse expr (cur {:?})", self.lexer.cur());
             logtrace!("> slots {:?}", c.slots);
 
@@ -3256,8 +3254,13 @@ pub const SRC_PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
 /// This has some overhead, if you want to execute a lot of code efficienty
 /// (e.g. in a CLI) consider creating a `VM` and re-using it.
 pub fn run_code(ctx: &mut Ctx, s: &str, file_name: Option<RStr>) -> Result<Value> {
-    let mut st = VM::new(ctx);
-    st.run(s, file_name)
+    let mut vm = VM::new(ctx);
+    vm.run(s, file_name)
+}
+
+pub fn call_closure(ctx: &mut Ctx, f: &Closure, args: &[Value]) -> Result<Value> {
+    let mut vm = VM::new(ctx);
+    vm.exec_closure(f.clone(), args)
 }
 
 /// Load the HOL prelude into this context.
@@ -3569,12 +3572,27 @@ mod test {
     fn test_closures() -> Result<()> {
         check_eval!("(let [f (fn [x] (+ 1 x))] (f 41))", 42);
         check_eval!(
-            "{
-            (def x 1)
-            (def f (fn [y] (+ x y)))
-            (f 41)
-            }",
+            "{ (def x 1)
+               (def f (fn [y] (+ x y)))
+               (f 41) }",
             42
+        );
+        check_eval!(
+            "(defn fold [f acc l]
+              (print l)
+              (if (nil? l) acc
+               (become fold f (f acc (car l)) (cdr l))))
+             { (def off 1)
+               (fold (fn [acc x] (+ acc x off)) 0 [1 2 3 4]) }",
+            {
+                let off = 1;
+                let acc = 0;
+                let acc = acc + 1 + off;
+                let acc = acc + 2 + off;
+                let acc = acc + 3 + off;
+                let acc = acc + 4 + off;
+                acc
+            }
         );
         Ok(())
     }
