@@ -50,7 +50,6 @@ pub enum Value {
     /// an embedded rust string literal.
     Str(RStr),
     Expr(k::Expr),
-    // TODO: add `cons?`, `car`, `cdr`… or destructuring
     /// Cons: a pair of values. This is the basis for lists.
     Cons(RPtr<(Value, Value)>),
     Thm(k::Thm),
@@ -211,8 +210,10 @@ enum Instr {
     Sub(SlotIdx, SlotIdx, SlotIdx),
     Div(SlotIdx, SlotIdx, SlotIdx),
     Mod(SlotIdx, SlotIdx, SlotIdx),
+    /// puts `is-nil sl[$0]` into `sl[$1]`
+    IsNil(SlotIdx, SlotIdx),
     /// puts `is-cons sl[$0]` into `sl[$1]`
-    IsPair(SlotIdx, SlotIdx),
+    IsCons(SlotIdx, SlotIdx),
     /// puts `car sl[$0]` into `sl[$1]`
     Car(SlotIdx, SlotIdx),
     /// puts `cdr sl[$0]` into `sl[$1]`
@@ -829,7 +830,14 @@ mod ml {
                         let s1 = get_slot_int!(self, abs_offset!(sf, s1));
                         self.stack[abs_offset!(sf, s2)] = Value::Int(s0 % s1);
                     }
-                    I::IsPair(s0, s1) => {
+                    I::IsNil(s0, s1) => {
+                        let b = match &self.stack[abs_offset!(sf, s0)] {
+                            Value::Nil => true,
+                            _ => false,
+                        };
+                        self.stack[abs_offset!(sf, s1)] = Value::Bool(b);
+                    }
+                    I::IsCons(s0, s1) => {
                         let b = match &self.stack[abs_offset!(sf, s0)] {
                             Value::Cons(..) => true,
                             _ => false,
@@ -1159,8 +1167,13 @@ mod ml {
                             Err(e) => {
                                 let mut s = vec![];
                                 // only print full stacktrace if `TRUSTEE_TRACE=1`
-                                let full_tr =
-                                    std::env::var("TRUSTEE_TRACE").ok().as_deref() == Some("1");
+                                // or if variable "print_full_traces" is true.
+                                let full_tr = self
+                                    .ctx
+                                    .find_meta_value("print_full_traces")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                    || std::env::var("TRUSTEE_TRACE").ok().as_deref() == Some("1");
                                 self.print_trace_(&mut s, full_tr).unwrap();
                                 logerr!(
                                     "error during execution:\n>> {}\n{}",
@@ -1439,9 +1452,6 @@ pub mod lexer {
 //  when parsing `f` in a chunk named `f`)?
 //  *OR* more general case, `PushFromStack(-n)` so we can tailcall from
 //      nested functions?
-
-// TODO: closures (with call_args then `MkClosure(sl_callable, sl_res)`
-//          which makes a Value::Closure with all the call_args)
 
 pub(crate) mod parser {
     use super::*;
@@ -1835,8 +1845,10 @@ pub(crate) mod parser {
         };
         if s == "not" {
             ret!(I::Not)
-        } else if s == "pair?" {
-            ret!(I::IsPair)
+        } else if s == "nil?" {
+            ret!(I::IsNil)
+        } else if s == "cons?" {
+            ret!(I::IsCons)
         } else if s == "car" {
             ret!(I::Car)
         } else if s == "cdr" {
@@ -2140,11 +2152,13 @@ pub(crate) mod parser {
             } else if let Some(unop_instr) = unary_op_(id) {
                 // unary op
                 self.next_tok_();
-                let e = self.parse_expr_(c, sl_res)?;
+                let e = self.parse_expr_(c, None)?;
                 self.eat_(Tok::RParen, "expected closing ')' after `not`")?;
                 // `e := not e`
-                c.emit_instr_(unop_instr(e.slot, e.slot));
-                Ok(e)
+                c.free(&e);
+                let res = get_res!(c, sl_res);
+                c.emit_instr_(unop_instr(e.slot, res.slot));
+                Ok(res)
             } else if id == "if" {
                 self.next_tok_();
                 let res = get_res!(c, sl_res);
@@ -3434,9 +3448,9 @@ mod test {
         check_eval!("(car [1 2])", 1);
         check_eval!("(car (cdr [1 2]))", 2);
         check_eval!("(cdr (cdr [1 2]))", ());
-        check_eval!("(pair? [1 2])", true);
-        check_eval!("(pair? nil)", false);
-        check_eval!("(pair? (cons 1 2))", true);
+        check_eval!("(cons? [1 2])", true);
+        check_eval!("(cons? nil)", false);
+        check_eval!("(cons? (cons 1 2))", true);
         Ok(())
     }
 

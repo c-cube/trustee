@@ -93,7 +93,9 @@ fn main() -> anyhow::Result<()> {
         meta::load_prelude_hol(&mut ctx)?;
     }
 
+    ctx.set_meta_value("print_full_traces", false.into());
     let mut vm = meta::VM::new(&mut ctx);
+
     for x in &opts.include {
         let file_content = std::fs::read_to_string(x)?;
         vm.run(&file_content, None)?;
