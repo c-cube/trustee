@@ -2128,12 +2128,12 @@ pub(crate) mod parser {
                 self.eat_(Tok::RParen, "expected closing ')' after 'if'")?;
                 Ok(res)
             } else if id == "def" {
-                // definition in current scope
+                // definition in current local scope, or global
                 self.next_tok_();
 
                 let x: RStr =
                     cur_tok_as_id_(&mut self.lexer, "expected variable name after `def`")?.into();
-                let sl_x = c.allocate_var_(x)?;
+                let sl_x = c.allocate_var_(x.clone())?;
                 self.next_tok_();
 
                 let scope = c.push_local_scope();
@@ -2144,6 +2144,19 @@ pub(crate) mod parser {
                 c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
 
                 Ok(sl_x)
+            } else if id == "set" {
+                self.next_tok_();
+
+                // parse a variable name
+                let x = cur_tok_as_id_(self.lexer, "expect variable name after 'set'")?;
+                let sl_x = c.allocate_local_(Value::Str(x.into()))?;
+                self.next_tok_();
+
+                let scope = c.push_local_scope();
+                let r = self.parse_expr_seq_(c, Tok::RParen, sl_res)?;
+                c.pop_local_scope(scope);
+                c.emit_instr_(I::SetGlob(sl_x, r.slot));
+                Ok(r)
             } else if id == "and" {
                 // control operator, need special handling
                 self.next_tok_();
@@ -2318,19 +2331,6 @@ pub(crate) mod parser {
                 // parse into a list
                 self.lexer.next();
                 self.parse_list_(c, sl_res, Tok::RParen)
-            } else if id == "set" {
-                self.next_tok_();
-
-                // parse a variable name
-                let x = cur_tok_as_id_(self.lexer, "expect variable name after 'set'")?;
-                let sl_x = c.allocate_local_(Value::Str(x.into()))?;
-                self.next_tok_();
-
-                let scope = c.push_local_scope();
-                let r = self.parse_expr_seq_(c, Tok::RParen, sl_res)?;
-                c.pop_local_scope(scope);
-                c.emit_instr_(I::SetGlob(sl_x, r.slot));
-                Ok(r)
             } else if id == "get" {
                 self.next_tok_();
                 // parse a variable name
@@ -3603,6 +3603,7 @@ mod test {
     #[test]
     fn test_set() -> Result<()> {
         check_eval!("(set x 1) (set y 2) (+ x y)", 3);
+        check_eval!("{ (set x 1) } (+ x 10)", 11);
         Ok(())
     }
 
