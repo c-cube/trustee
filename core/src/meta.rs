@@ -1168,7 +1168,7 @@ mod ml {
             loop {
                 let p = Parser::new(self.ctx, &mut lexer);
 
-                match p.parse_top_statement() {
+                match p.parse_top_expr() {
                     Err(e) => {
                         logerr!("error while parsing: {}", e);
                         return Err(e);
@@ -1520,6 +1520,10 @@ pub(crate) mod parser {
             logdebug!("enter call args scope");
             self.lex_scopes.push(LexScope::CallArgs);
             Scope(self.lex_scopes.len())
+        }
+
+        pub(crate) fn is_in_local_scope(&self) -> bool {
+            self.parent.is_some() || self.lex_scopes.len() > 0
         }
 
         pub(crate) fn exit_call_args(&mut self, sc: Scope) {
@@ -1946,20 +1950,17 @@ pub(crate) mod parser {
             self.lexer.next()
         }
 
-        // TODO: there is no reason to have that, with closures.
-        // `(defn f […] …)` is just short for `(def f (fn […] …)`
-        // which acts either in the global scope, or a local scope.
-        /// Parse a toplevel statement in the string passed at creation time.
+        /// Parse a toplevel expression in the string passed at creation time.
         ///
         /// Returns `Ok(None)` if no more statements could be read.
         /// Otherwise returns `Ok((chunk, lexer))`.
-        pub(super) fn parse_top_statement(mut self) -> Result<Option<Chunk>> {
+        pub(super) fn parse_top_expr(mut self) -> Result<Option<Chunk>> {
             let t = self.lexer.cur();
-            let loc = self.lexer.loc();
 
-            macro_rules! newcompiler {
-                () => {
-                    Compiler {
+            match t {
+                Tok::Eof => Ok(None),
+                _ => {
+                    let mut c = Compiler {
                         instrs: vec![],
                         locals: vec![],
                         captured: vec![],
@@ -1972,86 +1973,18 @@ pub(crate) mod parser {
                         phantom: PhantomData,
                         first_line: self.lexer.loc().0 as u32,
                         file_name: self.lexer.file_name.clone(),
-                    }
-                };
-            };
-
-            match t {
-                Tok::Eof => Ok(None),
-                Tok::Id(_)
-                | Tok::QuotedString(..)
-                | Tok::QuotedExpr(..)
-                | Tok::Int(..)
-                | Tok::ColonId(..) => {
-                    let mut c = newcompiler!();
-                    let r = self.parse_expr_(&mut c, None)?;
+                    };
+                    let res = get_res!(c, None);
+                    let r = self.parse_expr_(&mut c, Some(res.slot))?;
                     c.emit_instr_(I::Ret(r.slot));
                     Ok(Some(c.into_chunk()))
-                }
-                Tok::LBrace | Tok::LBracket => {
-                    let mut c = newcompiler!();
-                    let r = self.parse_expr_(&mut c, None)?;
-                    c.emit_instr_(I::Ret(r.slot));
-                    Ok(Some(c.into_chunk()))
-                }
-                Tok::LParen => {
-                    let closing = Tok::RParen;
-                    self.lexer.next();
-                    if let Tok::Id("defn") = self.lexer.cur() {
-                        self.lexer.next();
-
-                        // function name
-                        let f_name: RStr =
-                            cur_tok_as_id_(&mut self.lexer, "expected function name")?.into();
-                        self.next_tok_();
-
-                        // parse function
-                        let b_closing = match self.cur_tok_() {
-                            Tok::LParen => Tok::RParen,
-                            Tok::LBracket => Tok::RBracket,
-                            _ => {
-                                return Err(perror!(
-                                    self.lexer.loc(),
-                                    "expect '(' or '[' after `defn <id>`"
-                                ))
-                            }
-                        };
-                        self.next_tok_();
-
-                        let sub_c = self.parse_fn_args_and_body_(
-                            Some(f_name.clone()),
-                            b_closing,
-                            closing,
-                            None,
-                        )?;
-
-                        // define the function.
-                        logdebug!("define {} as {:#?}", &f_name, sub_c);
-                        let sub_c = Closure::new(sub_c, None);
-                        self.ctx.set_meta_value(f_name, Value::Closure(sub_c));
-                        Ok(Some(Chunk::retnil()))
-                    } else {
-                        let mut c = newcompiler!();
-                        let r = self.parse_expr_app_(&mut c, None)?;
-                        c.emit_instr_(I::Ret(r.slot));
-                        Ok(Some(c.into_chunk()))
-                    }
-                }
-                Tok::RParen => {
-                    return Err(perror!(loc, "non-closed ')'"));
-                }
-                Tok::RBracket => {
-                    return Err(perror!(loc, "non-closed ']'"));
-                }
-                Tok::RBrace => {
-                    return Err(perror!(loc, "non-closed '}}'"));
-                }
-                Tok::Invalid(c) => {
-                    return Err(perror!(loc, "invalid character '{}'", c));
                 }
             }
         }
 
+        /// Parse a list of arguments and the body of a function.
+        ///
+        /// Does not parse the preceeding `fn` or `defn`.
         fn parse_fn_args_and_body_(
             &mut self,
             f_name: Option<RStr>,
@@ -2310,12 +2243,7 @@ pub(crate) mod parser {
                 let b_closing = match self.cur_tok_() {
                     Tok::LParen => Tok::RParen,
                     Tok::LBracket => Tok::RBracket,
-                    _ => {
-                        return Err(perror!(
-                            self.lexer.loc(),
-                            "expect '(' or '[' after `defn <id>`"
-                        ))
-                    }
+                    _ => return Err(perror!(self.lexer.loc(), "expect '(' or '[' after `fn`")),
                 };
                 self.next_tok_();
 
@@ -2340,6 +2268,49 @@ pub(crate) mod parser {
                 } else {
                     // just copy the chunk
                     c.emit_instr_(I::LoadLocal(loc_sub, res.slot))
+                }
+
+                Ok(res)
+            } else if id == "defn" {
+                // function name
+                self.next_tok_();
+
+                let f_name: RStr =
+                    cur_tok_as_id_(&mut self.lexer, "expected function name")?.into();
+                self.next_tok_();
+
+                let res = c.allocate_var_(f_name.clone())?;
+
+                // parse function
+                let b_closing = match self.cur_tok_() {
+                    Tok::LParen => Tok::RParen,
+                    Tok::LBracket => Tok::RBracket,
+                    _ => {
+                        return Err(perror!(
+                            self.lexer.loc(),
+                            "expect '(' or '[' after `defn <id>`"
+                        ))
+                    }
+                };
+                self.next_tok_();
+
+                let sub_c = self.parse_fn_args_and_body_(
+                    Some(f_name.clone()),
+                    b_closing,
+                    Tok::RParen,
+                    None,
+                )?;
+
+                // define the function.
+                logdebug!("define {} as {:#?}", &f_name, sub_c);
+                let sub_c = Closure::new(sub_c, None);
+
+                if c.is_in_local_scope() {
+                    let loc = c.allocate_local_(Value::Closure(sub_c))?;
+                    c.emit_instr_(I::LoadLocal(loc, res.slot));
+                } else {
+                    self.ctx.set_meta_value(f_name, Value::Closure(sub_c));
+                    c.emit_instr_(I::LoadNil(res.slot));
                 }
 
                 Ok(res)
