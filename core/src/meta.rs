@@ -79,14 +79,14 @@ pub struct Chunk(k::Ref<ChunkImpl>);
 struct ChunkImpl {
     /// Instructions to execute.
     instrs: Box<[Instr]>,
-    /// Local values, typically chunks, theorems, or terms,
+    /// Local values, typically closures, theorems, or terms,
     /// used during the evaluation.
     locals: Box<[Value]>,
     /// Number of arguments required.
     n_args: u8,
-    /// Number of captured variables.
+    /// Number of captured variables, if any. Used if the chunk is a proper closure.
     n_captured: u8,
-    /// Number of local slots required (arguments included).
+    /// Total number of local slots required (arguments included).
     n_slots: u32,
     /// Name of this chunk, if any.
     name: Option<RStr>,
@@ -96,16 +96,21 @@ struct ChunkImpl {
     first_line: u32,
 }
 
+/// Lexical scope, used to control local variables.
 enum LexScope {
-    /// Slots for local variables
+    /// Slots for local variables, introduced by `{ … }` or most
+    /// defining constructs (`def …`, `defn …`, etc.).
     Local(Vec<SlotIdx>),
-    /// Parsing function call arguments, cannot use `def`
+    /// Local scope for evaluating function call arguments, cannot use `def`
+    /// in there as we need strict stack discipline. `def` will fail.
     CallArgs,
 }
 
 /// Compiler for a given chunk.
 struct Compiler<'a> {
+    /// Current instructions for the chunk.
     instrs: Vec<Instr>,
+    /// Local values for the chunk.
     locals: Vec<Value>,
     /// Captured variables from outer scopes, with their names.
     captured: Vec<RStr>,
