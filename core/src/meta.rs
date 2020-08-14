@@ -2641,11 +2641,16 @@ pub(crate) mod parser {
     }
 }
 
+/// Name and help of all the builtin constructs.
+pub fn all_builtin_names_and_help() -> impl Iterator<Item = (&'static str, &'static str)> {
+    let i1 = basic_primitives::BUILTINS.iter().map(|b| (b.name, b.help));
+    let i2 = logic_builtins::BUILTINS.iter().map(|b| (b.name, b.help));
+    i1.chain(i2)
+}
+
 /// Names of all the builtin constructs.
 pub fn all_builtin_names() -> impl Iterator<Item = &'static str> {
-    let i1 = basic_primitives::BUILTINS.iter().map(|b| b.name);
-    let i2 = logic_builtins::BUILTINS.iter().map(|b| b.name);
-    i1.chain(i2)
+    all_builtin_names_and_help().map(|t| t.0)
 }
 
 macro_rules! get_arg_as {
