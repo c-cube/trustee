@@ -22,6 +22,8 @@ impl jy::EvalContextImpl for EvalTrustee {
     }
 
     fn eval(&mut self, code: &str, execution_count: usize) -> Result<jy::EvalOutputs> {
+        log::debug!("eval code=`{}`, execution_cout={}", code, execution_count);
+
         let src = format!("cell {}", execution_count);
         let start = time::Instant::now();
         match meta::run_code(&mut self.ctx, code, Some(src.into())) {
@@ -51,6 +53,11 @@ impl jy::EvalContextImpl for EvalTrustee {
     }
 
     fn inspect(&mut self, code: &str, cursor_pos: usize) -> Option<String> {
+        log::debug!(
+            "inspect request for code=`{}`, cursor_pos={}",
+            code,
+            cursor_pos
+        );
         let mut last_tok = None;
 
         {
@@ -83,9 +90,14 @@ impl jy::EvalContextImpl for EvalTrustee {
     }
 
     fn completion(&mut self, code: &str, cursor_pos: usize) -> Option<jy::CompletionRes> {
+        log::debug!(
+            "completion request for code=`{}`, cursor_pos={}",
+            code,
+            cursor_pos
+        );
         let mut last_tok = None;
         let mut off1 = 0; // offset at which last_tok starts
-        let mut off2 = 0; // offset at which last_tok ends
+        let off2; // offset at which last_tok ends
 
         {
             let mut lexer = meta::lexer::Lexer::new(code, None);
