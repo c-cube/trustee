@@ -5,6 +5,7 @@ members = [
   "core",
   "cli",
   "opentheory",
+  "jupyter"
 ]
 
 default-members = [
