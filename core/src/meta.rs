@@ -1235,6 +1235,7 @@ pub mod lexer {
     pub struct Lexer<'b> {
         col: usize,
         line: usize,
+        tok_start_off: usize,
         i: usize,
         bytes: &'b [u8],
         pub(crate) file_name: Option<RStr>,
@@ -1303,6 +1304,14 @@ pub mod lexer {
             self.i
         }
 
+        pub fn token_start_offset(&self) -> usize {
+            self.tok_start_off
+        }
+
+        pub fn token_end_offset(&self) -> usize {
+            self.i
+        }
+
         fn skip_white_(&mut self) {
             while self.i < self.bytes.len() {
                 let c = self.bytes[self.i];
@@ -1341,6 +1350,7 @@ pub mod lexer {
                 self.cur_ = Some(Tok::Eof);
                 return Tok::Eof;
             }
+            self.tok_start_off = self.i;
             let tok = match self.bytes[self.i] {
                 b'(' => {
                     self.i += 1;
@@ -1462,6 +1472,7 @@ pub mod lexer {
                 line: 1,
                 i: 0,
                 bytes: s.as_bytes(),
+                tok_start_off: 0,
                 cur_: None,
                 file_name,
             }
