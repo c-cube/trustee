@@ -10,6 +10,35 @@ struct EvalTrustee {
     ctx: k::Ctx,
 }
 
+/// Find identifier the cursor is on (or just after)
+fn find_tok(s: &str, cursor_pos: usize) -> Option<(String, usize, usize)> {
+    let mut lexer = meta::lexer::Lexer::new(s, None);
+    loop {
+        let t = lexer.cur().clone();
+        if t == Tok::Eof {
+            break;
+        }
+
+        let start = lexer.token_start_offset();
+        let end = lexer.token_end_offset();
+
+        if start <= cursor_pos && end >= cursor_pos {
+            // here is where we want to complete
+            if let Tok::Id(s) = lexer.cur() {
+                log::debug!("relevant token is {:?} (range {}--{})", s, start, end);
+                return Some((s.to_string(), start, end));
+            } else {
+                log::debug!("outside any identifier");
+                return None;
+            }
+        } else {
+            // go to next token
+            lexer.next();
+        }
+    }
+    None
+}
+
 impl jy::EvalContextImpl for EvalTrustee {
     fn meta(&self) -> jy::MetaData {
         jy::MetaData {
@@ -58,35 +87,15 @@ impl jy::EvalContextImpl for EvalTrustee {
             code,
             cursor_pos
         );
-        let mut last_tok = None;
 
-        {
-            let mut lexer = meta::lexer::Lexer::new(code, None);
-            loop {
-                let t = lexer.cur().clone();
-                if t == Tok::Eof {
-                    break;
-                }
-                last_tok = Some(t);
-                lexer.next();
-                if lexer.offset() >= cursor_pos {
-                    break;
-                }
+        if let Some((tok, _start, _end)) = find_tok(code, cursor_pos) {
+            if let Some(v) = self.ctx.find_meta_value(&tok) {
+                return Some(format!("value: {}", v));
+            } else if let Some((v, hlp)) = meta::all_builtin_names_and_help().find(|v| v.0 == tok) {
+                return Some(format!("builtin {}:\n{}", v, hlp));
             }
         }
-
-        let token = match last_tok {
-            Some(Tok::Id(pre)) => pre,
-            _ => return None,
-        };
-
-        if let Some(v) = self.ctx.find_meta_value(token) {
-            Some(format!("value: {}", v))
-        } else if let Some((v, hlp)) = meta::all_builtin_names_and_help().find(|v| v.0 == token) {
-            Some(format!("builtin {}:\n{}", v, hlp))
-        } else {
-            None
-        }
+        None
     }
 
     fn completion(&mut self, code: &str, cursor_pos: usize) -> Option<jy::CompletionRes> {
@@ -95,59 +104,35 @@ impl jy::EvalContextImpl for EvalTrustee {
             code,
             cursor_pos
         );
-        let mut last_tok = None;
-        let mut off1 = 0; // offset at which last_tok starts
-        let off2; // offset at which last_tok ends
 
-        {
-            let mut lexer = meta::lexer::Lexer::new(code, None);
-            loop {
-                let t = lexer.cur().clone();
-                if t == Tok::Eof {
-                    off2 = lexer.offset();
-                    break;
-                }
-                last_tok = Some(t);
-                off1 = lexer.offset();
-                lexer.next();
-                if lexer.offset() >= cursor_pos {
-                    off2 = lexer.offset();
-                    break;
+        if let Some((tok, start, end)) = find_tok(code, cursor_pos) {
+            let mut compls: Vec<String> = vec![];
+
+            let mut add_compl = |s: &str| compls.push(s.to_string());
+
+            for (s, _e) in self.ctx.iter_meta_values() {
+                if s.starts_with(&tok) {
+                    add_compl(s)
                 }
             }
-        }
+            for s in meta::all_builtin_names() {
+                if s.starts_with(&tok) {
+                    add_compl(s)
+                }
+            }
 
-        let mut compls: Vec<String> = vec![];
-
-        let token = match last_tok {
-            Some(Tok::Id(pre)) => pre,
-            _ => return None,
-        };
-
-        let mut add_compl = |s: &str| compls.push(s.to_string());
-
-        for (s, _e) in self.ctx.iter_meta_values() {
-            if s.starts_with(token) {
-                add_compl(s)
+            if compls.len() > 0 {
+                log::info!("found {} completions", compls.len());
+                log::debug!("completions: {:#?}", compls);
+                return Some(jy::CompletionRes {
+                    cursor_start: start,
+                    cursor_end: end,
+                    matches: compls,
+                });
             }
         }
-        for s in meta::all_builtin_names() {
-            if s.starts_with(token) {
-                add_compl(s)
-            }
-        }
-
-        if compls.len() > 0 {
-            log::info!("found {} completions", compls.len());
-            log::debug!("completions: {:#?}", compls);
-            Some(jy::CompletionRes {
-                cursor_start: off1,
-                cursor_end: off2,
-                matches: compls,
-            })
-        } else {
-            None
-        }
+        log::debug!("no completion found");
+        None
     }
 }
 
