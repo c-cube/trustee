@@ -61,11 +61,16 @@ impl jy::EvalContextImpl for EvalTrustee {
         match vm.run(code, Some(src.into())) {
             Ok(v) => {
                 let dur = time::Instant::now().duration_since(start);
-                // TODO: capture `print` output for stdout as an option
-                // in trustee::meta (allow redirection)
 
                 let raw_stdout = match std::string::String::from_utf8(stdout) {
-                    Ok(s) if s.len() > 0 => Some(s),
+                    Ok(s) => {
+                        log::debug!("stdout: {:?}", s);
+                        if s.len() > 0 {
+                            Some(s)
+                        } else {
+                            None
+                        }
+                    }
                     _ => None,
                 };
 
