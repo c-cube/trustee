@@ -162,6 +162,10 @@
     (bool_eq_intro th1 th2)
   })
 
+(defn RAndAssoc [a b]
+  (doc "Takes `a` `b` and `c` and returns `(a/\b)/\c = a/\(b/\c")
+  (subst AndAssoc "a" a "b" b "c" c))
+
 ; prove `a /\ b = b /\ a`
 (set AndComm
   {
@@ -172,6 +176,10 @@
     (def th2 (subst th1 "a" `b:bool` "b" `a:bool`))
     (bool_eq_intro th1 th2)
   })
+
+(defn RAndComm [a b]
+  (doc "Takes `a` and `b` and returns `a/\b = b/\a")
+  (subst AndComm "a" a "b" b))
 
 ; prove `a |- a /\ T` and `a |- T /\ a`
 {
@@ -246,6 +254,11 @@
 ; define implication
 (defconst "==>" "DefImply" `\a b:bool. (a /\ b) = a`)
 (set_infix "==>" 20 19)
+
+; instantiates `a ==> b = …`
+(defn RImplyDefSubst [a b]
+  (doc "takes `a` and `b` and instantiates `(a ==> b) = ((a/\b)=a)`")
+  (rw (congr DefImply (refl a) (refl b)) :beta))
 
 ; prove `a, a ==> b |- b`
 (set ImplyElim {
