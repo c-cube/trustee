@@ -72,8 +72,10 @@ impl jy::EvalContextImpl for EvalTrustee {
                     raw_stderr: None,
                     raw_stdout: None,
                 };
-                outs.content_by_mime_type
-                    .insert("text/plain".to_string(), format!("{}", v));
+                if v != meta::Value::Nil {
+                    outs.content_by_mime_type
+                        .insert("text/plain".to_string(), format!("{}", v));
+                }
 
                 Ok(outs)
             }
