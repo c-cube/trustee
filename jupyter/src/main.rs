@@ -7,7 +7,7 @@ use trustee::{
 };
 
 struct EvalTrustee {
-    ctx: k::Ctx,
+    _ctx: Option<k::Ctx>,
 }
 
 /// Find identifier the cursor is on (or just after)
@@ -55,7 +55,7 @@ impl jy::EvalContextImpl for EvalTrustee {
 
         let src = format!("cell {}", execution_count);
         let start = time::Instant::now();
-        match meta::run_code(&mut self.ctx, code, Some(src.into())) {
+        match meta::run_code(self.ctx(), code, Some(src.into())) {
             Ok(v) => {
                 let dur = time::Instant::now().duration_since(start);
                 // TODO: capture `print` output for stdout as an option
@@ -91,10 +91,17 @@ impl jy::EvalContextImpl for EvalTrustee {
         );
 
         if let Some((tok, _start, _end)) = find_tok(code, cursor_pos) {
-            if let Some(v) = self.ctx.find_meta_value(&tok) {
-                return Some(format!("value: {}", v));
+            if let Some(v) = self.ctx().find_meta_value(&tok) {
+                let help = match v {
+                    meta::Value::Closure(c) => c
+                        .docstring()
+                        .map(|s| format!("\n\n{}", s))
+                        .unwrap_or("".to_string()),
+                    _ => "".to_string(),
+                };
+                return Some(format!("[value]: {}{}", v, help));
             } else if let Some((v, hlp)) = meta::all_builtin_names_and_help().find(|v| v.0 == tok) {
-                return Some(format!("builtin {}:\n{}", v, hlp));
+                return Some(format!("[builtin]: {}\n\n{}", v, hlp));
             }
         }
         None
@@ -132,7 +139,7 @@ impl jy::EvalContextImpl for EvalTrustee {
 
             let mut add_compl = |s: &str| compls.push(s.to_string());
 
-            for (s, _e) in self.ctx.iter_meta_values() {
+            for (s, _e) in self.ctx().iter_meta_values() {
                 if s.starts_with(&tok) {
                     add_compl(s)
                 }
@@ -160,9 +167,17 @@ impl jy::EvalContextImpl for EvalTrustee {
 
 impl EvalTrustee {
     fn new() -> Result<Self> {
-        let mut ctx = k::Ctx::new();
-        meta::load_prelude_hol(&mut ctx)?;
-        Ok(Self { ctx })
+        Ok(Self { _ctx: None })
+    }
+
+    /// Access the inner context.
+    fn ctx(&mut self) -> &mut k::Ctx {
+        if let None = &mut self._ctx {
+            let mut ctx = k::Ctx::new();
+            meta::load_prelude_hol(&mut ctx).expect("failed to load prelude");
+            self._ctx = Some(ctx);
+        }
+        self._ctx.as_mut().unwrap()
     }
 }
 
