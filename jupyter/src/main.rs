@@ -100,6 +100,26 @@ impl jy::EvalContextImpl for EvalTrustee {
         None
     }
 
+    fn code_is_complete(&mut self, code: &str) -> Option<bool> {
+        let mut lex = meta::lexer::Lexer::new(code, None);
+        let mut depth: isize = 0;
+
+        loop {
+            match lex.cur() {
+                Tok::Eof => return Some(depth <= 0),
+                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
+                Tok::RParen | Tok::RBracket | Tok::RBrace => depth -= 1,
+                Tok::Id(..)
+                | Tok::ColonId(..)
+                | Tok::QuotedString(..)
+                | Tok::QuotedExpr(..)
+                | Tok::Int(..) => (),
+                Tok::Invalid(_) => return None,
+            }
+            lex.next();
+        }
+    }
+
     fn completion(&mut self, code: &str, cursor_pos: usize) -> Option<jy::CompletionRes> {
         log::debug!(
             "completion request for code=`{}`, cursor_pos={}",
