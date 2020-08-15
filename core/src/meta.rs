@@ -3150,7 +3150,7 @@ mod logic_builtins {
             "subst",
             "Instantiate a theorem with a substitution.\n\
             \n\
-            Shape: `(subst th \"x\" e1 \"y\" y)`.\n",
+            Shape: `(subst th \"x1\" e1 \"x2\" e2)`.\n",
             |ctx, args| {
                 check_arity!("instantiate", args, >= 1);
                 let th = get_arg_thm!(args, 0);
