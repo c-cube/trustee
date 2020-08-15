@@ -228,6 +228,11 @@
   (set AProveAAndBEqB (bool_eq_intro ltor rtol))
 }
 
+; from `a` and `b` to `a |- (a/\b)=b`
+(defn RAProveAAndBEqB [a b]
+  (doc "takes boolean terms `a` and `b` and returns `a |- (a/\b)=b`")
+  (subst AProveAAndBEqB "a" a "b" b))
+
 ; define false
 (defconst "F" "DefFalse" `forall p:bool. p`)
 
@@ -236,13 +241,11 @@
   (def h_allp (bool_eq th DefFalse))
   (RForallSubst h_allp p))
 
-; TODO: false intro, false elim
+; TODO: false intro? excluded middle
 
 ; define implication
 (defconst "==>" "DefImply" `\a b:bool. (a /\ b) = a`)
 (set_infix "==>" 20 19)
-
-; # TODO: go from `|- a ==> b` to `a |- b`, and conversely
 
 ; prove `a, a ==> b |- b`
 (set ImplyElim {

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use jupyter_kernel as jy;
-use std::{collections::HashMap, time};
+use std::{collections::HashMap, io::Write, time};
 use trustee::{
     kernel_of_trust as k,
     meta::{self, lexer::Tok},
@@ -55,11 +55,19 @@ impl jy::EvalContextImpl for EvalTrustee {
 
         let src = format!("cell {}", execution_count);
         let start = time::Instant::now();
-        match meta::run_code(self.ctx(), code, Some(src.into())) {
+        let mut vm = meta::VM::new(self.ctx());
+        let mut stdout = vec![];
+        vm.set_stdout(&mut stdout);
+        match vm.run(code, Some(src.into())) {
             Ok(v) => {
                 let dur = time::Instant::now().duration_since(start);
                 // TODO: capture `print` output for stdout as an option
                 // in trustee::meta (allow redirection)
+
+                let raw_stdout = match std::string::String::from_utf8(stdout) {
+                    Ok(s) if s.len() > 0 => Some(s),
+                    _ => None,
+                };
 
                 // TODO: mimetypes
                 let mut outs = jy::EvalOutputs {
@@ -70,7 +78,7 @@ impl jy::EvalContextImpl for EvalTrustee {
                         None
                     },
                     raw_stderr: None,
-                    raw_stdout: None,
+                    raw_stdout,
                 };
                 if v != meta::Value::Nil {
                     outs.content_by_mime_type

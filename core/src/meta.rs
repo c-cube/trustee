@@ -283,7 +283,7 @@ pub struct InstrBuiltin {
     name: &'static str,
 
     /// Execute the instruction on the given state with arguments.
-    run: fn(ctx: &mut Ctx, args: &[Value]) -> Result<Value>,
+    run: fn(ctx: &mut Ctx, out: &mut Option<&mut dyn io::Write>, args: &[Value]) -> Result<Value>,
 
     /// A one-line help text for this instruction.
     help: &'static str,
@@ -311,6 +311,8 @@ pub struct VM<'a> {
     ctrl_stack: Vec<StackFrame>,
     /// In case of error, the error message lives here.
     result: Result<Value>,
+    /// Abstraction over stdout, or a redirection of stdout to capture `print`.
+    stdout: Option<&'a mut dyn io::Write>,
 }
 
 /// A stack frame.
@@ -725,7 +727,12 @@ mod ml {
                 upvalue_stack: vec![],
                 ctrl_stack: vec![],
                 result: Ok(Value::Nil),
+                stdout: None,
             }
+        }
+
+        pub fn set_stdout(&mut self, out: &'a mut dyn io::Write) {
+            self.stdout = Some(out);
         }
 
         /// Main execution loop.
@@ -949,14 +956,16 @@ mod ml {
                         let sl_f = abs_offset!(sf, sl_f);
                         let offset_ret = abs_offset!(sf, sl_ret);
 
-                        let Self { stack, ctx, .. } = self;
+                        let Self {
+                            stack, ctx, stdout, ..
+                        } = self;
                         match &stack[sl_f] {
                             Value::Builtin(b) => {
                                 logdebug!("call builtin {:?} with {} args", &b.name, n_args);
                                 let args = &stack[sl_f + 1..sl_f + 1 + n_args as usize];
                                 logtrace!("  args: {:?}", &args);
                                 let f = &(b.run);
-                                let res = f(ctx, &args);
+                                let res = f(ctx, stdout, &args);
                                 match res {
                                     Ok(ret_value) => {
                                         logdebug!("return[offset {}]: {}", offset_ret, ret_value);
@@ -1000,6 +1009,7 @@ mod ml {
                         let Self {
                             ctrl_stack,
                             ctx,
+                            stdout,
                             stack,
                             ..
                         } = self;
@@ -1034,7 +1044,7 @@ mod ml {
                             logdebug!("call builtin {:?}", &b.name);
                             let args = &stack[offset_f + 1..offset_f + 1 + n_args as usize];
                             let f = &b.run;
-                            match f(ctx, &args) {
+                            match f(ctx, stdout, &args) {
                                 Ok(ret_value) => {
                                     self.stack[offset_ret as usize] = ret_value;
                                     // remove last frame
@@ -2813,16 +2823,24 @@ mod basic_primitives {
 
     /// Builtin functions.
     pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[
-        &defbuiltin!("print", "print value(s).", |_, args: &[Value]| {
+        &defbuiltin!("print", "print value(s).", |_,
+                                                  out,
+                                                  args: &[Value]|
+         -> Result<Value> {
             for x in args {
-                println!("print: {}", x)
+                if let Some(o) = out {
+                    write!(o, "{}", x)
+                        .map_err(|e| Error::new_string(format!("error while printing: {}", e)))?
+                } else {
+                    println!("print: {}", x)
+                }
             }
             Ok(Value::Nil)
         }),
         &defbuiltin!(
             "help",
             "print help for an identifier.",
-            |_, args: &[Value]| -> Result<_> {
+            |_, _, args: &[Value]| -> Result<_> {
                 check_arity!("help", args, 1);
                 let s = get_arg_str!(args, 0).get();
 
@@ -2837,7 +2855,7 @@ mod basic_primitives {
         &defbuiltin!(
             "eval",
             "Takes a string, and returns the value yielded by evaluating it.",
-            |ctx, args: &[Value]| -> Result<_> {
+            |ctx, _, args: &[Value]| -> Result<_> {
                 check_arity!("eval", args, 1);
                 let s = get_arg_str!(args, 0);
                 logdebug!("evaluate `{}`", s);
@@ -2852,7 +2870,7 @@ mod basic_primitives {
         &defbuiltin!(
             "load_file",
             "Takes a string `f`, and returns content of file `f` as a string.",
-            |_ctx, args: &[Value]| -> Result<_> {
+            |_ctx, _, args: &[Value]| -> Result<_> {
                 check_arity!("load_file", args, 1);
                 let s = get_arg_str!(args, 0);
                 let content = match std::fs::read_to_string(&*s as &str) {
@@ -2868,7 +2886,7 @@ mod basic_primitives {
         &defbuiltin!(
             "show",
             "return a string representing the argument value",
-            |_ctx, args: &[Value]| -> Result<_> {
+            |_ctx, _, args: &[Value]| -> Result<_> {
                 check_arity!("show", args, 1);
                 let v = &args[0];
                 let s = format!("{}", v);
@@ -2878,7 +2896,7 @@ mod basic_primitives {
         &defbuiltin!(
             "show_chunk",
             "shows the bytecode of a closure",
-            |ctx, args: &[Value]| -> Result<_> {
+            |ctx, _, args: &[Value]| -> Result<_> {
                 check_arity!("show_chunk", args, 1);
                 let s = get_arg_str!(args, 0);
                 if let Some(c) = ctx.find_meta_value(s).and_then(|v| v.as_closure()) {
@@ -2900,7 +2918,7 @@ mod logic_builtins {
             "set_glob",
             "`(set_glob \"x\" v)` binds `v` in the toplevel table.\n\
             Later, `(get \"x\")` or simply `x` will retrieve it.",
-            |ctx, args: &[Value]| {
+            |ctx, _, args: &[Value]| {
                 check_arity!("set_glob", args, 2);
                 let s = get_arg_str!(args, 0);
                 let v = args[1].clone();
@@ -2911,7 +2929,7 @@ mod logic_builtins {
         &defbuiltin!(
             "get_glob",
             "`(get_glob \"x\")` retrieves the toplevel value \"x\".",
-            |ctx, args: &[Value]| {
+            |ctx, _, args: &[Value]| {
                 check_arity!("get_glob", args, 1);
                 let s = get_arg_str!(args, 0);
                 match ctx.find_meta_value(s) {
@@ -2925,7 +2943,7 @@ mod logic_builtins {
             "Defines a logic constant. Takes `(nc, nth, expr_rhs)` and returns\
             the tuple `{c . th}` where `c` is the constant, with name `nc`,\n\
             and `th` is the defining theorem with name `nth`",
-            |ctx, args: &[Value]| {
+            |ctx, _, args: &[Value]| {
                 check_arity!("defconst", args, 3);
                 let nc: k::Symbol = get_arg_str!(args, 0).into();
                 let nthm = get_arg_str!(args, 1);
@@ -2938,7 +2956,7 @@ mod logic_builtins {
         &defbuiltin!(
             "defthm",
             "Defines a theorem. Takes `(name, th)`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("defthm", args, 2);
                 let name = get_arg_str!(args, 0);
                 let th = get_arg_thm!(args, 1);
@@ -2946,18 +2964,22 @@ mod logic_builtins {
                 Ok(Value::Nil)
             }
         ),
-        &defbuiltin!("expr_ty", "Get the type of an expression.", |_ctx, args| {
-            check_arity!("expr_ty", args, 1);
-            let e = get_arg_expr!(args, 0);
-            if e.is_kind() {
-                return Err(Error::new("cannot get type of `kind`"));
+        &defbuiltin!(
+            "expr_ty",
+            "Get the type of an expression.",
+            |_ctx, _, args| {
+                check_arity!("expr_ty", args, 1);
+                let e = get_arg_expr!(args, 0);
+                if e.is_kind() {
+                    return Err(Error::new("cannot get type of `kind`"));
+                }
+                Ok(Value::Expr(e.ty().clone()))
             }
-            Ok(Value::Expr(e.ty().clone()))
-        }),
+        ),
         &defbuiltin!(
             "findconst",
             "Find the constant with given name.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("findconst", args, 1);
                 let name = get_arg_str!(args, 0);
                 let e = ctx
@@ -2968,7 +2990,7 @@ mod logic_builtins {
                 Ok(Value::Expr(e))
             }
         ),
-        &defbuiltin!("findthm", "looks up a theorem by name", |ctx, args| {
+        &defbuiltin!("findthm", "looks up a theorem by name", |ctx, _, args| {
             check_arity!("findthm", args, 1);
             let s = get_arg_str!(args, 0);
             match ctx.find_lemma(s) {
@@ -2980,7 +3002,7 @@ mod logic_builtins {
             "axiom",
             "Takes a boolean expression and makes it into an axiom.\n\
             Might fail if `pledge_no_new_axiom` was called earlier.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("axiom", args, 1);
                 let e = get_arg_expr!(args, 0);
                 let th = ctx.thm_axiom(vec![], e.clone())?;
@@ -2990,7 +3012,7 @@ mod logic_builtins {
         &defbuiltin!(
             "assume",
             "Takes a boolean expression and returns the theorem `e|-e`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("assume", args, 1);
                 let e = get_arg_expr!(args, 0);
                 let th = ctx.thm_assume(e.clone())?;
@@ -3000,7 +3022,7 @@ mod logic_builtins {
         &defbuiltin!(
             "refl",
             "Takes an expression `e` and returns the theorem `|-e=e`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("refl", args, 1);
                 let e = get_arg_expr!(args, 0);
                 let th = ctx.thm_refl(e.clone());
@@ -3010,7 +3032,7 @@ mod logic_builtins {
         &defbuiltin!(
             "sym",
             "Takes a theorem `A|- t=u` and returns the theorem `A|- u=t`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("sym", args, 1);
                 let th1 = get_arg_thm!(args, 0);
                 let th = algo::thm_sym(ctx, th1.clone())?;
@@ -3020,7 +3042,7 @@ mod logic_builtins {
         &defbuiltin!(
             "trans",
             "Transitivity", // TODO Takes ` theorem `A|- t=u` and returns the theorem `A|- u=t`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("trans", args, 2);
                 let th1 = get_arg_thm!(args, 0).clone();
                 let th2 = get_arg_thm!(args, 1).clone();
@@ -3032,7 +3054,7 @@ mod logic_builtins {
             "congr",
             "Congruence. Takes `A|- f=g` and `B|- t=u`, returns `A,B|- f t=g u`.\n\
             `(congr C1…Cn)` is like `(…((congr C1 C2) C3)…Cn)`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("congr", args, >= 2);
                 let mut th_res = get_arg_thm!(args, 0).clone();
                 for i in 1..args.len() {
@@ -3045,7 +3067,7 @@ mod logic_builtins {
         &defbuiltin!(
             "decl",
             "Declare a symbol. Takes a symbol `n`, and a type.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("decl", args, 2);
                 let name = get_arg_str!(args, 0);
                 let ty = get_arg_expr!(args, 1);
@@ -3059,7 +3081,7 @@ mod logic_builtins {
             \n\
             Takes a symbol `n`, and a pair of integers `i`,`j` as left and right\
             precedences.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("set_infix", args, 3);
                 let c = get_arg_str!(args, 0);
                 let i = get_arg_int!(args, 1);
@@ -3069,7 +3091,7 @@ mod logic_builtins {
                 Ok(Value::Nil)
             }
         ),
-        &defbuiltin!("set_prefix", "Make a symbol prefix.", |ctx, args| {
+        &defbuiltin!("set_prefix", "Make a symbol prefix.", |ctx, _, args| {
             check_arity!("set_prefix", args, 2);
             let c = get_arg_str!(args, 0);
             let i = get_arg_int!(args, 1);
@@ -3077,7 +3099,7 @@ mod logic_builtins {
             ctx.set_fixity(&*c, f)?;
             Ok(Value::Nil)
         }),
-        &defbuiltin!("set_binder", "Make a symbol a binder.", |ctx, args| {
+        &defbuiltin!("set_binder", "Make a symbol a binder.", |ctx, _, args| {
             check_arity!("set_binder", args, 2);
             let c = get_arg_str!(args, 0);
             let i = get_arg_int!(args, 1);
@@ -3089,7 +3111,7 @@ mod logic_builtins {
             "abs",
             "Takes `x`, `ty`, and `A|- t=u`, and returns\
             the theorem `A|- \\x:ty. t = \\x:ty. u`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("abs", args, 3);
                 let v = get_arg_str!(args, 0);
                 let ty = get_arg_expr!(args, 1);
@@ -3103,7 +3125,7 @@ mod logic_builtins {
             "absv",
             "Takes expr `x`, and `A|- t=u`, and returns\n\
             the theorem `A|- \\x:ty. t = \\x:ty. u`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("absv", args, 2);
                 let e = get_arg_expr!(args, 0);
                 let v = e
@@ -3117,13 +3139,13 @@ mod logic_builtins {
         &defbuiltin!(
             "concl",
             "Takes a theorem `A |- t`, and returns `t`.",
-            |_ctx, args| {
+            |_ctx, _, args| {
                 check_arity!("concl", args, 1);
                 let th = get_arg_thm!(args, 0);
                 Ok(Value::Expr(th.concl().clone()))
             }
         ),
-        &defbuiltin!("app_lhs", "Takes `f t` and returns `f`", |_ctx, args| {
+        &defbuiltin!("app_lhs", "Takes `f t` and returns `f`", |_ctx, _, args| {
             check_arity!("app_lhs", args, 1);
             let e = get_arg_expr!(args, 0);
             if let k::EApp(f, _) = e.view() {
@@ -3132,7 +3154,7 @@ mod logic_builtins {
                 Err(Error::new("app_lhs: expression is not an application"))
             }
         }),
-        &defbuiltin!("app_rhs", "Takes `f t` and returns `t`", |_ctx, args| {
+        &defbuiltin!("app_rhs", "Takes `f t` and returns `t`", |_ctx, _, args| {
             check_arity!("app_lhs", args, 1);
             let e = get_arg_expr!(args, 0);
             if let k::EApp(_, t) = e.view() {
@@ -3144,7 +3166,7 @@ mod logic_builtins {
         &defbuiltin!(
             "hol_prelude",
             "Returns the builtin HOL prelude, as a string.",
-            |_ctx, args| {
+            |_ctx, _, args| {
                 check_arity!("hol_prelude", args, 0);
                 Ok(Value::Str(super::SRC_PRELUDE_HOL.into()))
             }
@@ -3152,7 +3174,7 @@ mod logic_builtins {
         &defbuiltin!(
             "pledge_no_new_axiom",
             "Prevent any further calls to `axiom` to succeed.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("pledge_no_new_axiom", args, 0);
                 ctx.pledge_no_new_axiom();
                 Ok(Value::Nil)
@@ -3161,7 +3183,7 @@ mod logic_builtins {
         &defbuiltin!(
             "congr_ty",
             "Congruence rule on a type argument.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("congr_ty", args, 2);
                 let th1 = get_arg_thm!(args, 0);
                 let ty = get_arg_expr!(args, 1);
@@ -3174,7 +3196,7 @@ mod logic_builtins {
             "Cut rule.\n\
             `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`.\n\
             `cut C_1…C_n d` is `cut C1 (cut C2 … (cut C_n d) …)).`",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("cut", args, >= 2);
                 let mut th_res = get_arg_thm!(args, args.len() - 1).clone();
                 for i in 0..args.len() - 1 {
@@ -3187,7 +3209,7 @@ mod logic_builtins {
         &defbuiltin!(
             "bool_eq",
             "Boolean equality. Takes `A|- t` and `B|- t=u`, returns `A,B|- u`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("bool_eq", args, 2);
                 let th1 = get_arg_thm!(args, 0);
                 let th2 = get_arg_thm!(args, 1);
@@ -3199,7 +3221,7 @@ mod logic_builtins {
             "bool_eq_intro",
             "Boolean equality introduction.\n\
             Takes `A, t|- u` and `B,u |- t`, returns `A,B|- t=u`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("bool_eq_intro", args, 2);
                 let th1 = get_arg_thm!(args, 0);
                 let th2 = get_arg_thm!(args, 1);
@@ -3211,7 +3233,7 @@ mod logic_builtins {
             "beta_conv",
             "Beta-conversion rule.\n\
             Takes expr `(\\x. t) u`, returns `|- (\\x. t) u = t[u/x]`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("beta_conv", args, 1);
                 let e = get_arg_expr!(args, 0);
                 let th = ctx.thm_beta_conv(e)?;
@@ -3223,7 +3245,7 @@ mod logic_builtins {
             "Instantiate a theorem with a substitution.\n\
             \n\
             Shape: `(subst th \"x1\" e1 \"x2\" e2)`.\n",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("instantiate", args, >= 1);
                 let th = get_arg_thm!(args, 0);
 
@@ -3252,7 +3274,7 @@ mod logic_builtins {
             \n\
             Shape: `(rw th_to_rewrite :beta th1 th2)`.\n\
             Each rule is either an equational theorem, or `:beta`.",
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("rw", args, >= 1);
                 let th = get_arg_thm!(args, 0);
 
@@ -3296,7 +3318,7 @@ mod logic_builtins {
             r#"`(parse_expr "? /\ ?" e1 e2)` parses the expression
             given as the first argument, interpolating each '?' with
             the corresponding of the following arguments."#,
-            |ctx, args| {
+            |ctx, _, args| {
                 check_arity!("parse_with", args, >= 1);
                 let e = get_arg_str!(args, 0);
                 let n_args = e.as_bytes().iter().filter(|&&x| x == b'?').count();
@@ -3751,6 +3773,17 @@ mod test {
     fn test_docstr() -> Result<()> {
         check_eval!("(defn f [x] (doc \"hello f\") x) (f 1)", 1);
         assert!(eval!("(defn f [x] (doc \"hello f\"))").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_capture_stdout() -> Result<()> {
+        let mut ctx = Ctx::new();
+        let mut vm = VM::new(&mut ctx);
+        let mut out: Vec<u8> = vec![];
+        vm.stdout = Some(&mut out);
+        vm.run("(print 42)", None)?;
+        assert_eq!(std::str::from_utf8(&out).ok(), Some("42"));
         Ok(())
     }
 
