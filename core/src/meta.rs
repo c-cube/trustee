@@ -2829,7 +2829,7 @@ mod basic_primitives {
          -> Result<Value> {
             for x in args {
                 if let Some(o) = out {
-                    write!(o, "{}", x)
+                    writeln!(o, "{}", x)
                         .map_err(|e| Error::new_string(format!("error while printing: {}", e)))?
                 } else {
                     println!("print: {}", x)

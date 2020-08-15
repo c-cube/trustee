@@ -1744,9 +1744,10 @@ impl Ctx {
                 Error::new("bool-eq: th2 should have a boleean equality as conclusion")
             })?;
         if a != &th1.0.concl {
-            return Err(Error::new(
-                "bool-eq: the conclusion of th1 is not compatible with th2's concl LHS",
-            ));
+            return Err(Error::new_string(format!(
+                "bool-eq: the conclusion of th1, `{}` is not compatible with th2's concl LHS `{}`",
+                th1.0.concl, a
+            )));
         }
         let b = b.clone();
 
