@@ -90,6 +90,8 @@ struct ChunkImpl {
     n_slots: u32,
     /// Name of this chunk, if any.
     name: Option<RStr>,
+    /// Documentation, if any.
+    docstring: Option<RStr>,
     /// Debug info: file name
     file_name: Option<RStr>,
     /// Debug info: initial line
@@ -121,7 +123,10 @@ struct Compiler<'a> {
     n_args: u8,
     /// Maximum size `slots` ever took, including `n_args`.
     n_slots: u32,
+    /// Name for the future chunk.
     name: Option<RStr>,
+    /// Docstring for the future chunk.
+    docstring: Option<RStr>,
     slots: Vec<CompilerSlot>,
     /// Parent compiler, used to resolve values from outer scopes.
     parent: Option<*mut Compiler<'a>>,
@@ -466,6 +471,7 @@ mod ml {
                 n_args: 0,
                 n_captured: 0,
                 file_name: None,
+                docstring: None,
                 first_line: 0,
             }))
         }
@@ -524,6 +530,11 @@ mod ml {
         /// Name of the chunk.
         pub fn name(&self) -> Option<&str> {
             self.0.c.0.name.as_deref()
+        }
+
+        /// Docstring of the chunk, if any.
+        pub fn docstring(&self) -> Option<&str> {
+            self.0.c.0.docstring.as_deref()
         }
 
         fn print(&self, full: bool, ic: Option<usize>) -> io::Result<String> {
@@ -1526,6 +1537,7 @@ pub(crate) mod parser {
                 n_captured: self.captured.len() as u8,
                 name: self.name,
                 first_line: self.first_line,
+                docstring: self.docstring,
                 file_name: self.file_name,
             };
             Chunk(k::Ref::new(c))
@@ -1988,6 +2000,7 @@ pub(crate) mod parser {
                         n_args: 0,
                         lex_scopes: vec![],
                         name: None,
+                        docstring: None,
                         slots: vec![],
                         parent: None,
                         phantom: PhantomData,
@@ -2044,6 +2057,7 @@ pub(crate) mod parser {
                     n_slots: 0,
                     n_args: vars.len() as u8,
                     name: f_name.clone(),
+                    docstring: None,
                     lex_scopes: vec![],
                     slots: vec![],
                     parent,
@@ -2057,6 +2071,7 @@ pub(crate) mod parser {
                     c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
                 }
                 logtrace!("compiling {:?}: slots for args: {:?}", &f_name, &c.slots);
+
                 let res = self.parse_expr_seq_(&mut c, closing, None)?;
 
                 // return value
@@ -2066,6 +2081,26 @@ pub(crate) mod parser {
             };
 
             Ok(ch)
+        }
+
+        /// After a '(', see if we have `(doc "str")`
+        fn try_parse_doc(&mut self) -> Result<Option<RStr>> {
+            let loc = self.lexer.loc();
+            if let Tok::Id("doc") = self.cur_tok_() {
+                // docstring
+                self.next_tok_();
+                let s = if let Tok::QuotedString(s) = self.cur_tok_() {
+                    s.into()
+                } else {
+                    return Err(perror!(loc, "`doc` expects a string"));
+                };
+                self.lexer.next();
+                self.eat_(Tok::RParen, "missing ')' after `doc`")?;
+
+                Ok(Some(s))
+            } else {
+                Ok(None)
+            }
         }
 
         /// Parse an application-type expression, closed with `closing`.
@@ -2509,15 +2544,52 @@ pub(crate) mod parser {
             sl_res: Option<SlotIdx>,
         ) -> Result<ExprRes> {
             let res = get_res!(c, sl_res);
+            let mut first = true;
+            let mut init = false;
+            let loc = self.lexer.loc();
+
             loop {
                 if self.cur_tok_() == closing {
                     break; // done
                 }
-                let _ = self.parse_expr_(c, Some(res.slot))?;
+                let allow_doc = first;
+                let r = self.parse_expr_or_doc_(c, allow_doc, res.slot)?;
+                // make sure we return a value
+                init = init || r.is_some();
+                first = false;
             }
             self.eat_(closing, "unclosed sequence")?;
 
+            if !init {
+                return Err(perror!(
+                    loc,
+                    "no value is returned (is there only `doc` in here?)"
+                ));
+            }
+
             Ok(res)
+        }
+
+        fn parse_expr_or_doc_(
+            &mut self,
+            c: &mut Compiler,
+            allow_doc: bool,
+            sl_res: SlotIdx,
+        ) -> Result<Option<ExprRes>> {
+            if let Tok::LParen = self.cur_tok_() {
+                self.next_tok_();
+
+                if allow_doc && c.docstring.is_none() {
+                    if let Some(doc) = self.try_parse_doc()? {
+                        c.docstring = Some(doc);
+                        return Ok(None);
+                    }
+                }
+
+                Ok(Some(self.parse_expr_app_(c, Some(sl_res))?))
+            } else {
+                Ok(Some(self.parse_expr_(c, Some(sl_res))?))
+            }
         }
 
         /// Parse an expression and return its result's slot.
@@ -3672,6 +3744,13 @@ mod test {
         run_code(&mut ctx, PRELUDE, None)?;
         let v = run_code(&mut ctx, "(MP (assume `p0 ==> q0`) (assume `p0`))", None)?;
         assert_eq!(v.as_thm().expect("thm").concl().clone().to_string(), "q0");
+        Ok(())
+    }
+
+    #[test]
+    fn test_docstr() -> Result<()> {
+        check_eval!("(defn f [x] (doc \"hello f\") x) (f 1)", 1);
+        assert!(eval!("(defn f [x] (doc \"hello f\"))").is_err());
         Ok(())
     }
 
