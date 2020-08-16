@@ -921,7 +921,7 @@ impl Printer {
                 };
                 let f_name = fv.name.name();
                 match fv.fixity() {
-                    Fixity::Infix((l, r)) if args.len() >= 2 => {
+                    Fixity::Infix((l, r)) if args.len() >= 2 && !e.ty().is_fun_type() => {
                         let n = args.len();
                         if (pl > 0 && pl >= l) || (pr > 0 && pr >= r) {
                             return self.pp_expr_paren_(e, k, out);
@@ -957,8 +957,9 @@ impl Printer {
                     | Fixity::Binder(..)
                     | Fixity::Prefix(..)
                     | Fixity::Postfix(..) => {
-                        // default, safe case: print using `$` as prefix.
-                        write!(out, "($")?;
+                        // default, safe case: print `f` independently,
+                        // it'll have `$` as prefix.
+                        write!(out, "(")?;
                         self.pp_expr(f, k, P_MAX, P_MAX, out)?;
                         for x in &args {
                             write!(out, " ")?;
@@ -1289,6 +1290,20 @@ mod test {
             let r2 = format!("{}", r);
             assert_eq!(&r2, *s, "left: actual, right: expected");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_infix_pp_eq() -> Result<()> {
+        let mut ctx = Ctx::new();
+        let a = parse_expr(&mut ctx, "x:bool")?;
+        let b = parse_expr(&mut ctx, "y:bool")?;
+        let e = ctx.mk_eq_app(a, b)?;
+        let s = format!("{}", e);
+        assert_eq!(s, "with x y:bool. x = y");
+        let e1 = e.as_app().ok_or_else(|| Error::new("is not app"))?.0;
+        let s1 = format!("{}", e1);
+        assert_eq!(s1, "with x:bool. ($= bool x)");
         Ok(())
     }
 }

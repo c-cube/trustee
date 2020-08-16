@@ -465,6 +465,14 @@ impl Expr {
         }
     }
 
+    /// Is this a functional type?
+    pub fn is_fun_type(&self) -> bool {
+        match self.0.view {
+            EPi(..) => true,
+            _ => false,
+        }
+    }
+
     /// Is this the representation of `=`?
     pub fn is_eq(&self) -> bool {
         match &self.0.view {
