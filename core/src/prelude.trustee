@@ -162,7 +162,7 @@
     (bool_eq_intro th1 th2)
   })
 
-(defn RAndAssoc [a b]
+(defn RAndAssoc [a b c]
   (doc "Takes `a` `b` and `c` and returns `(a/\b)/\c = a/\(b/\c")
   (subst AndAssoc "a" a "b" b "c" c))
 
@@ -172,7 +172,8 @@
     (def goal1 (assume `with a b: bool. a /\ b`))
     (def th_a (RAndElim1 goal1))
     (def th_b (RAndElim2 goal1))
-    (def th1 (RAndIntro th_b th_a))
+    (def th1 (cut th_a th_b (RAndIntro th_b th_a)))
+    ; other case is exactly the same
     (def th2 (subst th1 "a" `b:bool` "b" `a:bool`))
     (bool_eq_intro th1 th2)
   })

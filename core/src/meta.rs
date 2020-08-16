@@ -3783,7 +3783,7 @@ mod test {
         let mut out: Vec<u8> = vec![];
         vm.stdout = Some(&mut out);
         vm.run("(print 42)", None)?;
-        assert_eq!(std::str::from_utf8(&out).ok(), Some("42"));
+        assert_eq!(std::str::from_utf8(&out).ok().map(|x| x.trim()), Some("42"));
         Ok(())
     }
 
