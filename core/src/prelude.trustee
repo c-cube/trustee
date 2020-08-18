@@ -133,7 +133,7 @@
   (doc "rule from `A |- a`, `B |- b` to `A, B |- a /\ b`")
   (def a (concl tha))
   (def b (concl thb))
-  (subst AndIntro "a" a "b" b))
+  (cut tha thb (subst AndIntro "a" a "b" b)))
 
 ; example:
 ; (print (cut TrueIsTrue (RAndIntro (assume `T`) (assume `b:bool`))))
@@ -148,16 +148,16 @@
     (def th_ab (RAndElim1 goal1))
     (def th_a (cut th_ab (RAndElim1 th_ab)))
     (def th_b (cut th_ab (RAndElim2 th_ab)))
-    (def th_bc (cut th_b th_c (RAndIntro th_b th_c)))
-    (def th1 (cut th_a th_bc (RAndIntro th_a th_bc)))
+    (def th_bc (RAndIntro th_b th_c))
+    (def th1 (RAndIntro th_a th_bc))
 
     (def goal2 (assume `with a b c: bool. a /\ (b /\ c)`))
     (def th_a (RAndElim1 goal2))
     (def th_bc (RAndElim2 goal2))
     (def th_b (cut th_bc (RAndElim1 th_bc)))
     (def th_c (cut th_bc (RAndElim2 th_bc)))
-    (def th_ab (cut th_a th_b (RAndIntro th_a th_b)))
-    (def th2 (cut th_c th_ab (RAndIntro th_ab th_c)))
+    (def th_ab (RAndIntro th_a th_b))
+    (def th2 (RAndIntro th_ab th_c))
 
     (bool_eq_intro th1 th2)
   })
@@ -172,7 +172,7 @@
     (def goal1 (assume `with a b: bool. a /\ b`))
     (def th_a (RAndElim1 goal1))
     (def th_b (RAndElim2 goal1))
-    (def th1 (cut th_a th_b (RAndIntro th_b th_a)))
+    (def th1 (RAndIntro th_b th_a))
     ; other case is exactly the same
     (def th2 (subst th1 "a" `b:bool` "b" `a:bool`))
     (bool_eq_intro th1 th2)
@@ -275,6 +275,20 @@
   (def r (REqTrueElim r))
   (cut r (RAndElim2 r))
 })
+
+; from `a|-b` to `|- a==>b`
+(defn RImplyIntro [th a]
+  (doc "takes `F, a|-b` and `a` and returns `F |- a==>b`")
+  (def b (concl th))
+  ; a |- a/\b
+  (def h1 (RAndIntro (assume a) th))
+  ; a/\b |- a
+  (def h2 (RAndElim1 (assume (parse_expr "? /\ ?" a b))))
+  ; (a/\b)=a
+  (def conj (bool_eq_intro h2 h1))
+  (def def_imp (sym (RImplyDefSubst a b)))
+  (def res (bool_eq conj def_imp))
+  res)
 
 (defn MP [th1 th2]
   (doc "takes `|- a==>b` and `|- a` and returns `|- b`")
