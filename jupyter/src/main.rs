@@ -43,14 +43,14 @@ impl jy::EvalContextImpl for EvalTrustee {
     fn meta(&self) -> jy::MetaData {
         jy::MetaData {
             language_name: "trustee".to_string(),
-            codemirror_mode: "trustee".to_string(),
+            codemirror_mode: "text/x-trustee".to_string(),
             pygment_lexer: "trustee".to_string(),
             file_extension: "trustee".to_string(),
             mimetype: "text/plain".to_string(),
         }
     }
 
-    fn eval(&mut self, code: &str, execution_count: usize) -> Result<jy::EvalOutputs> {
+    fn eval(&mut self, code: &str, execution_count: usize) -> jy::EvalResult {
         log::debug!("eval code=`{}`, execution_cout={}", code, execution_count);
 
         let src = format!("cell {}", execution_count);
@@ -58,42 +58,51 @@ impl jy::EvalContextImpl for EvalTrustee {
         let mut vm = meta::VM::new(self.ctx());
         let mut stdout = vec![];
         vm.set_stdout(&mut stdout);
-        match vm.run(code, Some(src.into())) {
+
+        // evaluate `code`
+        let eval_res = vm.run(code, Some(src.into()));
+
+        let dur = time::Instant::now().duration_since(start);
+        let timing = if dur.as_millis() > 500 {
+            Some(dur)
+        } else {
+            None
+        };
+
+        let raw_stdout = match std::string::String::from_utf8(stdout) {
+            Ok(s) => {
+                log::debug!("stdout: {:?}", s);
+                if s.len() > 0 {
+                    Some(s)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        // TODO: more mimetypes? return some html when we can
+        let mut res = jy::EvalResult {
+            res: Ok(()),
+            content_by_mime_type: HashMap::new(),
+            timing,
+            raw_stderr: None,
+            raw_stdout,
+        };
+
+        match eval_res {
             Ok(v) => {
-                let dur = time::Instant::now().duration_since(start);
-
-                let raw_stdout = match std::string::String::from_utf8(stdout) {
-                    Ok(s) => {
-                        log::debug!("stdout: {:?}", s);
-                        if s.len() > 0 {
-                            Some(s)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-
-                // TODO: mimetypes
-                let mut outs = jy::EvalOutputs {
-                    content_by_mime_type: HashMap::new(),
-                    timing: if dur.as_millis() > 500 {
-                        Some(dur)
-                    } else {
-                        None
-                    },
-                    raw_stderr: None,
-                    raw_stdout,
-                };
                 if v != meta::Value::Nil {
-                    outs.content_by_mime_type
+                    res.content_by_mime_type
                         .insert("text/plain".to_string(), format!("{}", v));
                 }
-
-                Ok(outs)
             }
-            Err(e) => Err(anyhow!("evaluation failed:\n{}", e)),
-        }
+            Err(e) => {
+                res.res = Err(anyhow!("evaluation failed:\n{}", e));
+            }
+        };
+
+        res
     }
 
     fn inspect(&mut self, code: &str, cursor_pos: usize) -> Option<String> {

@@ -280,7 +280,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "jupyter_kernel"
 version = "0.0.1"
-source = "git+https://github.com/c-cube/jupyter-kernel-rs#236ccdcd109013e8f101bfe6ffc5316db2ecdf55"
+source = "git+https://github.com/c-cube/jupyter-kernel-rs#03b59358d350827e046528162e8bf1d17c0524ab"
 dependencies = [
  "anyhow 1.0.31 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono 0.4.13 (registry+https://github.com/rust-lang/crates.io-index)",
