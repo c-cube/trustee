@@ -19,6 +19,7 @@ macro_rules! get_impl_ref {
     }};
 }
 
+#[allow(unsafe_code)]
 impl<T> Clone for RPtr<T> {
     #[inline]
     fn clone(&self) -> Self {
@@ -85,6 +86,7 @@ where
     }
 }
 
+#[allow(unsafe_code)]
 impl<T> Drop for RPtr<T> {
     fn drop(&mut self) {
         unsafe {
@@ -129,6 +131,7 @@ where
     }
 }
 
+#[allow(unsafe_code)]
 impl<T> RPtr<T> {
     /// New pointer.
     pub fn new(v: T) -> Self {

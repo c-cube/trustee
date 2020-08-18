@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 pub mod algo;
 mod fnv;
 pub mod kernel_of_trust;

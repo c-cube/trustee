@@ -706,6 +706,7 @@ mod ml {
         };
     }
 
+    #[allow(unsafe_code)]
     impl<'a> VM<'a> {
         /// Create a new VM using the given context.
         pub fn new(ctx: &'a mut Ctx) -> Self {
@@ -1783,6 +1784,7 @@ pub(crate) mod parser {
         }
 
         /// Find slot for the given variable `v`.
+        #[allow(unsafe_code)] // used for making `parent` pointers covariant
         fn find_slot_of_var(&mut self, v: &str) -> Result<Option<VarSlot>> {
             for (i, s) in self.slots.iter().enumerate().rev() {
                 if s.state != CompilerSlotState::Activated {

@@ -66,6 +66,7 @@ impl std::borrow::Borrow<str> for RStr {
     }
 }
 
+#[allow(unsafe_code)]
 impl Drop for RStrImpl {
     fn drop(&mut self) {
         unsafe {
@@ -112,6 +113,7 @@ impl RStrImpl {
         Self::from_vec_(s.as_bytes().to_vec())
     }
 
+    #[allow(unsafe_code)]
     pub fn get(&self) -> &str {
         unsafe {
             let sl = std::slice::from_raw_parts(self.data, self.len as usize);
