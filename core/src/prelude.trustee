@@ -31,7 +31,7 @@
 
 (defn REqTrueElim [th]
   (doc "rule from `A |- x=T` to `A |- x`")
-  (def x (app_rhs (app_lhs (concl th))))
+  (def x (e_app_rhs (e_app_lhs (concl th))))
   (def th1 (subst EqTrueElim "x" x))
   (bool_eq th th1))
 
@@ -49,7 +49,7 @@
 (defn RForallIntro [th x]
   (doc "rule that takes `F |- P[x]` with `x` not in `fvars(F)`, and returns `F |- forall x. P[x]`.")
   ; build `\x. P[x]`
-  (def P (parse_expr "\x:?. ?" (expr_ty x) (concl th)))
+  (def P (e_abs x (concl th)))
   ; get `($forall P) = (\x. P[x] = \x. T)
   (def forallp (rw (congr (congr_ty DefForall (expr_ty x)) (refl P)) :beta))
   ; get `F |- \x. P[x] = \x. T`
@@ -104,15 +104,15 @@
 (defn RAndElim1 [th]
   (doc "rule from `A |- a /\ b` to `A |- a`")
   (def c (concl th))
-  (def a (app_rhs (app_lhs c)))
-  (def b (app_rhs c))
+  (def a (e_app_rhs (e_app_lhs c)))
+  (def b (e_app_rhs c))
   (subst AndElim1 "a" a "b" b))
 
 (defn RAndElim2 [th]
   (doc "rule from `A |- a /\ b` to `A |- b`")
   (def c (concl th))
-  (def a (app_rhs (app_lhs c)))
-  (def b (app_rhs c))
+  (def a (e_app_rhs (e_app_lhs c)))
+  (def b (e_app_rhs c))
   (subst AndElim2 "a" a "b" b))
 
 ; theorem `a, b |- a /\ b`
@@ -258,7 +258,7 @@
 
 ; instantiates `a ==> b = …`
 (defn RImplyDefSubst [a b]
-  (doc "takes `a` and `b` and instantiates `(a ==> b) = ((a/\b)=a)`")
+  (doc "expand def of `==>`: takes `a` and `b` and instantiates `(a ==> b) = ((a/\b)=a)`")
   (rw (congr DefImply (refl a) (refl b)) :beta))
 
 ; prove `a, a ==> b |- b`
@@ -276,14 +276,14 @@
   (cut r (RAndElim2 r))
 })
 
-; from `a|-b` to `|- a==>b`
+; from `F, a|-b` and `a`, to `F |- a==>b`
 (defn RImplyIntro [th a]
   (doc "takes `F, a|-b` and `a` and returns `F |- a==>b`")
   (def b (concl th))
   ; a |- a/\b
   (def h1 (RAndIntro (assume a) th))
   ; a/\b |- a
-  (def h2 (RAndElim1 (assume (parse_expr "? /\ ?" a b))))
+  (def h2 (RAndElim1 (assume (e_app (e_app `$/\` a) b))))
   ; (a/\b)=a
   (def conj (bool_eq_intro h2 h1))
   (def def_imp (sym (RImplyDefSubst a b)))
@@ -293,22 +293,41 @@
 (defn MP [th1 th2]
   (doc "takes `|- a==>b` and `|- a` and returns `|- b`")
   (def a (concl th2))
-  (def b (app_rhs (concl th1)))
+  (def b (e_app_rhs (concl th1)))
   (subst ImplyElim "a" a "b" b))
 
 (defn RImplyElim [th]
   (doc "takes `F |- a==>b` and returns `F, a |- b`")
-  (def a (app_rhs (app_lhs (concl th))))
+  (def a (e_app_rhs (e_app_lhs (concl th))))
   (cut th (MP th (assume a))))
+
+(defconst "~" "DefNot" `\p:bool. p ==> F`)
+(set_prefix "~" 62)
+
+; expand definition of ~
+(defn RNotDefSubst [x]
+  (doc "expand def of `~`: takes `t` and returns `~t = (t==>F)`")
+  (rw (congr DefNot (refl x)) :beta))
+
+; prove ~ (T=F)
+(set NotTrueEqFalse
+  ; prove `T=F ==> F`
+  (def h0 (assume `T=F`))
+  (def h1 (bool_eq TrueIsTrue h0))
+  (def h2 (RImplyIntro h1 `T=F`))
+  (def teqf (RNotDefSubst `T = F`))
+  (bool_eq h2 (sym teqf)))
 
 (defconst "\/" "DefOr" `\a b: bool. forall t: bool. (a ==> t) ==> (b ==> t) ==> t`)
 (set_infix "\/" 22 21)
 ; TODO: lemmas about \/
 
-; negation
+; def or `\/`
+(defn ROrDefSubst [x y]
+  (doc "expands def of `\/`: takes `x` and `y` and returns `x\/y = …`")
+  (rw (congr DefOr (refl x) (refl y)) :beta))
 
-(defconst "~" "DefNot" `\p:bool. p ==> F`)
-(set_prefix "~" 62)
+; negation
 
 ; declare `select`
 (decl "select" `pi a. (a -> bool) -> a`)

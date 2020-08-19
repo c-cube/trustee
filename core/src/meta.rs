@@ -3147,24 +3147,55 @@ mod logic_builtins {
                 Ok(Value::Expr(th.concl().clone()))
             }
         ),
-        &defbuiltin!("app_lhs", "Takes `f t` and returns `f`", |_ctx, _, args| {
-            check_arity!("app_lhs", args, 1);
-            let e = get_arg_expr!(args, 0);
-            if let k::EApp(f, _) = e.view() {
-                Ok(Value::Expr(f.clone()))
-            } else {
-                Err(Error::new("app_lhs: expression is not an application"))
+        &defbuiltin!(
+            "e_abs",
+            "Takes `x` and `body` and returns `\\x. body`",
+            |ctx, _, args| {
+                check_arity!("e_abs", args, 2);
+                let x = match get_arg_expr!(args, 0).as_var() {
+                    Some(v) => v,
+                    None => return Err(Error::new("e.abs expects a variable")),
+                };
+                let b = get_arg_expr!(args, 1);
+                Ok(ctx.mk_lambda(x.clone(), b.clone())?.into())
             }
-        }),
-        &defbuiltin!("app_rhs", "Takes `f t` and returns `t`", |_ctx, _, args| {
-            check_arity!("app_lhs", args, 1);
-            let e = get_arg_expr!(args, 0);
-            if let k::EApp(_, t) = e.view() {
-                Ok(Value::Expr(t.clone()))
-            } else {
-                Err(Error::new("app_rhs: expression is not an application"))
+        ),
+        &defbuiltin!(
+            "e_app",
+            "Takes `f` and `t` and returns `f t`",
+            |ctx, _, args| {
+                check_arity!("e_app", args, 2);
+                let a = get_arg_expr!(args, 0);
+                let b = get_arg_expr!(args, 1);
+                Ok(ctx.mk_app(a.clone(), b.clone())?.into())
             }
-        }),
+        ),
+        &defbuiltin!(
+            "e_app_lhs",
+            "Takes `f t` and returns `f`",
+            |_ctx, _, args| {
+                check_arity!("e_app_lhs", args, 1);
+                let e = get_arg_expr!(args, 0);
+                if let k::EApp(f, _) = e.view() {
+                    Ok(Value::Expr(f.clone()))
+                } else {
+                    Err(Error::new("app_lhs: expression is not an application"))
+                }
+            }
+        ),
+        &defbuiltin!(
+            "e_app_rhs",
+            "Takes `f t` and returns `t`",
+            |_ctx, _, args| {
+                check_arity!("e_app_lhs", args, 1);
+                let e = get_arg_expr!(args, 0);
+                if let k::EApp(_, t) = e.view() {
+                    Ok(Value::Expr(t.clone()))
+                } else {
+                    Err(Error::new("app_rhs: expression is not an application"))
+                }
+            }
+        ),
         &defbuiltin!(
             "hol_prelude",
             "Returns the builtin HOL prelude, as a string.",

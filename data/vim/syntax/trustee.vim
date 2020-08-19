@@ -1,9 +1,10 @@
 set expandtab
 
 syn keyword     trusteeKW        def defconst set get decl findthm let defn fn
-syn keyword     trusteeKW        expr_ty app_lhs app_rhs parse_expr set doc
+syn keyword     trusteeKW        expr_ty parse_expr set doc
 syn keyword     trusteeKW        findconst set_infix set_binder set_prefix become do eval
 syn keyword     trusteeKW        hol_prelude pledge_no_more_axioms source print
+syn keyword     trusteeKW        e_app_lhs e_app_rhs e_app e_abs
 syn match       trusteeKW        "=="
 syn match       trusteeKW        "!="
 syn match       trusteeKW        ">="
