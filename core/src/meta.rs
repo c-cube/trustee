@@ -280,13 +280,14 @@ pub struct InstrBuiltin {
     ///
     /// The name should be consistent with lexical conventions (no whitespaces,
     /// brackets, backquotes, etc.)
-    name: &'static str,
+    pub name: &'static str,
 
     /// Execute the instruction on the given state with arguments.
-    run: fn(ctx: &mut Ctx, out: &mut Option<&mut dyn io::Write>, args: &[Value]) -> Result<Value>,
+    pub run:
+        fn(ctx: &mut Ctx, out: &mut Option<&mut dyn io::Write>, args: &[Value]) -> Result<Value>,
 
     /// A one-line help text for this instruction.
-    help: &'static str,
+    pub help: &'static str,
 }
 
 // TODO: have `let sc = open_scope(); …  close_scope(sc)` with #[must_use],
@@ -2772,9 +2773,13 @@ get_arg_as!(get_arg_expr, "expr", Value::Expr(i), i, &k::Expr);
 get_arg_as!(get_arg_thm, "thm", Value::Thm(i), i, k::Thm);
 //get_as_of!(get_slot_sym, "sym", Value::Sym(i), i, k::Ref<str>);
 
+#[macro_export]
+/// Define a builtin instruction using a name, help string, and a statically known function.
+///
+/// Usage: `defbuiltin!("foo", "foo help", |ctx, _, args| { … })`.
 macro_rules! defbuiltin {
     ($name: literal, $help:literal, $run:expr) => {
-        InstrBuiltin {
+        crate::meta::InstrBuiltin {
             name: $name,
             help: $help,
             run: $run,
@@ -2782,10 +2787,13 @@ macro_rules! defbuiltin {
     };
 }
 
+#[macro_export]
+/// `check_arity!("context", args, 2)` or `check_arity!("context", args, >= 2)` performs a basic
+/// arity check. To be used in `defbuiltin`.
 macro_rules! check_arity {
     ($what: expr, $args: expr, >= $n: literal) => {
         if $args.len() < $n {
-            return Err(Error::new(concat!(
+            return Err(crate::Error::new(concat!(
                 "arity mismatch in ",
                 $what,
                 ": expected at least ",
@@ -2797,7 +2805,7 @@ macro_rules! check_arity {
 
     ($what: expr, $args: expr, $n: literal) => {
         if $args.len() != $n {
-            return Err(Error::new(concat!(
+            return Err(crate::Error::new(concat!(
                 "arity mismatch in ",
                 $what,
                 ": expected ",

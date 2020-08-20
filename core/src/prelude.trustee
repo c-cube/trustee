@@ -417,14 +417,27 @@
 
 
 ; Map over a list
-(defn map [f l]
+(defn list_map [f l]
   (doc "(map f l) maps f over list l")
-  (if (nil? l) nil (cons (f (car l)) (map f (cdr l)))))
+  (if (nil? l) nil (cons (f (car l)) (list_map f (cdr l)))))
 
-(defn fold [f acc l]
+(defn list_fold [f acc l]
   (doc "(fold f acc l) left-folds f over l with accumulator acc.")
   (if (nil? l) acc
-    (become fold f (f acc (car l)) (cdr l))))
+    (become list_fold f (f acc (car l)) (cdr l))))
+
+; length of list
+(defn list_len [l]
+  (doc "length of input list")
+  (if (nil? l) 0 (+ 1 (list_len (cdr l)))))
+
+; iterate on list
+(defn list_iter [f l]
+  (doc "apply `f` on each element of `l`")
+  (if (nil? l) nil
+    { (f (car l))
+      (become list_iter f (cdr l))
+    }))
 
 ; # END OF FILE
 ; # avoid double include
