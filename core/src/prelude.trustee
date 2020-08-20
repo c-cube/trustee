@@ -305,7 +305,7 @@
 (defn RImplyElim [th]
   (doc "takes `F |- a==>b` and returns `F, a |- b`")
   (def a (e_app_rhs (e_app_lhs (concl th))))
-  (cut th (MP th (assume a))))
+  (MP th (assume a)))
 
 (set ImplyImpliesImply
   (def t `a:bool ==> b:bool`)
@@ -406,7 +406,8 @@
   (def b (e_app_rhs (concl th)))
   (bool_eq th (subst OrComm "a" a "b" b)))
 
-; TODO: lemmas about \/
+; TODO: assoc for \/
+; TODO: a rule for `|- a\/b`, `|-a==>F`, `|-b==>F` to `|-F`
 
 ; #### select ####
 
