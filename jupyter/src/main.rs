@@ -1,17 +1,44 @@
 use anyhow::{anyhow, Result};
 use jupyter_kernel as jy;
-use std::{collections::HashMap, io::Write, time};
+use std::{collections::HashMap, time};
 use trustee::{
-    kernel_of_trust as k,
-    meta::{self, lexer::Tok},
+    self, kernel_of_trust as k,
+    meta::{self, lexer::Tok, Value},
+    Error,
 };
 
+/// Builtins specific to jupyter.
+const BUILTINS: &'static [&'static meta::InstrBuiltin] = &[&trustee::defbuiltin!(
+    "import_ot",
+    "`import_ts \"file\"+` imports theorems from the opentheory file(s)",
+    |ctx, _out, args| {
+        trustee::check_arity!("import_ot", args, >= 1);
+        let mut vm = trustee_opentheory::VM::new(ctx);
+        for file in args {
+            let file = file.as_str().ok_or_else(|| Error::new("expect a string"))?;
+            log::info!("parse opentheory file '{}'", file);
+            vm.parse_file(file)?;
+        }
+        let art = vm.into_article();
+        log::debug!("got article: {:#?}", &art);
+        let l: Value = art.theorems.into();
+        Ok(l)
+    }
+)];
+
+/// The core structure for the jupyter kernel.
 struct EvalTrustee {
     _ctx: Option<k::Ctx>,
 }
 
+#[derive(Debug, Copy, Clone)]
+enum TokKind {
+    Id,
+    QuotedStr,
+}
+
 /// Find identifier the cursor is on (or just after)
-fn find_tok(s: &str, cursor_pos: usize) -> Option<(String, usize, usize)> {
+fn find_tok(s: &str, cursor_pos: usize) -> Option<(String, TokKind, usize, usize)> {
     let mut lexer = meta::lexer::Lexer::new(s, None);
     loop {
         let t = lexer.cur().clone();
@@ -24,12 +51,19 @@ fn find_tok(s: &str, cursor_pos: usize) -> Option<(String, usize, usize)> {
 
         if start <= cursor_pos && end >= cursor_pos {
             // here is where we want to complete
-            if let Tok::Id(s) = lexer.cur() {
-                log::debug!("relevant token is {:?} (range {}--{})", s, start, end);
-                return Some((s.to_string(), start, end));
-            } else {
-                log::debug!("outside any identifier");
-                return None;
+            match lexer.cur() {
+                Tok::Id(s) => {
+                    log::debug!("relevant token is {:?} (range {}--{})", s, start, end);
+                    return Some((s.to_string(), TokKind::Id, start, end));
+                }
+                Tok::QuotedString(s) => {
+                    log::debug!("relevant token is {:?} (range {}--{})", s, start, end);
+                    return Some((s.to_string(), TokKind::QuotedStr, start, end));
+                }
+                _ => {
+                    log::debug!("outside any identifier");
+                    return None;
+                }
             }
         } else {
             // go to next token
@@ -112,7 +146,7 @@ impl jy::EvalContextImpl for EvalTrustee {
             cursor_pos
         );
 
-        if let Some((tok, _start, _end)) = find_tok(code, cursor_pos) {
+        if let Some((tok, TokKind::Id, _start, _end)) = find_tok(code, cursor_pos) {
             if let Some(v) = self.ctx().find_meta_value(&tok) {
                 let help = match v {
                     meta::Value::Closure(c) => c
@@ -156,11 +190,11 @@ impl jy::EvalContextImpl for EvalTrustee {
             cursor_pos
         );
 
-        if let Some((tok, start, end)) = find_tok(code, cursor_pos) {
-            let mut compls: Vec<String> = vec![];
+        let mut compls: Vec<String> = vec![];
+        let mut add_compl = |s: &str| compls.push(s.to_string());
 
-            let mut add_compl = |s: &str| compls.push(s.to_string());
-
+        let tok = find_tok(code, cursor_pos); // find token of interest
+        if let Some((tok, TokKind::Id, start, end)) = tok {
             for (s, _e) in self.ctx().iter_meta_values() {
                 if s.starts_with(&tok) {
                     add_compl(s)
@@ -169,6 +203,28 @@ impl jy::EvalContextImpl for EvalTrustee {
             for s in meta::all_builtin_names() {
                 if s.starts_with(&tok) {
                     add_compl(s)
+                }
+            }
+
+            if compls.len() > 0 {
+                log::info!("found {} completions", compls.len());
+                log::debug!("completions: {:#?}", compls);
+                return Some(jy::CompletionRes {
+                    cursor_start: start,
+                    cursor_end: end,
+                    matches: compls,
+                });
+            }
+        } else if let Some((tok, TokKind::QuotedStr, start, end)) = tok {
+            // complete file names
+            use std::path::Path;
+            let path = Path::new(&tok);
+            log::info!("complete quoted string as path '{:?}'", path);
+            let dir = if path.is_file() { path.parent()? } else { path };
+            for x in dir.read_dir().ok()? {
+                let path2 = dir.join(x.ok()?.path());
+                if let Some(p2) = path2.to_str() {
+                    add_compl(p2);
                 }
             }
 
@@ -197,6 +253,10 @@ impl EvalTrustee {
         if let None = &mut self._ctx {
             let mut ctx = k::Ctx::new();
             meta::load_prelude_hol(&mut ctx).expect("failed to load prelude");
+            // add our custom builtins
+            for x in BUILTINS {
+                ctx.set_meta_value(x.name, Value::Builtin(x))
+            }
             self._ctx = Some(ctx);
         }
         self._ctx.as_mut().unwrap()

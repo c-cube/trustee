@@ -627,6 +627,7 @@ dependencies = [
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "simplelog 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "trustee 0.1.0",
+ "trustee_opentheory 0.1.0",
 ]
 
 [[package]]

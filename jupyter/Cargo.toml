@@ -8,6 +8,7 @@ edition = "2018"
 
 [dependencies]
 trustee = {path="../core", features=["logging"]}
+trustee_opentheory = {path="../opentheory"}
 log = "0.4"
 simplelog = "0.7.4"
 anyhow="1.0"
