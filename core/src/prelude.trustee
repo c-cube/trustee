@@ -2,6 +2,16 @@
 
 ; ## The HOL prelude for Trustee.
 
+; #### Helper rules ####
+
+(defn RAppLeft [f th]
+  (doc "takes `f` and `|- t=u` and returns `|- f t = f u`")
+  (congr (refl f) th))
+
+(defn RAppRight [th t]
+  (doc "takes `|- f=g` and `t` and returns `|- f t = g t`")
+  (congr th (refl t)))
+
 ; #### true ####
 
 (defconst
@@ -251,10 +261,11 @@
 ; define false
 (defconst "F" "DefFalse" `forall p:bool. p`)
 
-(defn FalseElim [th p]
+(defn RFalseElim [th p]
   (doc "takes `|- F` and a term `p`, and returns `|- p`")
   (def h_allp (bool_eq th DefFalse))
   (RForallSubst h_allp p))
+
 
 ; #### implication ####
 
@@ -307,6 +318,7 @@
   (def a (e_app_rhs (e_app_lhs (concl th))))
   (MP th (assume a)))
 
+; `(a ==> b) ==> a ==> b`
 (set ImplyImpliesImply
   (def t `a:bool ==> b:bool`)
   (def h (assume t))
@@ -316,6 +328,28 @@
   (doc "takes `a` and `b` and returns `|- (a==>b) ==> a ==> b`")
   (subst ImplyImpliesImply "a" a "b" b))
 
+; `|- a ==> a`
+(set AImplyA
+  (def h (assume `a:bool`))
+  (RImplyIntro h `a:bool`))
+
+(defn RImplyReflexive [p]
+  (doc "takes `p` and returns `|- p ==> p`")
+  (def h (assume p))
+  (RImplyIntro h p))
+
+; `a==>b`, `b==>c`, gives `a==>c`
+(defn RImplyTrans [th1 th2]
+  (doc "takes `|- a==>b` and `|- b==>c` to return `|- a==>c")
+  (def a (e_app_rhs (e_app_lhs (concl th1))))
+  (def b (e_app_rhs (concl th1)))
+  (RImplyIntro (MP th2 (RImplyElim th1)) a))
+
+; takes `p` and returns `|- F ==> p`
+(defn RFalseImply [p]
+  (doc "takes `p` and returns `|- F ==> p`")
+  (RImplyIntro (RFalseElim (assume `F`) p) `F`))
+
 ; #### negation ####
 
 (defconst "~" "DefNot" `\p:bool. p ==> F`)
@@ -324,16 +358,60 @@
 ; expand definition of ~
 (defn RNotDefSubst [x]
   (doc "expand def of `~`: takes `t` and returns `~t = (t==>F)`")
-  (rw (congr DefNot (refl x)) :beta))
+  (rw (RAppRight DefNot x) :beta))
+
+; prove `|- ~ F`
+(set NotFalse
+  (def heq (sym (RNotDefSubst `F`)))
+  (def fimpf (RImplyReflexive `F`))
+  (bool_eq fimpf heq))
+
+; `|- ~ F = T`
+(set NotFalseEqTrue
+  (bool_eq_intro TrueIsTrue NotFalse))
+
+; from `|- P ==> F` to `|- ~ P`
+(defn RNotIntro [th]
+  (doc "takes `|- p ==> F` and returns `|- ~ p`")
+  (def p (e_app_rhs (e_app_lhs (concl th))))
+  (def h (RNotDefSubst p))
+  (bool_eq th (sym h)))
+
+; `|- ~ P` to `|- P ==> F`
+(defn RNotElim [th]
+  (doc "takes `|- ~ P` and returns `|- P ==> F`")
+  (def p (e_app_rhs (concl th)))
+  (def h (RNotDefSubst p))
+  (bool_eq th h))
 
 ; prove ~ (T=F)
-(set NotTrueEqFalse
+(set TrueNeqFalse
   ; prove `T=F ==> F`
   (def h0 (assume `T=F`))
   (def h1 (bool_eq TrueIsTrue h0))
   (def h2 (RImplyIntro h1 `T=F`))
-  (def teqf (RNotDefSubst `T = F`))
+  (def teqf (RNotDefSubst `T=F`))
   (bool_eq h2 (sym teqf)))
+
+(set AImplyNotNotA
+  ; ~~a = (a==>F)==>F
+  (def dnotnota
+    (def n1 (RNotDefSubst `a:bool`))
+    (def n2 (RNotDefSubst `a:bool ==> F`))
+    (def n1c (RAppLeft `$~` n1))
+    (trans n1c n2))
+  (def h1 (assume `a:bool ==> F`))
+  (def h2 (RImplyElim h1))
+  (def h3 (RImplyIntro h2 `a:bool ==> F`))
+  (def h4 (bool_eq h3 (sym dnotnota)))
+  (RImplyIntro h4 `a:bool`))
+
+; from `p` to `|- p ==> ~ ~ p`
+(defn RAImplyNotNotA [p]
+  (doc "takes `p` and returns `|- p ==> ~ ~ p`")
+  (subst AImplyNotNotA "a" p))
+
+; #### disjunction ####
 
 (defconst "\/" "DefOr" `\a b: bool. forall t: bool. (a ==> t) ==> (b ==> t) ==> t`)
 (set_infix "\/" 22 21)
@@ -377,11 +455,22 @@
   (def defor (ROrDefSubst a b)) ; def `a\/b`
   (bool_eq h4 (sym defor)))
 
-; from `|-b` to `|- a\/b`
+; from `|- b` to `|- a\/b`
 (defn ROrIntro2 [th a]
   (doc "takes `F |- b` and `a` and returns `F |- a\/b`")
   (def b (concl th))
   (cut th (subst BProveAOrB "a" a "b" b)))
+
+; or intro rule by case
+(defn ROrElimByCase [thc th1 th2]
+  (doc "takes `|- a\/b`, `|- a ==> p`, `|- b ==> p`, and returns `|- p`")
+  (def a (e_app_rhs (e_app_lhs (concl th1))))
+  (def b (e_app_rhs (e_app_lhs (concl th2))))
+  (def p (e_app_rhs (concl th1)))
+  (def def_aorb (ROrDefSubst a b))
+  (def h (bool_eq thc def_aorb))
+  (def h1 (RForallSubst h p))
+  (MP (MP h1 th1) th2))
 
 ; \/ is commutative
 (set OrComm
@@ -407,7 +496,72 @@
   (bool_eq th (subst OrComm "a" a "b" b)))
 
 ; TODO: assoc for \/
-; TODO: a rule for `|- a\/b`, `|-a==>F`, `|-b==>F` to `|-F`
+; TODO: a rule from `a |- F` to `|- ~ a`
+
+; #### excluded middle ####
+
+; excluded middle axiom.
+(set ExcludedMiddle (axiom `forall P:bool. P \/ ~P`))
+
+; instantiate `x \/ ~x`
+(defn RExcludedMiddle [x]
+  (doc "apply excluded middle on given formula `P` to get `|- P \/ ~P`")
+  (RForallSubst ExcludedMiddle x))
+
+; prove `~ ~ a = a`
+(set NotNotAEqA
+  ; indirect: `a |- ~ ~ a`
+  (def hind (RImplyElim (RAImplyNotNotA `a:bool`)))
+
+  ; direct: `~ ~ a |- a`
+  ; use excluded middle on `~a` to get `a \/ ~a`
+  (def hex (RExcludedMiddle `a:bool`))
+  ; case1: if we have `a` we just return it
+  (def case1 (RImplyReflexive `a:bool`))
+  ; case2: if we have `~a`, since we also have `~~a` by hyp, we can prove false
+  (def hnn (bool_eq (assume `~ ~ a:bool`) (RNotDefSubst `~ a:bool`)))
+  (def case2 (RImplyTrans hnn (RFalseImply `a:bool`)))
+  (def hdir (ROrElimByCase hex case1 case2))
+
+  (bool_eq_intro hdir hind))
+
+; `~ T = F`
+(set NotTrueEqFalse
+  nil ; TODO
+)
+
+(defn RNotNotElimConv [p]
+  (doc "takes `p` and returns `|- ~ ~ p = p`")
+  (subst NotNotAEqA "a" p))
+
+
+(defn RNotNotElim [th]
+  (doc "takes `|- ~ ~ p` and returns `|- p`")
+  (def p (e_app_rhs (e_app_rhs (concl th))))
+  (bool_eq th (RNotNotElimConv p)))
+
+
+; goes from `~a |- F` and `a`, to `|- a`
+(defn RExFalso [th a]
+  (doc "takes `G, ~a |- F` and `a`, and returns `G |- a`")
+  ; prove `G |- ~a = F`
+  (def hindr (RImplyElim (RFalseImply (e_app `$~` a))))
+  (def h1 (bool_eq_intro th hindr))
+  ; now, make that `G |- ~~a = ~F = T`
+  (def h2 (RAppLeft `$~` h1))
+  (def h3 (trans h2 NotFalseEqTrue))
+  ; |- ~~a
+  (def h4 (REqTrueElim h3))
+  (RNotNotElim h4))
+
+; TODO
+;(defn RExFalso [th a]
+; (doc "takes `G, ~a |- F` and `a`, and returns `G |- a`")
+
+
+; TODO: a rule from `~ a |- F` to `|- a`
+
+; TODO: de morgan laws
 
 ; #### select ####
 
@@ -415,6 +569,8 @@
 (decl "select" `pi a. (a -> bool) -> a`)
 (set_binder "select" 41)
 
+
+; #### list utils ####
 
 ; Map over a list
 (defn list_map [f l]
@@ -440,5 +596,5 @@
     }))
 
 ; # END OF FILE
-; # avoid double include
+; # avoid double include, see `load_prelude_hol` in `meta.rs`
 (set hol_prelude_loaded true)
