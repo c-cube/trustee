@@ -577,6 +577,9 @@ mod ml {
                         // proper list
                         write!(out, "(list")?;
                         for x in args {
+                            if out.alternate() {
+                                writeln!(out, "")?;
+                            }
                             write!(out, " {}", x)?;
                         }
                         write!(out, ")")?
