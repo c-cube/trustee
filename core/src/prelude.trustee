@@ -384,6 +384,8 @@
   (def h (RNotDefSubst p))
   (bool_eq th h))
 
+; TODO: a rule from `a |- F` to `|- ~ a`
+
 ; prove ~ (T=F)
 (set TrueNeqFalse
   ; prove `T=F ==> F`
@@ -496,7 +498,6 @@
   (bool_eq th (subst OrComm "a" a "b" b)))
 
 ; TODO: assoc for \/
-; TODO: a rule from `a |- F` to `|- ~ a`
 
 ; #### excluded middle ####
 
@@ -525,21 +526,31 @@
 
   (bool_eq_intro hdir hind))
 
-; `~ T = F`
-(set NotTrueEqFalse
-  nil ; TODO
-)
-
+; gets `|- ~ ~ p = p`
 (defn RNotNotElimConv [p]
   (doc "takes `p` and returns `|- ~ ~ p = p`")
   (subst NotNotAEqA "a" p))
 
-
+; turns `|- ~ ~ p` into `|- p`
 (defn RNotNotElim [th]
   (doc "takes `|- ~ ~ p` and returns `|- p`")
   (def p (e_app_rhs (e_app_rhs (concl th))))
   (bool_eq th (RNotNotElimConv p)))
 
+; `|- ~ ~ T`
+(set NotNotTrue
+  (REqTrueElim (RNotNotElimConv `T`)))
+
+; `~ T = F`
+(set NotTrueEqFalse
+  ; `F |- ~T`, easy
+  (def hind (RImplyElim (RFalseImply `~ T`)))
+  ; get `~ T |- F`
+  (def h (RNotDefSubst `~ T`))
+  (print :h h)
+  (def h2 (bool_eq NotNotTrue h))
+  (def hdir (RImplyElim h2))
+  (bool_eq_intro hdir hind))
 
 ; goes from `~a |- F` and `a`, to `|- a`
 (defn RExFalso [th a]
