@@ -128,7 +128,7 @@ impl jy::EvalContextImpl for EvalTrustee {
             Ok(v) => {
                 if v != meta::Value::Nil {
                     res.content_by_mime_type
-                        .insert("text/plain".to_string(), format!("{}", v));
+                        .insert("text/plain".to_string(), format!("{:#}", v));
                 }
             }
             Err(e) => {
@@ -219,12 +219,36 @@ impl jy::EvalContextImpl for EvalTrustee {
             // complete file names
             use std::path::Path;
             let path = Path::new(&tok);
-            log::info!("complete quoted string as path '{:?}'", path);
-            let dir = if path.is_file() { path.parent()? } else { path };
+            log::info!("complete quoted string as path {:?}", path);
+            let (dir, file) = match path.parent() {
+                Some(p) => {
+                    let p = if p.to_str() == Some("") {
+                        Path::new(".")
+                    } else {
+                        p
+                    };
+                    (p, path.file_name().map(|x| Path::new(x)))
+                }
+                None => (Path::new("."), Some(path)),
+            };
+            log::debug!("split into dir={:?}, file={:?}", dir, file);
             for x in dir.read_dir().ok()? {
-                let path2 = dir.join(x.ok()?.path());
+                log::debug!("in dir, examine path {:?}", x);
+                let x = x.ok()?.path();
+                match (
+                    file.and_then(|s| s.to_str()),
+                    x.file_name().and_then(|s| s.to_str()),
+                ) {
+                    (Some(""), _) => (),
+                    (Some(f), Some(x)) if !x.starts_with(f) => {
+                        log::debug!("reject path {:?}", x);
+                        continue;
+                    }
+                    _ => (),
+                }
+                let path2 = dir.join(x);
                 if let Some(p2) = path2.to_str() {
-                    add_compl(p2);
+                    add_compl(&format!("\"{}\"", p2));
                 }
             }
 
