@@ -8,8 +8,9 @@ edition = "2018"
 
 [dependencies]
 trustee = {path="../core"}
-gen_lsp_server="0.2"
-lsp-types="0.57.2"
-crossbeam-channel="0.3.9"
-failure="0.1.8"
-flexi_logger={version="0.15", default-features=false, features=["colors"]}
+lsp-types="0.79"
+anyhow="1.0"
+log="0.4"
+serde_json="1.0"
+serde="1.0"
+simplelog = "0.7.4"
