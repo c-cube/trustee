@@ -280,7 +280,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "jupyter_kernel"
 version = "0.0.1"
-source = "git+https://github.com/c-cube/jupyter-kernel-rs#03b59358d350827e046528162e8bf1d17c0524ab"
 dependencies = [
  "anyhow 1.0.31 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono 0.4.13 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -623,7 +622,7 @@ name = "trustee_jupyter"
 version = "0.1.0"
 dependencies = [
  "anyhow 1.0.31 (registry+https://github.com/rust-lang/crates.io-index)",
- "jupyter_kernel 0.0.1 (git+https://github.com/c-cube/jupyter-kernel-rs)",
+ "jupyter_kernel 0.0.1",
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "simplelog 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "trustee 0.1.0",
@@ -763,7 +762,6 @@ dependencies = [
 "checksum hmac 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)" = "5dcb5e64cda4c23119ab41ba960d1e170a774c8e4b9d9e6a9bc18aabf5e59695"
 "checksum itertools 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)" = "f56a2d0bc861f9165be4eb3442afd3c236d8a98afd426f65d92324ae1091a484"
 "checksum json 0.11.15 (registry+https://github.com/rust-lang/crates.io-index)" = "92c245af8786f6ac35f95ca14feca9119e71339aaab41e878e7cdd655c97e9e5"
-"checksum jupyter_kernel 0.0.1 (git+https://github.com/c-cube/jupyter-kernel-rs)" = "<none>"
 "checksum lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 "checksum libc 0.2.70 (registry+https://github.com/rust-lang/crates.io-index)" = "3baa92041a6fec78c687fa0cc2b3fae8884f743d672cf551bed1d6dac6988d0f"
 "checksum log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)" = "14b6052be84e6b71ab17edffc2eeabf5c2c3ae1fdb464aae35ac50c67a44e1f7"

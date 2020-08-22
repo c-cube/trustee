@@ -12,4 +12,4 @@ trustee_opentheory = {path="../opentheory"}
 log = "0.4"
 simplelog = "0.7.4"
 anyhow="1.0"
-jupyter_kernel = {version="*", git="https://github.com/c-cube/jupyter-kernel-rs"}
+jupyter_kernel = {version="*", path="../jupyter-kernel/"}

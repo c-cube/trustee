@@ -547,7 +547,6 @@
   (def hind (RImplyElim (RFalseImply `~ T`)))
   ; get `~ T |- F`
   (def h (RNotDefSubst `~ T`))
-  (print :h h)
   (def h2 (bool_eq NotNotTrue h))
   (def hdir (RImplyElim h2))
   (bool_eq_intro hdir hind))
