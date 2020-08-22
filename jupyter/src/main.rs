@@ -147,17 +147,18 @@ impl jy::EvalContextImpl for EvalTrustee {
         );
 
         if let Some((tok, TokKind::Id, _start, _end)) = find_tok(code, cursor_pos) {
-            if let Some(v) = self.ctx().find_meta_value(&tok) {
+            if let Some((v, hlp)) = meta::all_builtin_names_and_help().find(|v| v.0 == tok) {
+                return Some(format!("[builtin]: {}\n\n{}", v, hlp));
+            } else if let Some(v) = self.ctx().find_meta_value(&tok) {
                 let help = match v {
-                    meta::Value::Closure(c) => c
-                        .docstring()
-                        .map(|s| format!("\n\n{}", s))
-                        .unwrap_or("".to_string()),
+                    meta::Value::Closure(c) => {
+                        let doc = c.docstring().unwrap_or("");
+                        let bytecode = c.chunk();
+                        format!("\n\n{}\n\n\n{:#?}", doc, bytecode)
+                    }
                     _ => "".to_string(),
                 };
                 return Some(format!("[value]: {}{}", v, help));
-            } else if let Some((v, hlp)) = meta::all_builtin_names_and_help().find(|v| v.0 == tok) {
-                return Some(format!("[builtin]: {}\n\n{}", v, hlp));
             }
         }
         None

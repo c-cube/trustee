@@ -540,6 +540,11 @@ mod ml {
             self.0.c.0.docstring.as_deref()
         }
 
+        /// Underlying bytecode chunk.
+        pub fn chunk(&self) -> &Chunk {
+            &self.0.c
+        }
+
         fn print(&self, full: bool, ic: Option<usize>) -> io::Result<String> {
             use std::io::Write;
 
