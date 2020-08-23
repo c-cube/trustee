@@ -190,11 +190,6 @@ impl JupyterMessage {
         self
     }
 
-    pub(crate) fn with_message_type(mut self, msg_type: &str) -> JupyterMessage {
-        self.header["msg_type"] = JsonValue::String(msg_type.to_owned());
-        self
-    }
-
     pub(crate) fn send(&self, connection: &mut Connection) -> Result<(), Error> {
         log::debug!("send message {:?}", self);
         // If performance is a concern, we can probably avoid the clone and to_vec calls with a bit

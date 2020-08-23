@@ -1,4 +1,0 @@
-#!/bin/sh
-
-export RUST_LOG=debug
-exec cargo run -p trustee_lsp -- $@
