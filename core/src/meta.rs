@@ -284,7 +284,7 @@ pub struct InstrBuiltin {
 
     /// Execute the instruction on the given state with arguments.
     pub run:
-        fn(ctx: &mut Ctx, out: &mut Option<&mut dyn io::Write>, args: &[Value]) -> Result<Value>,
+        fn(ctx: &mut Ctx, out: &mut Option<&mut dyn FnMut(&str)>, args: &[Value]) -> Result<Value>,
 
     /// A one-line help text for this instruction.
     pub help: &'static str,
@@ -313,7 +313,7 @@ pub struct VM<'a> {
     /// In case of error, the error message lives here.
     result: Result<Value>,
     /// Abstraction over stdout, or a redirection of stdout to capture `print`.
-    stdout: Option<&'a mut dyn io::Write>,
+    stdout: Option<&'a mut dyn FnMut(&str)>,
 }
 
 /// A stack frame.
@@ -741,7 +741,7 @@ mod ml {
             }
         }
 
-        pub fn set_stdout(&mut self, out: &'a mut dyn io::Write) {
+        pub fn set_stdout(&mut self, out: &'a mut dyn FnMut(&str)) {
             self.stdout = Some(out);
         }
 
@@ -1200,6 +1200,7 @@ mod ml {
         pub fn run_lexer_one(&mut self, lexer: &mut lexer::Lexer) -> Result<Option<Value>> {
             use parser::*;
 
+            self.reset();
             let p = Parser::new(self.ctx, lexer);
 
             match p.parse_top_expr() {
@@ -1267,8 +1268,8 @@ macro_rules! perror {
 /// Position in the text. 0 based.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Position {
-    line: usize,
-    col: usize,
+    pub line: usize,
+    pub col: usize,
 }
 
 pub mod lexer {
@@ -2861,9 +2862,9 @@ mod basic_primitives {
                                                   args: &[Value]|
          -> Result<Value> {
             for x in args {
-                if let Some(o) = out {
-                    writeln!(o, "{}", x)
-                        .map_err(|e| Error::new_string(format!("error while printing: {}", e)))?
+                if let Some(fnw) = out {
+                    // TODO: could avoid allocating so much
+                    fnw(&format!("{}", x))
                 } else {
                     println!("print: {}", x)
                 }
@@ -3844,10 +3845,11 @@ mod test {
     fn test_capture_stdout() -> Result<()> {
         let mut ctx = Ctx::new();
         let mut vm = VM::new(&mut ctx);
-        let mut out: Vec<u8> = vec![];
+        let mut r = None;
+        let mut out = |s: &str| r = Some(s.trim().to_string());
         vm.stdout = Some(&mut out);
         vm.run("(print 42)", None)?;
-        assert_eq!(std::str::from_utf8(&out).ok().map(|x| x.trim()), Some("42"));
+        assert_eq!(r.as_deref(), Some("42"));
         Ok(())
     }
 
