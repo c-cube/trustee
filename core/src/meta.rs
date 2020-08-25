@@ -1196,53 +1196,58 @@ mod ml {
             self.result = Ok(Value::Nil);
         }
 
-        /// Parse and execute the given code.
-        pub fn run(&mut self, s: &str, file_name: Option<RStr>) -> Result<Value> {
+        /// Parse and execute the first top-level expression from the given code.
+        pub fn run_lexer_one(&mut self, lexer: &mut lexer::Lexer) -> Result<Option<Value>> {
             use parser::*;
 
-            self.reset();
+            let p = Parser::new(self.ctx, lexer);
+
+            match p.parse_top_expr() {
+                Err(e) => {
+                    logerr!("error while parsing: {}", e);
+                    return Err(e);
+                }
+                Ok(Some(c)) => {
+                    logdebug!("chunk: {:?}", &c);
+                    debug_assert_eq!(c.0.n_captured, 0); // no parent to capture from
+                    let cl = Closure::new(c, None);
+                    match self.exec_top_closure_(cl) {
+                        Ok(x) => Ok(Some(x)),
+                        Err(e) => {
+                            let mut s = vec![];
+                            // only print full stacktrace if `TRUSTEE_TRACE=1`
+                            // or if variable "print_full_traces" is true.
+                            let full_tr = self
+                                .ctx
+                                .find_meta_value("print_full_traces")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                                || std::env::var("TRUSTEE_TRACE").ok().as_deref() == Some("1");
+                            self.print_trace_(&mut s, full_tr).unwrap();
+                            logerr!(
+                                "error during execution:\n>> {}\n{}",
+                                e,
+                                std::str::from_utf8(&s).unwrap_or("<err>")
+                            );
+
+                            return Err(e);
+                        }
+                    }
+                }
+                Ok(None) => Ok(None),
+            }
+        }
+
+        /// Parse and execute the given code.
+        pub fn run(&mut self, s: &str, file_name: Option<RStr>) -> Result<Value> {
             logdebug!("meta.run {}", s);
             let mut lexer = lexer::Lexer::new(s, file_name);
             let mut last_r = Value::Nil;
 
-            loop {
-                let p = Parser::new(self.ctx, &mut lexer);
-
-                match p.parse_top_expr() {
-                    Err(e) => {
-                        logerr!("error while parsing: {}", e);
-                        return Err(e);
-                    }
-                    Ok(Some(c)) => {
-                        logdebug!("chunk: {:?}", &c);
-                        debug_assert_eq!(c.0.n_captured, 0); // no parent to capture from
-                        let cl = Closure::new(c, None);
-                        match self.exec_top_closure_(cl) {
-                            Ok(x) => last_r = x,
-                            Err(e) => {
-                                let mut s = vec![];
-                                // only print full stacktrace if `TRUSTEE_TRACE=1`
-                                // or if variable "print_full_traces" is true.
-                                let full_tr = self
-                                    .ctx
-                                    .find_meta_value("print_full_traces")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false)
-                                    || std::env::var("TRUSTEE_TRACE").ok().as_deref() == Some("1");
-                                self.print_trace_(&mut s, full_tr).unwrap();
-                                logerr!(
-                                    "error during execution:\n>> {}\n{}",
-                                    e,
-                                    std::str::from_utf8(&s).unwrap_or("<err>")
-                                );
-
-                                return Err(e);
-                            }
-                        }
-                    }
-                    Ok(None) => return Ok(last_r),
-                };
+            while let Some(r) = self.run_lexer_one(&mut lexer)? {
+                last_r = r;
             }
+            Ok(last_r)
         }
     }
 }
@@ -1257,6 +1262,13 @@ macro_rules! perror {
                 concat!( "parse error at {:?}: ", $fmt), $loc,
                 $($arg),*))
     };
+}
+
+/// Position in the text. 0 based.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct Position {
+    line: usize,
+    col: usize,
 }
 
 pub mod lexer {
@@ -1326,8 +1338,11 @@ pub mod lexer {
         }
 
         /// Current `(line, column)`.
-        pub fn loc(&self) -> (usize, usize) {
-            (self.line, self.col)
+        pub fn loc(&self) -> Position {
+            Position {
+                line: self.line,
+                col: self.col,
+            }
         }
 
         /// Current offset in the string.
@@ -1935,7 +1950,7 @@ pub(crate) mod parser {
         ctx: &mut Ctx,
         c: &mut Compiler,
         s: &str,
-        loc: (usize, usize),
+        loc: Position,
         sl: SlotIdx,
     ) -> Result<()> {
         if let Some(var) = c.find_slot_of_var(s)? {
@@ -2025,7 +2040,7 @@ pub(crate) mod parser {
                         slots: vec![],
                         parent: None,
                         phantom: PhantomData,
-                        first_line: self.lexer.loc().0 as u32,
+                        first_line: self.lexer.loc().line as u32,
                         file_name: self.lexer.file_name.clone(),
                     };
                     let res = get_res!(c, None);
@@ -2083,7 +2098,7 @@ pub(crate) mod parser {
                     slots: vec![],
                     parent,
                     phantom: PhantomData,
-                    first_line: self.lexer.loc().0 as u32,
+                    first_line: self.lexer.loc().line as u32,
                     file_name: self.lexer.file_name.clone(),
                 };
                 // add variables to `sub_c`
