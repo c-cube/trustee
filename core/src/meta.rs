@@ -751,15 +751,11 @@ mod ml {
             while let Some(sf) = self.ctrl_stack.last_mut() {
                 assert!((sf.ic as usize) < sf.closure.0.c.0.instrs.len());
                 let instr = sf.closure.0.c.0.instrs[sf.ic as usize];
-                logdebug!(
+                logtrace!(
                     "exec loop: ic={} start={} instr=`{:?}`",
                     sf.ic,
                     sf.start,
                     instr
-                );
-                logtrace!(
-                    "  stack: {:?}",
-                    &self.stack[0..(sf.start + sf.closure.0.c.0.n_slots) as usize]
                 );
 
                 sf.ic += 1; // ready for next iteration
@@ -899,20 +895,20 @@ mod ml {
                         self.stack[abs_offset!(sf, s1)] = v;
                     }
                     I::Jump(offset) => {
-                        logdebug!("jump from ic={} with offset {}", sf.ic, offset);
+                        logtrace!("jump from ic={} with offset {}", sf.ic, offset);
                         sf.ic = (sf.ic as isize + offset as isize) as u32
                     }
                     I::JumpIfTrue(s0, offset) => {
                         let s0 = get_slot_bool!(self, abs_offset!(sf, s0));
                         if s0 {
-                            logdebug!("jump from ic={} with offset {}", sf.ic, offset);
+                            logtrace!("jump from ic={} with offset {}", sf.ic, offset);
                             sf.ic = (sf.ic as isize + offset as isize) as u32
                         }
                     }
                     I::JumpIfFalse(s0, offset) => {
                         let s0 = get_slot_bool!(self, abs_offset!(sf, s0));
                         if !s0 {
-                            logdebug!("jump from ic={} with offset {}", sf.ic, offset);
+                            logtrace!("jump from ic={} with offset {}", sf.ic, offset);
                             sf.ic = (sf.ic as isize + offset as isize) as u32
                         }
                     }
@@ -971,14 +967,14 @@ mod ml {
                         } = self;
                         match &stack[sl_f] {
                             Value::Builtin(b) => {
-                                logdebug!("call builtin {:?} with {} args", &b.name, n_args);
+                                logtrace!("call builtin {:?} with {} args", &b.name, n_args);
                                 let args = &stack[sl_f + 1..sl_f + 1 + n_args as usize];
                                 logtrace!("  args: {:?}", &args);
                                 let f = &(b.run);
                                 let res = f(ctx, stdout, &args);
                                 match res {
                                     Ok(ret_value) => {
-                                        logdebug!("return[offset {}]: {}", offset_ret, ret_value);
+                                        logtrace!("return[offset {}]: {}", offset_ret, ret_value);
                                         self.stack[offset_ret] = ret_value;
                                     }
                                     Err(mut e) => {
@@ -1051,7 +1047,7 @@ mod ml {
                             sf.closure = cl;
                             sf.ic = 0;
                         } else if let Value::Builtin(b) = f {
-                            logdebug!("call builtin {:?}", &b.name);
+                            logtrace!("call builtin {:?}", &b.name);
                             let args = &stack[offset_f + 1..offset_f + 1 + n_args as usize];
                             let f = &b.run;
                             match f(ctx, stdout, &args) {
@@ -1072,7 +1068,7 @@ mod ml {
                     }
                     I::Ret(sl_v) => {
                         let off_v = abs_offset!(sf, sl_v);
-                        logdebug!("ret sl_v={:?} abs_offset={} sf={:?}", sl_v, off_v, &sf);
+                        logtrace!("ret sl_v={:?} abs_offset={} sf={:?}", sl_v, off_v, &sf);
 
                         // pop frame, get return address and frame offset
                         let res_offset;
@@ -1145,7 +1141,7 @@ mod ml {
         /// Call closure `c` with arguments in `self.call_args`,
         /// put result into slot `offset`.
         fn exec_closure_(&mut self, cl: Closure, start_offset: u32, res_offset: u32) -> Result<()> {
-            logdebug!(
+            logtrace!(
                 "call closure (name={:?}, start_offset={}, res_offset={})",
                 &cl.0.c.0.name,
                 start_offset,
@@ -1209,7 +1205,7 @@ mod ml {
                     return Err(e);
                 }
                 Ok(Some(c)) => {
-                    logdebug!("chunk: {:?}", &c);
+                    logtrace!("chunk: {:?}", &c);
                     debug_assert_eq!(c.0.n_captured, 0); // no parent to capture from
                     let cl = Closure::new(c, None);
                     match self.exec_top_closure_(cl) {
@@ -1585,7 +1581,7 @@ pub(crate) mod parser {
         }
 
         pub(crate) fn enter_call_args(&mut self) -> Scope {
-            logdebug!("enter call args scope");
+            logtrace!("enter call args scope");
             self.lex_scopes.push(LexScope::CallArgs);
             Scope(self.lex_scopes.len())
         }
@@ -1595,7 +1591,7 @@ pub(crate) mod parser {
         }
 
         pub(crate) fn exit_call_args(&mut self, sc: Scope) {
-            logdebug!("exit call args scope");
+            logtrace!("exit call args scope");
             if self.lex_scopes.len() != sc.0 {
                 panic!(
                     "unbalanced scopes in call args (expect len {}, got {})",
@@ -1610,13 +1606,13 @@ pub(crate) mod parser {
         }
 
         pub(crate) fn push_local_scope(&mut self) -> Scope {
-            logdebug!("push local scope");
+            logtrace!("push local scope");
             self.lex_scopes.push(LexScope::Local(vec![]));
             Scope(self.lex_scopes.len())
         }
 
         pub(crate) fn pop_local_scope(&mut self, sc: Scope) {
-            logdebug!("pop local scope");
+            logtrace!("pop local scope");
             if self.lex_scopes.len() != sc.0 {
                 panic!(
                     "unbalanced scopes (expect len {}, got {})",
@@ -1636,7 +1632,7 @@ pub(crate) mod parser {
 
         /// Ensure the value is in `self.locals`, return its index.
         pub fn allocate_local_(&mut self, v: Value) -> Result<LocalIdx> {
-            logdebug!("compiler(name={:?}): push local {}", self.name, v);
+            logtrace!("compiler(name={:?}): push local {}", self.name, v);
 
             // see if `v` is a local already.
             if let Some((i, _)) = self.locals.iter().enumerate().find(|(_, v2)| *v2 == &v) {
@@ -1654,7 +1650,7 @@ pub(crate) mod parser {
 
         /// Emit instruction.
         pub fn emit_instr_(&mut self, i: Instr) {
-            logdebug!(
+            logtrace!(
                 "compiler(name={:?}, n_locals={}): emit instr {:?}",
                 self.name,
                 self.locals.len(),
@@ -1666,7 +1662,7 @@ pub(crate) mod parser {
         /// Reserve space for a jump instruction that will be emitted later.
         pub fn reserve_jump_(&mut self) -> JumpPosition {
             let off = self.instrs.len();
-            logdebug!(
+            logtrace!(
                 "compiler(name={:?}, n_locals={}): reserve jump at offset {}",
                 self.name,
                 self.locals.len(),
@@ -1693,7 +1689,7 @@ pub(crate) mod parser {
                 panic!("jump already edited at pos {}", pos.0);
             };
 
-            logdebug!(
+            logtrace!(
                 "compiler(name={:?}, n_locals={}): emit jump {:?} at offset {}",
                 self.name,
                 self.locals.len(),
@@ -1843,15 +1839,15 @@ pub(crate) mod parser {
                 // when we reach `h` we must capture `x` from `g` which captures
                 // it from `f`.
                 let parent = unsafe { &mut *parent };
-                logdebug!("look for {} in parent scope", v);
+                logtrace!("look for {} in parent scope", v);
                 if let Some(parent_var) = parent.find_slot_of_var(v)? {
-                    logdebug!("found {} in parent scope", v);
+                    logtrace!("found {} in parent scope", v);
                     // capture `v` from parent scope
                     if self.captured.len() > u8::MAX as usize {
                         return Err(Error::new("too many captured variables"));
                     }
                     let upidx = UpvalueIdx(self.captured.len() as u8);
-                    logdebug!("capture var {} from parent (upidx {})", v, upidx.0);
+                    logtrace!("capture var {} from parent (upidx {})", v, upidx.0);
                     self.captured.push(v.into());
                     match parent_var {
                         VarSlot::Local(sl) => parent.emit_instr_(I::PushLocalToUpvalue(sl)),
@@ -1977,7 +1973,6 @@ pub(crate) mod parser {
             let lidx = c.allocate_local_(v.clone())?;
             c.emit_instr_(I::LoadLocal(lidx, sl));
         } else {
-            logdebug!("unknown id '{}'", s);
             return Err(perror!(loc, "unknown identifier '{}'", s));
         }
         Ok(())
@@ -2072,7 +2067,7 @@ pub(crate) mod parser {
                 )?
                 .into();
                 self.next_tok_();
-                logdebug!("add var {:?}", e);
+                logtrace!("add var {:?}", e);
                 vars.push(e);
             }
             self.eat_(var_closing, "expected closing delimiter after variables")?;
@@ -2150,7 +2145,7 @@ pub(crate) mod parser {
         ) -> Result<ExprRes> {
             let loc = self.lexer.loc();
             let id = cur_tok_as_id_(&mut self.lexer, "expect an identifier after opening")?;
-            logdebug!("parse expr app id={:?}", id);
+            logtrace!("parse expr app id={:?}", id);
 
             if let Some((binop_instr, assoc)) = binary_op_(id) {
                 // primitive binary operator.
@@ -2438,14 +2433,14 @@ pub(crate) mod parser {
                 let mut res = ExprRes::new(SlotIdx(u8::MAX), false);
                 res.exited = true;
 
-                logdebug!("parse tail-application");
+                logtrace!("parse tail-application");
 
                 let id_f =
                     cur_tok_as_id_(&mut self.lexer, "expected function name after `become`")?;
                 let f = c.allocate_temporary_on_top_()?;
                 resolve_id_into_slot_(&mut self.ctx, c, id_f, loc, f.slot)?;
                 self.lexer.next();
-                logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
+                logtrace!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
 
                 // parse arguments
                 let mut args = vec![];
@@ -2473,7 +2468,7 @@ pub(crate) mod parser {
                 // make a function call.
 
                 let res = get_res!(c, sl_res);
-                logdebug!("parse application (res: {:?})", res);
+                logtrace!("parse application (res: {:?})", res);
 
                 let scope = c.enter_call_args(); // forbid `def`
 
@@ -2486,7 +2481,7 @@ pub(crate) mod parser {
                 };
                 resolve_id_into_slot_(&mut self.ctx, c, id, loc, f.slot)?;
                 self.lexer.next();
-                logdebug!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
+                logtrace!(".. function is {:?} := {:?}", f, c.get_slot_(f.slot));
 
                 // parse arguments
                 let mut args = vec![];
@@ -2556,7 +2551,7 @@ pub(crate) mod parser {
             closing: Tok<'b>,
         ) -> Result<ExprRes> {
             let res = get_res!(c, sl_res);
-            logdebug!("parse list (sl_res {:?}, res {:?})", sl_res, res);
+            logtrace!("parse list (sl_res {:?}, res {:?})", sl_res, res);
 
             c.emit_instr_(I::LoadNil(res.slot));
 
@@ -2633,7 +2628,7 @@ pub(crate) mod parser {
         ///
         /// `sl_res` is an optional pre-provided slot.
         fn parse_expr_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
-            logdebug!("parse expr (cur {:?})", self.lexer.cur());
+            logtrace!("parse expr (cur {:?})", self.lexer.cur());
             logtrace!("> slots {:?}", c.slots);
 
             let Self { ctx, lexer, .. } = self;
