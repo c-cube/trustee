@@ -757,6 +757,7 @@ dependencies = [
  "serde_json 1.0.57 (registry+https://github.com/rust-lang/crates.io-index)",
  "simplelog 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "trustee 0.1.0",
+ "trustee_utils 0.1.0",
 ]
 
 [[package]]
@@ -764,6 +765,15 @@ name = "trustee_opentheory"
 version = "0.1.0"
 dependencies = [
  "env_logger 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "trustee 0.1.0",
+]
+
+[[package]]
+name = "trustee_utils"
+version = "0.1.0"
+dependencies = [
+ "anyhow 1.0.31 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "trustee 0.1.0",
 ]

@@ -1,61 +1,68 @@
 use anyhow::{anyhow, Result};
-use lsp_types::{self as lsp, notification::Notification, request::Request};
-use serde::Deserialize;
-use serde_json::{json, Value as JsonValue};
-use std::collections::HashMap;
-use trustee::{self, kernel_of_trust as k, meta};
+use lsp_types::{self as lsp};
+use trustee::{self, kernel_of_trust as k, meta, meta::Position};
+use trustee_utils as utils;
 
 pub mod server;
-use lsp::InitializeResult;
 pub use server::{Doc, DocID, Server, State};
 
 struct TrusteeSt;
 
+fn pos(p: Position) -> lsp::Position {
+    // translate back
+    lsp::Position {
+        line: p.line as u64 - 1,
+        character: p.col as u64 - 1,
+    }
+}
+
 impl server::Handler for TrusteeSt {
-    fn handle_msg(&mut self, st: &mut State, msg: server::IncomingMsg) -> Result<Option<String>> {
-        use lsp::notification::*;
-        use lsp::request::*;
-        use lsp::*;
+    fn on_doc_update(&mut self, _id: DocID, txt: &str) -> Result<Vec<lsp::Diagnostic>> {
+        let mut ctx = k::Ctx::new();
 
-        // NOTE: ugh. we need to reserialize before we can deserialize from Value?
-        let params = msg.params.to_string();
-        if msg.m == lsp::request::Initialize::METHOD {
-            log::debug!("got initialize");
-            let _init: InitializeParams = serde_json::from_str(&params)?;
-            let capabilities = ServerCapabilities::default();
-            // TODO: declare some capabilities
-            let reply = InitializeResult {
-                capabilities,
-                server_info: None,
+        let mut r = utils::eval(&mut ctx, txt, None);
+        log::debug!("eval: got {} results in {:?}", r.res.len(), r.duration);
+
+        macro_rules! mk_diag {
+            ($sev: expr, $range: expr, $msg: expr) => {
+                lsp::Diagnostic {
+                    range: $range,
+                    severity: Some($sev),
+                    code: None,
+                    source: None,
+                    message: $msg,
+                    related_information: None,
+                    tags: None,
+                }
             };
-
-            Ok(Some(serde_json::to_string(&reply)?))
-        } else if msg.m == lsp::notification::DidOpenTextDocument::METHOD {
-            log::debug!("got text open {:?}", msg.params);
-            let d: DidOpenTextDocumentParams = serde_json::from_str(&params)?;
-            let mut st = st.lock().unwrap();
-            let td = d.text_document;
-            let doc = Doc {
-                id: DocID::new(td.uri.clone()),
-                version: td.version,
-                content: td.text,
-            };
-
-            st.docs.insert(td.uri, doc);
-            Ok(None)
-        } else if msg.m == lsp::notification::DidCloseTextDocument::METHOD {
-            log::debug!("got text close {:?}", params);
-            let mut st = st.lock().unwrap();
-            let d: DidCloseTextDocumentParams = serde_json::from_str(&params)?;
-            st.docs.remove(&d.text_document.uri);
-            Ok(None)
-        } else if msg.m == lsp::notification::DidChangeTextDocument::METHOD {
-            log::debug!("got text change {:?}", params);
-            // TODO
-            Ok(None)
-        } else {
-            Err(anyhow!("not implemented"))
         }
+
+        let mut diags = vec![];
+        for r in r.res.drain(..) {
+            let range = lsp::Range {
+                start: pos(r.start),
+                end: pos(r.end),
+            };
+
+            if let Some(s) = r.stdout {
+                diags.push(mk_diag!(lsp::DiagnosticSeverity::Hint, range, s.clone()));
+            }
+
+            let severity = if r.res.is_ok() {
+                lsp::DiagnosticSeverity::Information
+            } else {
+                lsp::DiagnosticSeverity::Error
+            };
+
+            let message = match r.res {
+                Ok(meta::Value::Nil) => continue,
+                Ok(v) => format!("yield value {}", v),
+                Err(e) => format!("error: {}", e),
+            };
+            diags.push(mk_diag!(severity, range, message));
+        }
+
+        Ok(diags)
     }
 }
 
