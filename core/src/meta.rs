@@ -2850,6 +2850,15 @@ const BUILTINS: &'static [&'static InstrBuiltin] = {
 mod basic_primitives {
     use super::*;
 
+    fn write_(out: &mut Option<&mut dyn FnMut(&str)>, s: &str) {
+        if let Some(fnw) = out {
+            // TODO: could avoid allocating so much
+            fnw(s)
+        } else {
+            println!("{}", s)
+        }
+    }
+
     /// Builtin functions.
     pub(super) const BUILTINS: &'static [&'static InstrBuiltin] = &[
         &defbuiltin!("print", "print value(s).", |_,
@@ -2857,26 +2866,21 @@ mod basic_primitives {
                                                   args: &[Value]|
          -> Result<Value> {
             for x in args {
-                if let Some(fnw) = out {
-                    // TODO: could avoid allocating so much
-                    fnw(&format!("{}", x))
-                } else {
-                    println!("print: {}", x)
-                }
+                write_(out, &format!("{}", x))
             }
             Ok(Value::Nil)
         }),
         &defbuiltin!(
             "help",
             "print help for an identifier.",
-            |_, _, args: &[Value]| -> Result<_> {
+            |_, out, args: &[Value]| -> Result<_> {
                 check_arity!("help", args, 1);
                 let s = get_arg_str!(args, 0).get();
 
                 if let Some(b) = basic_primitives::BUILTINS.iter().find(|b| b.name == s) {
-                    println!("{}", b.help);
+                    write_(out, b.help);
                 } else if let Some(b) = logic_builtins::BUILTINS.iter().find(|b| b.name == s) {
-                    println!("{}", b.help);
+                    write_(out, b.help);
                 };
                 Ok(Value::Nil)
             }
@@ -2925,11 +2929,11 @@ mod basic_primitives {
         &defbuiltin!(
             "show_chunk",
             "shows the bytecode of a closure",
-            |ctx, _, args: &[Value]| -> Result<_> {
+            |ctx, out, args: &[Value]| -> Result<_> {
                 check_arity!("show_chunk", args, 1);
                 let s = get_arg_str!(args, 0);
                 if let Some(c) = ctx.find_meta_value(s).and_then(|v| v.as_closure()) {
-                    println!("{:?}", c);
+                    write_(out, &format!("{:?}", c))
                 }
                 Ok(().into())
             }
