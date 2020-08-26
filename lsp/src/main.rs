@@ -19,6 +19,7 @@ fn pos(p: Position) -> lsp::Position {
 impl server::Handler for TrusteeSt {
     fn on_doc_update(&mut self, _id: DocID, txt: &str) -> Result<Vec<lsp::Diagnostic>> {
         let mut ctx = k::Ctx::new();
+        meta::load_prelude_hol(&mut ctx)?;
 
         let mut r = utils::eval(&mut ctx, txt, None);
         log::debug!("eval: got {} results in {:?}", r.res.len(), r.duration);

@@ -1,11 +1,14 @@
 use anyhow::{anyhow, Result};
-pub use lsp_types::{self as lsp, TextDocumentIdentifier as DocID};
+pub use lsp_types::{
+    self as lsp, notification::Notification, request::Request, TextDocumentIdentifier as DocID,
+};
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 use std::{
     collections::HashMap,
     io::{BufRead, Read, Write},
-    sync::{atomic, mpsc as chan, Arc, Mutex},
+    os::unix::io::AsRawFd,
+    sync::{mpsc as chan, Arc, Mutex},
     thread,
 };
 
@@ -24,7 +27,6 @@ pub struct State(Arc<Mutex<StateImpl>>);
 /// Content of the state.
 #[derive(Debug)]
 pub struct StateImpl {
-    pub nid: atomic::AtomicU32,
     pub docs: HashMap<lsp_types::Url, Doc>,
 }
 
@@ -66,16 +68,12 @@ pub struct HandlerFactory(pub Box<dyn (FnMut() -> Box<dyn Handler>)>);
 pub struct Server {
     st: State,
     handler: HandlerFactory,
-    write_th: thread::JoinHandle<()>,
-    /// Send serialized replies
-    send: chan::Sender<String>,
 }
 
 impl State {
     /// New state.
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(StateImpl {
-            nid: atomic::AtomicU32::new(0),
             docs: Default::default(),
         })))
     }
@@ -92,20 +90,46 @@ pub struct IncomingMsg {
 mod server {
     use super::*;
 
-    /// Thread that writes on stdout.
-    fn write_thread(s: chan::Receiver<String>) {
+    fn write_msg_(out: &mut dyn Write, s: &str) -> Result<()> {
+        let bytes = s.as_bytes();
+        write!(out, "Content-Length: {}\r\n\r\n", bytes.len())
+            .map_err(|e| anyhow!("cannot write header on stdout: {}", e))?;
+        let mut bytes = bytes;
+        while bytes.len() > 0 {
+            let n = out
+                .write(bytes)
+                .map_err(|e| anyhow!("cannot write content ({}B) on stdout: {}", bytes.len(), e))?;
+            bytes = &bytes[n..];
+        }
+        out.flush()
+            .map_err(|e| anyhow!("cannot flush stdout: {}", e))?;
+        Ok(())
+    }
+
+    /*
+    fn write_thread_loop_(s: chan::Receiver<String>) -> Result<()> {
         let stdout = std::io::stdout();
         let mut stdout = stdout.lock();
-        let mut stdout = std::io::BufWriter::new(&mut stdout);
+
         while let Ok(x) = s.recv() {
-            let bytes = x.as_bytes();
-            write!(&mut stdout, "Content-Length: {}\r\n\r\n", bytes.len())
-                .expect("cannot write on stdout");
-            stdout.write(bytes).expect("cannot write on stdout");
-            stdout.flush().expect("cannot flush stdout");
+            log::debug!("send-thr: write {:?}", x);
+
+            // try several times
+            if let Err(e) = write_msg_(&mut stdout, &x) {
+                log::error!("error when writing message: {}", e);
+                return Err(anyhow!("cannot write to stdout"));
+            }
         }
-        log::info!("writer thread quits");
+        Ok(())
     }
+
+    /// Thread that writes on stdout.
+    fn write_thread(s: chan::Receiver<String>) {
+        let r = write_thread_loop_(s);
+        log::info!("writer thread quits with {:?}", r);
+        r.expect("writer thread failed")
+    }
+    */
 
     fn read_until_pos<I, F>(
         chars: &mut std::iter::Peekable<I>,
@@ -151,10 +175,8 @@ mod server {
         };
         macro_rules! mk_notif {
             ($m: expr, $params: expr) => {{
-                let st = st.0.lock().map_err(|_| anyhow!("cannot lock state in mk_notif"))?;
                 serde_json::to_string(&json!({
                     "jsonrpc": "2.0",
-                    "id": st.nid.fetch_add(1, atomic::Ordering::SeqCst),
                     "method": $m,
                     "params": $params,
                 }))?
@@ -170,14 +192,23 @@ mod server {
             let mut capabilities = ServerCapabilities::default();
 
             // require incremental updates
-            capabilities.text_document_sync = Some(lsp::TextDocumentSyncCapability::Kind(
-                lsp::TextDocumentSyncKind::Incremental,
+            capabilities.text_document_sync = Some(lsp::TextDocumentSyncCapability::Options(
+                lsp::TextDocumentSyncOptions {
+                    open_close: Some(false),
+                    change: Some(lsp::TextDocumentSyncKind::Incremental),
+                    will_save: Some(false),
+                    will_save_wait_until: Some(false),
+                    save: None,
+                },
             ));
 
             // TODO: declare more actual capabilities
             let reply = InitializeResult {
                 capabilities,
-                server_info: None, // TODO ask the handler?
+                server_info: Some(ServerInfo {
+                    name: "trustee".to_string(), // TODO ask the handler?
+                    version: None,
+                }),
             };
 
             Ok(Some(mk_reply!(reply)))
@@ -207,8 +238,8 @@ mod server {
                 diagnostics,
             };
             drop(st); // unlock
-            Ok(Some(mk_notif!("textDocument/publishDiagnostics", reply)))
-        } else if msg.m == lsp::notification::DidCloseTextDocument::METHOD {
+            Ok(Some(mk_notif!(PublishDiagnostics::METHOD, reply)))
+        } else if msg.m == DidCloseTextDocument::METHOD {
             log::debug!("got text close {:?}", params);
 
             let d: DidCloseTextDocumentParams = serde_json::from_str(&params)?;
@@ -312,7 +343,7 @@ mod server {
     }
 
     /// Handle incoming message.
-    fn handle_msg(st: State, send: chan::Sender<String>, h: Box<dyn Handler>, msg: IncomingMsg) {
+    fn handle_msg(st: State, h: Box<dyn Handler>, msg: IncomingMsg) {
         log::trace!("handle msg {:?}", msg);
         let mid = msg.id.clone();
 
@@ -320,21 +351,35 @@ mod server {
         let reply = match r {
             Ok(r) => r,
             Err(e) => {
-                let r = json!({
-                    "id": mid,
-                    "error": {
-                        "code": -32603,
-                        "message": e.to_string(),
-                    }
-                });
-                Some(r.to_string())
+                if !mid.is_null() {
+                    let r = json!({
+                        "id": mid,
+                        "error": {
+                            "code": -32603,
+                            "message": e.to_string(),
+                        }
+                    });
+                    Some(r.to_string())
+                } else {
+                    // must be a notification, can't reply with an error
+                    log::error!("error with no reply: {}", e);
+                    None
+                }
             }
         };
 
         // send reply back
         if let Some(r_s) = reply {
             log::debug!("reply with {:?}", r_s);
-            send.send(r_s).expect("cannot send to writer");
+
+            let stdout = std::io::stdout();
+            let mut stdout = stdout.lock();
+            let rsend = write_msg_(&mut stdout, &r_s);
+
+            // log error
+            if let Err(e) = rsend {
+                log::error!("handle-thr: cannot send to writer: {}", e);
+            }
         } else {
             log::debug!("no reply");
         }
@@ -347,14 +392,7 @@ mod server {
         /// request.
         pub fn new(h: HandlerFactory) -> Self {
             let st = State::new();
-            let (send, recv) = chan::channel();
-            let write_th = thread::spawn(move || write_thread(recv));
-            Self {
-                st,
-                handler: h,
-                send,
-                write_th,
-            }
+            Self { st, handler: h }
         }
 
         fn serve_loop(&mut self) -> Result<()> {
@@ -409,10 +447,9 @@ mod server {
 
                 let raw_msg = IncomingMsg { m, params, id };
                 {
-                    let send = self.send.clone();
                     let st = self.st.clone();
                     let h = (self.handler.0)();
-                    thread::spawn(move || handle_msg(st, send, h, raw_msg));
+                    thread::spawn(move || handle_msg(st, h, raw_msg));
                 }
             }
         }
@@ -421,9 +458,6 @@ mod server {
         pub fn serve(mut self) -> Result<()> {
             let r = self.serve_loop();
             log::debug!("serve-loop exited with {:?}", &r);
-            self.write_th
-                .join()
-                .map_err(|_| anyhow!("cannot join writer thread"))?;
             r
         }
     }
