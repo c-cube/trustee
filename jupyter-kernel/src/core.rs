@@ -32,10 +32,8 @@ pub(crate) struct Server {
     iopub: Arc<Mutex<Connection>>,
     stdin: Arc<Mutex<Connection>>,
     latest_execution_request: Arc<Mutex<Option<JupyterMessage>>>,
-    shutdown_requested_receiver:
-        Arc<Mutex<mpsc::Receiver<(JupyterMessage, Connection)>>>,
-    shutdown_requested_sender:
-        Arc<Mutex<mpsc::Sender<(JupyterMessage, Connection)>>>,
+    shutdown_requested_receiver: Arc<Mutex<mpsc::Receiver<(JupyterMessage, Connection)>>>,
+    shutdown_requested_sender: Arc<Mutex<mpsc::Sender<(JupyterMessage, Connection)>>>,
 }
 
 /// Execution results of the kernel, to be sent to jupyter.
@@ -121,19 +119,12 @@ impl EvalContext {
 }
 
 impl Server {
-    pub(crate) fn start(
-        config: &control_file::Control,
-        mut eval: EvalContext,
-    ) -> Result<()> {
+    pub(crate) fn start(config: &control_file::Control, mut eval: EvalContext) -> Result<()> {
         let meta = eval.0.meta().clone();
         use zmq::SocketType;
 
         let zmq_context = zmq::Context::new();
-        let heartbeat = bind_socket(
-            config,
-            config.hb_port,
-            zmq_context.socket(SocketType::REP)?,
-        )?;
+        let heartbeat = bind_socket(config, config.hb_port, zmq_context.socket(SocketType::REP)?)?;
         let mut shell_socket = bind_socket(
             config,
             config.shell_port,
@@ -155,25 +146,18 @@ impl Server {
             zmq_context.socket(SocketType::PUB)?,
         )?));
 
-        let (shutdown_requested_sender, shutdown_requested_receiver) =
-            mpsc::channel();
+        let (shutdown_requested_sender, shutdown_requested_receiver) = mpsc::channel();
 
         let mut server = Server {
             iopub,
             latest_execution_request: Arc::new(Mutex::new(None)),
             stdin: Arc::new(Mutex::new(stdin_socket)),
-            shutdown_requested_receiver: Arc::new(Mutex::new(
-                shutdown_requested_receiver,
-            )),
-            shutdown_requested_sender: Arc::new(Mutex::new(
-                shutdown_requested_sender,
-            )),
+            shutdown_requested_receiver: Arc::new(Mutex::new(shutdown_requested_receiver)),
+            shutdown_requested_sender: Arc::new(Mutex::new(shutdown_requested_sender)),
         };
 
         thread::spawn(move || Self::handle_hb(&heartbeat));
-        server.start_thread(move |server: Server| {
-            server.handle_control(control_socket)
-        });
+        server.start_thread(move |server: Server| server.handle_control(control_socket));
 
         let mut execution_count = 0;
         loop {
@@ -189,11 +173,10 @@ impl Server {
                 }
             }
 
-            let message =
-                match JupyterMessage::read_poll(&mut shell_socket, 200)? {
-                    None => continue,
-                    Some(m) => m,
-                };
+            let message = match JupyterMessage::read_poll(&mut shell_socket, 200)? {
+                None => continue,
+                Some(m) => m,
+            };
             log::debug!("recv msg {:?}", message);
             // Processing of every message should be enclosed between "busy" and "idle"
             // see https://jupyter-client.readthedocs.io/en/latest/messaging.html#messages-on-the-shell-router-dealer-channel
@@ -227,8 +210,7 @@ impl Server {
                 execution_count += 1;
                 let e = execution_count;
                 log::info!("execute request (execution count {})", e);
-                let reply =
-                    server.handle_execution_requests(&mut eval, e, message)?;
+                let reply = server.handle_execution_requests(&mut eval, e, message)?;
                 reply.send(&mut shell_socket)?;
             } else if message.message_type() == "comm_open" {
                 message
@@ -256,7 +238,10 @@ impl Server {
                         }
                     }
                 };
-                message.new_reply().with_content(res).send(&mut shell_socket)?
+                message
+                    .new_reply()
+                    .with_content(res)
+                    .send(&mut shell_socket)?
             } else if message.message_type() == "history_request" {
                 // TODO
                 /*
@@ -311,7 +296,7 @@ impl Server {
             idle.send(&mut *server.iopub.lock().unwrap())?;
         }
 
-        Ok(())
+        //Ok(())
     }
 
     fn start_thread<F>(&self, body: F)
@@ -397,8 +382,8 @@ impl Server {
                 data.insert(
                     "text/html".into(),
                     json::from(format!(
-                            "<span style=\"color: rgba(0,0,0,0.4);\">Took {}ms</span>",
-                            ms
+                        "<span style=\"color: rgba(0,0,0,0.4);\">Took {}ms</span>",
+                        ms
                     )),
                 );
             };
@@ -428,8 +413,7 @@ impl Server {
         prompt: &str,
         password: bool,
     ) -> Option<String> {
-        if current_request.get_content()["allow_stdin"].as_bool() != Some(true)
-        {
+        if current_request.get_content()["allow_stdin"].as_bool() != Some(true) {
             return None;
         }
         let mut stdin = self.stdin.lock().unwrap();
@@ -461,9 +445,7 @@ impl Server {
                 }
                 "interrupt_request" => {
                     message.new_reply().send(&mut connection)?;
-                    log::error!(
-                        "Interrupting execution is not supported. Perhaps restart kernel?"
-                    );
+                    log::error!("Interrupting execution is not supported. Perhaps restart kernel?");
                 }
                 _ => {
                     log::error!(
@@ -483,9 +465,7 @@ impl Server {
         thread::spawn(move || {
             while let Ok(line) = channel.recv() {
                 let mut message = None;
-                if let Some(exec_request) =
-                    &*self.latest_execution_request.lock().unwrap()
-                {
+                if let Some(exec_request) = &*self.latest_execution_request.lock().unwrap() {
                     message = Some(exec_request.new_message("stream"));
                 }
                 if let Some(message) = message {
@@ -503,11 +483,7 @@ impl Server {
         });
     }
 
-    fn emit_errors(
-        &self,
-        e: &anyhow::Error,
-        parent_message: &JupyterMessage,
-    ) -> Result<()> {
+    fn emit_errors(&self, e: &anyhow::Error, parent_message: &JupyterMessage) -> Result<()> {
         parent_message
             .new_message("error")
             .with_content(object! {

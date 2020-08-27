@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use jupyter_kernel as jy;
-use std::{collections::HashMap, time};
+use std::{cell::RefCell, collections::HashMap, time};
 use trustee::{
     self, kernel_of_trust as k,
     meta::{self, lexer::Tok, Value},
@@ -11,9 +11,9 @@ use trustee::{
 const BUILTINS: &'static [&'static meta::InstrBuiltin] = &[&trustee::defbuiltin!(
     "import_ot",
     "`import_ts \"file\"+` imports theorems from the opentheory file(s)",
-    |ctx, _out, args| {
+    |ctx, args| {
         trustee::check_arity!("import_ot", args, >= 1);
-        let mut vm = trustee_opentheory::VM::new(ctx);
+        let mut vm = trustee_opentheory::VM::new(ctx.ctx);
         for file in args {
             let file = file.as_str().ok_or_else(|| Error::new("expect a string"))?;
             log::info!("parse opentheory file '{}'", file);
@@ -90,8 +90,12 @@ impl jy::EvalContextImpl for EvalTrustee {
         let src = format!("cell {}", execution_count);
         let start = time::Instant::now();
         let mut vm = meta::VM::new(self.ctx());
-        let mut stdout = vec![];
-        vm.set_stdout(&mut stdout);
+        let stdout = RefCell::new(String::new());
+        let mut pp = |s: &str| {
+            let mut out = stdout.borrow_mut();
+            out.push_str(s);
+        };
+        vm.set_stdout(&mut pp);
 
         // evaluate `code`
         let eval_res = vm.run(code, Some(src.into()));
@@ -103,16 +107,14 @@ impl jy::EvalContextImpl for EvalTrustee {
             None
         };
 
-        let raw_stdout = match std::string::String::from_utf8(stdout) {
-            Ok(s) => {
-                log::debug!("stdout: {:?}", s);
-                if s.len() > 0 {
-                    Some(s)
-                } else {
-                    None
-                }
+        let s = stdout.borrow();
+        let raw_stdout = {
+            log::debug!("stdout: {:?}", s);
+            if s.len() > 0 {
+                Some(s.to_string())
+            } else {
+                None
             }
-            _ => None,
         };
 
         // TODO: more mimetypes? return some html when we can
