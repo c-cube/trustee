@@ -95,6 +95,8 @@ fn main() -> anyhow::Result<()> {
 
     ctx.set_meta_value("print_full_traces", false.into());
     let mut vm = meta::VM::new(&mut ctx);
+    let mut out = |s: &str| println!("{}", s);
+    vm.set_stdout(&mut out);
 
     for x in &opts.include {
         let file_content = std::fs::read_to_string(x)?;

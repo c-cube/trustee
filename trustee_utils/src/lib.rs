@@ -61,13 +61,7 @@ fn find_tok(s: &str, pos: PosOrOffset) -> Option<(String, TokKind, PosAndOffset,
             PosOrOffset::Offset(x) => start <= x && end >= x,
             PosOrOffset::Pos(p) => pstart <= p && pend > p,
         };
-        log::debug!(
-            "is_in={}, pos={:?}, pstart={:?}, pend={:?}",
-            is_in,
-            pos,
-            pstart,
-            pend
-        );
+        //log::debug!( "is_in={}, pos={:?}, pstart={:?}, pend={:?}", is_in, pos, pstart, pend);
 
         if is_in {
             // here is where we want to complete
@@ -81,7 +75,7 @@ fn find_tok(s: &str, pos: PosOrOffset) -> Option<(String, TokKind, PosAndOffset,
             };
 
             let tok = lexer.cur();
-            //log::trace!("relevant token is {:?} (range {:?}-{:?})", tok, start, end);
+            log::debug!("relevant token is {:?} (range {:?}-{:?})", tok, start, end);
             match tok {
                 Tok::Id(s) => {
                     return Some((s.to_string(), TokKind::Id, start, end));
@@ -225,7 +219,7 @@ pub fn inspect(
             };
 
             if pval {
-                return Some((format!("[value]: {}{}", v, help), start, end));
+                return Some((format!("[value]: {:#}{}", v, help), start, end));
             } else {
                 return Some((help, start, end));
             }
