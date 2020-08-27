@@ -138,7 +138,7 @@ impl server::Handler for TrusteeSt {
 fn main() -> Result<()> {
     use {simplelog::*, std::fs::File};
     WriteLogger::init(
-        LevelFilter::Debug,
+        LevelFilter::Warn,
         Config::default(),
         File::create("/tmp/trustee_lsp.log")?,
     )

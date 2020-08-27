@@ -294,7 +294,7 @@ fn main() -> Result<()> {
     // setup logging
     use {simplelog::*, std::fs::File};
     WriteLogger::init(
-        LevelFilter::Debug,
+        LevelFilter::Warn,
         Config::default(),
         File::create("/tmp/trustee_jupyter.log")?,
     )
