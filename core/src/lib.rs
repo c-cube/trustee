@@ -4,6 +4,7 @@ pub mod algo;
 mod fnv;
 pub mod kernel_of_trust;
 pub mod meta;
+pub mod position;
 pub mod rptr;
 pub mod rstr;
 pub mod syntax;

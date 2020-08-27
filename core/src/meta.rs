@@ -333,6 +333,8 @@ struct StackFrame {
     res_offset: u32,
 }
 
+pub use crate::position::Position;
+
 /// Meta-language.
 mod ml {
     use super::*;
@@ -1261,21 +1263,18 @@ macro_rules! perror {
     };
 }
 
-/// Position in the text. 0 based.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct Position {
-    pub line: usize,
-    pub col: usize,
-}
-
 pub mod lexer {
     use super::*;
 
     /// Basic lexer.
     pub struct Lexer<'b> {
-        col: usize,
-        line: usize,
+        /// Current position.
+        pos: Position,
+        /// Position at the start of current token.
+        tok_start_pos: Position,
+        /// Offset at the start of current token.
         tok_start_off: usize,
+        /// Current offset.
         i: usize,
         bytes: &'b [u8],
         pub(crate) file_name: Option<RStr>,
@@ -1336,10 +1335,12 @@ pub mod lexer {
 
         /// Current `(line, column)`.
         pub fn loc(&self) -> Position {
-            Position {
-                line: self.line,
-                col: self.col,
-            }
+            self.pos
+        }
+
+        /// `(line,column)` at the beginning of the token.
+        pub fn token_start_pos(&self) -> Position {
+            self.tok_start_pos
         }
 
         /// Current offset in the string.
@@ -1365,11 +1366,11 @@ pub mod lexer {
                     }
                 } else if c == b' ' || c == b'\t' {
                     self.i += 1;
-                    self.col += 1;
+                    self.pos.col += 1;
                 } else if c == b'\n' {
                     self.i += 1;
-                    self.line += 1;
-                    self.col = 1
+                    self.pos.line += 1;
+                    self.pos.col = 1
                 } else {
                     return;
                 }
@@ -1394,35 +1395,36 @@ pub mod lexer {
                 return Tok::Eof;
             }
             self.tok_start_off = self.i;
+            self.tok_start_pos = self.loc();
             let tok = match self.bytes[self.i] {
                 b'(' => {
                     self.i += 1;
-                    self.col += 1;
+                    self.pos.col += 1;
                     Tok::LParen
                 }
                 b'{' => {
                     self.i += 1;
-                    self.col += 1;
+                    self.pos.col += 1;
                     Tok::LBrace
                 }
                 b'[' => {
                     self.i += 1;
-                    self.col += 1;
+                    self.pos.col += 1;
                     Tok::LBracket
                 }
                 b')' => {
                     self.i += 1;
-                    self.col += 1;
+                    self.pos.col += 1;
                     Tok::RParen
                 }
                 b'}' => {
                     self.i += 1;
-                    self.col += 1;
+                    self.pos.col += 1;
                     Tok::RBrace
                 }
                 b']' => {
                     self.i += 1;
-                    self.col += 1;
+                    self.pos.col += 1;
                     Tok::RBracket
                 }
                 b'`' => {
@@ -1432,7 +1434,7 @@ pub mod lexer {
                     }
                     let src_expr = std::str::from_utf8(&self.bytes[self.i + 1..j])
                         .expect("invalid utf8 slice");
-                    self.col += j - self.i + 1;
+                    self.pos.col += j - self.i + 1;
                     self.i = j + 1;
                     Tok::QuotedExpr(src_expr)
                 }
@@ -1444,7 +1446,7 @@ pub mod lexer {
                     let tok =
                         std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
                     let n = str::parse(tok).expect("cannot parse int");
-                    self.col += j - self.i;
+                    self.pos.col += j - self.i;
                     self.i = j;
                     Tok::Int(n)
                 }
@@ -1458,7 +1460,7 @@ pub mod lexer {
                     }
                     let tok = std::str::from_utf8(&self.bytes[self.i + 1..j])
                         .expect("invalid utf8 slice");
-                    self.col += j - self.i;
+                    self.pos.col += j - self.i;
                     self.i = j;
                     Tok::ColonId(tok)
                 }
@@ -1472,7 +1474,7 @@ pub mod lexer {
                     }
                     let tok = std::str::from_utf8(&self.bytes[self.i + 1..j])
                         .expect("invalid utf8 slice");
-                    self.col += j - self.i + 1;
+                    self.pos.col += j - self.i + 1;
                     self.i = j + 1;
                     Tok::QuotedString(tok)
                 }
@@ -1486,7 +1488,7 @@ pub mod lexer {
                     }
                     let tok =
                         std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
-                    self.col += j - self.i;
+                    self.pos.col += j - self.i;
                     self.i = j;
                     match str::parse(tok) {
                         Ok(n) => Tok::Int(n), // if all numerics
@@ -1510,12 +1512,13 @@ pub mod lexer {
 
         /// New lexer.
         pub fn new(s: &'b str, file_name: Option<RStr>) -> Self {
+            let pos = Position { line: 1, col: 1 };
             Self {
-                col: 1,
-                line: 1,
+                pos,
                 i: 0,
                 bytes: s.as_bytes(),
                 tok_start_off: 0,
+                tok_start_pos: pos,
                 cur_: None,
                 file_name,
             }
