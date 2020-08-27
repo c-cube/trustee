@@ -52,7 +52,7 @@ syn match       trusteeExpr      "==>"
 
 syn keyword trusteeThm   assume axiom mp bool_eq bool_eq_intro congr
 syn keyword trusteeThm   trans refl abs absv congr_ty beta_conv sym cut
-syn keyword trusteeThm   subst abs rw concl
+syn keyword trusteeThm   subst abs rw concl def_ty
 
 syn keyword  trusteeTodo  contained TODO BUG FIX FIXME NOTE
 
