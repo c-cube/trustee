@@ -2,13 +2,11 @@ use anyhow::{anyhow, Result};
 pub use lsp_types::{
     self as lsp, notification::Notification, request::Request, TextDocumentIdentifier as DocID,
 };
-use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 use std::{
     collections::HashMap,
     io::{BufRead, Read, Write},
-    os::unix::io::AsRawFd,
-    sync::{mpsc as chan, Arc, Mutex},
+    sync::{Arc, Mutex},
     thread,
 };
 
@@ -46,14 +44,24 @@ pub trait Handler: Send {
     fn on_remove_doc(&mut self, _id: DocID) {}
 
     /// Handle hover requests.
-    fn handle_hover(&mut self, _p: lsp::HoverParams) -> Result<Option<lsp::Hover>> {
+    fn handle_hover(
+        &mut self,
+        _st: &mut State,
+        _p: lsp::HoverParams,
+    ) -> Result<Option<lsp::Hover>> {
         Ok(None)
     }
 
     /// Handle completion requests.
-    fn handle_completion(&mut self, _p: lsp::CompletionParams) -> Option<lsp::CompletionResponse> {
+    fn handle_completion(
+        &mut self,
+        _st: &mut State,
+        _p: lsp::CompletionParams,
+    ) -> Option<lsp::CompletionResponse> {
         None
     }
+
+    // TODO: goto definition
 
     /// Handle message and optionally return a reply.
     fn handle_other_msg(&mut self, _st: &mut State, msg: IncomingMsg) -> Result<Option<String>> {
@@ -76,6 +84,13 @@ impl State {
         Self(Arc::new(Mutex::new(StateImpl {
             docs: Default::default(),
         })))
+    }
+}
+
+impl StateImpl {
+    /// Access document by URI.
+    pub fn get_doc(&self, id: &DocID) -> Option<&Doc> {
+        self.docs.get(&id.uri)
     }
 }
 
@@ -331,7 +346,15 @@ mod server {
         } else if msg.m == lsp::request::HoverRequest::METHOD {
             log::debug!("got hover request {:?}", params);
             let d: HoverParams = serde_json::from_str(&params)?;
-            let r = h.handle_hover(d)?;
+            let r = h.handle_hover(&mut st, d)?;
+            Ok(match r {
+                Some(r) => Some(mk_reply!(r)),
+                None => None,
+            })
+        } else if msg.m == lsp::request::Completion::METHOD {
+            log::debug!("got completion request {:?}", params);
+            let d: CompletionParams = serde_json::from_str(&params)?;
+            let r = h.handle_completion(&mut st, d);
             Ok(match r {
                 Some(r) => Some(mk_reply!(r)),
                 None => None,

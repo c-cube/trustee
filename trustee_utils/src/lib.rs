@@ -1,19 +1,50 @@
-use std::time;
+use std::{fmt::Write, time};
 use trustee::{
     self, kernel_of_trust as k,
     meta::{self, lexer, lexer::Tok, Value},
-    Error,
 };
 
 #[derive(Debug, Copy, Clone)]
 enum TokKind {
     Id,
     QuotedStr,
+    QuotedExpr,
+    ColonId,
 }
 
-// TODO: also be able to find token by position
+pub type Position = meta::Position;
+
+/// An offset, or a position, in a file.
+#[derive(Clone, Copy, Debug)]
+pub enum PosOrOffset {
+    Pos(Position),
+    Offset(usize),
+}
+
+/// An offset, *and* a position.
+#[derive(Clone, Copy, Debug)]
+pub struct PosAndOffset {
+    pub pos: Position,
+    pub offset: usize,
+}
+
+mod utils {
+    use super::*;
+
+    impl From<Position> for PosOrOffset {
+        fn from(p: Position) -> Self {
+            Self::Pos(p)
+        }
+    }
+    impl From<usize> for PosOrOffset {
+        fn from(x: usize) -> Self {
+            Self::Offset(x)
+        }
+    }
+}
+
 /// Find identifier the cursor is on (or just after)
-fn find_tok(s: &str, cursor_pos: usize) -> Option<(String, TokKind, usize, usize)> {
+fn find_tok(s: &str, pos: PosOrOffset) -> Option<(String, TokKind, PosAndOffset, PosAndOffset)> {
     let mut lexer = meta::lexer::Lexer::new(s, None);
     loop {
         let t = lexer.cur().clone();
@@ -22,18 +53,47 @@ fn find_tok(s: &str, cursor_pos: usize) -> Option<(String, TokKind, usize, usize
         }
 
         let start = lexer.token_start_offset();
+        let pstart = lexer.token_start_pos().prev_col(); // a bit of slack here
         let end = lexer.token_end_offset();
+        let pend = lexer.loc();
 
-        if start <= cursor_pos && end >= cursor_pos {
+        let is_in = match pos {
+            PosOrOffset::Offset(x) => start <= x && end >= x,
+            PosOrOffset::Pos(p) => pstart <= p && pend > p,
+        };
+        log::debug!(
+            "is_in={}, pos={:?}, pstart={:?}, pend={:?}",
+            is_in,
+            pos,
+            pstart,
+            pend
+        );
+
+        if is_in {
             // here is where we want to complete
-            match lexer.cur() {
+            let start = PosAndOffset {
+                pos: pstart,
+                offset: start,
+            };
+            let end = PosAndOffset {
+                pos: pend,
+                offset: end,
+            };
+
+            let tok = lexer.cur();
+            //log::trace!("relevant token is {:?} (range {:?}-{:?})", tok, start, end);
+            match tok {
                 Tok::Id(s) => {
-                    log::debug!("relevant token is {:?} (range {}--{})", s, start, end);
                     return Some((s.to_string(), TokKind::Id, start, end));
                 }
                 Tok::QuotedString(s) => {
-                    log::debug!("relevant token is {:?} (range {}--{})", s, start, end);
                     return Some((s.to_string(), TokKind::QuotedStr, start, end));
+                }
+                Tok::ColonId(s) => {
+                    return Some((s.to_string(), TokKind::ColonId, start, end));
+                }
+                Tok::QuotedExpr(s) => {
+                    return Some((s.to_string(), TokKind::QuotedExpr, start, end));
                 }
                 _ => {
                     log::debug!("outside any identifier");
@@ -47,8 +107,6 @@ fn find_tok(s: &str, cursor_pos: usize) -> Option<(String, TokKind, usize, usize
     }
     None
 }
-
-pub type Position = meta::Position;
 
 /// Results of evaluation.
 #[derive(Debug, Clone)]
@@ -75,7 +133,7 @@ pub fn eval(
     use std::cell::RefCell;
     log::debug!("eval code=`{}`", code);
 
-    let start = time::Instant::now();
+    let ts_start = time::Instant::now();
     let mut vm = meta::VM::new(ctx);
     let mut lexer = lexer::Lexer::new(code, src.into());
 
@@ -89,6 +147,7 @@ pub fn eval(
     // evaluate `code`
     let mut res = vec![];
     loop {
+        lexer.cur(); // make sure to parse first token before capturing `start`
         let start = lexer.loc();
         // evaluate
         let v = vm.run_lexer_one(&mut lexer);
@@ -129,32 +188,59 @@ pub fn eval(
         }
     }
 
-    let duration = time::Instant::now().duration_since(start);
+    let duration = time::Instant::now().duration_since(ts_start);
     EvalResults { res, duration }
 }
 
-/// Inspect wht's at this location.
-pub fn inspect(ctx: &mut k::Ctx, code: &str, cursor_pos: usize) -> Option<String> {
-    log::debug!(
-        "inspect request for code=`{}`, cursor_pos={}",
-        code,
-        cursor_pos
-    );
+/// Inspect what's at this postion.
+pub fn inspect(
+    ctx: &mut k::Ctx,
+    code: &str,
+    pos: impl Into<PosOrOffset>,
+) -> Option<(String, PosAndOffset, PosAndOffset)> {
+    let pos = pos.into();
+    log::debug!("inspect request for code=`{}`, pos={:?}", code, pos);
 
-    if let Some((tok, TokKind::Id, _start, _end)) = find_tok(code, cursor_pos) {
+    let tok = find_tok(code, pos);
+    if let Some((tok, TokKind::Id, start, end)) = tok {
         if let Some((v, hlp)) = meta::all_builtin_names_and_help().find(|v| v.0 == tok) {
-            return Some(format!("[builtin]: {}\n\n{}", v, hlp));
+            return Some((format!("[builtin]: {}\n\n{}", v, hlp), start, end));
         } else if let Some(v) = ctx.find_meta_value(&tok) {
-            let help = match v {
+            let (pval, help) = match v {
                 meta::Value::Closure(c) => {
                     let doc = c.docstring().unwrap_or("");
                     let bytecode = c.chunk();
-                    format!("\n\n{}\n\n\n{:#?}", doc, bytecode)
+                    (true, format!("\n\n{}\n\n```\n{:#?}```", doc, bytecode))
                 }
-                _ => "".to_string(),
+                meta::Value::Thm(th) => {
+                    let mut s = "[theorem]\n\n```\n".to_string();
+                    for h in th.hyps() {
+                        write!(s, " {}\n", h).unwrap();
+                    }
+                    write!(s, "|------------------------------\n").unwrap();
+                    write!(s, " {}\n```\n", th.concl()).unwrap();
+                    (false, s)
+                }
+                _ => (true, "".to_string()),
             };
-            return Some(format!("[value]: {}{}", v, help));
+
+            if pval {
+                return Some((format!("[value]: {}{}", v, help), start, end));
+            } else {
+                return Some((help, start, end));
+            }
         }
+    } else if let Some((_tok, TokKind::QuotedStr, start, end)) = tok {
+        return Some((format!("[string]"), start, end));
+    } else if let Some((_tok, TokKind::ColonId, start, end)) = tok {
+        return Some((format!("[atom]"), start, end));
+    } else if let Some((tok, TokKind::QuotedExpr, start, end)) = tok {
+        let info = match trustee::parse_expr(ctx, &tok) {
+            Ok(e) if e.is_kind() => format!("> root of type hierarchy"),
+            Ok(e) => format!("type: `{}`", e.ty()),
+            Err(e) => format!("ERR: could not parse: {}", e),
+        };
+        return Some((format!("[expr]\n`{}`\n\n{}", tok, info), start, end));
     }
     None
 }
@@ -182,23 +268,24 @@ pub fn code_is_complete(code: &str) -> Option<bool> {
 
 #[derive(Debug)]
 pub struct CompletionRes {
-    pub cursor_start: usize,
-    pub cursor_end: usize,
+    pub start: PosAndOffset,
+    pub end: PosAndOffset,
     pub matches: Vec<String>,
 }
 
 /// Find completions at the given location.
-pub fn completion(ctx: &mut k::Ctx, code: &str, cursor_pos: usize) -> Option<CompletionRes> {
-    log::debug!(
-        "completion request for code=`{}`, cursor_pos={}",
-        code,
-        cursor_pos
-    );
+pub fn completion(
+    ctx: &mut k::Ctx,
+    code: &str,
+    pos: impl Into<PosOrOffset>,
+) -> Option<CompletionRes> {
+    let pos = pos.into();
+    log::debug!("completion request for code=`{}`, pos={:?}", code, pos);
 
     let mut compls: Vec<String> = vec![];
     let mut add_compl = |s: &str| compls.push(s.to_string());
 
-    let tok = find_tok(code, cursor_pos); // find token of interest
+    let tok = find_tok(code, pos); // find token of interest
     if let Some((tok, TokKind::Id, start, end)) = tok {
         for (s, _e) in ctx.iter_meta_values() {
             if s.starts_with(&tok) {
@@ -215,8 +302,8 @@ pub fn completion(ctx: &mut k::Ctx, code: &str, cursor_pos: usize) -> Option<Com
             log::info!("found {} completions", compls.len());
             log::debug!("completions: {:#?}", compls);
             return Some(CompletionRes {
-                cursor_start: start,
-                cursor_end: end,
+                start,
+                end,
                 matches: compls,
             });
         }
@@ -261,8 +348,8 @@ pub fn completion(ctx: &mut k::Ctx, code: &str, cursor_pos: usize) -> Option<Com
             log::info!("found {} completions", compls.len());
             log::debug!("completions: {:#?}", compls);
             return Some(CompletionRes {
-                cursor_start: start,
-                cursor_end: end,
+                start,
+                end,
                 matches: compls,
             });
         }
