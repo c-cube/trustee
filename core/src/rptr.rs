@@ -1,6 +1,7 @@
 //! Refcounted pointer.
 //!
-//! A lightweight version of `std::rc::Rc`, with only one `u32` counter.
+//! A lightweight version of `std::rc::Rc`, with only one `u32` counter,
+//! and no weak count.
 
 use std::{cell::Cell, fmt::Debug, ops::Deref, ptr, u32};
 
@@ -25,7 +26,11 @@ impl<T> Clone for RPtr<T> {
     fn clone(&self) -> Self {
         unsafe {
             let i = get_impl_ref!(self);
-            i.rc.set(1 + i.rc.get());
+            let rc = i.rc.get();
+            // saturating: if we reach u32::MAX we stay there
+            if rc < u32::MAX {
+                i.rc.set(1 + rc);
+            }
         };
         RPtr(self.0)
     }
@@ -91,8 +96,12 @@ impl<T> Drop for RPtr<T> {
     fn drop(&mut self) {
         unsafe {
             let i = get_impl_ref!(self);
-            let rc = i.rc.get() - 1;
-            i.rc.set(rc);
+            let rc = i.rc.get();
+            assert!(rc > 0);
+            if rc == u32::MAX {
+                return; // saturating, just leak
+            }
+            i.rc.set(rc - 1);
             if rc == 0 {
                 let b = Box::from_raw(self.0 as *mut RPtrImpl<T>);
                 drop(b);

@@ -7,6 +7,7 @@
 use {
     crate::{
         algo,
+        algo::conv,
         kernel_of_trust::{self as k, Ctx},
         rptr::RPtr,
         rstr::RStr,
@@ -45,6 +46,7 @@ pub enum Value {
     Nil,
     Int(i64),
     Bool(bool),
+    /// A symbol, like `:foo` or `:a`.
     Sym(k::Symbol),
     /// A raw string literal. Obtained by parsing a source file or using
     /// an embedded rust string literal.
@@ -52,7 +54,10 @@ pub enum Value {
     Expr(k::Expr),
     /// Cons: a pair of values. This is the basis for lists.
     Cons(RPtr<(Value, Value)>),
+    /// A theorem.
     Thm(k::Thm),
+    /// A converter.
+    Conv(RPtr<conv::BasicConverter>),
     /// An executable closure (chunks + upvalues).
     Closure(Closure),
     /// A builtin instruction implemented in rust.
@@ -588,6 +593,7 @@ mod ml {
                 Value::Int(i) => write!(out, "{}", i),
                 Value::Bool(b) => write!(out, "{}", b),
                 Value::Sym(s) => write!(out, ":{}", s.name()),
+                Value::Conv(_) => write!(out, "<converter>"),
                 Value::Cons(..) => {
                     let mut args = vec![];
                     let mut cur = self;
@@ -691,6 +697,12 @@ mod ml {
     impl From<k::Thm> for Value {
         fn from(th: k::Thm) -> Self {
             Value::Thm(th)
+        }
+    }
+
+    impl From<conv::BasicConverter> for Value {
+        fn from(c: conv::BasicConverter) -> Self {
+            Value::Conv(RPtr::new(c))
         }
     }
 
@@ -3348,7 +3360,7 @@ mod logic_builtins {
                 let th = get_arg_thm!(args, 0);
 
                 let mut beta = false;
-                let mut rw_rules = algo::RewriteRuleSet::new();
+                let mut rw_rules = algo::rw_rule::RewriteRuleSet::new();
                 for x in &args[1..] {
                     match x {
                         Value::Sym(s) if s.name() == "beta" => {
@@ -3366,19 +3378,22 @@ mod logic_builtins {
                     }
                 }
 
-                let rw: Box<dyn algo::Rewriter> = if beta && !rw_rules.is_empty() {
-                    let mut rw = algo::RewriteCombine::new();
-                    rw.add(&algo::RewriterBetaConv);
-                    rw.add(&rw_rules);
-                    Box::new(rw)
+                // build a converter from beta/rules, then apply it bottom-up
+                let th = if beta && !rw_rules.is_empty() {
+                    let mut cs = conv::SeqConverter::new();
+                    cs.add(conv::BasicConverter::beta_repeat());
+                    cs.add(conv::BasicConverter::wrap(rw_rules));
+                    let rw = algo::rw::BottomUpRwConv(&cs);
+                    conv::thm_conv_concl(ctx.ctx, th.clone(), &rw)?
                 } else if beta {
-                    Box::new(algo::RewriterBetaConv)
+                    let rw = algo::rw::BottomUpRwConv(&conv::RepeatBetaReduce);
+                    conv::thm_conv_concl(ctx.ctx, th.clone(), &rw)?
                 } else if !rw_rules.is_empty() {
-                    Box::new(rw_rules)
+                    let rw = algo::rw::BottomUpRwConv(&rw_rules);
+                    conv::thm_conv_concl(ctx.ctx, th.clone(), &rw)?
                 } else {
-                    return Ok(Value::Thm(th.clone()));
+                    return Ok(Value::Thm(th.clone())); // no rw
                 };
-                let th = algo::thm_rw_concl(ctx.ctx, th.clone(), &*rw)?;
                 Ok(Value::Thm(th))
             }
         ),

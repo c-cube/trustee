@@ -3,14 +3,15 @@
 use crate::{kernel_of_trust as k, *};
 
 pub mod cc;
+pub mod conv;
 pub mod rw;
+pub mod rw_rule;
 pub mod unif;
 
 pub use cc::{prove_cc, CC};
-pub use rw::{
-    rewrite_bottom_up, thm_rw_concl, RewriteCombine, RewriteRule, RewriteRuleSet, Rewriter,
-    RewriterBetaConv,
-};
+pub use conv::{thm_conv_concl, BetaReduce, Converter, RepeatBetaReduce};
+pub use rw::rewrite_bottom_up;
+pub use rw_rule::{RewriteRule, RewriteRuleSet};
 pub use unif::{match_, unify, RenamingData, UnifySubst};
 
 /// Result of the definition of a new polymorphic constant.
@@ -182,7 +183,7 @@ mod test {
         )?;
 
         let th1 = ctx.thm_assume(e)?;
-        let th2 = thm_rw_concl(&mut ctx, th1, &RewriterBetaConv)?;
+        let th2 = conv::thm_conv_concl(&mut ctx, th1, &conv::BetaReduce)?;
         let exp = syntax::parse_expr(
             &mut ctx,
             r#"with (tau:type) (h g1:tau->tau) (a:tau). h (g1 (g1 a)) = (g1 (g1 (g1 (g1 a))))"#,
