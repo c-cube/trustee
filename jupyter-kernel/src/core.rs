@@ -407,6 +407,8 @@ impl Server {
         Ok(reply)
     }
 
+    // TODO
+    #[allow(dead_code)]
     fn request_input(
         &self,
         current_request: &JupyterMessage,
@@ -440,7 +442,7 @@ impl Server {
                 "shutdown_request" => {
                     // do not answer here, let main loop do it after it winds down
                     let chan = self.shutdown_requested_sender.lock().unwrap();
-                    chan.send((message, connection));
+                    chan.send((message, connection)).expect("cannot send");
                     return Ok(());
                 }
                 "interrupt_request" => {
@@ -457,6 +459,8 @@ impl Server {
         }
     }
 
+    // TODO
+    #[allow(dead_code)]
     fn start_output_pass_through_thread(
         self,
         output_name: &'static str,
@@ -481,18 +485,6 @@ impl Server {
                 }
             }
         });
-    }
-
-    fn emit_errors(&self, e: &anyhow::Error, parent_message: &JupyterMessage) -> Result<()> {
-        parent_message
-            .new_message("error")
-            .with_content(object! {
-                "ename" => "Error",
-                "evalue" => e.to_string(),
-                //"traceback" => traceback,
-            })
-            .send(&mut *self.iopub.lock().unwrap())?;
-        Ok(())
     }
 }
 
