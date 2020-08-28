@@ -3386,7 +3386,7 @@ mod logic_builtins {
                     let rw = algo::rw::BottomUpRwConv(&cs);
                     conv::thm_conv_concl(ctx.ctx, th.clone(), &rw)?
                 } else if beta {
-                    let rw = algo::rw::BottomUpRwConv(&conv::RepeatBetaReduce);
+                    let rw = algo::rw::BottomUpRwConv(&conv::BetaReduceRepeat);
                     conv::thm_conv_concl(ctx.ctx, th.clone(), &rw)?
                 } else if !rw_rules.is_empty() {
                     let rw = algo::rw::BottomUpRwConv(&rw_rules);

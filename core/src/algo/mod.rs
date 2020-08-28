@@ -9,7 +9,7 @@ pub mod rw_rule;
 pub mod unif;
 
 pub use cc::{prove_cc, CC};
-pub use conv::{thm_conv_concl, BetaReduce, Converter, RepeatBetaReduce};
+pub use conv::{thm_conv_concl, BetaReduce, BetaReduceRepeat, Converter};
 pub use rw::rewrite_bottom_up;
 pub use rw_rule::{RewriteRule, RewriteRuleSet};
 pub use unif::{match_, unify, RenamingData, UnifySubst};
@@ -175,15 +175,48 @@ mod test {
     }
 
     #[test]
+    fn test_beta_conv_repeat() -> Result<()> {
+        let mut ctx = Ctx::new();
+        let e = syntax::parse_expr(
+            &mut ctx,
+            r#"with (tau:type) (p:tau->tau->bool) (h:tau->tau) (a:tau).
+            let f1 = \(x:tau). h x in
+            let f2 = \(x:tau). f1 x in
+            let f3 = \(x:tau). f2 x in
+            p (h (f3 a)) (f3 a)"#,
+        )?;
+
+        let th1 = ctx.thm_assume(e.clone())?;
+        let th2 = conv::thm_conv_concl(
+            &mut ctx,
+            th1,
+            &conv::Congr(&conv::BetaReduceRepeat, &conv::BetaReduceRepeat),
+        )?;
+        let exp = syntax::parse_expr(
+            &mut ctx,
+            r#"with (tau:type) (p:tau->tau->bool) (h:tau->tau) (a:tau).
+            let f1 = \(x:tau). h x in
+            let f2 = \(x:tau). f1 x in
+            let f3 = \(x:tau). f2 x in
+            p (h (f3 a)) (h a)"#,
+        )?;
+        assert_eq!(exp, th2.concl().clone(), "\n\ninitial: {}", e);
+        Ok(())
+    }
+
+    #[test]
     fn test_rw_beta_conv() -> Result<()> {
         let mut ctx = Ctx::new();
         let e = syntax::parse_expr(
             &mut ctx,
-            r#"with (tau:type) (g1 h:tau->tau) (a:tau). let f2 = \(f:tau->tau) (x:tau). f (f x) in h (f2 g1 a) = f2 (f2 g1) a"#,
+            r#"with (tau:type) (g1 h:tau->tau) (a:tau).
+            let f2 = \(f:tau->tau) (x:tau). f (f x) in
+            h (f2 g1 a) = f2 (f2 g1) a"#,
         )?;
 
         let th1 = ctx.thm_assume(e)?;
-        let th2 = conv::thm_conv_concl(&mut ctx, th1, &conv::BetaReduce)?;
+        let rw = rw::BottomUpRwConv(&conv::BetaReduce);
+        let th2 = conv::thm_conv_concl(&mut ctx, th1, &rw)?;
         let exp = syntax::parse_expr(
             &mut ctx,
             r#"with (tau:type) (h g1:tau->tau) (a:tau). h (g1 (g1 a)) = (g1 (g1 (g1 (g1 a))))"#,

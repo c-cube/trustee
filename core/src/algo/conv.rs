@@ -23,6 +23,47 @@ pub trait Converter: fmt::Debug {
     }
 }
 
+/// Apply beta-reduction at root.
+#[derive(Clone, Copy, Debug)]
+pub struct BetaReduce;
+
+/// Apply beta-reduction at root, repeatedly, until the root
+/// is not a beta-redex anymore.
+#[derive(Clone, Copy, Debug)]
+pub struct BetaReduceRepeat;
+
+/// Converter that does nothing.
+#[derive(Clone, Copy, Debug)]
+pub struct TrivialConv;
+
+/// A "basic" converter. Use a as component in `SeqConverter`.
+#[derive(Debug, Clone)]
+pub enum BasicConverter {
+    Nil,
+    Beta(BetaReduce),
+    BetaRepeat(BetaReduceRepeat),
+    Wrapped(k::Ref<dyn Converter>),
+}
+
+/// A composite converter, made of smaller converters.
+#[derive(Debug)]
+pub struct SeqConverter {
+    v: Vec<BasicConverter>,
+    repeat: bool,
+}
+
+/// Converter2
+#[derive(Debug)]
+pub struct Congr<'a>(pub &'a dyn Converter, pub &'a dyn Converter);
+
+/// Converter for the LHS.
+#[derive(Debug)]
+pub struct CongrLHS<'a>(pub &'a dyn Converter);
+
+/// Converter for the RHS.
+#[derive(Debug)]
+pub struct CongrRHS<'a>(pub &'a dyn Converter);
+
 /// Normalize the conclusion of `th` using the given converter.
 pub fn thm_conv_concl(ctx: &mut Ctx, th: Thm, conv: &dyn Converter) -> Result<Thm> {
     let c = th.concl().clone();
@@ -56,9 +97,80 @@ fn chain_res(ctx: &mut k::Ctx, res1: Option<Thm>, res2: Option<Thm>) -> Result<O
     }
 }
 
-/// Apply beta-reduction at root.
-#[derive(Clone, Copy, Debug)]
-pub struct BetaReduce;
+impl Converter for TrivialConv {
+    fn try_conv(&self, _ctx: &mut k::Ctx, _e: &k::Expr) -> Result<Option<k::Thm>> {
+        Ok(None)
+    }
+}
+
+impl<'a> Converter for Congr<'a> {
+    fn try_conv(&self, ctx: &mut k::Ctx, e: &k::Expr) -> Result<Option<k::Thm>> {
+        if let Some((lhs, rhs)) = e.as_app() {
+            let r1 = self.0.try_conv(ctx, lhs)?;
+            let r2 = self.1.try_conv(ctx, rhs)?;
+            eprintln!("conv {:?}: r1={:?}, r2={:?}", e, r1, r2);
+            let step = match (r1, r2) {
+                (None, None) => None,
+                (Some(th), None) => {
+                    if rhs.ty().is_type() {
+                        Some(ctx.thm_congr_ty(th, rhs)?)
+                    } else {
+                        let th2 = ctx.thm_refl(rhs.clone());
+                        Some(ctx.thm_congr(th, th2)?)
+                    }
+                }
+                (None, Some(th)) => {
+                    let th_hd = ctx.thm_refl(lhs.clone());
+                    Some(ctx.thm_congr(th_hd, th)?)
+                }
+                (Some(th1), Some(th2)) => Some(ctx.thm_congr(th1, th2)?),
+            };
+            Ok(step)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<'a> Converter for CongrLHS<'a> {
+    fn try_conv(&self, ctx: &mut k::Ctx, e: &k::Expr) -> Result<Option<k::Thm>> {
+        if let Some((lhs, rhs)) = e.as_app() {
+            let r1 = self.0.try_conv(ctx, lhs)?;
+            let step = match r1 {
+                None => None,
+                Some(th) => {
+                    if rhs.ty().is_type() {
+                        Some(ctx.thm_congr_ty(th, rhs)?)
+                    } else {
+                        let th2 = ctx.thm_refl(rhs.clone());
+                        Some(ctx.thm_congr(th, th2)?)
+                    }
+                }
+            };
+            Ok(step)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<'a> Converter for CongrRHS<'a> {
+    fn try_conv(&self, ctx: &mut k::Ctx, e: &k::Expr) -> Result<Option<k::Thm>> {
+        if let Some((lhs, rhs)) = e.as_app() {
+            let r2 = self.0.try_conv(ctx, rhs)?;
+            let step = match r2 {
+                None => None,
+                Some(th) => {
+                    let th_hd = ctx.thm_refl(lhs.clone());
+                    Some(ctx.thm_congr(th_hd, th)?)
+                }
+            };
+            Ok(step)
+        } else {
+            Ok(None)
+        }
+    }
+}
 
 impl Converter for BetaReduce {
     fn try_conv(&self, ctx: &mut k::Ctx, e: &k::Expr) -> Result<Option<k::Thm>> {
@@ -66,11 +178,7 @@ impl Converter for BetaReduce {
     }
 }
 
-/// Apply beta-reduction at root, repeatedly, until the root
-/// is not a beta-redex anymore.
-#[derive(Clone, Copy, Debug)]
-pub struct BetaReduceRepeat;
-
+// FIXME: also go in applications to reduce `(\x. u) a b c` into `u[x\a] b c`
 impl Converter for BetaReduceRepeat {
     fn try_conv(&self, ctx: &mut k::Ctx, e: &k::Expr) -> Result<Option<k::Thm>> {
         let mut e = e.clone();
@@ -88,14 +196,6 @@ impl Converter for BetaReduceRepeat {
         }
         Ok(r)
     }
-}
-
-/// A "basic" converter. Use a as component in `SeqConverter`.
-#[derive(Debug, Clone)]
-pub enum BasicConverter {
-    Beta(BetaReduce),
-    BetaRepeat(BetaReduceRepeat),
-    Wrapped(k::Ref<dyn Converter>),
 }
 
 impl From<BetaReduce> for BasicConverter {
@@ -129,18 +229,12 @@ impl BasicConverter {
 impl Converter for BasicConverter {
     fn try_conv(&self, ctx: &mut Ctx, e: &Expr) -> Result<Option<Thm>> {
         match self {
+            BasicConverter::Nil => Ok(None),
             BasicConverter::Beta(b) => b.try_conv(ctx, e),
             BasicConverter::BetaRepeat(b) => b.try_conv(ctx, e),
             BasicConverter::Wrapped(b) => b.try_conv(ctx, e),
         }
     }
-}
-
-/// A composite converter, made of smaller converters.
-#[derive(Debug)]
-pub struct SeqConverter {
-    v: Vec<BasicConverter>,
-    repeat: bool,
 }
 
 impl Converter for SeqConverter {
