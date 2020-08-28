@@ -261,7 +261,7 @@ impl OConst for CustomConst {
         let mut c_ty_vars: Expr = self.c_ty_vars.clone();
         let mut ty_vars = Cow::Borrowed(&self.ty_vars);
         // rename if needed
-        if let Some(mut data) = algo::need_to_rename_before_unif(&c_ty_vars, &ty) {
+        if let Some(mut data) = algo::unif::need_to_rename_before_unif(&c_ty_vars, &ty) {
             //eprintln!(
             //    "need to rename in const {:?}:{:?}, to unify with type {:?}",
             //    self.c, self.c_ty_vars, ty
