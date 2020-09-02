@@ -36,8 +36,6 @@ macro_rules! logerr{
     }
 }
 
-// TODO: closure
-
 /// # Values
 ///
 /// A value of the language.
@@ -62,7 +60,15 @@ pub enum Value {
     Closure(Closure),
     /// A builtin instruction implemented in rust.
     Builtin(&'static InstrBuiltin),
-    //Array(ValueArray),
+    Error(RPtr<MetaError>),
+}
+
+/// An error. It can be related to parsing, compilation, or execution.
+#[derive(Debug)]
+pub struct MetaError {
+    err: k::Error,
+    start: Position,
+    end: Position,
 }
 
 /// A closure, i.e. a function (chunk) associated with some captured values.
@@ -256,8 +262,7 @@ enum Instr {
     /// Create a closure from the upvalue stack and the (empty) closure
     /// in `local[$0]`, and put the resulting closure in `sl[$1]`
     CreateClosure(LocalIdx, SlotIdx),
-    // TODO: reinstate `Call1`?
-    /// Call chunk `sl[$0]` with arguments in `stack[sl[$0]+1 …]`
+    /// Call chunk `sl[$0]` with arguments in `stack[sl[$0]+1 … sl[$0]+1+$1]`
     /// and put the result into `sl[$2]`.
     ///
     /// `$1` is the number of arguments the function takes.
@@ -638,6 +643,7 @@ mod ml {
                     }
                 }
                 Value::Builtin(b) => write!(out, "<builtin {}>", b.name),
+                Value::Error(e) => write!(out, "<error at {} - {}: {}>", e.start, e.end, e.err),
             }
         }
     }
