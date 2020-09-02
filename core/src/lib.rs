@@ -15,3 +15,29 @@ pub use crate::meta::{load_prelude_hol, run_code};
 pub use kernel_of_trust::ExprView::*;
 pub use kernel_of_trust::{Ctx, Error, Expr, ExprView, Result, Symbol, Thm, Var};
 pub use syntax::{parse_expr, parse_expr_with_args};
+
+pub(crate) mod macros {
+    #[macro_export]
+    macro_rules! logtrace{
+        ($($t:expr),*) => {
+            #[cfg(feature="logging")]
+            log::trace!($($t),*)
+        }
+    }
+
+    #[macro_export]
+    macro_rules! logdebug{
+        ($($t:expr),*) => {
+            #[cfg(feature="logging")]
+            log::debug!($($t),*)
+        }
+    }
+
+    #[macro_export]
+    macro_rules! logerr{
+        ($($t:expr),*) => {
+            #[cfg(feature="logging")]
+            log::error!($($t),*)
+        }
+    }
+}
