@@ -926,7 +926,7 @@ impl<'a> Compiler<'a> {
     }
 
     #[inline]
-    pub fn get_slot_(&mut self, i: SlotIdx) -> &mut CompilerSlot {
+    fn get_slot_(&mut self, i: SlotIdx) -> &mut CompilerSlot {
         &mut self.slots[i.0 as usize]
     }
 
@@ -955,13 +955,13 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    pub(crate) fn push_local_scope(&mut self) -> Scope {
+    fn push_local_scope(&mut self) -> Scope {
         crate::logtrace!("push local scope");
         self.lex_scopes.push(LexScope::Local(vec![]));
         Scope(self.lex_scopes.len())
     }
 
-    pub(crate) fn pop_local_scope(&mut self, sc: Scope) {
+    fn pop_local_scope(&mut self, sc: Scope) {
         crate::logtrace!("pop local scope");
         if self.lex_scopes.len() != sc.0 {
             panic!(
@@ -981,7 +981,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// Ensure the value is in `self.locals`, return its index.
-    pub fn allocate_local_(&mut self, v: Value) -> Result<LocalIdx> {
+    fn allocate_local_(&mut self, v: Value) -> Result<LocalIdx> {
         crate::logtrace!("compiler(name={:?}): push local {}", self.name, v);
 
         // see if `v` is a local already.
@@ -999,7 +999,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// Emit instruction.
-    pub fn emit_instr_(&mut self, i: Instr) {
+    fn emit_instr_(&mut self, i: Instr) {
         crate::logtrace!(
             "compiler(name={:?}, n_locals={}): emit instr {:?}",
             self.name,
@@ -1010,7 +1010,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// Reserve space for a jump instruction that will be emitted later.
-    pub(super) fn reserve_jump_(&mut self) -> JumpPosition {
+    fn reserve_jump_(&mut self) -> JumpPosition {
         let off = self.instrs.len();
         crate::logtrace!(
             "compiler(name={:?}, n_locals={}): reserve jump at offset {}",
@@ -1024,11 +1024,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// Set the jump instruction for a previously reserved jump slot.
-    pub(super) fn emit_jump(
-        &mut self,
-        pos: JumpPosition,
-        mk_i: impl FnOnce(i16) -> Instr,
-    ) -> Result<()> {
+    fn emit_jump(&mut self, pos: JumpPosition, mk_i: impl FnOnce(i16) -> Instr) -> Result<()> {
         let i = if let I::Trap = self.instrs[pos.0] {
             let j_offset = self.instrs.len() as isize - pos.0 as isize - 1;
             if j_offset < i16::MIN as isize || j_offset > i16::MAX as isize {
@@ -1083,7 +1079,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// Allocate or reuse a slot.
-    pub(super) fn allocate_any_slot_(&mut self, st: CompilerSlotState) -> Result<SlotIdx> {
+    fn allocate_any_slot_(&mut self, st: CompilerSlotState) -> Result<SlotIdx> {
         if let Some((i, sl)) = self
             .slots
             .iter_mut()
@@ -1100,7 +1096,7 @@ impl<'a> Compiler<'a> {
     }
 
     /// Allocate a variable (bound, local, etc.) somewhere in the stack.
-    pub(super) fn allocate_var_(&mut self, name: RStr) -> Result<ExprRes> {
+    fn allocate_var_(&mut self, name: RStr) -> Result<ExprRes> {
         let slot = self.allocate_any_slot_(CompilerSlotState::NotActivatedYet)?;
         self.get_slot_(slot).var_name = Some(name);
         if let Some(LexScope::CallArgs) = self.lex_scopes.last() {
@@ -1114,18 +1110,18 @@ impl<'a> Compiler<'a> {
     }
 
     /// Allocate a slot on the stack, anywhere, to hold a temporary result.
-    pub fn allocate_temporary_(&mut self) -> Result<ExprRes> {
+    fn allocate_temporary_(&mut self) -> Result<ExprRes> {
         let slot = self.allocate_any_slot_(CompilerSlotState::Activated)?;
         Ok(ExprRes::new(slot, true))
     }
 
-    pub fn allocate_temporary_on_top_(&mut self) -> Result<ExprRes> {
+    fn allocate_temporary_on_top_(&mut self) -> Result<ExprRes> {
         let slot = self.allocate_top_slot_(CompilerSlotState::Activated)?;
         Ok(ExprRes::new(slot, true))
     }
 
     /// Check if `sl` is the top slot.
-    pub(super) fn is_top_of_stack_(&self, sl: SlotIdx) -> bool {
+    fn is_top_of_stack_(&self, sl: SlotIdx) -> bool {
         if sl.0 as usize + 1 == self.slots.len() {
             true
         } else {
@@ -1136,14 +1132,14 @@ impl<'a> Compiler<'a> {
     }
 
     /// Free expression result.
-    pub(super) fn free(&mut self, e: &ExprRes) {
+    fn free(&mut self, e: &ExprRes) {
         if e.temporary {
             self.deallocate_slot_(e.slot)
         }
     }
 
     /// Deallocate that slot, it becomes available for further use.
-    pub(super) fn deallocate_slot_(&mut self, sl: SlotIdx) {
+    fn deallocate_slot_(&mut self, sl: SlotIdx) {
         if sl.0 as usize + 1 == self.slots.len() {
             // just pop the slot
             self.slots.pop().unwrap();
@@ -1156,7 +1152,7 @@ impl<'a> Compiler<'a> {
 
     /// Find slot for the given variable `v`.
     #[allow(unsafe_code)] // used for making `parent` pointers covariant
-    pub(crate) fn find_slot_of_var(&mut self, v: &str) -> Result<Option<VarSlot>> {
+    fn find_slot_of_var(&mut self, v: &str) -> Result<Option<VarSlot>> {
         for (i, s) in self.slots.iter().enumerate().rev() {
             if s.state != CompilerSlotState::Activated {
                 continue; // slot is not actually ready yet
