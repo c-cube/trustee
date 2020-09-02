@@ -15,8 +15,9 @@ default-members = [
 
 [profile.release]
 debug=1
-opt-level=3
-lto="thin"
+opt-level=2
+#lto="thin"
+lto="off"
 
 [profile.dev]
 opt-level=1

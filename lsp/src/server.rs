@@ -347,10 +347,15 @@ mod server {
             log::debug!("got hover request {:?}", params);
             let d: HoverParams = serde_json::from_str(&params)?;
             let r = h.handle_hover(&mut st, d)?;
-            Ok(match r {
-                Some(r) => Some(mk_reply!(r)),
-                None => None,
-            })
+            match r {
+                Some(r) => Ok(Some(mk_reply!(r))),
+                None => Ok(Some(mk_reply!(Hover {
+                    contents: HoverContents::Scalar(lsp::MarkedString::String(
+                        "<no information>".to_string()
+                    )),
+                    range: None
+                }))),
+            }
         } else if msg.m == lsp::request::Completion::METHOD {
             log::debug!("got completion request {:?}", params);
             let d: CompletionParams = serde_json::from_str(&params)?;
@@ -382,6 +387,7 @@ mod server {
                             "message": e.to_string(),
                         }
                     });
+                    log::error!("error with reply: {}", e);
                     Some(r.to_string())
                 } else {
                     // must be a notification, can't reply with an error
