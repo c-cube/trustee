@@ -6,11 +6,14 @@ use crate::{logdebug, logtrace, perror};
 use {
     crate::{
         kernel_of_trust::{self as k, Ctx},
+        rptr::RPtr,
         rstr::RStr,
         syntax, Error, Result,
     },
     std::{fmt, i16, marker::PhantomData, u8},
 };
+
+//  TODO: actually use tracepoints to emit `Trace`
 
 use Instr as I;
 
@@ -18,6 +21,8 @@ use Instr as I;
 pub struct Parser<'a, 'b, 'c> {
     pub(crate) lexer: &'c mut lexer::Lexer<'b>,
     ctx: &'a mut k::Ctx,
+    /// Where to trace, if anywhere.
+    trace_points: Vec<Position>,
 }
 
 /// Lexical scope, used to control local variables.
@@ -57,7 +62,8 @@ struct Compiler<'a> {
     /// as it just lives shorter.
     phantom: PhantomData<&'a ()>,
     file_name: Option<RStr>,
-    first_line: u32,
+    start: Position,
+    end: Position,
 }
 
 struct CompilerSlot {
@@ -157,7 +163,16 @@ macro_rules! get_res {
 impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
     /// Create a new parser for source string `s`.
     pub fn new(ctx: &'a mut k::Ctx, lexer: &'c mut lexer::Lexer<'b>) -> Self {
-        Self { ctx, lexer }
+        Self {
+            ctx,
+            lexer,
+            trace_points: vec![],
+        }
+    }
+
+    /// Add a trace point at the given position.
+    pub fn add_tracepoint(&mut self, p: Position) {
+        self.trace_points.push(p)
     }
 
     /// Current token
@@ -178,6 +193,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
     /// Otherwise returns `Ok((chunk, lexer))`.
     pub(super) fn parse_top_expr(mut self) -> Result<Option<Chunk>> {
         let t = self.lexer.cur();
+        let start = self.lexer.loc();
 
         match t {
             Tok::Eof => Ok(None),
@@ -194,12 +210,31 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                     slots: vec![],
                     parent: None,
                     phantom: PhantomData,
-                    first_line: self.lexer.loc().line as u32,
+                    start,
+                    end: start,
                     file_name: self.lexer.file_name.clone(),
                 };
                 let res = get_res!(c, None);
-                let r = self.parse_expr_(&mut c, Some(res.slot))?;
-                c.emit_instr_(I::Ret(r.slot));
+                let r = self.parse_expr_(&mut c, Some(res.slot));
+                c.end = self.lexer.loc();
+                match r {
+                    Ok(r) => {
+                        c.emit_instr_(I::Ret(r.slot));
+                    }
+                    Err(e) => {
+                        // build error message
+                        c.instrs.clear();
+                        let loc = Location {
+                            start: c.start,
+                            end: c.end,
+                            file_name: c.file_name.clone(),
+                        };
+                        let err = RPtr::new(MetaError { err: e, loc });
+                        let l0 = c.allocate_local_(Value::Error(err))?;
+                        // emit instruction to fail
+                        c.emit_instr_(I::Fail(l0))
+                    }
+                }
                 Ok(Some(c.into_chunk()))
             }
         }
@@ -234,6 +269,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
         }
 
         let ch = {
+            let start = self.lexer.loc();
             let parent = match parent {
                 None => None,
                 Some(p) => Some(p as &mut _ as *mut _),
@@ -252,7 +288,8 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                 slots: vec![],
                 parent,
                 phantom: PhantomData,
-                first_line: self.lexer.loc().line as u32,
+                start,
+                end: start,
                 file_name: self.lexer.file_name.clone(),
             };
             // add variables to `sub_c`
@@ -262,11 +299,29 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             }
             logtrace!("compiling {:?}: slots for args: {:?}", &f_name, &c.slots);
 
-            let res = self.parse_expr_seq_(&mut c, closing, None)?;
+            let res = self.parse_expr_seq_(&mut c, closing, None);
 
-            // return value
-            c.emit_instr_(I::Ret(res.slot));
-            c.free(&res);
+            match res {
+                Ok(res) => {
+                    // return value
+                    c.emit_instr_(I::Ret(res.slot));
+                    c.free(&res);
+                }
+                Err(e) => {
+                    // build error message
+                    c.instrs.clear();
+                    let loc = Location {
+                        start: c.start,
+                        end: c.end,
+                        file_name: c.file_name.clone(),
+                    };
+                    let err = RPtr::new(MetaError { err: e, loc });
+                    let l0 = c.allocate_local_(Value::Error(err))?;
+                    // emit instruction to fail
+                    c.emit_instr_(I::Fail(l0))
+                }
+            }
+
             c.into_chunk()
         };
 
@@ -910,7 +965,12 @@ enum BinOpAssoc {
 
 impl<'a> Compiler<'a> {
     /// Convert the compiler's state into a proper chunk.
-    pub fn into_chunk(self) -> Chunk {
+    fn into_chunk(self) -> Chunk {
+        let loc = Location {
+            start: self.start,
+            end: self.end,
+            file_name: self.file_name,
+        };
         let c = ChunkImpl {
             instrs: self.instrs.into_boxed_slice(),
             locals: self.locals.into_boxed_slice(),
@@ -918,9 +978,8 @@ impl<'a> Compiler<'a> {
             n_slots: self.n_slots,
             n_captured: self.captured.len() as u8,
             name: self.name,
-            first_line: self.first_line,
             docstring: self.docstring,
-            file_name: self.file_name,
+            loc,
         };
         Chunk(k::Ref::new(c))
     }
@@ -940,7 +999,7 @@ impl<'a> Compiler<'a> {
         self.parent.is_some() || self.lex_scopes.len() > 0
     }
 
-    pub(crate) fn exit_call_args(&mut self, sc: Scope) {
+    fn exit_call_args(&mut self, sc: Scope) {
         crate::logtrace!("exit call args scope");
         if self.lex_scopes.len() != sc.0 {
             panic!(

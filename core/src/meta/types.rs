@@ -38,6 +38,9 @@ pub enum Value {
     Closure(Closure),
     /// A builtin instruction implemented in rust.
     Builtin(&'static InstrBuiltin),
+    /// A position as a value.
+    Pos(RPtr<Position>),
+    /// An error as a value.
     Error(RPtr<MetaError>),
 }
 
@@ -123,7 +126,11 @@ pub(super) enum Instr {
     Become(SlotIdx, u8),
     /// Return from current chunk with value `sl[$0]`.
     Ret(SlotIdx),
-    /// Error.
+    /// Trace value from `sl[$1]` with location in `local[$0]`.
+    Trace(LocalIdx, SlotIdx),
+    /// Fail with the error in `local[$0]`.
+    Fail(LocalIdx),
+    /// Unrecoverable error.
     Trap,
 }
 
@@ -164,9 +171,16 @@ pub struct InstrBuiltin {
 /// An error. It can be related to parsing, compilation, or execution.
 #[derive(Debug)]
 pub struct MetaError {
-    pub(super) err: k::Error,
-    pub(super) start: Position,
-    pub(super) end: Position,
+    pub err: k::Error,
+    pub loc: Location,
+}
+
+#[derive(Debug, Clone)]
+/// A full location in a file or a string.
+pub struct Location {
+    pub start: Position,
+    pub end: Position,
+    pub file_name: Option<RStr>,
 }
 
 /// A closure, i.e. a function (chunk) associated with some captured values.
@@ -201,10 +215,8 @@ pub(super) struct ChunkImpl {
     pub(super) name: Option<RStr>,
     /// Documentation, if any.
     pub(super) docstring: Option<RStr>,
-    /// Debug info: file name
-    pub(super) file_name: Option<RStr>,
-    /// Debug info: initial line
-    pub(super) first_line: u32,
+    /// Debug info: location.
+    pub(super) loc: Location,
 }
 
 /// Opaque printer to stdout.
@@ -224,6 +236,16 @@ mod impls {
         pub fn print<'c>(&'c mut self, s: &'c str) {
             if let Some(out) = self.0 {
                 out(s)
+            }
+        }
+    }
+
+    impl Location {
+        pub(crate) fn nil_loc() -> Self {
+            Self {
+                start: Position { line: 1, col: 1 },
+                end: Position { line: 1, col: 1 },
+                file_name: None,
             }
         }
     }
@@ -343,6 +365,16 @@ mod impls {
         }
     }
 
+    impl fmt::Display for Location {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            if let Some(file) = &self.file_name {
+                write!(f, "{} - {} in {}", self.start, self.end, file)
+            } else {
+                write!(f, "{} - {} in <none>", self.start, self.end)
+            }
+        }
+    }
+
     impl Chunk {
         /// Trivial chunk that returns `nil`
         pub fn retnil() -> Self {
@@ -353,9 +385,8 @@ mod impls {
                 n_slots: 1,
                 n_args: 0,
                 n_captured: 0,
-                file_name: None,
+                loc: Location::nil_loc(),
                 docstring: None,
-                first_line: 0,
             }))
         }
 
@@ -494,7 +525,8 @@ mod impls {
                     }
                 }
                 Value::Builtin(b) => write!(out, "<builtin {}>", b.name),
-                Value::Error(e) => write!(out, "<error at {} - {}: {}>", e.start, e.end, e.err),
+                Value::Pos(p) => write!(out, "<position {}>", p),
+                Value::Error(e) => write!(out, "<error at {}: {}>", e.loc, e.err),
             }
         }
     }

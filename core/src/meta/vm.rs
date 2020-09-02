@@ -1,19 +1,10 @@
 //! The virtual machine for the meta-language.
 
-use super::parser::Parser;
-#[macro_use]
 use super::lexer;
 use super::types::*;
 use {
-    crate::{
-        algo,
-        algo::conv,
-        kernel_of_trust::{self as k, Ctx},
-        rptr::RPtr,
-        rstr::RStr,
-        syntax, Error, Result,
-    },
-    std::{fmt, i16, io, marker::PhantomData, u8},
+    crate::{kernel_of_trust::Ctx, rptr::RPtr, rstr::RStr, Error, Result},
+    std::io,
 };
 
 /// The meta-language virtual machine.
@@ -34,6 +25,10 @@ pub(super) struct VM<'a> {
     result: Result<Value>,
     /// Abstraction over stdout, or a redirection of stdout to capture `print`.
     stdout: Option<&'a mut dyn FnMut(&str)>,
+    /// Errors occuring during evaluation.
+    pub errors: Vec<RPtr<MetaError>>,
+    /// Vaues traced during the execution.
+    pub traces: Vec<(Position, Value)>,
 }
 
 /// Maximum stack size
@@ -104,6 +99,8 @@ impl<'a> VM<'a> {
             ctrl_stack: vec![],
             result: Ok(Value::Nil),
             stdout: None,
+            errors: vec![],
+            traces: vec![],
         }
     }
 
@@ -464,6 +461,29 @@ impl<'a> VM<'a> {
                         self.stack[res_offset as usize] = ret_val;
                     }
                 }
+                I::Trace(l0, s1) => {
+                    let pos = match &sf.closure.0.c.0.locals[l0.0 as usize] {
+                        Value::Pos(p) => p,
+                        _ => {
+                            self.result = Err(Error::new("trace: expected a position"));
+                            break;
+                        }
+                    };
+                    let v = self.stack[abs_offset!(sf, s1)].clone();
+                    crate::logtrace!("trace {:?} at {:?}", v, pos);
+                    self.traces.push((**pos, v))
+                }
+                I::Fail(l0) => {
+                    let e = match &sf.closure.0.c.0.locals[l0.0 as usize] {
+                        Value::Error(e) => e,
+                        _ => {
+                            self.result = Err(Error::new("fail: expected an error"));
+                            break;
+                        }
+                    };
+                    self.errors.push(e.clone());
+                    break;
+                }
                 I::Trap => {
                     self.result = Err(Error::new("executed `trap`"));
                     break;
@@ -487,8 +507,8 @@ impl<'a> VM<'a> {
             let next_stack_i = (sf.start + sf.closure.0.c.0.n_slots) as usize;
             write!(
                 out,
-                "in closure {:?} (file {:?} starting at line {})\n",
-                sf.closure.0.c.0.name, sf.closure.0.c.0.file_name, sf.closure.0.c.0.first_line
+                "in closure {:?} (at {})\n",
+                sf.closure.0.c.0.name, sf.closure.0.c.0.loc
             )?;
             if full {
                 write!(
