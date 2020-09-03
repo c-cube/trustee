@@ -43,6 +43,7 @@ pub enum Tok<'b> {
     Id(&'b str),           // identifier
     QuotedString(&'b str), // "some string"
     QuotedExpr(&'b str),   // `some expr`
+    Trace,                 // `>>`
     Int(i64),
     LParen,        // '('
     RParen,        // ')'
@@ -244,6 +245,7 @@ impl<'b> Lexer<'b> {
                 self.i = j;
                 match str::parse(tok) {
                     Ok(n) => Tok::Int(n), // if all numerics
+                    Err(_) if tok == ">>" => Tok::Trace,
                     Err(_) => Tok::Id(tok),
                 }
             }
@@ -339,6 +341,30 @@ mod test {
                 T::Int(1),
                 T::Id("+"),
                 T::Int(1),
+                T::RBrace,
+                T::RParen,
+                T::Eof,
+            ],
+        )];
+        lex_test!(a)
+    }
+
+    #[test]
+    fn test_lexer3() {
+        use Tok as T;
+        let a = vec![(
+            r#"(print (>> 1 + >>(1)})"#,
+            vec![
+                T::LParen,
+                T::Id("print"),
+                T::LParen,
+                T::Trace,
+                T::Int(1),
+                T::Id("+"),
+                T::Trace,
+                T::LParen,
+                T::Int(1),
+                T::RParen,
                 T::RBrace,
                 T::RParen,
                 T::Eof,

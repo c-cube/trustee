@@ -96,7 +96,6 @@ const BUILTINS: &'static [&'static InstrBuiltin] = {
 */
 
 pub(super) mod basic_primitives {
-    #[macro_use]
     use super::*;
 
     /// Builtin functions.

@@ -12,7 +12,10 @@ pub mod parser;
 pub mod types;
 pub(crate) mod vm;
 
+pub use builtins::{all_builtin_names, all_builtin_names_and_help};
+pub use lexer::Position;
 pub use types::{InstrBuiltin, Value};
+pub use vm::VM;
 
 use types::*;
 

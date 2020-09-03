@@ -61,6 +61,8 @@ struct Compiler<'a> {
     /// If 'a: 'b, a compiler for 'a can be casted into a compiler for 'b
     /// as it just lives shorter.
     phantom: PhantomData<&'a ()>,
+    /// Last result in a `def`.
+    last_res: Option<ExprRes>,
     file_name: Option<RStr>,
     start: Position,
     end: Position,
@@ -211,6 +213,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                     parent: None,
                     phantom: PhantomData,
                     start,
+                    last_res: None,
                     end: start,
                     file_name: self.lexer.file_name.clone(),
                 };
@@ -289,6 +292,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                 parent,
                 phantom: PhantomData,
                 start,
+                last_res: None,
                 end: start,
                 file_name: self.lexer.file_name.clone(),
             };
@@ -511,6 +515,19 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             c.emit_jump(j_false, |off| I::Jump(off))?;
 
             self.eat_(Tok::RParen, "missing ')' after or")?;
+            Ok(res)
+        } else if id == "fail" {
+            self.next_tok_();
+            // emit failure
+            let l = if let Tok::QuotedString(s) = self.cur_tok_() {
+                c.allocate_local_(Value::Str(RStr::from(s)))?
+            } else {
+                return Err(Error::new("after `fail`, expect a string literal"));
+            };
+            self.eat_(Tok::RParen, "missing ')' after 'fail'")?;
+
+            c.emit_instr_(I::Fail(l));
+            let res = get_res!(c, sl_res); // will not be used
             Ok(res)
         } else if id == "let" {
             // local definitions.
@@ -836,7 +853,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
 
         let Self { ctx, lexer, .. } = self;
         let loc = lexer.loc();
-        match lexer.cur() {
+        let r = match lexer.cur() {
             Tok::LParen => {
                 lexer.next();
                 self.parse_expr_app_(c, sl_res)
@@ -852,6 +869,18 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                 let scope = c.push_local_scope();
                 let r = self.parse_expr_seq_(c, Tok::RBrace, sl_res)?;
                 c.pop_local_scope(scope);
+                Ok(r)
+            }
+            Tok::Trace => {
+                // parse expression, and trace it.
+                let loc = self.lexer.loc();
+                self.next_tok_();
+
+                let r = self.parse_expr_(c, sl_res)?;
+
+                // put location in locals.
+                let l_loc = c.allocate_local_(Value::Pos(RPtr::new(loc)))?;
+                c.emit_instr_(I::Trace(l_loc, r.slot));
                 Ok(r)
             }
             Tok::Int(i) => {
@@ -949,7 +978,11 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             Tok::Invalid(c) => return Err(perror!(loc, "invalid char {}", c)),
 
             Tok::Eof => return Err(perror!(loc, "unexpected EOF when parsing expr")),
+        };
+        if let Ok(res) = r {
+            c.last_res = Some(res);
         }
+        r
     }
 
     /// Expect the token `t`, and consume it; or return an error.

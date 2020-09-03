@@ -8,7 +8,7 @@ use {
 };
 
 /// The meta-language virtual machine.
-pub(super) struct VM<'a> {
+pub struct VM<'a> {
     /// The logical context underlying the VM.
     ///
     /// The context provides means to build expressions, theorems (following
@@ -25,10 +25,9 @@ pub(super) struct VM<'a> {
     result: Result<Value>,
     /// Abstraction over stdout, or a redirection of stdout to capture `print`.
     stdout: Option<&'a mut dyn FnMut(&str)>,
-    /// Errors occuring during evaluation.
-    pub errors: Vec<RPtr<MetaError>>,
-    /// Vaues traced during the execution.
-    pub traces: Vec<(Position, Value)>,
+    /// Callback for tracing events
+    on_trace: Option<&'a mut dyn FnMut(&Position, Value)>,
+    on_error: Option<&'a mut dyn FnMut(&MetaError)>,
 }
 
 /// Maximum stack size
@@ -99,13 +98,24 @@ impl<'a> VM<'a> {
             ctrl_stack: vec![],
             result: Ok(Value::Nil),
             stdout: None,
-            errors: vec![],
-            traces: vec![],
+            on_trace: None,
+            on_error: None,
         }
     }
 
+    /// Set a callback for stdout events.
+    ///
+    /// When `print` is called, this function is passed the result.
     pub fn set_stdout(&mut self, out: &'a mut dyn FnMut(&str)) {
         self.stdout = Some(out);
+    }
+
+    /// Set a callback for trace events.
+    ///
+    /// Traced values, along with the tracing position, are passed to
+    /// the function during evaluation.
+    pub fn set_on_trace(&mut self, f: &'a mut dyn FnMut(&Position, Value)) {
+        self.on_trace = Some(f);
     }
 
     /// Main execution loop.
@@ -462,16 +472,18 @@ impl<'a> VM<'a> {
                     }
                 }
                 I::Trace(l0, s1) => {
-                    let pos = match &sf.closure.0.c.0.locals[l0.0 as usize] {
-                        Value::Pos(p) => p,
-                        _ => {
-                            self.result = Err(Error::new("trace: expected a position"));
-                            break;
-                        }
-                    };
-                    let v = self.stack[abs_offset!(sf, s1)].clone();
-                    crate::logtrace!("trace {:?} at {:?}", v, pos);
-                    self.traces.push((**pos, v))
+                    if let Some(f) = &mut self.on_trace {
+                        let pos = match &sf.closure.0.c.0.locals[l0.0 as usize] {
+                            Value::Pos(p) => p,
+                            _ => {
+                                self.result = Err(Error::new("trace: expected a position"));
+                                break;
+                            }
+                        };
+                        let v = self.stack[abs_offset!(sf, s1)].clone();
+                        crate::logtrace!("trace {:?} at {:?}", v, pos);
+                        f(&*pos, v)
+                    }
                 }
                 I::Fail(l0) => {
                     let e = match &sf.closure.0.c.0.locals[l0.0 as usize] {
@@ -481,7 +493,11 @@ impl<'a> VM<'a> {
                             break;
                         }
                     };
-                    self.errors.push(e.clone());
+                    if let Some(f) = &mut self.on_error {
+                        f(&e)
+                    }
+                    // fail with the given error
+                    self.result = Err(e.err.clone());
                     break;
                 }
                 I::Trap => {
