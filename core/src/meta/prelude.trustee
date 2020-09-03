@@ -466,13 +466,20 @@
 ; or intro rule by case
 (defn ROrElimByCase [thc th1 th2]
   (doc "takes `|- a\/b`, `|- a ==> p`, `|- b ==> p`, and returns `|- p`")
-  (def a (e_app_rhs (e_app_lhs (concl th1))))
-  (def b (e_app_rhs (e_app_lhs (concl th2))))
+  (def a (e_app_rhs (e_app_lhs (concl thc))))
+  (def b (e_app_rhs (concl thc)))
   (def p (e_app_rhs (concl th1)))
   (def def_aorb (ROrDefSubst a b))
   (def h (bool_eq thc def_aorb))
   (def h1 (RForallSubst h p))
   (MP (MP h1 th1) th2))
+
+; or intro rule by case, with cuts
+(defn ROrElimByCaseCut [thc th1 th2]
+  (doc "takes `|- a\/b`, `a |- p`, `b |- p`, and returns `|- p`")
+  (def a (e_app_rhs (e_app_lhs (concl thc))))
+  (def b (e_app_rhs (concl thc)))
+  (become ROrElimByCase thc (RImplyIntro th1 a) (RImplyIntro th2 b)))
 
 ; \/ is commutative
 (set OrComm
@@ -481,12 +488,9 @@
   ; direct: a\/b |- b\/a
   (def direct
     (def h1 (assume `a:bool \/ b:bool`))
-    (def h2 (bool_eq h1 (ROrDefSubst a b)))
-    ; prove a
-    (def h2 (RForallSubst h2 `b:bool \/ a:bool`))
-    (def r1 (RImplyIntro (ROrIntro1 (assume b) a) b))
-    (def r2 (RImplyIntro (ROrIntro2 (assume a) b) a))
-    (MP (MP h2 r2) r1))
+    (def r1 (ROrIntro1 (assume b) a))
+    (def r2 (ROrIntro2 (assume a) b))
+    (ROrElimByCaseCut h1 r1 r2))
   (def indirect (subst direct "a" b "b" a))
   (bool_eq_intro direct indirect))
 
@@ -497,7 +501,39 @@
   (def b (e_app_rhs (concl th)))
   (bool_eq th (subst OrComm "a" a "b" b)))
 
-; TODO: assoc for \/
+; (a\/b)\/c = a\/(b\/c)
+(set OrAssoc
+  (def a `a:bool`)
+  (def b `b:bool`)
+  (def c `c:bool`)
+  (def ab `with a b:bool. a\/b`)
+  (def bc `with b c:bool. b\/c`)
+  (def direct
+    (def h1 (assume `with a b c: bool. (a \/ b) \/ c`))
+    ; a\/b |- a \/ (b\/c)
+    (def c1
+      (def h (assume ab))
+      (def hbc (ROrIntro1 (assume b) c))
+      (def bc_imp_abc (ROrIntro2 (assume bc) a))
+      (def aimpabc (ROrIntro1 (assume a) bc))
+      (def bimpabc (cut hbc bc_imp_abc))
+      (ROrElimByCaseCut h aimpabc bimpabc))
+    ; c |- a\/(b\/c)
+    (def c2
+      (def h1 (ROrIntro2 (assume c) b))
+      (ROrIntro2 h1 a))
+    (ROrElimByCaseCut h1 c1 c2))
+  (def indirect
+    (def h1 (assume `with a b c:bool. a\/(b\/c)`))
+    ; a |- …
+    (def c1 (ROrIntro1 (ROrIntro1 (assume a) b) c))
+    (def c2
+      (def h (assume bc))
+      (def c21 (ROrIntro1 (ROrIntro2 (assume b) a) c))
+      (def c22 (ROrIntro2 (assume c) ab))
+      (ROrElimByCaseCut h c21 c22))
+    (ROrElimByCaseCut h1 c1 c2))
+  (bool_eq_intro direct indirect))
 
 ; #### excluded middle ####
 
