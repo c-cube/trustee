@@ -224,16 +224,17 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                     Ok(r) => {
                         c.emit_instr_(I::Ret(r.slot));
                     }
-                    Err(e) => {
-                        // build error message
+                    Err(mut e) => {
+                        // build context error message
                         c.instrs.clear();
                         let loc = Location {
                             start: c.start,
                             end: c.end,
-                            file_name: c.file_name.clone(),
+                            file_name: c.file_name.as_ref().map(|f| f.to_string()),
                         };
-                        let err = RPtr::new(MetaError { err: e, loc });
-                        let l0 = c.allocate_local_(Value::Error(err))?;
+                        let wrap_err = Error::new_meta("parse top expr".to_string(), loc);
+                        e.set_source(wrap_err);
+                        let l0 = c.allocate_local_(Value::Error(RPtr::new(e)))?;
                         // emit instruction to fail
                         c.emit_instr_(I::Fail(l0))
                     }
@@ -338,7 +339,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
     ///
     /// Put the result into slot `sl_res` if provided.
     fn parse_expr_app_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
-        let loc = self.lexer.loc();
+        let loc = self.lexer.token_start_pos();
         let id = cur_tok_as_id_(&mut self.lexer, "expect an identifier after opening")?;
         logtrace!("parse expr app id={:?}", id);
 
@@ -499,16 +500,34 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             self.eat_(Tok::RParen, "missing ')' after or")?;
             Ok(res)
         } else if id == "fail" {
+            let start = loc;
+
             self.next_tok_();
-            // emit failure
-            let l = if let Tok::QuotedString(s) = self.cur_tok_() {
-                c.allocate_local_(Value::Str(RStr::from(s)))?
-            } else {
-                return Err(Error::new("after `fail`, expect a string literal"));
+            // emit failure. Takes a string message or nothing.
+            let err = match self.cur_tok_() {
+                Tok::QuotedString(s) => {
+                    let s = s.to_string();
+                    self.next_tok_();
+                    s
+                }
+                Tok::RParen => "failure".to_string(),
+                _ => {
+                    return Err(Error::new("after `fail`, expect a string literal"));
+                }
             };
+            let end = self.lexer.loc();
             self.eat_(Tok::RParen, "missing ')' after 'fail'")?;
 
+            // build a meta-error and emit `Fail()` with it as parameter.
+            let loc = Location {
+                start,
+                end,
+                file_name: c.file_name.as_ref().map(|s| s.to_string()),
+            };
+            let merr = Error::new_meta(err, loc);
+            let l = c.allocate_local_(Value::Error(RPtr::new(merr)))?;
             c.emit_instr_(I::Fail(l));
+
             let res = get_res!(c, sl_res); // will not be used
             Ok(res)
         } else if id == "let" {
@@ -984,7 +1003,7 @@ impl<'a> Compiler<'a> {
         let loc = Location {
             start: self.start,
             end: self.end,
-            file_name: self.file_name,
+            file_name: self.file_name.map(|s| s.to_string()),
         };
         let c = ChunkImpl {
             instrs: self.instrs.into_boxed_slice(),

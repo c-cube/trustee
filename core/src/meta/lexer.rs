@@ -189,7 +189,7 @@ impl<'b> Lexer<'b> {
                 }
                 let src_expr =
                     std::str::from_utf8(&self.bytes[self.i + 1..j]).expect("invalid utf8 slice");
-                self.pos.col += j - self.i + 1;
+                self.pos.col += (j - self.i + 1) as u32;
                 self.i = j + 1;
                 Tok::QuotedExpr(src_expr)
             }
@@ -200,7 +200,7 @@ impl<'b> Lexer<'b> {
                 }
                 let tok = std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
                 let n = str::parse(tok).expect("cannot parse int");
-                self.pos.col += j - self.i;
+                self.pos.col += (j - self.i) as u32;
                 self.i = j;
                 Tok::Int(n)
             }
@@ -214,7 +214,7 @@ impl<'b> Lexer<'b> {
                 }
                 let tok =
                     std::str::from_utf8(&self.bytes[self.i + 1..j]).expect("invalid utf8 slice");
-                self.pos.col += j - self.i;
+                self.pos.col += (j - self.i) as u32;
                 self.i = j;
                 Tok::ColonId(tok)
             }
@@ -228,7 +228,7 @@ impl<'b> Lexer<'b> {
                 }
                 let tok =
                     std::str::from_utf8(&self.bytes[self.i + 1..j]).expect("invalid utf8 slice");
-                self.pos.col += j - self.i + 1;
+                self.pos.col += (j - self.i + 1) as u32;
                 self.i = j + 1;
                 Tok::QuotedString(tok)
             }
@@ -241,7 +241,7 @@ impl<'b> Lexer<'b> {
                     j += 1;
                 }
                 let tok = std::str::from_utf8(&self.bytes[self.i..j]).expect("invalid utf8 slice");
-                self.pos.col += j - self.i;
+                self.pos.col += (j - self.i) as u32;
                 self.i = j;
                 match str::parse(tok) {
                     Ok(n) => Tok::Int(n), // if all numerics

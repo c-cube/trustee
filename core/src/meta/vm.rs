@@ -27,7 +27,7 @@ pub struct VM<'a> {
     stdout: Option<&'a mut dyn FnMut(&str)>,
     /// Callback for tracing events
     on_trace: Option<&'a mut dyn FnMut(&Position, Value)>,
-    on_error: Option<&'a mut dyn FnMut(&MetaError)>,
+    on_error: Option<&'a mut dyn FnMut(&Error)>,
 }
 
 /// Maximum stack size
@@ -356,7 +356,7 @@ impl<'a> VM<'a> {
                                 }
                                 Err(mut e) => {
                                     // TODO: proper stack trace instead
-                                    e = e.set_source(Error::new_string(format!(
+                                    e.set_source(Error::new_string(format!(
                                         "while calling {}",
                                         b.name
                                     )));
@@ -497,7 +497,7 @@ impl<'a> VM<'a> {
                         f(&e)
                     }
                     // fail with the given error
-                    self.result = Err(e.err.clone());
+                    self.result = Err(e.get_cloned());
                     break;
                 }
                 I::Trap => {
@@ -509,6 +509,10 @@ impl<'a> VM<'a> {
 
         let mut r = Ok(Value::Nil);
         std::mem::swap(&mut r, &mut self.result);
+
+        if let Err(e) = &mut r {
+            e.set_source(Error::new("VM main loop"));
+        }
         r
     }
 

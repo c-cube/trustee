@@ -140,6 +140,14 @@ where
     }
 }
 
+impl<T: Clone> RPtr<T> {
+    /// Obtain content by cloning it.
+    pub fn get_cloned(&self) -> T {
+        let r = &**self;
+        r.clone()
+    }
+}
+
 #[allow(unsafe_code)]
 impl<T> RPtr<T> {
     /// New pointer.

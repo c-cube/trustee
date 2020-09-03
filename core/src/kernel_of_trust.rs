@@ -10,67 +10,7 @@ pub type Lock<T> = std::cell::RefCell<T>;
 /// For infix/prefix/postfix constants.
 pub type Fixity = crate::syntax::Fixity;
 
-/// Errors that can be returned from the Kernel.
-#[derive(Debug, Clone)]
-pub struct Error {
-    pub msg: ErrorMsg,
-    pub source: Option<Box<Error>>,
-}
-
-/// An error message.
-#[derive(Debug, Clone)]
-pub enum ErrorMsg {
-    EStatic(&'static str),
-    EDyn(String),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        match &self.msg {
-            ErrorMsg::EStatic(msg) => write!(out, "{}", msg),
-            ErrorMsg::EDyn(s) => write!(out, "{}", &s),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match &self.source {
-            None => None,
-            Some(p) => Some(&*p),
-        }
-    }
-}
-
-impl Error {
-    /// Build a new error.
-    pub fn new(msg: &'static str) -> Self {
-        Error {
-            msg: ErrorMsg::EStatic(msg),
-            source: None,
-        }
-    }
-
-    pub fn new_string(msg: String) -> Self {
-        Error {
-            msg: ErrorMsg::EDyn(msg),
-            source: None,
-        }
-    }
-
-    /// Change the source of this error.
-    pub fn set_source(mut self, src: Self) -> Self {
-        self.source = Some(Box::new(src));
-        self
-    }
-
-    pub fn to_string(&self) -> String {
-        format!("{}", self)
-    }
-}
-
-/// Result type.
-pub type Result<T> = std::result::Result<T, Error>;
+pub use crate::error::{Error, Result};
 
 ///! # Symbols.
 

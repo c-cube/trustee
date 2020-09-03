@@ -1184,7 +1184,7 @@ mod test {
         for (x, y) in &pairs {
             let mut ctx = mkctx()?;
             let r = parse_expr(&mut ctx, x)
-                .map_err(|e| e.set_source(Error::new_string(format!("parsing {:?}", x))))?;
+                .map_err(|e| e.with_source(Error::new_string(format!("parsing {:?}", x))))?;
             let r2 = format!("{:?}", r);
             assert_eq!(&r2, *y);
         }
@@ -1218,7 +1218,7 @@ mod test {
             let args: Vec<_> = f(&mut ctx)?;
             let qargs: Vec<InterpolationArg> = args.iter().map(|x| x.into()).collect();
             let r = parse_expr_with_args(&mut ctx, x, &qargs)
-                .map_err(|e| e.set_source(Error::new_string(format!("parsing {:?}", x))))?;
+                .map_err(|e| e.with_source(Error::new_string(format!("parsing {:?}", x))))?;
             let r2 = format!("{:?}", r);
             assert_eq!(&r2, *y);
         }
@@ -1246,7 +1246,7 @@ mod test {
             let mut ctx = Ctx::new();
             crate::meta::load_prelude_hol(&mut ctx)?;
             let r = parse_expr(&mut ctx, x)
-                .map_err(|e| e.set_source(Error::new_string(format!("parsing {:?}", x))))?;
+                .map_err(|e| e.with_source(Error::new_string(format!("parsing {:?}", x))))?;
             let r2 = format!("{:?}", r);
             assert_eq!(&r2, *y);
         }
@@ -1285,7 +1285,7 @@ mod test {
             let mut ctx = Ctx::new();
             crate::meta::load_prelude_hol(&mut ctx)?;
             let r = parse_expr(&mut ctx, x)
-                .map_err(|e| e.set_source(Error::new_string(format!("parsing {:?}", x))))?;
+                .map_err(|e| e.with_source(Error::new_string(format!("parsing {:?}", x))))?;
             // use pretty printer
             let r2 = format!("{}", r);
             assert_eq!(&r2, *s, "left: actual, right: expected");

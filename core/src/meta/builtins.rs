@@ -133,7 +133,7 @@ pub(super) mod basic_primitives {
                 let mut vm = crate::meta::vm::VM::new(ctx.ctx);
                 // evaluate `s` in a new VM. Directly use `s` for the file name.
                 let v = vm.run(s, Some(s.clone())).map_err(|e| {
-                    e.set_source(Error::new_string(format!("while evaluating {}", s)))
+                    e.with_source(Error::new_string(format!("while evaluating {}", s)))
                 })?;
                 Ok(v)
             }

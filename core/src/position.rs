@@ -3,8 +3,8 @@ use std::fmt;
 /// Position in the text. 0 based.
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Position {
-    pub line: usize,
-    pub col: usize,
+    pub line: u32,
+    pub col: u32,
 }
 
 impl fmt::Debug for Position {

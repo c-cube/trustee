@@ -6,7 +6,7 @@ use {
         kernel_of_trust::{self as k, Ctx},
         rptr::RPtr,
         rstr::RStr,
-        Result,
+        Error, Result,
     },
     std::{fmt, i16, io, u8},
 };
@@ -41,7 +41,7 @@ pub enum Value {
     /// A position as a value.
     Pos(RPtr<Position>),
     /// An error as a value.
-    Error(RPtr<MetaError>),
+    Error(RPtr<Error>),
 }
 
 // TODO: convert into stack VM
@@ -168,19 +168,12 @@ pub struct InstrBuiltin {
     pub help: &'static str,
 }
 
-/// An error. It can be related to parsing, compilation, or execution.
-#[derive(Debug)]
-pub struct MetaError {
-    pub err: k::Error,
-    pub loc: Location,
-}
-
 #[derive(Debug, Clone)]
 /// A full location in a file or a string.
 pub struct Location {
     pub start: Position,
     pub end: Position,
-    pub file_name: Option<RStr>,
+    pub file_name: Option<String>,
 }
 
 /// A closure, i.e. a function (chunk) associated with some captured values.
@@ -368,9 +361,9 @@ mod impls {
     impl fmt::Display for Location {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             if let Some(file) = &self.file_name {
-                write!(f, "{} - {} in {}", self.start, self.end, file)
+                write!(f, "{}-{} in {}", self.start, self.end, file)
             } else {
-                write!(f, "{} - {} in <none>", self.start, self.end)
+                write!(f, "{}-{}", self.start, self.end)
             }
         }
     }
@@ -526,7 +519,7 @@ mod impls {
                 }
                 Value::Builtin(b) => write!(out, "<builtin {}>", b.name),
                 Value::Pos(p) => write!(out, "<position {}>", p),
-                Value::Error(e) => write!(out, "<error at {}: {}>", e.loc, e.err),
+                Value::Error(e) => write!(out, "<error {}>", e),
             }
         }
     }
