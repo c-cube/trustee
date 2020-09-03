@@ -172,6 +172,32 @@ impl server::Handler for TrusteeSt {
             None
         }
     }
+
+    fn handle_goto_def(
+        &mut self,
+        st: &mut State,
+        p: lsp::GotoDefinitionParams,
+    ) -> Option<lsp::GotoDefinitionResponse> {
+        let d = p.text_document_position_params.text_document;
+        let pos = pos_of_lsp(p.text_document_position_params.position);
+        let st = st.lock().unwrap();
+        if let Some(doc) = st.get_doc(&d) {
+            log::debug!("goto-def in document {:?} at {:?}", &d, pos);
+
+            let (_, start, end) = utils::find_definition(&doc.content, pos.into())?;
+
+            let range = lsp::Range {
+                start: pos_to_lsp(start.pos),
+                end: pos_to_lsp(end.pos),
+            };
+            let loc = lsp::Location::new(d.uri, range);
+            let r = lsp::GotoDefinitionResponse::Scalar(loc);
+            Some(r)
+        } else {
+            log::debug!("no known document for {:?}", &d);
+            None
+        }
+    }
 }
 
 fn main() -> Result<()> {

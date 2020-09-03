@@ -372,3 +372,71 @@ pub fn completion(
     log::debug!("no completion found");
     None
 }
+
+/// Find definition of symbol at given position, if any.
+pub fn find_definition(
+    code: &str,
+    pos: PosOrOffset,
+) -> Option<(String, PosAndOffset, PosAndOffset)> {
+    let pos = pos.into();
+    log::debug!("find-definition request for code=`{}`, pos={:?}", code, pos);
+
+    // find token under the cursor
+    let (name, kind, _, tokend) = find_tok(code, pos)?;
+    if let TokKind::Id = kind {
+    } else {
+        return None;
+    }
+
+    // now find last defining occurrence of code that comes before `tokend`
+    let mut lexer = meta::lexer::Lexer::new(code, None);
+    let mut is_defining = false;
+    let mut res = None;
+
+    loop {
+        let t = lexer.cur().clone();
+        if t == Tok::Eof {
+            break;
+        }
+
+        let start = lexer.token_start_offset();
+        let pstart = lexer.token_start_pos().prev_col(); // a bit of slack here
+        let end = lexer.token_end_offset();
+        let pend = lexer.loc();
+
+        if pstart > tokend.pos {
+            break; // gone past the original query position
+        }
+
+        if let Tok::Id(s) = t {
+            if s == &name && is_defining {
+                // found!
+
+                // here is where we want to complete
+                let start = PosAndOffset {
+                    pos: pstart,
+                    offset: start,
+                };
+                let end = PosAndOffset {
+                    pos: pend,
+                    offset: end,
+                };
+
+                // update `res`.
+                res = Some((start, end))
+            } else if s == "def" || s == "defn" || s == "set" {
+                is_defining = true; // for the next token
+            } else {
+                is_defining = false
+            }
+        } else {
+            is_defining = false
+        }
+
+        // go to next token
+        lexer.next();
+    }
+
+    let (start, end) = res?;
+    Some((name, start, end))
+}

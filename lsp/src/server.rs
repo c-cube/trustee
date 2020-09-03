@@ -61,7 +61,14 @@ pub trait Handler: Send {
         None
     }
 
-    // TODO: goto definition
+    /// Handle jump-to-definition.
+    fn handle_goto_def(
+        &mut self,
+        _st: &mut State,
+        _p: lsp::GotoDefinitionParams,
+    ) -> Option<lsp::GotoDefinitionResponse> {
+        None
+    }
 
     /// Handle message and optionally return a reply.
     fn handle_other_msg(&mut self, _st: &mut State, msg: IncomingMsg) -> Result<Option<String>> {
@@ -360,6 +367,14 @@ mod server {
             log::debug!("got completion request {:?}", params);
             let d: CompletionParams = serde_json::from_str(&params)?;
             let r = h.handle_completion(&mut st, d);
+            Ok(match r {
+                Some(r) => Some(mk_reply!(r)),
+                None => None,
+            })
+        } else if msg.m == lsp::request::GotoDefinition::METHOD {
+            log::debug!("got goto-def request {:?}", params);
+            let d: GotoDefinitionParams = serde_json::from_str(&params)?;
+            let r = h.handle_goto_def(&mut st, d);
             Ok(match r {
                 Some(r) => Some(mk_reply!(r)),
                 None => None,
