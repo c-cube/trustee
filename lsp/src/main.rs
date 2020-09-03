@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
 use lsp_types::{self as lsp};
-use trustee::{self, kernel_of_trust as k, meta, meta::Position};
+use trustee::{
+    self, kernel_of_trust as k, meta,
+    meta::{Location, Position},
+};
 use trustee_utils as utils;
 
 pub mod server;
@@ -18,9 +21,20 @@ fn pos_to_lsp(p: Position) -> lsp::Position {
 
 /// Translate back.
 fn pos_of_lsp(p: lsp::Position) -> Position {
+    if p.line > u32::MAX as u64 || p.character > u32::MAX as u64 {
+        panic!("cannot handle position outside the u32 range")
+    }
     Position {
-        line: p.line as usize + 1,
-        col: p.character as usize + 1,
+        line: p.line as u32 + 1,
+        col: p.character as u32 + 1,
+    }
+}
+
+/// Translate a location into a range
+fn loc_to_lsp(l: &Location) -> lsp::Range {
+    lsp::Range {
+        start: pos_to_lsp(l.start),
+        end: pos_to_lsp(l.end),
     }
 }
 
@@ -67,18 +81,32 @@ impl server::Handler for TrusteeSt {
                 diags.push(mk_diag!(lsp::DiagnosticSeverity::Hint, range, s));
             }
 
-            let severity = if r.res.is_ok() {
-                lsp::DiagnosticSeverity::Information
-            } else {
-                lsp::DiagnosticSeverity::Error
-            };
+            // main result
+            {
+                let severity = if r.res.is_ok() {
+                    lsp::DiagnosticSeverity::Information
+                } else {
+                    lsp::DiagnosticSeverity::Error
+                };
 
-            let message = match r.res {
-                Ok(meta::Value::Nil) => continue,
-                Ok(v) => format!("yield value {}", v),
-                Err(e) => format!("error: {}", e),
-            };
-            diags.push(mk_diag!(severity, range, message));
+                let (msg, range) = match &r.res {
+                    Err(e) => {
+                        use trustee::error::ErrorMsg;
+                        let msg = format!("error: {}", e.to_string_with_src());
+                        let range = match &e.msg {
+                            ErrorMsg::EMeta { msg: _, loc } => {
+                                // use more accurate location
+                                loc_to_lsp(&loc)
+                            }
+                            _ => range,
+                        };
+                        (msg, range)
+                    }
+                    Ok(meta::Value::Nil) => continue,
+                    Ok(v) => (format!("yield value {}", v), range),
+                };
+                diags.push(mk_diag!(severity, range, msg));
+            }
         }
 
         Ok(diags)

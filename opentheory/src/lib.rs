@@ -3,8 +3,7 @@
 use {
     std::{collections::HashMap, fmt, io::BufRead, rc::Rc},
     trustee::kernel_of_trust as k,
-    trustee::*,
-    trustee::{Error, Expr, Symbol, Thm, Var},
+    trustee::{algo, meta, Error, Expr, Result, Symbol, Thm, Var},
 };
 
 #[derive(Clone, Eq, PartialEq, Hash)]
@@ -411,7 +410,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Term(e));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in abs_term(<term,var>)")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in abs_term(<term,var>)")))
     }
 
     fn abs_thm(&mut self) -> Result<()> {
@@ -422,7 +421,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in abs_thm(<thm,var>)")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in abs_thm(<thm,var>)")))
     }
 
     fn app_term(&mut self) -> Result<()> {
@@ -433,7 +432,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Term(e));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in app_term(<term,term>)")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in app_term(<term,term>)")))
     }
 
     fn app_thm(&mut self) -> Result<()> {
@@ -444,7 +443,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in app_thm(<thm,thm>)")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in app_thm(<thm,thm>)")))
     }
 
     fn assume(&mut self) -> Result<()> {
@@ -454,7 +453,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in assume(<term>)")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in assume(<term>)")))
     }
 
     fn axiom(&mut self) -> Result<()> {
@@ -466,7 +465,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 .map(|x| {
                     let t = x
                         .as_term()
-                        .map_err(|e| e.set_source(Error::new("axiom: hyps contain non-term")))?;
+                        .map_err(|e| e.with_source(Error::new("axiom: hyps contain non-term")))?;
                     Ok(t.clone())
                 })
                 .collect::<Result<_>>()?;
@@ -485,7 +484,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(ax));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in axiom(<term,list>)")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in axiom(<term,list>)")))
     }
 
     fn version(&mut self) -> Result<()> {
@@ -1043,7 +1042,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             return Err(Error::new("define_type_op: not enough elements in stack"));
         }
         self.define_type_op_()
-            .map_err(|e| e.set_source(Error::new("define_type_op")))
+            .map_err(|e| e.with_source(Error::new("define_type_op")))
     }
 
     fn pop(&mut self) -> Result<()> {
@@ -1088,7 +1087,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.theorems.insert(k, thm.clone());
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in thm")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in thm")))
     }
 
     fn subst(&mut self) -> Result<()> {
@@ -1145,7 +1144,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th2));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in subst")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in subst")))
     }
 
     fn refl(&mut self) -> Result<()> {
@@ -1155,7 +1154,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in refl")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in refl")))
     }
 
     fn trans(&mut self) -> Result<()> {
@@ -1166,7 +1165,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in trans(<thm,thm>)")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in trans(<thm,thm>)")))
     }
 
     fn sym(&mut self) -> Result<()> {
@@ -1176,7 +1175,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in refl")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in refl")))
     }
 
     fn eq_mp(&mut self) -> Result<()> {
@@ -1186,11 +1185,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let th = vm
                 .ctx
                 .thm_bool_eq(th1, th2)
-                .map_err(|e| e.set_source(Error::new("in eq_mp")))?;
+                .map_err(|e| e.with_source(Error::new("in eq_mp")))?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in eq_mp(<thm,thm>)")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in eq_mp(<thm,thm>)")))
     }
 
     fn beta_conv(&mut self) -> Result<()> {
@@ -1200,7 +1199,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in beta_conv")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in beta_conv")))
     }
 
     fn deduct_antisym(&mut self) -> Result<()> {
@@ -1211,7 +1210,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in deduct_antisym(<thm,thm>)")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in deduct_antisym(<thm,thm>)")))
     }
 
     fn prove_hyp(&mut self) -> Result<()> {
@@ -1221,11 +1220,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let th = vm
                 .ctx
                 .thm_cut(th2, th1)
-                .map_err(|e| e.set_source(Error::new("in cut")))?;
+                .map_err(|e| e.with_source(Error::new("in cut")))?;
             vm.push_obj(O::Thm(th));
             Ok(())
         })
-        .map_err(|e| e.set_source(Error::new("OT: failure in prove_hyp(<thm,thm>):\n {}")))
+        .map_err(|e| e.with_source(Error::new("OT: failure in prove_hyp(<thm,thm>):\n {}")))
     }
 
     /// Parse the given reader.

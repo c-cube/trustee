@@ -2,6 +2,7 @@ use std::{fmt::Write, time};
 use trustee::{
     self, kernel_of_trust as k,
     meta::{self, lexer, lexer::Tok, Value},
+    Error as TrError,
 };
 
 #[derive(Debug, Copy, Clone)]
@@ -114,7 +115,7 @@ pub struct EvalResults {
 pub struct EvalResult {
     pub start: Position,
     pub end: Position,
-    pub res: std::result::Result<Value, String>,
+    pub res: std::result::Result<Value, TrError>,
     pub traces: Vec<(Position, Value)>,
     pub stdout: Option<String>,
 }
@@ -190,7 +191,7 @@ pub fn eval(
                 res.push(EvalResult {
                     start,
                     end,
-                    res: Err(e.to_string()),
+                    res: Err(e),
                     traces: traces2,
                     stdout,
                 });
