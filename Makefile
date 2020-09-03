@@ -8,7 +8,7 @@ clean:
 	@cargo clean
 
 check:
-	@cargo check
+	@cargo check --all
 
 doc:
 	@cargo doc
