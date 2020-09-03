@@ -15,3 +15,8 @@ jobs:
       run: cargo test --verbose
     - name: Build all
       run: cargo build --all
+    - uses: actions/cache@v2
+      name: cache
+      with:
+        path: ~/target/
+        key: ${{ runner.os }}
