@@ -115,6 +115,7 @@ pub struct EvalResult {
     pub start: Position,
     pub end: Position,
     pub res: std::result::Result<Value, String>,
+    pub traces: Vec<(Position, Value)>,
     pub stdout: Option<String>,
 }
 
@@ -132,11 +133,19 @@ pub fn eval(
     let mut lexer = lexer::Lexer::new(code, src.into());
 
     let stdout = RefCell::new(String::new());
+    let traces = RefCell::new(vec![]);
+
     let mut fout = |s: &str| {
         let mut out = stdout.borrow_mut();
         out.push_str(&s)
     };
     vm.set_stdout(&mut fout);
+
+    let mut ftrace = |pos: &Position, v| {
+        let mut tr = traces.borrow_mut();
+        tr.push((pos.clone(), v))
+    };
+    vm.set_on_trace(&mut ftrace);
 
     // evaluate `code`
     let mut res = vec![];
@@ -159,6 +168,12 @@ pub fn eval(
             }
         };
 
+        let mut traces2 = vec![];
+        {
+            let mut tr = traces.borrow_mut();
+            std::mem::swap(&mut *tr, &mut traces2);
+        }
+
         match v {
             Ok(None) => break,
             Ok(Some(r)) => {
@@ -166,6 +181,7 @@ pub fn eval(
                     start,
                     end,
                     res: Ok(r),
+                    traces: traces2,
                     stdout,
                 });
             }
@@ -175,6 +191,7 @@ pub fn eval(
                     start,
                     end,
                     res: Err(e.to_string()),
+                    traces: traces2,
                     stdout,
                 });
                 break;
@@ -186,6 +203,8 @@ pub fn eval(
     EvalResults { res, duration }
 }
 
+// TODO: put a trace there, somehow (modify lexer?) and report its result
+// automatically
 /// Inspect what's at this postion.
 pub fn inspect(
     ctx: &mut k::Ctx,
@@ -253,6 +272,7 @@ pub fn code_is_complete(code: &str) -> Option<bool> {
             | Tok::ColonId(..)
             | Tok::QuotedString(..)
             | Tok::QuotedExpr(..)
+            | Tok::Trace
             | Tok::Int(..) => (),
             Tok::Invalid(_) => return None,
         }

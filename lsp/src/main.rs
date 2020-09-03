@@ -46,14 +46,25 @@ impl server::Handler for TrusteeSt {
         }
 
         let mut diags = vec![];
-        for r in r.res.drain(..) {
+        for mut r in r.res.drain(..) {
             let range = lsp::Range {
                 start: pos_to_lsp(r.start),
                 end: pos_to_lsp(r.end),
             };
 
+            // stdout
             if let Some(s) = r.stdout {
                 diags.push(mk_diag!(lsp::DiagnosticSeverity::Hint, range, s.clone()));
+            }
+
+            // tracing events
+            for (pos, v) in r.traces.drain(..) {
+                let range = lsp::Range {
+                    start: pos_to_lsp(pos),
+                    end: pos_to_lsp(pos),
+                };
+                let s = format!("trace: {}", v);
+                diags.push(mk_diag!(lsp::DiagnosticSeverity::Hint, range, s));
             }
 
             let severity = if r.res.is_ok() {
