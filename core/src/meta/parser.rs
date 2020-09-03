@@ -303,29 +303,11 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             }
             logtrace!("compiling {:?}: slots for args: {:?}", &f_name, &c.slots);
 
-            let res = self.parse_expr_seq_(&mut c, closing, None);
+            let res = self.parse_expr_seq_(&mut c, closing, None)?;
 
-            match res {
-                Ok(res) => {
-                    // return value
-                    c.emit_instr_(I::Ret(res.slot));
-                    c.free(&res);
-                }
-                Err(e) => {
-                    // build error message
-                    c.instrs.clear();
-                    let loc = Location {
-                        start: c.start,
-                        end: c.end,
-                        file_name: c.file_name.clone(),
-                    };
-                    let err = RPtr::new(MetaError { err: e, loc });
-                    let l0 = c.allocate_local_(Value::Error(err))?;
-                    // emit instruction to fail
-                    c.emit_instr_(I::Fail(l0))
-                }
-            }
-
+            // return value
+            c.emit_instr_(I::Ret(res.slot));
+            c.free(&res);
             c.into_chunk()
         };
 
