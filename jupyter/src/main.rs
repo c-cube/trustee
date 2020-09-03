@@ -177,6 +177,7 @@ impl jy::EvalContextImpl for EvalTrustee {
                 Tok::RParen | Tok::RBracket | Tok::RBrace => depth -= 1,
                 Tok::Id(..)
                 | Tok::ColonId(..)
+                | Tok::Trace
                 | Tok::QuotedString(..)
                 | Tok::QuotedExpr(..)
                 | Tok::Int(..) => (),
