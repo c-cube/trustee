@@ -21,6 +21,8 @@ use Instr as I;
 pub struct Parser<'a, 'b, 'c> {
     pub(crate) lexer: &'c mut lexer::Lexer<'b>,
     ctx: &'a mut k::Ctx,
+    /// Pool of compiler states that can be re-used
+    comps: Box<[Option<Box<CompilerState>>]>,
     /// Where to trace, if anywhere.
     trace_points: Vec<Position>,
 }
@@ -37,15 +39,7 @@ enum LexScope {
 
 /// Compiler for a given chunk.
 struct Compiler<'a> {
-    /// Current instructions for the chunk.
-    instrs: Vec<Instr>,
-    /// Local values for the chunk.
-    locals: Vec<Value>,
-    /// Captured variables from outer scopes, with their names.
-    captured: Vec<RStr>,
-    /// Local lexical scopes, each containing local variables.
-    /// The `push` and `pop` operations must be balanced.
-    lex_scopes: Vec<LexScope>,
+    st: Box<CompilerState>,
     /// Number of input arguments. invariant: `<= n_slots`.
     n_args: u8,
     /// Maximum size `slots` ever took, including `n_args`.
@@ -54,8 +48,6 @@ struct Compiler<'a> {
     name: Option<RStr>,
     /// Docstring for the future chunk.
     docstring: Option<RStr>,
-    /// Slots for representing the stack.
-    slots: Vec<CompilerSlot>,
     /// Parent compiler, used to resolve values from outer scopes.
     parent: Option<*mut Compiler<'a>>,
     /// Variance: covariant.
@@ -66,6 +58,22 @@ struct Compiler<'a> {
     file_name: Option<RStr>,
     start: Position,
     end: Position,
+}
+
+/// A part of the `Compiler` type that can be re-used.
+#[must_use]
+struct CompilerState {
+    /// Current instructions for the chunk.
+    instrs: Vec<Instr>,
+    /// Local values for the chunk.
+    locals: Vec<Value>,
+    /// Captured variables from outer scopes, with their names.
+    captured: Vec<RStr>,
+    /// Local lexical scopes, each containing local variables.
+    /// The `push` and `pop` operations must be balanced.
+    lex_scopes: Vec<LexScope>,
+    /// Slots for representing the stack.
+    slots: Vec<CompilerSlot>,
 }
 
 struct CompilerSlot {
@@ -165,9 +173,12 @@ macro_rules! get_res {
 impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
     /// Create a new parser for source string `s`.
     pub fn new(ctx: &'a mut k::Ctx, lexer: &'c mut lexer::Lexer<'b>) -> Self {
+        let mut comps = vec![];
+        comps.resize_with(8, || None); // size of cache
         Self {
             ctx,
             lexer,
+            comps: comps.into_boxed_slice(),
             trace_points: vec![],
         }
     }
@@ -189,6 +200,30 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
         self.lexer.next()
     }
 
+    /// Obtain or reuse a compiler state.
+    fn obtain_compiler_state(&mut self) -> Box<CompilerState> {
+        for x in self.comps.iter_mut() {
+            if x.is_some() {
+                let c = x.take().unwrap();
+                return c;
+            }
+        }
+        Box::new(CompilerState::new())
+    }
+
+    /// Cache this compiler state for further reuse.
+    fn recycle_compiler_state(&mut self, mut st: Box<CompilerState>) {
+        for x in self.comps.iter_mut() {
+            if x.is_none() {
+                st.reset(); // ensure it's clean before reusing it
+                *x = Some(st);
+                return;
+            }
+        }
+        // all full, just discard st
+        drop(st)
+    }
+
     /// Parse a toplevel expression in the string passed at creation time.
     ///
     /// Returns `Ok(None)` if no more statements could be read.
@@ -200,7 +235,8 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
         match t {
             Tok::Eof => Ok(None),
             _ => {
-                let mut c = Compiler::new(start, None, self.lexer.file_name.clone());
+                let st = self.obtain_compiler_state();
+                let mut c = Compiler::new(st, start, None, self.lexer.file_name.clone());
                 let res = get_res!(c, None);
                 let r = self.parse_expr_(&mut c, Some(res.slot));
                 c.end = self.lexer.loc();
@@ -210,7 +246,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                     }
                     Err(mut e) => {
                         // build context error message
-                        c.instrs.clear();
+                        c.st.instrs.clear();
                         let loc = Location {
                             start: c.start,
                             end: c.end,
@@ -223,7 +259,9 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                         c.emit_instr_(I::Fail(l0))
                     }
                 }
-                Ok(Some(c.into_chunk()))
+                let (ch, st) = c.into_chunk();
+                self.recycle_compiler_state(st);
+                Ok(Some(ch))
             }
         }
     }
@@ -264,7 +302,9 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             };
 
             // make a compiler for this chunk.
-            let mut c: Compiler<'_> = Compiler::new(start, parent, self.lexer.file_name.clone());
+            let st = self.obtain_compiler_state();
+            let mut c: Compiler<'_> =
+                Compiler::new(st, start, parent, self.lexer.file_name.clone());
             c.n_args = vars.len() as u8;
             c.name = f_name.clone();
             // add variables to `sub_c`
@@ -272,14 +312,16 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                 let sl_x = c.allocate_var_(x)?;
                 c.get_slot_(sl_x.slot).state = CompilerSlotState::Activated;
             }
-            logtrace!("compiling {:?}: slots for args: {:?}", &f_name, &c.slots);
+            logtrace!("compiling {:?}: slots for args: {:?}", &f_name, &c.st.slots);
 
             let res = self.parse_expr_seq_(&mut c, closing, None)?;
 
             // return value
             c.emit_instr_(I::Ret(res.slot));
             c.free(&res);
-            c.into_chunk()
+            let (ch, st) = c.into_chunk();
+            self.recycle_compiler_state(st);
+            ch
         };
 
         Ok(ch)
@@ -820,7 +862,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
     /// `sl_res` is an optional pre-provided slot.
     fn parse_expr_(&mut self, c: &mut Compiler, sl_res: Option<SlotIdx>) -> Result<ExprRes> {
         logtrace!("parse expr (cur {:?})", self.lexer.cur());
-        logtrace!("> slots {:?}", c.slots);
+        logtrace!("> slots {:?}", c.st.slots);
 
         let Self { ctx, lexer, .. } = self;
         let loc = lexer.loc();
@@ -963,18 +1005,49 @@ enum BinOpAssoc {
     NonAssoc,
 }
 
-impl<'a> Compiler<'a> {
-    fn new(start: Position, parent: Option<*mut Compiler<'a>>, file_name: Option<RStr>) -> Self {
-        Compiler {
+impl CompilerState {
+    /// Create a new state.
+    fn new() -> Self {
+        Self {
             instrs: Vec::with_capacity(32),
             locals: Vec::with_capacity(32),
             captured: vec![],
+            lex_scopes: Vec::with_capacity(16),
+            slots: Vec::with_capacity(16),
+        }
+    }
+
+    /// Reset all data, so this can be reused.
+    fn reset(&mut self) {
+        let CompilerState {
+            instrs,
+            locals,
+            captured,
+            lex_scopes,
+            slots,
+        } = self;
+        instrs.clear();
+        locals.clear();
+        captured.clear();
+        lex_scopes.clear();
+        slots.clear();
+    }
+}
+
+impl<'a> Compiler<'a> {
+    /// Create a new compiler.
+    fn new(
+        st: Box<CompilerState>,
+        start: Position,
+        parent: Option<*mut Compiler<'a>>,
+        file_name: Option<RStr>,
+    ) -> Self {
+        Compiler {
+            st,
             n_slots: 0,
             n_args: 0,
-            lex_scopes: Vec::with_capacity(16),
             name: None,
             docstring: None,
-            slots: Vec::with_capacity(16),
             parent,
             phantom: PhantomData,
             start,
@@ -984,50 +1057,55 @@ impl<'a> Compiler<'a> {
     }
 
     /// Convert the compiler's state into a proper chunk.
-    fn into_chunk(self) -> Chunk {
+    /// Also return the underlying compiler state.
+    fn into_chunk(mut self) -> (Chunk, Box<CompilerState>) {
         let loc = Location {
             start: self.start,
             end: self.end,
             file_name: self.file_name.map(|s| s.to_string()),
         };
+        let mut instrs = vec![];
+        std::mem::swap(&mut self.st.instrs, &mut instrs);
+        let mut locals = vec![];
+        std::mem::swap(&mut self.st.locals, &mut locals);
         let c = ChunkImpl {
-            instrs: self.instrs.into_boxed_slice(),
-            locals: self.locals.into_boxed_slice(),
+            instrs: instrs.into_boxed_slice(),
+            locals: locals.into_boxed_slice(),
             n_args: self.n_args,
             n_slots: self.n_slots,
-            n_captured: self.captured.len() as u8,
+            n_captured: self.st.captured.len() as u8,
             name: self.name,
             docstring: self.docstring,
             loc,
         };
-        Chunk(k::Ref::new(c))
+        (Chunk(k::Ref::new(c)), self.st)
     }
 
     #[inline]
     fn get_slot_(&mut self, i: SlotIdx) -> &mut CompilerSlot {
-        &mut self.slots[i.0 as usize]
+        &mut self.st.slots[i.0 as usize]
     }
 
     fn enter_call_args(&mut self) -> Scope {
         crate::logtrace!("enter call args scope");
-        self.lex_scopes.push(LexScope::CallArgs);
-        Scope(self.lex_scopes.len())
+        self.st.lex_scopes.push(LexScope::CallArgs);
+        Scope(self.st.lex_scopes.len())
     }
 
     fn is_in_local_scope(&self) -> bool {
-        self.parent.is_some() || self.lex_scopes.len() > 0
+        self.parent.is_some() || self.st.lex_scopes.len() > 0
     }
 
     fn exit_call_args(&mut self, sc: Scope) {
         crate::logtrace!("exit call args scope");
-        if self.lex_scopes.len() != sc.0 {
+        if self.st.lex_scopes.len() != sc.0 {
             panic!(
                 "unbalanced scopes in call args (expect len {}, got {})",
                 sc.0,
-                self.lex_scopes.len()
+                self.st.lex_scopes.len()
             );
         }
-        match self.lex_scopes.pop() {
+        match self.st.lex_scopes.pop() {
             Some(LexScope::CallArgs) => (),
             _ => panic!("unbalanced scope in call args"),
         }
@@ -1035,20 +1113,20 @@ impl<'a> Compiler<'a> {
 
     fn push_local_scope(&mut self) -> Scope {
         crate::logtrace!("push local scope");
-        self.lex_scopes.push(LexScope::Local(vec![]));
-        Scope(self.lex_scopes.len())
+        self.st.lex_scopes.push(LexScope::Local(vec![]));
+        Scope(self.st.lex_scopes.len())
     }
 
     fn pop_local_scope(&mut self, sc: Scope) {
         crate::logtrace!("pop local scope");
-        if self.lex_scopes.len() != sc.0 {
+        if self.st.lex_scopes.len() != sc.0 {
             panic!(
                 "unbalanced scopes (expect len {}, got {})",
                 sc.0,
-                self.lex_scopes.len()
+                self.st.lex_scopes.len()
             );
         }
-        match self.lex_scopes.pop() {
+        match self.st.lex_scopes.pop() {
             Some(LexScope::Local(sl)) => {
                 for x in sl {
                     self.deallocate_slot_(x)
@@ -1063,16 +1141,16 @@ impl<'a> Compiler<'a> {
         crate::logtrace!("compiler(name={:?}): push local {}", self.name, v);
 
         // see if `v` is a local already.
-        if let Some((i, _)) = self.locals.iter().enumerate().find(|(_, v2)| *v2 == &v) {
+        if let Some((i, _)) = self.st.locals.iter().enumerate().find(|(_, v2)| *v2 == &v) {
             return Ok(LocalIdx(i as u8));
         }
 
         // else push a new local
-        let i = self.locals.len();
+        let i = self.st.locals.len();
         if i > u8::MAX as usize {
             return Err(Error::new("maximum number of locals exceeded"));
         }
-        self.locals.push(v);
+        self.st.locals.push(v);
         Ok(LocalIdx(i as u8))
     }
 
@@ -1081,30 +1159,30 @@ impl<'a> Compiler<'a> {
         crate::logtrace!(
             "compiler(name={:?}, n_locals={}): emit instr {:?}",
             self.name,
-            self.locals.len(),
+            self.st.locals.len(),
             i
         );
-        self.instrs.push(i)
+        self.st.instrs.push(i)
     }
 
     /// Reserve space for a jump instruction that will be emitted later.
     fn reserve_jump_(&mut self) -> JumpPosition {
-        let off = self.instrs.len();
+        let off = self.st.instrs.len();
         crate::logtrace!(
             "compiler(name={:?}, n_locals={}): reserve jump at offset {}",
             self.name,
-            self.locals.len(),
+            self.st.locals.len(),
             off
         );
 
-        self.instrs.push(I::Trap); // reserve space
+        self.st.instrs.push(I::Trap); // reserve space
         JumpPosition(off)
     }
 
     /// Set the jump instruction for a previously reserved jump slot.
     fn emit_jump(&mut self, pos: JumpPosition, mk_i: impl FnOnce(i16) -> Instr) -> Result<()> {
-        let i = if let I::Trap = self.instrs[pos.0] {
-            let j_offset = self.instrs.len() as isize - pos.0 as isize - 1;
+        let i = if let I::Trap = self.st.instrs[pos.0] {
+            let j_offset = self.st.instrs.len() as isize - pos.0 as isize - 1;
             if j_offset < i16::MIN as isize || j_offset > i16::MAX as isize {
                 return Err(Error::new("jump is too long"));
             }
@@ -1116,18 +1194,18 @@ impl<'a> Compiler<'a> {
         crate::logtrace!(
             "compiler(name={:?}, n_locals={}): emit jump {:?} at offset {}",
             self.name,
-            self.locals.len(),
+            self.st.locals.len(),
             i,
             pos.0
         );
-        self.instrs[pos.0] = i;
+        self.st.instrs[pos.0] = i;
         Ok(())
     }
 
     /// Allocate a slot on top of the stack.
     fn allocate_top_slot_(&mut self, st: CompilerSlotState) -> Result<SlotIdx> {
         assert_ne!(st, CompilerSlotState::Unused);
-        let i = self.slots.len();
+        let i = self.st.slots.len();
         if i > u8::MAX as usize {
             return Err(Error::new("maximum number of slots exceeded"));
         }
@@ -1137,7 +1215,7 @@ impl<'a> Compiler<'a> {
             var_name: None,
             state: st,
         };
-        self.slots.push(sl);
+        self.st.slots.push(sl);
         Ok(SlotIdx(i as u8))
     }
 
@@ -1147,6 +1225,7 @@ impl<'a> Compiler<'a> {
     fn deallocate_top_slots_(&mut self, n: usize) {
         for _i in 0..n {
             let sl = self
+                .st
                 .slots
                 .pop()
                 .expect("compiler: deallocating non-existing slot");
@@ -1159,6 +1238,7 @@ impl<'a> Compiler<'a> {
     /// Allocate or reuse a slot.
     fn allocate_any_slot_(&mut self, st: CompilerSlotState) -> Result<SlotIdx> {
         if let Some((i, sl)) = self
+            .st
             .slots
             .iter_mut()
             .enumerate()
@@ -1177,11 +1257,11 @@ impl<'a> Compiler<'a> {
     fn allocate_var_(&mut self, name: RStr) -> Result<ExprRes> {
         let slot = self.allocate_any_slot_(CompilerSlotState::NotActivatedYet)?;
         self.get_slot_(slot).var_name = Some(name);
-        if let Some(LexScope::CallArgs) = self.lex_scopes.last() {
+        if let Some(LexScope::CallArgs) = self.st.lex_scopes.last() {
             return Err(Error::new(
                 "cannot bind variable in the list of arguments of a function call",
             ));
-        } else if let Some(LexScope::Local(scope)) = self.lex_scopes.last_mut() {
+        } else if let Some(LexScope::Local(scope)) = self.st.lex_scopes.last_mut() {
             scope.push(slot); // push into local scope
         }
         Ok(ExprRes::new(slot, false))
@@ -1200,10 +1280,10 @@ impl<'a> Compiler<'a> {
 
     /// Check if `sl` is the top slot.
     fn is_top_of_stack_(&self, sl: SlotIdx) -> bool {
-        if sl.0 as usize + 1 == self.slots.len() {
+        if sl.0 as usize + 1 == self.st.slots.len() {
             true
         } else {
-            self.slots[sl.0 as usize..]
+            self.st.slots[sl.0 as usize..]
                 .iter()
                 .all(|s| s.state == CompilerSlotState::Unused)
         }
@@ -1218,9 +1298,9 @@ impl<'a> Compiler<'a> {
 
     /// Deallocate that slot, it becomes available for further use.
     fn deallocate_slot_(&mut self, sl: SlotIdx) {
-        if sl.0 as usize + 1 == self.slots.len() {
+        if sl.0 as usize + 1 == self.st.slots.len() {
             // just pop the slot
-            self.slots.pop().unwrap();
+            self.st.slots.pop().unwrap();
         } else {
             let sl = self.get_slot_(sl);
             sl.var_name = None;
@@ -1231,7 +1311,7 @@ impl<'a> Compiler<'a> {
     /// Find slot for the given variable `v`.
     #[allow(unsafe_code)] // used for making `parent` pointers covariant
     fn find_slot_of_var(&mut self, v: &str) -> Result<Option<VarSlot>> {
-        for (i, s) in self.slots.iter().enumerate().rev() {
+        for (i, s) in self.st.slots.iter().enumerate().rev() {
             if s.state != CompilerSlotState::Activated {
                 continue; // slot is not actually ready yet
             }
@@ -1242,7 +1322,7 @@ impl<'a> Compiler<'a> {
             }
         }
         // look in already captured variables
-        for (i, s) in self.captured.iter().enumerate() {
+        for (i, s) in self.st.captured.iter().enumerate() {
             if v == s.get() {
                 return Ok(Some(VarSlot::Captured(UpvalueIdx(i as u8))));
             }
@@ -1267,12 +1347,12 @@ impl<'a> Compiler<'a> {
             if let Some(parent_var) = parent.find_slot_of_var(v)? {
                 crate::logtrace!("found {} in parent scope", v);
                 // capture `v` from parent scope
-                if self.captured.len() > u8::MAX as usize {
+                if self.st.captured.len() > u8::MAX as usize {
                     return Err(Error::new("too many captured variables"));
                 }
-                let upidx = UpvalueIdx(self.captured.len() as u8);
+                let upidx = UpvalueIdx(self.st.captured.len() as u8);
                 crate::logtrace!("capture var {} from parent (upidx {})", v, upidx.0);
-                self.captured.push(v.into());
+                self.st.captured.push(v.into());
                 match parent_var {
                     VarSlot::Local(sl) => parent.emit_instr_(I::PushLocalToUpvalue(sl)),
                     VarSlot::Captured(u) => parent.emit_instr_(I::PushUpvalueToUpvalue(u)),
