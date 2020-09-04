@@ -366,19 +366,17 @@ mod server {
         } else if msg.m == lsp::request::Completion::METHOD {
             log::debug!("got completion request {:?}", params);
             let d: CompletionParams = serde_json::from_str(&params)?;
-            let r = h.handle_completion(&mut st, d);
-            Ok(match r {
-                Some(r) => Some(mk_reply!(r)),
-                None => None,
-            })
+            let r = h
+                .handle_completion(&mut st, d)
+                .unwrap_or_else(|| lsp::CompletionResponse::Array(vec![]));
+            Ok(Some(mk_reply!(r)))
         } else if msg.m == lsp::request::GotoDefinition::METHOD {
             log::debug!("got goto-def request {:?}", params);
             let d: GotoDefinitionParams = serde_json::from_str(&params)?;
-            let r = h.handle_goto_def(&mut st, d);
-            Ok(match r {
-                Some(r) => Some(mk_reply!(r)),
-                None => None,
-            })
+            let r = h
+                .handle_goto_def(&mut st, d)
+                .unwrap_or_else(|| lsp::GotoDefinitionResponse::Array(vec![]));
+            Ok(Some(mk_reply!(r)))
         } else {
             // fallback
             h.handle_other_msg(&mut st, msg)
