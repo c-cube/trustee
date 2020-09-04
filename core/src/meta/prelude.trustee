@@ -463,16 +463,24 @@
   (def b (concl th))
   (cut th (subst BProveAOrB "a" a "b" b)))
 
+; the theorem `a\/b, a==>c, b==>c |- c`
+(set OrElim
+  (def a `a:bool`)
+  (def b `b:bool`)
+  (def c `c:bool`)
+  (def def_aorb (ROrDefSubst a b))
+  (def h (bool_eq (assume `with a b:bool. a\/b`) def_aorb))
+  (def h1 (RForallSubst h c))
+  (RImplyElim (RImplyElim h1)))
+
 ; or intro rule by case
 (defn ROrElimByCase [thc th1 th2]
   (doc "takes `|- a\/b`, `|- a ==> p`, `|- b ==> p`, and returns `|- p`")
   (def a (e_app_rhs (e_app_lhs (concl thc))))
   (def b (e_app_rhs (concl thc)))
   (def p (e_app_rhs (concl th1)))
-  (def def_aorb (ROrDefSubst a b))
-  (def h (bool_eq thc def_aorb))
-  (def h1 (RForallSubst h p))
-  (MP (MP h1 th1) th2))
+  (def th (subst OrElim "a" a "b" b "c" p))
+  (cut th1 th2 thc th))
 
 ; or intro rule by case, with cuts
 (defn ROrElimByCaseCut [thc th1 th2]
