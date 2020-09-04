@@ -54,6 +54,7 @@ struct Compiler<'a> {
     name: Option<RStr>,
     /// Docstring for the future chunk.
     docstring: Option<RStr>,
+    /// Slots for representing the stack.
     slots: Vec<CompilerSlot>,
     /// Parent compiler, used to resolve values from outer scopes.
     parent: Option<*mut Compiler<'a>>,
@@ -62,7 +63,6 @@ struct Compiler<'a> {
     /// as it just lives shorter.
     phantom: PhantomData<&'a ()>,
     /// Last result in a `def`.
-    last_res: Option<ExprRes>,
     file_name: Option<RStr>,
     start: Position,
     end: Position,
@@ -200,23 +200,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
         match t {
             Tok::Eof => Ok(None),
             _ => {
-                let mut c = Compiler {
-                    instrs: vec![],
-                    locals: vec![],
-                    captured: vec![],
-                    n_slots: 0,
-                    n_args: 0,
-                    lex_scopes: vec![],
-                    name: None,
-                    docstring: None,
-                    slots: vec![],
-                    parent: None,
-                    phantom: PhantomData,
-                    start,
-                    last_res: None,
-                    end: start,
-                    file_name: self.lexer.file_name.clone(),
-                };
+                let mut c = Compiler::new(start, None, self.lexer.file_name.clone());
                 let res = get_res!(c, None);
                 let r = self.parse_expr_(&mut c, Some(res.slot));
                 c.end = self.lexer.loc();
@@ -280,23 +264,9 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             };
 
             // make a compiler for this chunk.
-            let mut c: Compiler<'_> = Compiler {
-                instrs: vec![],
-                locals: vec![],
-                captured: vec![],
-                n_slots: 0,
-                n_args: vars.len() as u8,
-                name: f_name.clone(),
-                docstring: None,
-                lex_scopes: vec![],
-                slots: vec![],
-                parent,
-                phantom: PhantomData,
-                start,
-                last_res: None,
-                end: start,
-                file_name: self.lexer.file_name.clone(),
-            };
+            let mut c: Compiler<'_> = Compiler::new(start, parent, self.lexer.file_name.clone());
+            c.n_args = vars.len() as u8;
+            c.name = f_name.clone();
             // add variables to `sub_c`
             for x in vars {
                 let sl_x = c.allocate_var_(x)?;
@@ -854,7 +824,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
 
         let Self { ctx, lexer, .. } = self;
         let loc = lexer.loc();
-        let r = match lexer.cur() {
+        match lexer.cur() {
             Tok::LParen => {
                 lexer.next();
                 self.parse_expr_app_(c, sl_res)
@@ -979,11 +949,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             Tok::Invalid(c) => return Err(perror!(loc, "invalid char {}", c)),
 
             Tok::Eof => return Err(perror!(loc, "unexpected EOF when parsing expr")),
-        };
-        if let Ok(res) = r {
-            c.last_res = Some(res);
         }
-        r
     }
 
     /// Expect the token `t`, and consume it; or return an error.
@@ -998,6 +964,25 @@ enum BinOpAssoc {
 }
 
 impl<'a> Compiler<'a> {
+    fn new(start: Position, parent: Option<*mut Compiler<'a>>, file_name: Option<RStr>) -> Self {
+        Compiler {
+            instrs: Vec::with_capacity(32),
+            locals: Vec::with_capacity(32),
+            captured: vec![],
+            n_slots: 0,
+            n_args: 0,
+            lex_scopes: Vec::with_capacity(16),
+            name: None,
+            docstring: None,
+            slots: Vec::with_capacity(16),
+            parent,
+            phantom: PhantomData,
+            start,
+            end: start,
+            file_name,
+        }
+    }
+
     /// Convert the compiler's state into a proper chunk.
     fn into_chunk(self) -> Chunk {
         let loc = Location {
