@@ -2,12 +2,14 @@
 
 use crate::{kernel_of_trust as k, *};
 
+pub mod ac_rw;
 pub mod cc;
 pub mod conv;
 pub mod rw;
 pub mod rw_rule;
 pub mod unif;
 
+pub use ac_rw::{ACConv, ACConvList};
 pub use cc::{prove_cc, CC};
 pub use conv::{thm_conv_concl, BetaReduce, BetaReduceRepeat, Converter};
 pub use rw::rewrite_bottom_up;

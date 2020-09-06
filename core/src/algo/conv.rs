@@ -84,7 +84,7 @@ fn get_or_refl(ctx: &mut k::Ctx, e: &Expr, th: Option<Thm>) -> Thm {
 }
 
 /// Chain `res1` and `res2` into a single theorem, or `None` if both are none.
-fn chain_res(ctx: &mut k::Ctx, res1: Option<Thm>, res2: Option<Thm>) -> Result<Option<Thm>> {
+pub fn chain_res(ctx: &mut k::Ctx, res1: Option<Thm>, res2: Option<Thm>) -> Result<Option<Thm>> {
     if let Some(th1) = res1 {
         if let Some(th2) = res2 {
             // transitivity here
