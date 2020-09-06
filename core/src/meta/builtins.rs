@@ -632,7 +632,7 @@ pub(super) mod logic_builtins {
                 // convert arguments to expressions
                 let mut e_args = vec![];
                 for i in 0..n_args {
-                    e_args.push(get_arg_expr!(args, i + 1).into());
+                    e_args.push(get_arg_expr!(args, i + 1).clone());
                 }
 
                 let e = syntax::parse_expr_with_args(ctx.ctx, e, &e_args[..])?;

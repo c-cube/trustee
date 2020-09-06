@@ -263,27 +263,6 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
-/// An interpolation argument.
-///
-/// This is used to fill in "gaps" in the parsed expression, represented
-/// by a "?", similar to SQL parametrized queries.
-#[derive(Clone, Copy, Debug)]
-pub enum InterpolationArg<'a> {
-    Thm(&'a k::Thm),
-    Expr(&'a k::Expr),
-}
-
-impl<'a> From<&'a k::Thm> for InterpolationArg<'a> {
-    fn from(x: &'a k::Thm) -> Self {
-        InterpolationArg::Thm(x)
-    }
-}
-impl<'a> From<&'a k::Expr> for InterpolationArg<'a> {
-    fn from(x: &'a k::Expr) -> Self {
-        InterpolationArg::Expr(x)
-    }
-}
-
 /// Result of parsing a statement.
 #[derive(Debug, Clone)]
 pub enum ParseOutput {
@@ -308,7 +287,7 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
     next_tok: Option<Tok<'a>>,
     /// Interpolation arguments.
-    qargs: &'a [InterpolationArg<'a>],
+    qargs: &'a [k::Expr],
     /// Index in `qargs`
     qargs_idx: usize,
 }
@@ -331,11 +310,7 @@ impl<'a> Parser<'a> {
     /// Holes in the source `src` will be filled with elements of `qargs`.
     /// A parse error will be emitted if the number of holes in `src` does not
     /// correspond to the length of `qargs`.
-    pub fn new_with_args(
-        ctx: &'a mut Ctx,
-        src: &'a str,
-        qargs: &'a [InterpolationArg<'a>],
-    ) -> Self {
+    pub fn new_with_args(ctx: &'a mut Ctx, src: &'a str, qargs: &'a [k::Expr]) -> Self {
         let lexer = Lexer::new(src);
         Self {
             ctx,
@@ -613,16 +588,7 @@ impl<'a> Parser<'a> {
     /// Look for an interpolation argument and consume it
     fn interpol_expr_(&mut self) -> Result<k::Expr> {
         Ok(if self.qargs_idx < self.qargs.len() {
-            let e = match self.qargs[self.qargs_idx] {
-                InterpolationArg::Expr(e) => e.clone(),
-                InterpolationArg::Thm(_) => {
-                    return Err(perror!(
-                        self,
-                        "interpolation parameter {} is a theorem, expected a term",
-                        self.qargs_idx
-                    ))
-                }
-            };
+            let e = self.qargs[self.qargs_idx].clone();
             self.qargs_idx += 1;
             e
         } else {
@@ -847,7 +813,7 @@ pub fn parse_expr(ctx: &mut Ctx, s: &str) -> Result<k::Expr> {
 }
 
 /// Parse the string into an expression with a set of parameters.
-pub fn parse_expr_with_args(ctx: &mut Ctx, s: &str, qargs: &[InterpolationArg]) -> Result<k::Expr> {
+pub fn parse_expr_with_args(ctx: &mut Ctx, s: &str, qargs: &[k::Expr]) -> Result<k::Expr> {
     let mut p = Parser::new_with_args(ctx, s, qargs);
     p.parse_expr()
 }
@@ -1215,8 +1181,7 @@ mod test {
 
         for (x, y, f) in &cases {
             let mut ctx = mkctx()?;
-            let args: Vec<_> = f(&mut ctx)?;
-            let qargs: Vec<InterpolationArg> = args.iter().map(|x| x.into()).collect();
+            let qargs: Vec<k::Expr> = f(&mut ctx)?;
             let r = parse_expr_with_args(&mut ctx, x, &qargs)
                 .map_err(|e| e.with_source(Error::new_string(format!("parsing {:?}", x))))?;
             let r2 = format!("{:?}", r);
