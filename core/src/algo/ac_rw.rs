@@ -3,7 +3,7 @@
 //! The purpose is simply to normalize some AC-operators such as `\/` or `/\`.
 
 use crate::{
-    algo::{self, conv},
+    algo::{self, conv, kbo},
     kernel_of_trust::{Ctx, Error, Expr, Result, Thm},
     syntax,
 };
@@ -82,8 +82,6 @@ impl ACConv {
 #[derive(Debug, Clone)]
 pub struct ACConvList<'a>(pub &'a [&'a ACConv]);
 
-// TODO: implement basic KBO for the "comm" case
-
 impl conv::Converter for ACConv {
     fn try_conv(&self, ctx: &mut Ctx, e: &Expr) -> Result<Option<Thm>> {
         let mut e = e.clone();
@@ -104,15 +102,16 @@ impl conv::Converter for ACConv {
                 res = conv::chain_res(ctx, res, Some(th))?;
             } else if let Some(th) = rw_comm.try_conv(ctx, &e)? {
                 let (a, b) = e.unfold_eq().expect("rw-comm matches implies is-eq");
-                if a > b {
-                    // effectively rewrite, by term ordering.
-                    // TODO: use KBO as a more robust ordering.
-                    e = th
+                if let Some(std::cmp::Ordering::Greater) = kbo::kbo_compare(&a, &b) {
+                    // effectively rewrite, by term ordering, if `a >_kbo b`.
+                    let e2 = th
                         .concl()
                         .unfold_eq()
                         .ok_or_else(|| Error::new("rw conv yielded a non-equational theorem"))?
                         .1
                         .clone();
+                    crate::logtrace!("rewrite {:?} into {:?}", e, e2);
+                    e = e2;
                     res = conv::chain_res(ctx, res, Some(th))?;
                 } else {
                     break;
