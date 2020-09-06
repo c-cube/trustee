@@ -608,12 +608,31 @@
   (def h4 (REqTrueElim h3))
   (RNotNotElim h4))
 
-; TODO
-;(defn RExFalso [th a]
-; (doc "takes `G, ~a |- F` and `a`, and returns `G |- a`")
-
-
-; TODO: a rule from `~ a |- F` to `|- a`
+; `(~a \/ b) = (a ==> b)`
+(set ROrNotEqImply
+  (def direct
+    (def h1 (assume `with a b:bool. ~a \/ b`))
+    ; prove `~a |- a==>b`
+    (def c1
+      (def h (assume `~ a:bool`))
+      (def h2 (RImplyElim (RNotElim h)))
+      (def h3 (RFalseElim h2 `b:bool`))
+      (RImplyIntro h3 `a:bool`))
+    ; `b |- a ==> b`
+    (def c2
+      (RImplyIntro (assume `b:bool`) `a:bool`))
+    (ROrElimByCaseCut h1 c1 c2))
+  ; prove `a==>b |- ~a\/b`
+  (def indirect
+    (def h (assume `a:bool ==> b:bool`))
+    (def ha (RExcludedMiddle `a:bool`))
+    (def h1 (ROrIntro2 (MP h (assume `a:bool`)) ` ~a:bool`))
+    (def h2 (ROrIntro1 (assume `~ a:bool`) `b:bool`))
+    (ROrElimByCaseCut ha h1 h2))
+    ;>>(ROrElimByCaseCut h1 c1 c2))
+  (bool_eq_intro
+  direct
+  indirect))
 
 ; TODO: de morgan laws
 
