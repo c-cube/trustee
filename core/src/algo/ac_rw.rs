@@ -3,10 +3,7 @@
 //! The purpose is simply to normalize some AC-operators such as `\/` or `/\`.
 
 use crate::{
-    algo::{
-        self,
-        conv::{self},
-    },
+    algo::{self, conv},
     kernel_of_trust::{Ctx, Error, Expr, Result, Thm},
     syntax,
 };

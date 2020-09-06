@@ -27,11 +27,17 @@ pub trait KBOParams {
 pub struct DefaultParams;
 
 /// Compare the two expressions according to KBO.
-pub fn compare(kbo: &mut dyn KBOParams, a: Expr, b: Expr) -> Option<Ordering> {
+pub fn kbo_compare_with(kbo: &mut dyn KBOParams, a: &Expr, b: &Expr) -> Option<Ordering> {
     use kbo_cmp::*;
     let mut st = State::new();
     let mut wb = Weight(0);
     tc_kbo(kbo, &mut st, &mut wb, &a, &b)
+}
+
+/// Compare the two expressions according to KBO, with default parameters.
+pub fn kbo_compare(a: &Expr, b: &Expr) -> Option<Ordering> {
+    let kbo = &mut DefaultParams;
+    kbo_compare_with(kbo, a, b)
 }
 
 mod kbo_cmp {
@@ -301,5 +307,70 @@ mod impls {
             // use the alphabetical order
             a.name().cmp(b.name())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        kernel_of_trust::{Ctx, Result},
+        meta, syntax,
+    };
+
+    const PRELUDE: &'static str = r#"
+    (decl "tau" `type`)
+    (decl "p0" `bool`)
+    (decl "f1" `tau -> tau`)
+    (decl "g1" `tau -> tau`)
+    (decl "f2" `tau -> tau -> tau`)
+    (decl "g2" `tau -> tau -> tau`)
+    (decl "a" `tau`)
+    (decl "b" `tau`)
+    (decl "c" `tau`)
+    (decl "d" `tau`)
+    "#;
+
+    #[test]
+    fn test1() -> Result<()> {
+        let mut ctx = Ctx::new();
+        meta::run_code(&mut ctx, PRELUDE, None)?;
+
+        for (s1, s2, exp, reason) in &[
+            (
+                "f2 (f1 a) (g1 b)",
+                "f2 (f1 a) (g1 (g1 b))",
+                Some(Ordering::Less),
+                "weight",
+            ),
+            (
+                "f2 (f1 a) (g1 b)",
+                "f2 (f1 a) (g1 b)",
+                Some(Ordering::Equal),
+                "syntactically equal",
+            ),
+            (
+                "with x:tau. f2 (f1 x) (g1 b)",
+                "with y:tau. f2 (f1 a) (g1 y)",
+                None,
+                "non ordered sets of variables",
+            ),
+            (
+                "with x:tau. f2 (f1 b) (g2 x b)",
+                "with x:tau. f2 (f1 a) (g2 b x)",
+                Some(Ordering::Greater),
+                "lexico on first arg",
+            ),
+        ] {
+            let t1 = syntax::parse_expr(&mut ctx, s1)?;
+            let t2 = syntax::parse_expr(&mut ctx, s2)?;
+            let r = kbo_compare(&t1, &t2);
+            assert_eq!(
+                *exp, r,
+                "comparing {:?} and {:?}, reason: {}",
+                &t1, &t2, reason
+            );
+        }
+        Ok(())
     }
 }

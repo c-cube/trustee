@@ -5,6 +5,7 @@ use crate::{kernel_of_trust as k, *};
 pub mod ac_rw;
 pub mod cc;
 pub mod conv;
+pub mod kbo;
 pub mod rw;
 pub mod rw_rule;
 pub mod unif;
