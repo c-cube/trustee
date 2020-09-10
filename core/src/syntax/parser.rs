@@ -1,4 +1,4 @@
-use crate::syntax::{Lexer, Tok};
+use crate::syntax::{lexer::Position, Lexer, Tok};
 use crate::{kernel_of_trust as k, syntax::Fixity, Ctx, Error, Result};
 
 /// Parse the string into an expression.
@@ -35,7 +35,6 @@ pub struct Parser<'a> {
     /// Let bindings (`let x = y in z`)
     let_bindings: Vec<(&'a str, k::Expr)>,
     lexer: Lexer<'a>,
-    next_tok: Option<Tok<'a>>,
     /// Interpolation arguments.
     qargs: &'a [k::Expr],
     /// Index in `qargs`
@@ -67,7 +66,6 @@ impl<'a> Parser<'a> {
             local: vec![],
             let_bindings: vec![],
             lexer,
-            next_tok: None,
             qargs,
             qargs_idx: 0,
         }
@@ -81,21 +79,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Return current `(line,column)` pair.
-    pub fn loc(&self) -> (usize, usize) {
+    pub fn loc(&self) -> Position {
         self.lexer.cur_pos()
-    }
-
-    /// Peek at the current token.
-    #[inline]
-    fn peek_(&mut self) -> Tok<'a> {
-        match self.next_tok {
-            Some(t) => t,
-            None => {
-                let t = self.lexer.next_();
-                self.next_tok = Some(t);
-                t
-            }
-        }
     }
 
     #[inline]
@@ -117,36 +102,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Consume current token and return the next one.
-    #[inline]
-    fn next_(&mut self) -> Tok<'a> {
-        match self.next_tok {
-            Some(t) => {
-                self.next_tok = None;
-                t
-            }
-            None => self.lexer.next_(),
-        }
-    }
-
-    /// Consume `tok` and fail on anything else.
-    fn eat_(&mut self, tok: Tok) -> Result<()> {
-        let t = self.peek_();
-        if t == tok {
-            self.next_();
-            Ok(())
-        } else {
-            Err(Error::new_string(format!(
-                "expected {:?}, got {:?}",
-                tok, t
-            )))
-        }
-    }
-
     /// Parse a symbol and return it.
     fn parse_sym_(&mut self) -> Result<&'a str> {
         use Tok::*;
-        match self.next_() {
+        match self.lexer.consume_cur() {
             SYM(s) => Ok(s),
             t => Err(perror!(self, "expected symbol, got {:?}", t)),
         }
@@ -162,7 +121,7 @@ impl<'a> Parser<'a> {
         let mut i = 0;
 
         loop {
-            match self.peek_() {
+            match self.lexer.cur() {
                 SYM(s) => {
                     names[i] = s;
                     i += 1;
@@ -173,7 +132,7 @@ impl<'a> Parser<'a> {
                             MAX_NUM
                         ));
                     }
-                    self.next_();
+                    self.lexer.next();
                 }
                 COLON | DOT => break,
                 t => {
@@ -189,8 +148,8 @@ impl<'a> Parser<'a> {
             return Err(perror!(self, "expected a variable name",));
         }
 
-        let ty_parsed = if let COLON = self.peek_() {
-            self.eat_(COLON)?;
+        let ty_parsed = if let COLON = self.lexer.cur() {
+            self.lexer.eat(COLON, "type signature")?;
             // the expression after `:` should have type `type`.
             let ty_ty = self.ctx.mk_ty();
             Some(self.parse_expr_bp_(0, Some(ty_ty))?)
@@ -226,11 +185,11 @@ impl<'a> Parser<'a> {
 
         let mut n = 0;
         loop {
-            match self.peek_() {
+            match self.lexer.cur() {
                 LPAREN => {
-                    self.next_();
+                    self.lexer.next();
                     n += self.parse_bnd_var_list_(ty_expected)?;
-                    self.eat_(RPAREN)?;
+                    self.lexer.eat(RPAREN, "after list of variables")?;
                 }
                 SYM(_) => {
                     n += self.parse_bnd_var_list_(ty_expected)?;
@@ -349,9 +308,9 @@ impl<'a> Parser<'a> {
     fn parse_nullary_(&mut self, s: &str) -> Result<k::Expr> {
         use Tok::*;
 
-        if let COLON = self.peek_() {
+        if let COLON = self.lexer.cur() {
             // inline variable decl, parse type with high precedence.
-            self.eat_(COLON)?;
+            self.lexer.next();
             let ty_ty = self.ctx.mk_ty();
             let ty = self.parse_expr_bp_(u16::MAX, Some(ty_ty))?;
             let v = k::Var::new(k::Symbol::from_str(s), ty);
@@ -369,14 +328,14 @@ impl<'a> Parser<'a> {
         use Tok::*;
 
         let mut lhs = {
-            let t = self.next_();
+            let t = self.lexer.consume_cur();
             match t {
                 LET => {
                     // parse `let x = y in e`.
                     let v = self.parse_sym_()?;
-                    self.eat_(SYM("="))?;
+                    self.lexer.eat(SYM("="), "after let-bound variable")?;
                     let e = self.parse_expr_bp_(0, None)?;
-                    self.eat_(IN)?;
+                    self.lexer.eat(IN, "after let binding")?;
                     let n_let = self.let_bindings.len();
                     self.let_bindings.push((v, e));
                     let body = self.parse_expr_bp_(bp, ty_expected);
@@ -400,7 +359,7 @@ impl<'a> Parser<'a> {
                             let local_offset = self.local.len();
                             let ty_expected_vars = self.binder_type_hint_(s)?;
                             self.parse_bnd_vars_(ty_expected_vars.as_ref())?;
-                            self.eat_(DOT)?;
+                            self.lexer.eat(DOT, "before binder's body")?;
                             // TODO: find expected type for body, maybe
                             let body = self.parse_expr_bp_(l2, None)?;
                             let result = self.mk_expr_binder_(s, local_offset, body);
@@ -456,7 +415,7 @@ impl<'a> Parser<'a> {
                 }
                 LPAREN => {
                     let t = self.parse_expr_bp_(0, ty_expected)?;
-                    self.eat_(RPAREN)?;
+                    self.lexer.eat(RPAREN, "after '('-prefixed expression")?;
                     t
                 }
                 RPAREN | DOT | EOF | COLON | IN | QUOTED_STR(..) => {
@@ -466,27 +425,27 @@ impl<'a> Parser<'a> {
         };
 
         loop {
-            let (op, l_bp, r_bp) = match self.peek_() {
+            let (op, l_bp, r_bp) = match self.lexer.cur() {
                 EOF => return Ok(lhs),
                 RPAREN | COLON | DOT | IN | LET | QUOTED_STR(..) => break,
                 LPAREN => {
                     // TODO: set ty_expected to `lhs`'s first argument's type.
-                    self.next_();
+                    self.lexer.next();
                     let t = self.parse_expr_bp_(0, None)?; // maximum binding power
-                    self.eat_(RPAREN)?;
+                    self.lexer.eat(RPAREN, "after '('-prefixed expression")?;
                     lhs = self.ctx.mk_app(lhs, t)?;
                     continue;
                 }
                 DOLLAR_SYM(s) => {
                     let arg = self.expr_of_atom_(s)?;
 
-                    self.next_();
+                    self.lexer.next();
                     // simple application
                     lhs = self.ctx.mk_app(lhs, arg)?;
                     continue;
                 }
                 QUESTION_MARK => {
-                    self.next_();
+                    self.lexer.next();
                     let arg = self.interpol_expr_()?;
 
                     // simple application
@@ -502,14 +461,14 @@ impl<'a> Parser<'a> {
                             // simple application
                             let arg = self.parse_nullary_(s)?;
                             lhs = self.ctx.mk_app(lhs, arg)?;
-                            self.next_();
+                            self.lexer.next();
                             continue;
                         }
                         Fixity::Postfix((l_bp, _)) => {
                             if l_bp < bp {
                                 break;
                             }
-                            self.next_();
+                            self.lexer.next();
 
                             // postfix operator applied to lhs
                             let po = self.expr_of_atom_(s)?;
@@ -530,7 +489,7 @@ impl<'a> Parser<'a> {
                 break; // binding left
             }
 
-            self.next_();
+            self.lexer.next();
 
             let rhs = self.parse_expr_bp_(r_bp, None)?;
 
@@ -545,7 +504,7 @@ impl<'a> Parser<'a> {
     /// Parse an expression, up to EOF.
     pub fn parse_expr(&mut self) -> Result<k::Expr> {
         let e = self.parse_expr_bp_(0, None)?;
-        if self.peek_() != Tok::EOF {
+        if self.lexer.cur() != Tok::EOF {
             Err(perror!(self, "expected EOF"))
         } else if self.qargs_idx < self.qargs.len() {
             Err(perror!(

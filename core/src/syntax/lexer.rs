@@ -1,3 +1,8 @@
+//! # Lexing for the core syntax
+
+pub use crate::meta::Position;
+use crate::{Error, Result};
+
 /// A token of the language. This is zero-copy.
 #[allow(non_camel_case_types)]
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -22,11 +27,10 @@ pub(super) struct Lexer<'a> {
     src: &'a str,
     /// Index in `src`
     i: usize,
-    /// Current line in `src`
-    line: usize,
-    /// Current column in `src`
-    col: usize,
+    /// Position is `src`
+    pos: Position,
     is_done: bool,
+    cur_: Option<Tok<'a>>,
 }
 
 impl<'a> Lexer<'a> {
@@ -34,14 +38,15 @@ impl<'a> Lexer<'a> {
         Self {
             src,
             i: 0,
-            line: 1,
-            col: 1,
+            pos: Position { line: 1, col: 1 },
             is_done: false,
+            cur_: None,
         }
     }
 
-    pub fn cur_pos(&self) -> (usize, usize) {
-        (self.line, self.col)
+    /// Current position.
+    pub fn cur_pos(&self) -> Position {
+        self.pos
     }
 
     /// Read the rest of the line.
@@ -57,14 +62,13 @@ impl<'a> Lexer<'a> {
         if self.i < bytes.len() && bytes[self.i] == b'\n' {
             // newline
             self.i += 1;
-            self.col = 1;
-            self.line += 1;
+            self.pos.col = 1;
+            self.pos.line += 1;
         }
         &self.src[i..j]
     }
 
-    /// get next token.
-    pub fn next_(&mut self) -> Tok<'a> {
+    fn next_(&mut self) -> Tok<'a> {
         use Tok::*;
         assert!(!self.is_done);
 
@@ -77,10 +81,10 @@ impl<'a> Lexer<'a> {
                 self.rest_of_line();
             } else if c == b' ' || c == b'\t' {
                 self.i += 1;
-                self.col += 1;
+                self.pos.col += 1;
             } else if c == b'\n' {
-                self.col = 1;
-                self.line += 1;
+                self.pos.col = 1;
+                self.pos.line += 1;
                 self.i += 1;
             } else {
                 break;
@@ -95,23 +99,23 @@ impl<'a> Lexer<'a> {
         let c = bytes[self.i];
         if c == b'(' {
             self.i += 1;
-            self.col += 1;
+            self.pos.col += 1;
             return LPAREN;
         } else if c == b')' {
             self.i += 1;
-            self.col += 1;
+            self.pos.col += 1;
             return RPAREN;
         } else if c == b':' {
             self.i += 1;
-            self.col += 1;
+            self.pos.col += 1;
             COLON
         } else if c == b'.' {
             self.i += 1;
-            self.col += 1;
+            self.pos.col += 1;
             DOT
         } else if c == b'?' {
             self.i += 1;
-            self.col += 1;
+            self.pos.col += 1;
             // might be meta-variable
             let mut j = self.i;
             while j < bytes.len() {
@@ -127,7 +131,7 @@ impl<'a> Lexer<'a> {
                 QUESTION_MARK
             } else {
                 let slice = &self.src[self.i..j];
-                self.col += j - self.i;
+                self.pos.col += (j - self.i) as u32;
                 self.i = j;
                 QUESTION_MARK_STR(slice)
             }
@@ -143,7 +147,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             let slice = &self.src[self.i + 1..j];
-            self.col += j - self.i;
+            self.pos.col += (j - self.i) as u32;
             self.i = j;
             return DOLLAR_SYM(slice);
         } else if c == b'"' {
@@ -173,7 +177,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             let slice = &self.src[self.i..j];
-            self.col += j - self.i;
+            self.pos.col += (j - self.i) as u32;
             self.i = j;
             return if slice == "let" {
                 LET
@@ -206,12 +210,51 @@ impl<'a> Lexer<'a> {
                 }
             }
             let slice = &self.src[self.i..j];
-            self.col += j - self.i;
+            self.pos.col += (j - self.i) as u32;
             self.i = j;
             return SYM(slice);
         } else {
             let s = &[c];
             todo!("handle char {:?} ({:?})", c, std::str::from_utf8(s)) // TODO? error?
+        }
+    }
+
+    /// get next token.
+    pub fn next(&mut self) -> Tok<'a> {
+        let t = self.next_();
+        self.cur_ = Some(t);
+        t
+    }
+
+    /// Current token.
+    pub fn cur(&mut self) -> Tok<'a> {
+        if let Some(c) = self.cur_ {
+            c
+        } else {
+            self.next()
+        }
+    }
+
+    pub fn consume_cur(&mut self) -> Tok<'a> {
+        let t = self.cur();
+        self.next();
+        t
+    }
+
+    /// Expect the token `t`, and consume it; or return an error.
+    ///
+    /// The error message should be a posotion in the grammar,
+    /// like "after lambda"
+    pub fn eat(&mut self, t: Tok, errmsg: &str) -> Result<()> {
+        let t2 = self.cur();
+        if t2 == t {
+            self.next();
+            Ok(())
+        } else {
+            Err(Error::new_string(format!(
+                "lexing error at {:?}: expected {:?} {}, got {:?}",
+                self.pos, t, errmsg, t2
+            )))
         }
     }
 }
@@ -222,7 +265,7 @@ impl<'a> Iterator for Lexer<'a> {
         if self.is_done {
             None
         } else {
-            Some(self.next_())
+            Some(self.next())
         }
     }
 }
