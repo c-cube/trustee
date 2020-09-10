@@ -1,3 +1,11 @@
+//! # Expression parser
+//!
+//! This parses an expression from a string directly, without intermediate AST.
+//! New constants can be declared with infix/prefix fixity.
+//!
+//! We follow https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
+//! quite closely :-)
+
 use crate::syntax::{lexer::Position, Lexer, Tok};
 use crate::{kernel_of_trust as k, syntax::Fixity, Ctx, Error, Result};
 
@@ -330,6 +338,14 @@ impl<'a> Parser<'a> {
         let mut lhs = {
             let t = self.lexer.consume_cur();
             match t {
+                ERROR(c) => {
+                    return Err(perror!(
+                        self,
+                        "invalid char {:?} (utf8: {:?})",
+                        c,
+                        std::str::from_utf8(&[c])
+                    ));
+                }
                 LET => {
                     // parse `let x = y in e`.
                     let v = self.parse_sym_()?;
@@ -371,7 +387,7 @@ impl<'a> Parser<'a> {
                 }
                 DOLLAR_SYM(s) => self.expr_of_atom_(s)?,
                 QUESTION_MARK => self.interpol_expr_()?,
-                QUESTION_MARK_STR(..) => {
+                WILDCARD | QUESTION_MARK_STR(..) => {
                     return Err(perror!(self, "invalid token in expression: {:?}", t))
                 }
                 NUM(s) => {
@@ -427,7 +443,7 @@ impl<'a> Parser<'a> {
         loop {
             let (op, l_bp, r_bp) = match self.lexer.cur() {
                 EOF => return Ok(lhs),
-                RPAREN | COLON | DOT | IN | LET | QUOTED_STR(..) => break,
+                RPAREN | WILDCARD | COLON | DOT | IN | LET | QUOTED_STR(..) => break,
                 LPAREN => {
                     // TODO: set ty_expected to `lhs`'s first argument's type.
                     self.lexer.next();
@@ -482,6 +498,14 @@ impl<'a> Parser<'a> {
                             return Err(perror!(self, "unexpected binder {:?}", s))
                         }
                     }
+                }
+                ERROR(c) => {
+                    return Err(perror!(
+                        self,
+                        "invalid char {:?} (utf8: {:?})",
+                        c,
+                        std::str::from_utf8(&[c])
+                    ));
                 }
             };
 

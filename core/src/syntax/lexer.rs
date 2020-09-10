@@ -11,6 +11,7 @@ pub(super) enum Tok<'a> {
     RPAREN,
     COLON,
     DOT,
+    WILDCARD,
     QUESTION_MARK,
     QUESTION_MARK_STR(&'a str),
     SYM(&'a str),
@@ -19,6 +20,7 @@ pub(super) enum Tok<'a> {
     IN,
     DOLLAR_SYM(&'a str),
     NUM(&'a str),
+    ERROR(u8),
     EOF,
 }
 
@@ -113,6 +115,10 @@ impl<'a> Lexer<'a> {
             self.i += 1;
             self.pos.col += 1;
             DOT
+        } else if c == b'_' {
+            self.i += 1;
+            self.pos.col += 1;
+            WILDCARD
         } else if c == b'?' {
             self.i += 1;
             self.pos.col += 1;
@@ -214,8 +220,8 @@ impl<'a> Lexer<'a> {
             self.i = j;
             return SYM(slice);
         } else {
-            let s = &[c];
-            todo!("handle char {:?} ({:?})", c, std::str::from_utf8(s)) // TODO? error?
+            // Error token!
+            ERROR(c)
         }
     }
 
@@ -286,13 +292,14 @@ mod test {
     #[test]
     fn test_lexer1() {
         use Tok::*;
-        let lexer = Lexer::new(" foo + bar13(hello! \" co co\" world) ");
+        let lexer = Lexer::new(" foo + _ bar13(hello! \" co co\" world) ");
         let toks = lexer.collect::<Vec<_>>();
         assert_eq!(
             toks,
             vec![
                 SYM("foo"),
                 SYM("+"),
+                WILDCARD,
                 SYM("bar13"),
                 LPAREN,
                 SYM("hello"),
