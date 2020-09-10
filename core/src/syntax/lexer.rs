@@ -7,6 +7,7 @@ pub(super) enum Tok<'a> {
     COLON,
     DOT,
     QUESTION_MARK,
+    QUESTION_MARK_STR(&'a str),
     SYM(&'a str),
     QUOTED_STR(&'a str),
     LET,
@@ -110,7 +111,26 @@ impl<'a> Lexer<'a> {
             DOT
         } else if c == b'?' {
             self.i += 1;
-            QUESTION_MARK
+            self.col += 1;
+            // might be meta-variable
+            let mut j = self.i;
+            while j < bytes.len() {
+                let c2 = bytes[j];
+                if c2.is_ascii_alphanumeric() || is_ascii_symbol(c2) {
+                    j += 1
+                } else {
+                    break;
+                }
+            }
+
+            if j == self.i {
+                QUESTION_MARK
+            } else {
+                let slice = &self.src[self.i..j];
+                self.col += j - self.i;
+                self.i = j;
+                QUESTION_MARK_STR(slice)
+            }
         } else if c == b'$' {
             // operator but without any precedence
             let mut j = self.i + 1;
@@ -245,7 +265,7 @@ mod test {
     #[test]
     fn test_lexer2() {
         use Tok::*;
-        let lexer = Lexer::new(r#"((12+ f(x, in Y \( ))---let z)wlet)"#);
+        let lexer = Lexer::new(r#"((12+ f(x, in ?a ? ? b Y \( ))---let z)wlet)"#);
         let toks = lexer.collect::<Vec<_>>();
         assert_eq!(
             vec![
@@ -258,6 +278,10 @@ mod test {
                 SYM("x"),
                 SYM(","),
                 IN,
+                QUESTION_MARK_STR("a"),
+                QUESTION_MARK,
+                QUESTION_MARK,
+                SYM("b"),
                 SYM("Y"),
                 SYM("\\"),
                 LPAREN,
