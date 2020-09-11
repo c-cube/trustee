@@ -411,9 +411,14 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             Tok::Int(i) => {
                 self.next_tok_();
                 // compute `matchee == i`
-                let l0 = c.allocate_local_(Value::Int(i))?;
                 let sl_i = c.allocate_temporary_()?;
-                c.emit_instr_(I::LoadLocal(l0, sl_i.slot));
+                if i.abs() < i16::MAX as i64 {
+                    c.emit_instr_(I::LoadInteger(i as i16, sl_i.slot));
+                } else {
+                    // use a local
+                    let l0 = c.allocate_local_(Value::Int(i))?;
+                    c.emit_instr_(I::LoadLocal(l0, sl_i.slot));
+                }
                 c.emit_instr_(I::Eq(sl_i.slot, matchee, sl_i.slot));
                 c.deallocate_slot_(sl_i.slot);
                 // if false, jump away
@@ -459,6 +464,55 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                 // no possible failure here, matches anything!
                 Ok(vec![])
             }
+            Tok::LBracket => {
+                self.next_tok_();
+                // list literal
+
+                let mut jp_fail_v = vec![];
+                let tmp0 = c.allocate_temporary_()?; // used for list elements
+                let mut cur = matchee;
+
+                loop {
+                    let tok = self.lexer.cur();
+
+                    let sl_tmp = c.allocate_temporary_()?;
+
+                    if matches!(tok, Tok::RBracket) {
+                        self.next_tok_();
+
+                        // check we have nil
+                        c.emit_instr_(I::IsNil(cur, sl_tmp.slot));
+                        c.deallocate_slot_(sl_tmp.slot);
+                        let jp_false = c.reserve_jump_();
+                        let jpe = JumpInstrEmit::jump_if_false(jp_false, sl_tmp.slot);
+                        jp_fail_v.push(jpe);
+
+                        break;
+                    }
+
+                    // check we have `cons`
+                    c.emit_instr_(I::IsCons(cur, sl_tmp.slot));
+                    c.deallocate_slot_(sl_tmp.slot);
+
+                    // if not cons, jump out
+                    let jpe = c.reserve_jump_();
+                    jp_fail_v.push(JumpInstrEmit::jump_if_false(jpe, sl_tmp.slot));
+
+                    // match head to sub-pattern
+                    let hd = c.allocate_temporary_()?;
+                    c.emit_instr_(I::Car(cur, hd.slot));
+                    let v = self.parse_pattern_(c, hd.slot)?;
+                    jp_fail_v.extend(v);
+                    c.deallocate_slot_(hd.slot);
+
+                    // recurse with `cur` being the tail of the list
+                    c.emit_instr_(I::Cdr(cur, tmp0.slot));
+                    cur = tmp0.slot;
+                }
+
+                c.deallocate_slot_(tmp0.slot);
+                Ok(jp_fail_v)
+            }
             Tok::LParen => {
                 self.next_tok_();
                 let loc = self.lexer.loc();
@@ -479,13 +533,15 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                     // match head to sub-pattern
                     let hd = c.allocate_temporary_()?;
                     c.emit_instr_(I::Car(matchee, hd.slot));
-                    self.parse_pattern_(c, hd.slot)?;
+                    let v = self.parse_pattern_(c, hd.slot)?;
+                    jp_fail_v.extend(v);
                     c.deallocate_slot_(hd.slot);
 
                     // match tail to sub-pattern
                     let tl = c.allocate_temporary_()?;
                     c.emit_instr_(I::Cdr(matchee, tl.slot));
-                    self.parse_pattern_(c, tl.slot)?;
+                    let v = self.parse_pattern_(c, tl.slot)?;
+                    jp_fail_v.extend(v);
                     c.deallocate_slot_(tl.slot);
 
                     self.eat_(

@@ -501,14 +501,17 @@ mod impls {
 
                     if let Value::Nil = cur {
                         // proper list
-                        write!(out, "(list")?;
-                        for x in args {
+                        write!(out, "[")?;
+                        for (i, x) in args.into_iter().enumerate() {
                             if out.alternate() {
                                 writeln!(out, "")?;
                             }
-                            write!(out, " {}", x)?;
+                            if i > 0 {
+                                write!(out, " ")?
+                            }
+                            write!(out, "{}", x)?;
                         }
-                        write!(out, ")")?
+                        write!(out, "]")?
                     } else {
                         // conses
                         let n = args.len();
