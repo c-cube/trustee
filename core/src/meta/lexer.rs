@@ -291,7 +291,7 @@ mod test {
                 loop {
                     let t = p.cur().clone();
                     toks.push(t);
-                    if t == T::Eof {
+                    if matches!(t, Tok::Eof) {
                         break;
                     }
                     p.next();
@@ -366,6 +366,38 @@ mod test {
                 T::Int(1),
                 T::RParen,
                 T::RBrace,
+                T::RParen,
+                T::Eof,
+            ],
+        )];
+        lex_test!(a)
+    }
+
+    #[test]
+    fn test_lexer4() {
+        use Tok as T;
+        let a = vec![(
+            r#"(match `T/\F` ("?a /\ ?b" (def l [a b]) l) (else 1))"#,
+            vec![
+                T::LParen,
+                T::Id("match"),
+                T::QuotedExpr("T/\\F"),
+                T::LParen,
+                T::QuotedString("?a /\\ ?b"),
+                T::LParen,
+                T::Id("def"),
+                T::Id("l"),
+                T::LBracket,
+                T::Id("a"),
+                T::Id("b"),
+                T::RBracket,
+                T::RParen,
+                T::Id("l"),
+                T::RParen,
+                T::LParen,
+                T::Id("else"),
+                T::Int(1),
+                T::RParen,
                 T::RParen,
                 T::Eof,
             ],

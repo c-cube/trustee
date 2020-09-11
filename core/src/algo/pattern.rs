@@ -7,7 +7,7 @@
 //! and bind `?a` to `(g x)`, and `?b? to `foo`.
 
 use {
-    crate::{fnv::FnvHashMap as HM, Ctx, Error, Expr, Result},
+    crate::{fnv::FnvHashMap as HM, rptr::RPtr, Error, Expr, Result},
     std::fmt,
 };
 
@@ -16,10 +16,13 @@ pub type Ty = Expr;
 /// A pattern. It is represented as a flattened term-like structure,
 /// a bit like a "flatterm" in ATP terms.
 #[derive(Clone)]
-pub struct Pattern {
+pub struct Pattern(RPtr<PatternImpl>);
+
+struct PatternImpl {
     meta_vars: Vec<String>,
     /// Not empty.
     nodes: Vec<PatternView>,
+    /// Index in `nodes`.
     root: PatternIdx,
 }
 
@@ -36,9 +39,19 @@ pub enum PatternView {
     Const(Expr),
     /// Application
     App(PatternIdx, PatternIdx),
-    /// Any term. Implemented as an anonymous variable.
-    Wildcard(VarIdx),
+    /// Any term.
+    Wildcard,
+    // TODO: with-ty(Pattern, Ty) for checking type
     // TODO? Lam(Ty, PatternIdx),
+}
+
+/// A substitution, obtained by successfully matching a pattern against an expression.
+///
+/// The substitution maps each meta-variable into a sub-expression.
+pub struct PatternSubst {
+    p: Pattern,
+    /// Invariant: same length as `p.meta_vars`
+    subst: Vec<Expr>,
 }
 
 /// A pattern meta-variable.
@@ -48,15 +61,6 @@ pub struct VarIdx(u8);
 /// An index in the pattern's structure.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct PatternIdx(u8);
-
-/// A substitution, obtained by successfully matching a pattern against an expression.
-///
-/// The substitution maps each meta-variable into a sub-expression.
-pub struct PatternSubst<'a> {
-    p: &'a Pattern,
-    /// Invariant: same length as `p.meta_vars`
-    subst: Vec<Expr>,
-}
 
 /// A temporary builder for patterns.
 pub struct PatternBuilder {
@@ -83,18 +87,14 @@ impl PatternBuilder {
         Ok(PatternIdx(i as u8))
     }
 
-    fn alloc_new_meta_(
-        &mut self,
-        s: &str,
-        f: impl Fn(VarIdx) -> PatternView,
-    ) -> Result<PatternIdx> {
+    fn alloc_new_meta_(&mut self, s: &str) -> Result<PatternIdx> {
         let i = self.meta_vars.len();
         if i > u8::MAX as usize {
             return Err(Error::new("too many meta variables in pattern"));
         }
         let i = VarIdx(i as u8);
         self.meta_vars.push(s.to_string());
-        let view = f(i);
+        let view = PatternView::Var(i);
         self.alloc_node(view)
     }
 
@@ -105,35 +105,44 @@ impl PatternBuilder {
             let i = VarIdx(i as u8);
             self.alloc_node(PatternView::EqVar(i))
         } else {
-            self.alloc_new_meta_(s, |i| PatternView::Var(i))
+            self.alloc_new_meta_(s)
         }
     }
 
     pub fn alloc_wildcard(&mut self) -> Result<PatternIdx> {
-        self.alloc_new_meta_("_", |i| PatternView::Wildcard(i))
+        self.alloc_node(PatternView::Wildcard)
     }
 
     /// Turn the builder into a proper pattern.
     pub fn into_pattern(self, root: PatternIdx) -> Pattern {
         assert!((root.0 as usize) < self.nodes.len());
         let PatternBuilder { nodes, meta_vars } = self;
-        Pattern {
+        Pattern(RPtr::new(PatternImpl {
             root,
             nodes,
             meta_vars,
-        }
+        }))
     }
 }
 
 impl Pattern {
     /// Number of internal nodes.
     pub fn len(&self) -> usize {
-        self.nodes.len()
+        self.0.nodes.len()
     }
 
     /// Number of meta-variables.
     pub fn n_vars(&self) -> usize {
-        self.meta_vars.len()
+        self.0.meta_vars.len()
+    }
+
+    /// Iterate on the variables bound by this pattern.
+    pub fn iter_vars(&self) -> impl Iterator<Item = (&str, VarIdx)> {
+        self.0
+            .meta_vars
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (&**s, VarIdx(i as u8)))
     }
 
     /// Flatten applications.
@@ -147,6 +156,16 @@ impl Pattern {
         }
         args.reverse();
         (i, args)
+    }
+
+    /// Find a meta-variable by its name.
+    pub fn find_var_by_name(&self, name: &str) -> Option<VarIdx> {
+        self.0
+            .meta_vars
+            .iter()
+            .enumerate()
+            .find(|(_, s)| &**s == name)
+            .map(|t| VarIdx(t.0 as u8))
     }
 
     fn print_(&self, i: PatternIdx, out: &mut fmt::Formatter) -> fmt::Result {
@@ -164,16 +183,15 @@ impl Pattern {
                 }
                 write!(out, ")")
             }
-            PatternView::Wildcard(..) => write!(out, "_"),
+            PatternView::Wildcard => write!(out, "_"),
         }
     }
 
     fn match_rec_(&self, tbl: &mut HM<VarIdx, Expr>, i: PatternIdx, e: &Expr) -> bool {
         use crate::ExprView as EV;
         match (&self[i], e.view()) {
-            (PatternView::Wildcard(v), _) => {
-                tbl.insert(*v, e.clone());
-                true
+            (PatternView::Wildcard, _) => {
+                true // always matches
             }
             (PatternView::Var(v), _) => {
                 if let Some(e2) = tbl.get(&v) {
@@ -202,13 +220,16 @@ impl Pattern {
     /// Match pattern against the given expression.
     pub fn match_(&self, e: &Expr) -> Option<PatternSubst> {
         let mut tbl = crate::fnv::new_table_with_cap(8);
-        if self.match_rec_(&mut tbl, self.root, e) {
+        if self.match_rec_(&mut tbl, self.0.root, e) {
             let mut subst = Vec::with_capacity(self.n_vars());
             subst.resize(self.n_vars(), e.clone()); // `e` will be entirely erased
             for (v, e2) in tbl.into_iter() {
                 subst[v.0 as usize] = e2
             }
-            let subst = PatternSubst { subst, p: self };
+            let subst = PatternSubst {
+                p: self.clone(),
+                subst,
+            };
             Some(subst)
         } else {
             None
@@ -216,25 +237,13 @@ impl Pattern {
     }
 }
 
-impl<'a> PatternSubst<'a> {
-    fn apply_(&self, ctx: &mut Ctx, i: PatternIdx) -> Result<Expr> {
-        let e = match &self.p[i] {
-            PatternView::Var(v) => self.subst[v.0 as usize].clone(),
-            PatternView::EqVar(v) => self.subst[v.0 as usize].clone(),
-            PatternView::Wildcard(v) => self.subst[v.0 as usize].clone(),
-            PatternView::Const(e) => e.clone(),
-            PatternView::App(f, a) => {
-                let f = self.apply_(ctx, *f)?;
-                let a = self.apply_(ctx, *a)?;
-                ctx.mk_app(f, a)?
-            }
-        };
-        Ok(e)
-    }
-
-    /// Apply substitution to obtain an expression.
-    pub fn apply(&self, ctx: &mut Ctx) -> Result<Expr> {
-        self.apply_(ctx, self.p.root)
+impl PatternSubst {
+    /// Get value for a variable, by name.
+    ///
+    /// Linear in the number of variables bound in this substitution.
+    pub fn get_by_name(&self, s: &str) -> Option<&Expr> {
+        let i = self.p.find_var_by_name(s)?;
+        Some(&self[i])
     }
 }
 
@@ -246,7 +255,7 @@ mod impls {
 
         #[inline]
         fn index(&self, i: PatternIdx) -> &Self::Output {
-            &self.nodes[i.0 as usize]
+            &self.0.nodes[i.0 as usize]
         }
     }
 
@@ -255,11 +264,11 @@ mod impls {
 
         #[inline]
         fn index(&self, i: VarIdx) -> &Self::Output {
-            &self.meta_vars[i.0 as usize]
+            &self.0.meta_vars[i.0 as usize]
         }
     }
 
-    impl<'a> std::ops::Index<VarIdx> for PatternSubst<'a> {
+    impl std::ops::Index<VarIdx> for PatternSubst {
         type Output = Expr;
 
         #[inline]
@@ -270,11 +279,11 @@ mod impls {
 
     impl fmt::Debug for Pattern {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            self.print_(self.root, f)
+            self.print_(self.0.root, f)
         }
     }
 
-    impl<'a> fmt::Debug for PatternSubst<'a> {
+    impl fmt::Debug for PatternSubst {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "(subst")?;
             for (i, e) in self.subst.iter().enumerate() {
@@ -288,10 +297,10 @@ mod impls {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{meta, syntax};
+    use crate::{meta, syntax, Ctx};
 
     #[test]
-    fn test_pp1() -> Result<()> {
+    fn test_pp() -> Result<()> {
         let mut ctx = Ctx::new();
         meta::load_prelude_hol(&mut ctx)?;
         let s = r#"(/\ ?a (\/ ?a (~ ?b)))"#;
@@ -302,19 +311,34 @@ mod test {
     }
 
     #[test]
+    fn test_itervars() -> Result<()> {
+        let mut ctx = Ctx::new();
+        let s = r#"(_ ?a (_ ?a (_ ?b)))"#;
+        let p = syntax::parse_pattern(&mut ctx, &s)?;
+
+        let vars: Vec<_> = p.iter_vars().collect();
+
+        assert_eq!(vars, vec![("a", VarIdx(0)), ("b", VarIdx(1))]);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_match() -> Result<()> {
         let mut ctx = Ctx::new();
         meta::load_prelude_hol(&mut ctx)?;
-        let s = r#"(/\ ?a (\/ ?a (~ ?b)))"#;
+        let s = r#"/\ ?a (\/ ?a (~ ?b))"#;
         let p = syntax::parse_pattern(&mut ctx, &s)?;
         let e = syntax::parse_expr(&mut ctx, r#"T /\ (T \/ ~ F)"#)?;
 
         let subst = p.match_(&e).ok_or(Error::new("cannot match"))?;
         assert_eq!("(subst (?a := T) (?b := F))", format!("{:?}", subst));
 
-        // subst.apply yields `e` back
-        let e2 = subst.apply(&mut ctx)?;
-        assert_eq!(e, e2);
+        let t1 = syntax::parse_expr(&mut ctx, "T")?;
+        let t2 = syntax::parse_expr(&mut ctx, "F")?;
+
+        assert_eq!(Some(&t1), subst.get_by_name("a"));
+        assert_eq!(Some(&t2), subst.get_by_name("b"));
 
         Ok(())
     }

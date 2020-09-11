@@ -2,7 +2,7 @@
 
 use {
     crate::{
-        algo::conv,
+        algo::{conv, pattern, Pattern, PatternSubst},
         kernel_of_trust::{self as k, Ctx},
         rptr::RPtr,
         rstr::RStr,
@@ -38,13 +38,16 @@ pub enum Value {
     Closure(Closure),
     /// A builtin instruction implemented in rust.
     Builtin(&'static InstrBuiltin),
+    /// A pattern.
+    Pattern(RPtr<Pattern>),
+    /// Substitution obtained from a pattern.
+    PatSubst(RPtr<PatternSubst>),
     /// A position as a value.
     Pos(RPtr<Position>),
     /// An error as a value.
     Error(RPtr<Error>),
 }
 
-// TODO: convert into stack VM
 /// ## Instructions
 ///
 /// An instruction of the language.
@@ -92,12 +95,19 @@ pub(super) enum Instr {
     Cdr(SlotIdx, SlotIdx),
     /// Set `sl[$1]` to `not sl[$0]`
     Not(SlotIdx, SlotIdx),
+    /// Get value of var `varidx_$1` from subst `sl[$0]`, put result into `sl[$2]`
+    PatSubstGet(SlotIdx, pattern::VarIdx, SlotIdx),
     /// Jump to `ic + $1` if `sl[$0]` is false
     JumpIfFalse(SlotIdx, i16),
     /// Jump to `ic + $1` if `sl[$0]` is true
     JumpIfTrue(SlotIdx, i16),
+    /// Jump to `ic + $1` if `sl[$0]` is nil
+    JumpIfNil(SlotIdx, i16),
     /// Jump to `ic + $1` unconditionally
     Jump(i16),
+    /// Match pattern in `local[$0]` against expr in `sl[$1]`, put
+    /// substitution or `nil` into `sl[$2]`
+    PatMatch(LocalIdx, SlotIdx, SlotIdx),
     /// Set `sl[$1]` to `ctx[local[$0]]`
     GetGlob(LocalIdx, SlotIdx),
     /// Set `ctx[local[$0]]` to value `$1`
@@ -290,6 +300,10 @@ mod impls {
                 Value::Closure(c) => Some(c),
                 _ => None,
             }
+        }
+
+        pub fn is_nil(&self) -> bool {
+            matches!(self, Value::Nil)
         }
 
         pub fn as_bool(&self) -> Option<bool> {
@@ -518,6 +532,8 @@ mod impls {
                     }
                 }
                 Value::Builtin(b) => write!(out, "<builtin {}>", b.name),
+                Value::Pattern(p) => write!(out, "<pattern `{:?}`>", p),
+                Value::PatSubst(s) => write!(out, "<pattern-subst {:?}>", s),
                 Value::Pos(p) => write!(out, "<position {}>", p),
                 Value::Error(e) => write!(out, "<error {}>", e),
             }

@@ -61,14 +61,21 @@ mod test {
     use vm::VM;
 
     macro_rules! eval {
+        ($ctx: expr, $e:expr) => {{
+            let mut vm = VM::new(&mut $ctx);
+            vm.run($e, None)
+        }};
         ($e:expr) => {{
             let mut ctx = Ctx::new();
-            let mut vm = VM::new(&mut ctx);
-            vm.run($e, None)
+            eval!(ctx, $e)
         }};
     }
 
     macro_rules! check_eval {
+        ($ctx: expr, $e:expr, $val:expr) => {{
+            let res_e = eval!($ctx, $e)?;
+            assert_eq!(res_e, $val.into());
+        }};
         ($e:expr, $val:expr) => {{
             let res_e = eval!($e)?;
             assert_eq!(res_e, $val.into());
@@ -393,6 +400,28 @@ mod test {
         assert_eq!(
             v.as_thm().expect("thm").concl().clone(),
             crate::syntax::parse_expr(&mut ctx, "p1 (f1 c0)")?
+        );
+        Ok(())
+    }
+
+    #[allow(non_snake_case)]
+    #[test]
+    fn test_match() -> Result<()> {
+        let mut ctx = k::Ctx::new();
+        load_prelude_hol(&mut ctx)?;
+        let eT = eval!(ctx, "T")?;
+        let eF = eval!(ctx, "F")?;
+        check_eval!(ctx, r#"(match `T /\ F` (else 1))"#, 1);
+        check_eval!(ctx, r#"(match `T /\ F` ("_" 2) (else 1))"#, 2);
+        check_eval!(
+            ctx,
+            r#"(match `T /\ F` ("/\ ?a ?b" [a b]) (else 1))"#,
+            vec![eT.clone(), eF.clone()]
+        );
+        check_eval!(
+            ctx,
+            r#"(match `T /\ F` ("/\ ?a ?b" (def h [b a]) h) (else 1))"#,
+            vec![eF.clone(), eT.clone()]
         );
         Ok(())
     }

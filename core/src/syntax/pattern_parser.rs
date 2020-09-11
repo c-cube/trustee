@@ -39,32 +39,12 @@ mod parser {
             Self { lexer, args }
         }
 
-        fn parse_app_(
-            &mut self,
-            ctx: &mut Ctx,
-            p: &mut PatternBuilder,
-            hd: PatternIdx,
-        ) -> Result<PatternIdx> {
-            let mut cur_p = hd;
-            loop {
-                let t = self.lexer.cur();
-                if t == Tok::RPAREN {
-                    break;
-                }
-
-                let p2 = self.parse_(ctx, p)?;
-                cur_p = p.alloc_node(PatternView::App(cur_p, p2))?;
-            }
-            Ok(cur_p)
-        }
-
-        fn parse_(&mut self, ctx: &mut Ctx, p: &mut PatternBuilder) -> Result<PatternIdx> {
+        fn parse_atomic_(&mut self, ctx: &mut Ctx, p: &mut PatternBuilder) -> Result<PatternIdx> {
             let t = self.lexer.cur();
             let p = match t {
                 Tok::LPAREN => {
                     self.lexer.next();
-                    let hd = self.parse_(ctx, p)?;
-                    let p = self.parse_app_(ctx, p, hd)?;
+                    let p = self.parse_(ctx, p, None)?;
                     self.lexer.eat(Tok::RPAREN, "after '('-prefixed pattern")?;
                     p
                 }
@@ -131,9 +111,31 @@ mod parser {
             Ok(p)
         }
 
+        fn parse_(
+            &mut self,
+            ctx: &mut Ctx,
+            p: &mut PatternBuilder,
+            hd: Option<PatternIdx>,
+        ) -> Result<PatternIdx> {
+            let mut cur_p = hd;
+            loop {
+                let t = self.lexer.cur();
+                if t == Tok::RPAREN || t == Tok::EOF {
+                    break;
+                }
+
+                let p2 = self.parse_atomic_(ctx, p)?;
+                cur_p = Some(match cur_p.take() {
+                    None => p2,
+                    Some(hd) => p.alloc_node(PatternView::App(hd, p2))?,
+                });
+            }
+            cur_p.ok_or_else(|| Error::new("empty pattern"))
+        }
+
         pub fn parse(&mut self, ctx: &mut Ctx) -> Result<Pattern> {
             let mut pb = PatternBuilder::new();
-            let root = self.parse_(ctx, &mut pb)?;
+            let root = self.parse_(ctx, &mut pb, None)?;
             let p = pb.into_pattern(root);
             Ok(p)
         }
@@ -151,7 +153,7 @@ mod test {
     fn test_parse1() -> Result<()> {
         let mut ctx = Ctx::new();
         meta::load_prelude_hol(&mut ctx)?;
-        let s = r#"(/\ ?a (~ ?b))"#;
+        let s = r#"/\ ?a (~ ?b)"#;
         let p = parse_pattern(&mut ctx, &s)?;
         assert_eq!(p.len(), 7);
         assert_eq!(p.n_vars(), 2);
@@ -165,7 +167,7 @@ mod test {
         let s = r#"(/\ _ _)"#;
         let p = parse_pattern(&mut ctx, &s)?;
         assert_eq!(p.len(), 5);
-        assert_eq!(p.n_vars(), 2);
+        assert_eq!(p.n_vars(), 0);
         Ok(())
     }
 }

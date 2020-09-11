@@ -68,6 +68,7 @@ macro_rules! get_slot_as {
 
 get_slot_as!(get_slot_int, "int", Value::Int(i), i, i64);
 get_slot_as!(get_slot_bool, "bool", Value::Bool(i), *i, bool);
+get_slot_as!(get_slot_expr, "expr", Value::Expr(e), e, Expr);
 
 macro_rules! abs_offset {
     ($sf: expr, $i: expr) => {
@@ -265,6 +266,18 @@ impl<'a> VM<'a> {
                     };
                     self.stack[abs_offset!(sf, s1)] = v;
                 }
+                I::PatSubstGet(s0, vidx, s2) => {
+                    let s = match &self.stack[abs_offset!(sf, s0)] {
+                        Value::PatSubst(s) => s.clone(),
+                        _ => {
+                            self.result =
+                                Err(Error::new("pat-subst-get called on a non-substitution"));
+                            break;
+                        }
+                    };
+                    let e = s[vidx].clone();
+                    self.stack[abs_offset!(sf, s2)] = Value::Expr(e);
+                }
                 I::Jump(offset) => {
                     crate::logtrace!("jump from ic={} with offset {}", sf.ic, offset);
                     sf.ic = (sf.ic as isize + offset as isize) as u32
@@ -281,6 +294,29 @@ impl<'a> VM<'a> {
                     if !s0 {
                         crate::logtrace!("jump from ic={} with offset {}", sf.ic, offset);
                         sf.ic = (sf.ic as isize + offset as isize) as u32
+                    }
+                }
+                I::JumpIfNil(s0, offset) => {
+                    let s0 = &self.stack[abs_offset!(sf, s0)];
+                    if s0.is_nil() {
+                        crate::logtrace!("jump from ic={} with offset {}", sf.ic, offset);
+                        sf.ic = (sf.ic as isize + offset as isize) as u32
+                    }
+                }
+                I::PatMatch(l0, s1, s2) => {
+                    let p = match &sf.closure.0.c.0.locals[l0.0 as usize] {
+                        Value::Pattern(p) => p,
+                        _ => {
+                            return Err(Error::new("match: need a pattern"));
+                        }
+                    };
+                    let e1 = get_slot_expr!(self, abs_offset!(sf, s1));
+                    let s2 = abs_offset!(sf, s2);
+                    if let Some(s) = p.match_(e1) {
+                        let v = Value::PatSubst(RPtr::new(s));
+                        self.stack[s2] = v;
+                    } else {
+                        self.stack[s2] = Value::Nil;
                     }
                 }
                 I::GetGlob(x, s1) => {

@@ -8,7 +8,9 @@ use {
         kernel_of_trust::{self as k, Ctx},
         rptr::RPtr,
         rstr::RStr,
-        syntax, Error, Result,
+        syntax,
+        syntax::parse_pattern,
+        Error, Result,
     },
     std::{fmt, i16, marker::PhantomData, u8},
 };
@@ -421,6 +423,94 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             c.emit_jump(jump_after_then, |off| I::Jump(off))?;
 
             self.eat_(Tok::RParen, "expected closing ')' after 'if'")?;
+            Ok(res)
+        } else if id == "match" {
+            // match on expressions
+            self.next_tok_();
+            let res = get_res!(c, sl_res);
+
+            // expression to match
+            let e = self.parse_expr_(c, None)?;
+
+            // where to put result of matching
+            let match_res = c.allocate_temporary_()?;
+
+            // parse a series of `(<pat> <expr>+)` finished by `(else <expr>+))`
+
+            let mut jumps_if_true = vec![]; // accumulate success conditions
+            let mut prev_jump_if_failed = None; // after first iteration
+            loop {
+                let loc = self.lexer.loc();
+                if let Tok::LParen = self.cur_tok_() {
+                    self.next_tok_();
+                    // another case in the match
+
+                    // jump here if previous case failed.
+                    if let Some(jp) = prev_jump_if_failed.take() {
+                        c.emit_jump(jp, |off| I::JumpIfNil(match_res.slot, off))?;
+                    }
+
+                    if let Tok::Id("else") = self.cur_tok_() {
+                        // last case, unconditional
+                        self.next_tok_();
+                        let _ = self.parse_expr_seq_(c, Tok::RParen, Some(res.slot))?;
+                        break;
+                    }
+
+                    // parse a pattern.
+                    // TODO: support patterns with interpolation? maybe not here?
+                    let pat = match self.lexer.cur() {
+                        Tok::QuotedString(s) => {
+                            let p = parse_pattern(self.ctx, s)?;
+                            self.next_tok_();
+                            RPtr::new(p)
+                        }
+                        _ => {
+                            return Err(perror!(
+                                loc,
+                                "expected a quoted pattern in each case, got {:?}",
+                                self.lexer.cur()
+                            ))
+                        }
+                    };
+
+                    let l0 = c.allocate_local_(Value::Pattern(pat.clone()))?;
+                    // match e with `pat`
+                    c.emit_instr_(I::PatMatch(l0, e.slot, match_res.slot));
+
+                    // if matching failed, we'll go to the next case
+                    let jump_if_fail = c.reserve_jump_();
+                    prev_jump_if_failed = Some(jump_if_fail);
+
+                    // parse expressions in this branch, in a local scope
+                    // in which the pattern's variables are bound
+                    let scope = c.push_local_scope();
+                    for (name, idx) in pat.iter_vars() {
+                        crate::logtrace!("allocate local var {:?} from pattern", name);
+                        let var_sl = c.allocate_var_(name.into())?;
+                        c.emit_instr_(I::PatSubstGet(match_res.slot, idx, var_sl.slot));
+                        c.get_slot_(var_sl.slot).state = CompilerSlotState::Activated;
+                    }
+                    let _ = self.parse_expr_seq_(c, Tok::RParen, Some(res.slot))?;
+                    c.pop_local_scope(scope); // match result gets out of scope
+
+                    // then jump to the end.
+                    let jp = c.reserve_jump_();
+                    jumps_if_true.push(jp);
+                } else {
+                    return Err(perror!(
+                        loc,
+                        "expect `(else <expr>+)` or `(\"pat\" <expr>+)` in `match`"
+                    ));
+                }
+            }
+            self.eat_(Tok::RParen, "expected closing ')' after 'match'")?;
+
+            // all successful jumps come directly here
+            for jp in jumps_if_true {
+                c.emit_jump(jp, |off| I::Jump(off))?;
+            }
+
             Ok(res)
         } else if id == "def" {
             // definition in current local scope, or global
