@@ -203,6 +203,10 @@ impl<'a> VM<'a> {
                     let s0 = get_slot_bool!(self, abs_offset!(sf, s0));
                     self.stack[abs_offset!(sf, s1)] = Value::Bool(!s0);
                 }
+                I::EqBool(b, s1, s2) => {
+                    let v = &self.stack[abs_offset!(sf, s1)] == &Value::Bool(b);
+                    self.stack[abs_offset!(sf, s2)] = Value::Bool(v);
+                }
                 I::Add(s0, s1, s2) => {
                     let s0 = get_slot_int!(self, abs_offset!(sf, s0));
                     let s1 = get_slot_int!(self, abs_offset!(sf, s1));

@@ -412,16 +412,21 @@ mod test {
         let eT = eval!(ctx, "T")?;
         let eF = eval!(ctx, "F")?;
         check_eval!(ctx, r#"(match `T /\ F` (else 1))"#, 1);
-        check_eval!(ctx, r#"(match `T /\ F` ("_" 2) (else 1))"#, 2);
+        check_eval!(ctx, r#"(match `T /\ F` (case `_` 2) (else 1))"#, 2);
         check_eval!(
             ctx,
-            r#"(match `T /\ F` ("/\ ?a ?b" [a b]) (else 1))"#,
+            r#"(match `T /\ F` (case `/\ ?a ?b` [a b]) (else 1))"#,
             vec![eT.clone(), eF.clone()]
         );
         check_eval!(
             ctx,
-            r#"(match `T /\ F` ("/\ ?a ?b" (def h [b a]) h) (else 1))"#,
+            r#"(match `T /\ F` (case `/\ ?a ?b` (def h [b a]) h) (else 1))"#,
             vec![eF.clone(), eT.clone()]
+        );
+        check_eval!(
+            ctx,
+            r#"(match [1 2 3] (case (cons a b) [b a]) (else false))"#,
+            vec![vec![2, 3].into(), 1.into()] as Vec<Value>
         );
         Ok(())
     }

@@ -2,8 +2,6 @@
 //!
 //! This syntax is optional and is not needed at all when using the kernel,
 //! but can be very convenient for building terms.
-//! We follow https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
-//! for the main parser and terminology.
 
 pub mod expr_parser;
 pub mod fixity;

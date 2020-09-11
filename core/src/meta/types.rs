@@ -95,6 +95,8 @@ pub(super) enum Instr {
     Cdr(SlotIdx, SlotIdx),
     /// Set `sl[$1]` to `not sl[$0]`
     Not(SlotIdx, SlotIdx),
+    /// Set `sl[$2]` to `sl[$1] == $0`
+    EqBool(bool, SlotIdx, SlotIdx),
     /// Get value of var `varidx_$1` from subst `sl[$0]`, put result into `sl[$2]`
     PatSubstGet(SlotIdx, pattern::VarIdx, SlotIdx),
     /// Jump to `ic + $1` if `sl[$0]` is false
@@ -157,7 +159,7 @@ pub(super) struct LocalIdx(pub(super) u8);
 pub(super) struct UpvalueIdx(pub(super) u8);
 
 #[must_use]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct JumpPosition(pub(super) usize);
 
 /// A custom instruction implemented in rust.

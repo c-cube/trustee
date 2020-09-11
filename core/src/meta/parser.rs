@@ -8,9 +8,7 @@ use {
         kernel_of_trust::{self as k, Ctx},
         rptr::RPtr,
         rstr::RStr,
-        syntax,
-        syntax::parse_pattern,
-        Error, Result,
+        syntax, Error, Result,
     },
     std::{fmt, i16, marker::PhantomData, u8},
 };
@@ -170,6 +168,27 @@ macro_rules! get_res {
             None => $c.allocate_temporary_()?,
         }
     };
+}
+
+/// A delayed "jump" instruction, to emit when we know the offset
+struct JumpInstrEmit {
+    pos: JumpPosition,
+    match_res: SlotIdx,
+    f: &'static dyn Fn(SlotIdx, i16) -> Instr,
+}
+
+impl JumpInstrEmit {
+    fn new(
+        pos: JumpPosition,
+        match_res: SlotIdx,
+        f: &'static dyn Fn(SlotIdx, i16) -> Instr,
+    ) -> Self {
+        Self { pos, match_res, f }
+    }
+
+    fn jump_if_false(pos: JumpPosition, res: SlotIdx) -> Self {
+        Self::new(pos, res, &|sl, i| I::JumpIfFalse(sl, i))
+    }
 }
 
 impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
@@ -349,6 +368,147 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
         }
     }
 
+    /// Parse a pattern in a `match` branch, possibly adding bindings to
+    /// a local scope if `matchee` matches the pattern.
+    ///
+    /// Returns a vector of jumps to emit if the pattern fails.
+    fn parse_pattern_(&mut self, c: &mut Compiler, matchee: SlotIdx) -> Result<Vec<JumpInstrEmit>> {
+        let loc = self.lexer.loc();
+        let tok = self.lexer.cur();
+
+        match tok {
+            Tok::QuotedExpr(s) => {
+                // TODO: support patterns with interpolation? maybe not here?
+                let p = syntax::parse_pattern(self.ctx, s)?;
+                self.next_tok_();
+                let pat = RPtr::new(p);
+
+                let match_res = c.allocate_temporary_()?;
+
+                let l0 = c.allocate_local_(Value::Pattern(pat.clone()))?;
+                // match `matchee` with `pat`
+                c.emit_instr_(I::PatMatch(l0, matchee, match_res.slot));
+
+                let jp_fail = c.reserve_jump_();
+
+                // jump succeeded, so we push the pattern's substitution
+                // bindings into the local scope.
+                for (name, idx) in pat.iter_vars() {
+                    crate::logtrace!("allocate local var {:?} from pattern", name);
+                    let var_sl = c.allocate_var_(name.into())?;
+                    c.emit_instr_(I::PatSubstGet(match_res.slot, idx, var_sl.slot));
+                    c.get_slot_(var_sl.slot).state = CompilerSlotState::Activated;
+                }
+
+                // match result is not needed anymore
+                c.deallocate_slot_(match_res.slot);
+
+                let jpe = JumpInstrEmit::new(jp_fail, match_res.slot, &|slot, off| {
+                    I::JumpIfNil(slot, off)
+                });
+                Ok(vec![jpe])
+            }
+            Tok::Int(i) => {
+                self.next_tok_();
+                // compute `matchee == i`
+                let l0 = c.allocate_local_(Value::Int(i))?;
+                let sl_i = c.allocate_temporary_()?;
+                c.emit_instr_(I::LoadLocal(l0, sl_i.slot));
+                c.emit_instr_(I::Eq(sl_i.slot, matchee, sl_i.slot));
+                c.deallocate_slot_(sl_i.slot);
+                // if false, jump away
+                let jp_false = c.reserve_jump_();
+                let jpe = JumpInstrEmit::jump_if_false(jp_false, sl_i.slot);
+                Ok(vec![jpe])
+            }
+            Tok::Id("nil") => {
+                self.next_tok_();
+                let sl_i = c.allocate_temporary_()?;
+                c.emit_instr_(I::IsNil(matchee, sl_i.slot));
+                let jp_false = c.reserve_jump_();
+                let jpe = JumpInstrEmit::jump_if_false(jp_false, sl_i.slot);
+                Ok(vec![jpe])
+            }
+            Tok::Id("true") => {
+                self.next_tok_();
+                let sl_i = c.allocate_temporary_()?;
+                c.emit_instr_(I::EqBool(true, matchee, sl_i.slot));
+                let jp_false = c.reserve_jump_();
+                let jpe = JumpInstrEmit::jump_if_false(jp_false, sl_i.slot);
+                Ok(vec![jpe])
+            }
+            Tok::Id("false") => {
+                self.next_tok_();
+                let sl_i = c.allocate_temporary_()?;
+                c.emit_instr_(I::EqBool(false, matchee, sl_i.slot));
+                let jp_false = c.reserve_jump_();
+                let jpe = JumpInstrEmit::jump_if_false(jp_false, sl_i.slot);
+                Ok(vec![jpe])
+            }
+            Tok::Id("_") => {
+                self.next_tok_();
+                Ok(vec![]) // automatic success
+            }
+            Tok::Id(name) => {
+                // bind variable
+                crate::logtrace!("allocate local var {:?} from pattern", name);
+                let var_sl = c.allocate_var_(name.into())?;
+                self.next_tok_();
+                c.emit_instr_(I::Copy(matchee, var_sl.slot));
+                c.get_slot_(var_sl.slot).state = CompilerSlotState::Activated;
+                // no possible failure here, matches anything!
+                Ok(vec![])
+            }
+            Tok::LParen => {
+                self.next_tok_();
+                let loc = self.lexer.loc();
+                let tok = self.lexer.cur();
+
+                if let Tok::Id("cons") = tok {
+                    self.next_tok_();
+                    let mut jp_fail_v = vec![];
+
+                    let sl_i = c.allocate_temporary_()?;
+                    c.emit_instr_(I::IsCons(matchee, sl_i.slot));
+                    c.deallocate_slot_(sl_i.slot);
+
+                    // if not cons, jump out
+                    let jpe = c.reserve_jump_();
+                    jp_fail_v.push(JumpInstrEmit::jump_if_false(jpe, sl_i.slot));
+
+                    // match head to sub-pattern
+                    let hd = c.allocate_temporary_()?;
+                    c.emit_instr_(I::Car(matchee, hd.slot));
+                    self.parse_pattern_(c, hd.slot)?;
+                    c.deallocate_slot_(hd.slot);
+
+                    // match tail to sub-pattern
+                    let tl = c.allocate_temporary_()?;
+                    c.emit_instr_(I::Cdr(matchee, tl.slot));
+                    self.parse_pattern_(c, tl.slot)?;
+                    c.deallocate_slot_(tl.slot);
+
+                    self.eat_(
+                        Tok::RParen,
+                        "expect two sub-patterns after `cons`, then `)`",
+                    )?;
+
+                    Ok(jp_fail_v)
+                } else {
+                    Err(perror!(loc, "unknown composite pattern head: {:?}", tok))
+                }
+            }
+            // TODO: match `[p1 p2 … pn]` for lists
+            _ => {
+                return Err(perror!(
+                    loc,
+                    "expected a pattern in each case, got {:?}",
+                    self.lexer.cur()
+                ))
+            }
+        }
+    }
+
     /// Parse an application-type expression, closed with `closing`.
     ///
     /// Put the result into slot `sl_res` if provided.
@@ -432,82 +592,67 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             // expression to match
             let e = self.parse_expr_(c, None)?;
 
-            // where to put result of matching
-            let match_res = c.allocate_temporary_()?;
-
             // parse a series of `(<pat> <expr>+)` finished by `(else <expr>+))`
 
-            let mut jumps_if_true = vec![]; // accumulate success conditions
-            let mut prev_jump_if_failed = None; // after first iteration
+            let mut jumps_if_succeeded = vec![]; // accumulate success conditions
+            let mut prev_jump_if_failed: Option<Vec<JumpInstrEmit>> = None; // previous's iteration jump to the current one
             loop {
                 let loc = self.lexer.loc();
-                if let Tok::LParen = self.cur_tok_() {
+                let t = self.cur_tok_();
+                if let Tok::LParen = t {
                     self.next_tok_();
-                    // another case in the match
-
-                    // jump here if previous case failed.
-                    if let Some(jp) = prev_jump_if_failed.take() {
-                        c.emit_jump(jp, |off| I::JumpIfNil(match_res.slot, off))?;
-                    }
-
-                    if let Tok::Id("else") = self.cur_tok_() {
-                        // last case, unconditional
-                        self.next_tok_();
-                        let _ = self.parse_expr_seq_(c, Tok::RParen, Some(res.slot))?;
-                        break;
-                    }
-
-                    // parse a pattern.
-                    // TODO: support patterns with interpolation? maybe not here?
-                    let pat = match self.lexer.cur() {
-                        Tok::QuotedString(s) => {
-                            let p = parse_pattern(self.ctx, s)?;
-                            self.next_tok_();
-                            RPtr::new(p)
-                        }
-                        _ => {
-                            return Err(perror!(
-                                loc,
-                                "expected a quoted pattern in each case, got {:?}",
-                                self.lexer.cur()
-                            ))
-                        }
-                    };
-
-                    let l0 = c.allocate_local_(Value::Pattern(pat.clone()))?;
-                    // match e with `pat`
-                    c.emit_instr_(I::PatMatch(l0, e.slot, match_res.slot));
-
-                    // if matching failed, we'll go to the next case
-                    let jump_if_fail = c.reserve_jump_();
-                    prev_jump_if_failed = Some(jump_if_fail);
-
-                    // parse expressions in this branch, in a local scope
-                    // in which the pattern's variables are bound
-                    let scope = c.push_local_scope();
-                    for (name, idx) in pat.iter_vars() {
-                        crate::logtrace!("allocate local var {:?} from pattern", name);
-                        let var_sl = c.allocate_var_(name.into())?;
-                        c.emit_instr_(I::PatSubstGet(match_res.slot, idx, var_sl.slot));
-                        c.get_slot_(var_sl.slot).state = CompilerSlotState::Activated;
-                    }
-                    let _ = self.parse_expr_seq_(c, Tok::RParen, Some(res.slot))?;
-                    c.pop_local_scope(scope); // match result gets out of scope
-
-                    // then jump to the end.
-                    let jp = c.reserve_jump_();
-                    jumps_if_true.push(jp);
+                // another case in the match
+                } else if let Tok::RParen = t {
+                    return Err(perror!(loc, "match must end with a `(else <expr>+)` case"));
                 } else {
                     return Err(perror!(
                         loc,
-                        "expect `(else <expr>+)` or `(\"pat\" <expr>+)` in `match`"
+                        "expect `(else <expr>+)` or `(\"expr pat\" <expr>+)` in `match`, got {:?}",
+                        t
                     ));
                 }
+
+                // jump here if previous case failed. There can be multiple ways
+                // the previous case failed.
+                if let Some(jps) = prev_jump_if_failed.take() {
+                    for jpe in jps {
+                        let JumpInstrEmit { pos, match_res, f } = jpe;
+                        c.emit_jump(pos, |off| f(match_res, off))?;
+                    }
+                }
+
+                // create match and subsequent bindings
+                let tok = self.cur_tok_();
+                if let Tok::Id("else") = tok {
+                    // last case, unconditional
+                    self.next_tok_();
+                    let _ = self.parse_expr_seq_(c, Tok::RParen, Some(res.slot))?;
+                    break;
+                } else if let Tok::Id("case") = tok {
+                    self.next_tok_()
+                } else {
+                    return Err(perror!(loc, "expect `else` or `case` in a match branch"));
+                };
+
+                let scope = c.push_local_scope();
+
+                // parse a pattern in the new scope.
+                let jumps_if_false_p = self.parse_pattern_(c, e.slot)?;
+
+                // if matching failed, we'll go to the next case
+                prev_jump_if_failed = Some(jumps_if_false_p);
+
+                let _ = self.parse_expr_seq_(c, Tok::RParen, Some(res.slot))?;
+                c.pop_local_scope(scope); // match result gets out of scope
+
+                // then jump to the end.
+                let jp = c.reserve_jump_();
+                jumps_if_succeeded.push(jp);
             }
             self.eat_(Tok::RParen, "expected closing ')' after 'match'")?;
 
             // all successful jumps come directly here
-            for jp in jumps_if_true {
+            for jp in jumps_if_succeeded {
                 c.emit_jump(jp, |off| I::Jump(off))?;
             }
 
