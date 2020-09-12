@@ -25,37 +25,28 @@ pub struct ACConv {
 
 impl ACConv {
     fn new_(ctx: &mut Ctx, assoc: Thm, comm: Thm) -> Result<Self> {
-        let eqc = comm
-            .concl()
-            .unfold_eq()
-            .ok_or_else(|| Error::new("commutativity axiom must be an equality"))?;
-        let (f, args) = eqc.0.unfold_app();
-        if args.len() < 2 {
+        let pat_assoc = syntax::parse_pattern(ctx, r#"= _ (?f (?f ?x ?y) ?z) (?f ?x (?f ?y ?z))"#)
+            .map_err(|e| e.with_source(Error::new("parsing pattern for associativity")))?;
+        let pat_comm = syntax::parse_pattern(ctx, r#"= _ (?f ?x ?y) (?f ?y ?x)"#)
+            .map_err(|e| e.with_source(Error::new("parsing pattern for commutativity")))?;
+
+        let s1 = pat_assoc.match_(assoc.concl()).ok_or_else(|| {
+            Error::new_string(format!("theorem `{:?}` doesn't match associativity", assoc))
+        })?;
+        let s2 = pat_comm.match_(comm.concl()).ok_or_else(|| {
+            Error::new_string(format!("theorem `{:?}` doesn't match commutativity", comm))
+        })?;
+
+        let f1 = s1.get_by_name("f").expect("pattern bug");
+        let f2 = s2.get_by_name("f").expect("pattern bug");
+
+        if f1 != f2 {
             return Err(Error::new_string(format!(
-                "{:?} must be a binary function",
-                f
+                "ac_rw: incompatible axioms: assoc is for function {:?}, comm is for {:?}",
+                f1, f2
             )));
         }
-        let f = f.clone();
-        let ty = args[args.len() - 2].ty().clone();
-
-        let t_assoc = syntax::parse_expr_with_args(
-            ctx,
-            "with x y z:?. let f = ? in f (f x y) z = f x (f y z)",
-            &[ty, f.clone()],
-        )?;
-
-        dbg!(&t_assoc);
-        if let Some(_subst) = algo::unif::match_(&t_assoc, assoc.concl()) {
-            // TODO: actually check for alpha-equiv
-        } else {
-            return Err(Error::new_string(format!(
-                "expected conclusion of {:?} to be {:?}",
-                assoc, t_assoc,
-            )));
-        }
-
-        // TODO: also check comm
+        let f = f1.clone();
 
         Ok(ACConv {
             assoc,

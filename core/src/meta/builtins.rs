@@ -132,9 +132,9 @@ pub(super) mod basic_primitives {
                 crate::logdebug!("evaluate `{}`", s);
                 let mut vm = crate::meta::vm::VM::new(ctx.ctx);
                 // evaluate `s` in a new VM. Directly use `s` for the file name.
-                let v = vm.run(s, Some(s.clone())).map_err(|e| {
-                    e.with_source(Error::new_string(format!("while evaluating {}", s)))
-                })?;
+                let v = vm
+                    .run(s, Some(s.clone()))
+                    .map_err(|e| e.with_source(Error::new("<eval>")))?;
                 Ok(v)
             }
         ),
@@ -674,6 +674,24 @@ pub(super) mod logic_builtins {
                 ];
 
                 Ok(res.into())
+            }
+        ),
+        &defbuiltin!(
+            "ac_rw",
+            r#"rewrite module AC.
+
+            Takes axioms `|- assoc(f)` and `|- comm(f)`, and a theorem `th`,
+            and rewrites `th`'s conclusion using the axioms."#,
+            |ctx, args| {
+                check_arity!("ac_rw", args, 3);
+                let assoc = get_arg_thm!(args, 0).clone();
+                let comm = get_arg_thm!(args, 1).clone();
+                let th = get_arg_thm!(args, 2).clone();
+
+                let c = algo::ac_rw::ACConv::new(ctx.ctx, assoc, comm)?;
+
+                let r = conv::thm_conv_concl(ctx.ctx, th, &c)?;
+                Ok(r.into())
             }
         ),
     ];
