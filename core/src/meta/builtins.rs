@@ -689,6 +689,7 @@ pub(super) mod logic_builtins {
                 let th = get_arg_thm!(args, 2).clone();
 
                 let c = algo::ac_rw::ACConv::new(ctx.ctx, assoc, comm)?;
+                let c = algo::rw::BottomUpRwConv::new(&c); // rewrite deeply
 
                 let r = conv::thm_conv_concl(ctx.ctx, th, &c)?;
                 Ok(r.into())

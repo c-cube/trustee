@@ -84,3 +84,10 @@ impl<'a> Converter for BottomUpRwConv<'a> {
         rewrite_bottom_up(ctx, self.0, e.clone())
     }
 }
+
+impl<'a> BottomUpRwConv<'a> {
+    /// New converter.
+    pub fn new(c: &'a dyn Converter) -> Self {
+        BottomUpRwConv(c)
+    }
+}

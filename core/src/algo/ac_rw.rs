@@ -37,8 +37,10 @@ impl ACConv {
             Error::new_string(format!("theorem `{:?}` doesn't match commutativity", comm))
         })?;
 
-        let f1 = s1.get_by_name("f").expect("pattern bug");
-        let f2 = s2.get_by_name("f").expect("pattern bug");
+        crate::logtrace!("match assoc: {:?}, match comm: {:?}", s1, s2);
+
+        let f1 = s1.get_by_name("f").ok_or(Error::new("pattern bug"))?;
+        let f2 = s2.get_by_name("f").ok_or(Error::new("pattern bug"))?;
 
         if f1 != f2 {
             return Err(Error::new_string(format!(
@@ -82,6 +84,7 @@ impl conv::Converter for ACConv {
         let rw_comm = algo::rw_rule::RewriteRule::new(&self.comm.clone())?;
 
         loop {
+            crate::logtrace!("ac rw: try to rewrite {:?}", e);
             if let Some(th) = rw_assoc.try_conv(ctx, &e)? {
                 e = th
                     .concl()
@@ -92,7 +95,10 @@ impl conv::Converter for ACConv {
 
                 res = conv::chain_res(ctx, res, Some(th))?;
             } else if let Some(th) = rw_comm.try_conv(ctx, &e)? {
-                let (a, b) = e.unfold_eq().expect("rw-comm matches implies is-eq");
+                let (a, b) = th
+                    .concl()
+                    .unfold_eq()
+                    .expect("rw-comm matches implies is-eq");
                 if let Some(std::cmp::Ordering::Greater) = kbo::kbo_compare(&a, &b) {
                     // effectively rewrite, by term ordering, if `a >_kbo b`.
                     let e2 = th
