@@ -42,6 +42,7 @@ struct Scope(usize);
 
 /// Token used to remember to deallocate temporary slots.
 #[must_use]
+#[derive(Debug)]
 struct TempSlot(SlotIdx);
 
 #[derive(Copy, Clone)]
@@ -553,8 +554,8 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             let (tmp_a, a) = self.parse_expr_or_get_var_(c)?;
             let (tmp_b, b) = self.parse_expr_or_get_var_(c)?;
             c.emit_instr(binop_instr(a, b, res));
-            c.free_opt(tmp_a);
             c.free_opt(tmp_b);
+            c.free_opt(tmp_a);
 
             if let BinOpAssoc::LAssoc = assoc {
                 // parse more arguments, like in `(+ a b c)`
@@ -1712,7 +1713,7 @@ mod compiler {
             let s = match self.state {
                 CompilerSlotState::Activated => "[active]",
                 CompilerSlotState::NotActivatedYet => "[_]",
-                CompilerSlotState::Unused => "_",
+                CompilerSlotState::Unused => "ø",
             };
             write!(out, "(slot{} n:{:?})", s, self.var_name)
         }
