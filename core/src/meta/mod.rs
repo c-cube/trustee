@@ -442,11 +442,10 @@ mod test {
             "(defn append [l1 l2] (match l1 (case (cons x l11) (cons x (append l11 l2))) (else l2)))\n(append [1 2 3 4] [5 6 7])",
             vec![1,2,3,4,5,6,7]
         );
-        // FIXME: miscompiles?
-        //check_eval!(
-        //    "(defn append [l1 l2] (match l1 (case (cons x l11) (cons x (append l11 l2))) (else l2)))\n(append (cons 1 2) [5 6 7])",
-        //    vec![1,5,6,7]
-        //);
+        check_eval!(
+            "(defn append [l1 l2] (match l1 (case (cons x l11) (cons x (append l11 l2))) (else l2)))\n(append (cons 1 2) [5 6 7])",
+            vec![1,5,6,7]
+        );
         Ok(())
     }
 }
