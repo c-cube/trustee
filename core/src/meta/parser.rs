@@ -767,7 +767,12 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
 
             self.next_tok_();
             // emit failure. Takes a string message or nothing.
-            let err = match self.cur_tok_() {
+            // NOTE: if we're in a function, emitting an error with a location
+            // would be misleading, so we put the location in the message.
+            // In a toplevel block we can directly embed the current location
+            // so that LSP points it out properly.
+            let loc_in_err = c.n_args == 0;
+            let mut err = match self.cur_tok_() {
                 Tok::QuotedString(s) => {
                     let s = s.to_string();
                     self.next_tok_();
@@ -781,13 +786,21 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             let end = self.lexer.loc();
             self.eat_(Tok::RParen, "missing ')' after 'fail'")?;
 
-            // build a meta-error and emit `Fail()` with it as parameter.
             let loc = Location {
                 start,
                 end,
                 file_name: c.file_name.as_ref().map(|s| s.to_string()),
             };
-            let merr = Error::new_meta(err, loc);
+
+            let merr = if loc_in_err {
+                Error::new_meta(err, loc)
+            } else {
+                use std::fmt::Write;
+                write!(&mut err, " at {}", loc).unwrap();
+                Error::new_string(err)
+            };
+
+            // build a meta-error and emit `Fail()` with it as parameter.
             let l = c.allocate_local(Value::Error(RPtr::new(merr)))?;
             c.emit_instr(I::Fail(l));
         } else if id == "let" {

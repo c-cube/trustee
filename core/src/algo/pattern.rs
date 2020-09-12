@@ -342,4 +342,22 @@ mod test {
 
         Ok(())
     }
+
+    #[test]
+    fn test_imply() -> Result<()> {
+        let mut ctx = Ctx::new();
+        meta::load_prelude_hol(&mut ctx)?;
+        let s = r#"==> ?a ?b"#;
+        let p = syntax::parse_pattern(&mut ctx, &s)?;
+
+        let e = syntax::parse_expr(&mut ctx, r#"T ==> F"#)?;
+        let subst = p.match_(&e).ok_or_else(|| Error::new("match fail"))?;
+
+        let t1 = syntax::parse_expr(&mut ctx, "T")?;
+        let t2 = syntax::parse_expr(&mut ctx, "F")?;
+
+        assert_eq!(Some(&t1), subst.get_by_name("a"));
+        assert_eq!(Some(&t2), subst.get_by_name("b"));
+        Ok(())
+    }
 }
