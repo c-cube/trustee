@@ -554,8 +554,8 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             let (tmp_a, a) = self.parse_expr_or_get_var_(c)?;
             let (tmp_b, b) = self.parse_expr_or_get_var_(c)?;
             c.emit_instr(binop_instr(a, b, res));
-            c.free_opt(tmp_b);
             c.free_opt(tmp_a);
+            c.free_opt(tmp_b);
 
             if let BinOpAssoc::LAssoc = assoc {
                 // parse more arguments, like in `(+ a b c)`
@@ -1274,6 +1274,9 @@ mod compiler {
         /// The `push` and `pop` operations must be balanced.
         lex_scopes: Vec<LexScope>,
         /// Slots for representing the stack.
+        ///
+        /// Invariant: the top slot is always used
+        /// (its state is not `CompilerSlotState::Unused`)
         slots: Vec<CompilerSlot>,
     }
 
@@ -1522,7 +1525,17 @@ mod compiler {
         /// Allocate a slot on top of the stack.
         fn allocate_top_slot_(&mut self, st: CompilerSlotState) -> Result<SlotIdx> {
             assert_ne!(st, CompilerSlotState::Unused);
+            if self.st.slots.is_empty() {
+                let sl = CompilerSlot {
+                    var_name: None,
+                    state: st,
+                };
+                self.st.slots.push(sl);
+                return Ok(SlotIdx(0));
+            }
+
             let i = self.st.slots.len();
+            assert_ne!(self.st.slots[i - 1].state, CompilerSlotState::Unused);
             if i > u8::MAX as usize {
                 return Err(Error::new("maximum number of slots exceeded"));
             }
@@ -1534,6 +1547,15 @@ mod compiler {
             };
             self.st.slots.push(sl);
             Ok(SlotIdx(i as u8))
+        }
+
+        /// Enforce invariant: top slot is used.
+        fn pop_unused_top_(&mut self) {
+            while let Some(CompilerSlotState::Unused) =
+                self.st.slots.last().as_ref().map(|sl| sl.state)
+            {
+                self.st.slots.pop();
+            }
         }
 
         /// Deallocate the `n` top slots.
@@ -1550,6 +1572,7 @@ mod compiler {
                     panic!("deallocating top slot that is a named var")
                 }
             }
+            self.pop_unused_top_();
         }
 
         /// Allocate or reuse a slot.
@@ -1622,14 +1645,10 @@ mod compiler {
 
         /// Deallocate that slot, it becomes available for further use.
         fn deallocate_slot_(&mut self, sl: SlotIdx) {
-            if sl.0 as usize + 1 == self.st.slots.len() {
-                // just pop the slot
-                self.st.slots.pop().unwrap();
-            } else {
-                let sl = self.get_slot_(sl);
-                sl.var_name = None;
-                sl.state = CompilerSlotState::Unused;
-            }
+            let sl = self.get_slot_(sl);
+            sl.var_name = None;
+            sl.state = CompilerSlotState::Unused;
+            self.pop_unused_top_();
         }
 
         /// Free expression result.
