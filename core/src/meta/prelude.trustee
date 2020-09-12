@@ -42,9 +42,11 @@
 
 (defn REqTrueElim [th]
   (doc "rule from `A |- x=T` to `A |- x`")
-  (def x (e_app_rhs (e_app_lhs (concl th))))
-  (def th1 (subst EqTrueElim "x" x))
-  (bool_eq th th1))
+  (match (concl th)
+   (case `= _ ?x T`
+    (def th1 (subst EqTrueElim "x" x))
+    (bool_eq th th1))
+   (else (fail "true elim: concl must be `x=T`"))))
 
 ; #### forall ####
 
@@ -117,31 +119,28 @@
 
 (defn RAndElim1 [th]
   (doc "rule from `A |- a /\ b` to `A |- a`")
-  (def c (concl th))
-  (def a (e_app_rhs (e_app_lhs c)))
-  (def b (e_app_rhs c))
-  (subst AndElim1 "a" a "b" b))
+  (match (concl th)
+   (case `/\ ?a ?b`
+    (subst AndElim1 "a" a "b" b))
+   (else (fail "and elim1: expect /\ in concl"))))
 
 (defn RAndElim2 [th]
   (doc "rule from `A |- a /\ b` to `A |- b`")
-  (def c (concl th))
-  (def a (e_app_rhs (e_app_lhs c)))
-  (def b (e_app_rhs c))
-  (subst AndElim2 "a" a "b" b))
+  (match (concl th)
+   (case `/\ ?a ?b` (subst AndElim2 "a" a "b" b))
+   (else (fail "and elim2: expect /\ in concl"))))
 
 ; theorem `a, b |- a /\ b`
 (set AndIntro
-  {
-    (def tha (REqTrueIntro (assume `a:bool`)))
-    (def thb (REqTrueIntro (assume `b:bool`)))
-    (def th1 (rw (congr DefAnd tha thb) DefForall :beta))
-    ; prove `(\f. f T T = f T T) = (\f. T)`
-    (def lemma1
-      (def lhs (refl `with f: bool->bool->bool. f T T`))
-      (def c (REqTrueIntro lhs))
-      (absv `f:(bool->bool->bool)` c))
-    (bool_eq lemma1 (sym th1))
-  })
+  (def tha (REqTrueIntro (assume `a:bool`)))
+  (def thb (REqTrueIntro (assume `b:bool`)))
+  (def th1 (rw (congr DefAnd tha thb) DefForall :beta))
+  ; prove `(\f. f T T = f T T) = (\f. T)`
+  (def lemma1
+    (def lhs (refl `with f: bool->bool->bool. f T T`))
+    (def c (REqTrueIntro lhs))
+    (absv `f:(bool->bool->bool)` c))
+  (bool_eq lemma1 (sym th1)))
 
 (defn RAndIntro [tha thb]
   (doc "rule from `A |- a`, `B |- b` to `A, B |- a /\ b`")
@@ -155,26 +154,24 @@
 
 ; prove `(a /\ b) /\ c) = a /\ (b /\ c)`
 (set AndAssoc
-  {
-    ; direct direction
-    (def goal1 (assume `with a b c: bool. (a /\ b) /\ c`))
-    (def th_c (RAndElim2 goal1))
-    (def th_ab (RAndElim1 goal1))
-    (def th_a (cut th_ab (RAndElim1 th_ab)))
-    (def th_b (cut th_ab (RAndElim2 th_ab)))
-    (def th_bc (RAndIntro th_b th_c))
-    (def th1 (RAndIntro th_a th_bc))
+  ; direct direction
+  (def goal1 (assume `with a b c: bool. (a /\ b) /\ c`))
+  (def th_c (RAndElim2 goal1))
+  (def th_ab (RAndElim1 goal1))
+  (def th_a (cut th_ab (RAndElim1 th_ab)))
+  (def th_b (cut th_ab (RAndElim2 th_ab)))
+  (def th_bc (RAndIntro th_b th_c))
+  (def th1 (RAndIntro th_a th_bc))
 
-    (def goal2 (assume `with a b c: bool. a /\ (b /\ c)`))
-    (def th_a (RAndElim1 goal2))
-    (def th_bc (RAndElim2 goal2))
-    (def th_b (cut th_bc (RAndElim1 th_bc)))
-    (def th_c (cut th_bc (RAndElim2 th_bc)))
-    (def th_ab (RAndIntro th_a th_b))
-    (def th2 (RAndIntro th_ab th_c))
+  (def goal2 (assume `with a b c: bool. a /\ (b /\ c)`))
+  (def th_a (RAndElim1 goal2))
+  (def th_bc (RAndElim2 goal2))
+  (def th_b (cut th_bc (RAndElim1 th_bc)))
+  (def th_c (cut th_bc (RAndElim2 th_bc)))
+  (def th_ab (RAndIntro th_a th_b))
+  (def th2 (RAndIntro th_ab th_c))
 
-    (bool_eq_intro th1 th2)
-  })
+  (bool_eq_intro th1 th2))
 
 (defn RAndAssoc [a b c]
   (doc "Takes `a` `b` and `c` and returns `(a/\b)/\c = a/\(b/\c")
@@ -182,26 +179,21 @@
 
 ; prove `a /\ b = b /\ a`
 (set AndComm
-  {
-    (def goal1 (assume `with a b: bool. a /\ b`))
-    (def th_a (RAndElim1 goal1))
-    (def th_b (RAndElim2 goal1))
-    (def th1 (RAndIntro th_b th_a))
-    ; other case is exactly the same
-    (def th2 (subst th1 "a" `b:bool` "b" `a:bool`))
-    (bool_eq_intro th1 th2)
-  })
+  (def goal1 (assume `with a b: bool. a /\ b`))
+  (def th_a (RAndElim1 goal1))
+  (def th_b (RAndElim2 goal1))
+  (def th1 (RAndIntro th_b th_a))
+  ; other case is exactly the same
+  (def th2 (subst th1 "a" `b:bool` "b" `a:bool`))
+  (bool_eq_intro th1 th2))
 
 (defn RAndComm [a b]
   (doc "Takes `a` and `b` and returns `a/\b = b/\a")
   (subst AndComm "a" a "b" b))
 
 ; prove `a |- a /\ T` and `a |- T /\ a`
-{
-  (def th_a (assume `a:bool`))
-  (set AndTrueRight (RAndIntro th_a TrueIsTrue))
-  (set AndTrueLeft (RAndIntro TrueIsTrue th_a))
-}
+(set AndTrueRight (RAndIntro (assume `a:bool`) TrueIsTrue))
+(set AndTrueLeft (RAndIntro TrueIsTrue (assume `a:bool`) ))
 
 {
   (def hypa (assume `a:bool`))
@@ -242,14 +234,13 @@
 
 
 ; `a |- (a/\b) = b`
-{
+(set AProveAAndBEqB
   (def h1 (assume `a:bool`))
   ; prove `a |- (a/\b)=b`
 
   (def ltor (RCutAndRight `a:bool` `b:bool`))
   (def rtol (RAndIntro (assume `a:bool`) (assume `b:bool`)))
-  (set AProveAAndBEqB (bool_eq_intro ltor rtol))
-}
+  (bool_eq_intro ltor rtol))
 
 ; from `a` and `b` to `a |- (a/\b)=b`
 (defn RAProveAAndBEqB [a b]
@@ -279,7 +270,7 @@
   (rw (congr DefImply (refl a) (refl b)) :beta))
 
 ; prove `a, a ==> b |- b`
-(set ImplyElim {
+(set ImplyElim
   (def ha (assume `a:bool`))
   (def hypab (assume `a:bool ==> b:bool`))
   (def def_exp
@@ -290,8 +281,7 @@
   (def a_eq_t (REqTrueIntro ha))
   (def r (trans a_and_b_eq_a a_eq_t))
   (def r (REqTrueElim r))
-  (cut r (RAndElim2 r))
-})
+  (cut r (RAndElim2 r)))
 
 ; from `F |- b` and `a`, to `F \ {a} |- a==>b`
 (defn RImplyIntro [th a]
@@ -309,14 +299,24 @@
 
 (defn MP [th1 th2]
   (doc "takes `|- a==>b` and `|- a` and returns `|- b`")
-  (def a (concl th2))
-  (def b (e_app_rhs (concl th1)))
-  (cut th1 th2 (subst ImplyElim "a" a "b" b)))
+  (match (concl th1)
+   (case `==> ?a ?b`
+     (cut th1 th2 (subst ImplyElim "a" a "b" b)))
+   (else (fail "MP: expect first theorem to be an implication"))))
 
 (defn RImplyElim [th]
   (doc "takes `F |- a==>b` and returns `F, a |- b`")
-  (def a (e_app_rhs (e_app_lhs (concl th))))
-  (MP th (assume a)))
+  (match (concl th)
+   (case `==> ?a _` (MP th (assume a)))
+   (else (fail "imply elim: theorem is not an implication"))))
+
+(defn RImplyElimRep [th]
+  (doc "takes `F |- a1==>…==>an==>b` and returns `F, a1…an |- b`")
+  (match (concl th)
+   (case `==> ?a _`
+     (def th2 (MP th (assume a)))
+     (become RImplyElimRep th2))
+   (else th)))
 
 ; `(a ==> b) ==> a ==> b`
 (set ImplyImpliesImply
@@ -344,6 +344,14 @@
   (def a (e_app_rhs (e_app_lhs (concl th1))))
   (def b (e_app_rhs (concl th1)))
   (RImplyIntro (MP th2 (RImplyElim th1)) a))
+
+; `a==>b`, `b==>c`, gives `a==>c`
+(defn RImplyTrans [th1 th2]
+  (doc "takes `|- a==>b` and `|- b==>c` to return `|- a==>c")
+  (match (concl th1)
+   (case `==> ?a _`
+    (RImplyIntro (MP th2 (RImplyElim th1)) a))
+   (else (fail "imply trans: needs first theorem to be an implication"))))
 
 ; takes `p` and returns `|- F ==> p`
 (defn RFalseImply [p]
@@ -373,16 +381,20 @@
 ; from `|- P ==> F` to `|- ~ P`
 (defn RNotIntro [th]
   (doc "takes `|- p ==> F` and returns `|- ~ p`")
-  (def p (e_app_rhs (e_app_lhs (concl th))))
-  (def h (RNotDefSubst p))
-  (bool_eq th (sym h)))
+  (match (concl th)
+   (case `==> ?p F`
+    (def h (RNotDefSubst p))
+    (bool_eq th (sym h)))
+   (else (fail "not intro: expect conclusion `p ==> F`"))))
 
 ; `|- ~ P` to `|- P ==> F`
 (defn RNotElim [th]
   (doc "takes `|- ~ P` and returns `|- P ==> F`")
-  (def p (e_app_rhs (concl th)))
-  (def h (RNotDefSubst p))
-  (bool_eq th h))
+  (match (concl th)
+   (case `~ ?p`
+    (def h (RNotDefSubst p))
+    (bool_eq th h))
+   (else (fail "not elim: expect `~ p` as concl"))))
 
 ; TODO: a rule from `a |- F` to `|- ~ a`
 
@@ -476,18 +488,22 @@
 ; or intro rule by case
 (defn ROrElimByCase [thc th1 th2]
   (doc "takes `|- a\/b`, `|- a ==> p`, `|- b ==> p`, and returns `|- p`")
-  (def a (e_app_rhs (e_app_lhs (concl thc))))
-  (def b (e_app_rhs (concl thc)))
-  (def p (e_app_rhs (concl th1)))
-  (def th (subst OrElim "a" a "b" b "c" p))
-  (cut th1 th2 thc th))
+  (match (concl thc)
+   (case `\/ ?a ?b`
+    (match (concl th1)
+     (case `==> _ ?p`
+      (def th (subst OrElim "a" a "b" b "c" p))
+      (cut th1 th2 thc th))
+     (else (fail "or elim by case: th2 must be an implication"))))
+   (else (fail "or elim by case: th0 must be a disjunction"))))
 
 ; or intro rule by case, with cuts
 (defn ROrElimByCaseCut [thc th1 th2]
   (doc "takes `|- a\/b`, `a |- p`, `b |- p`, and returns `|- p`")
-  (def a (e_app_rhs (e_app_lhs (concl thc))))
-  (def b (e_app_rhs (concl thc)))
-  (become ROrElimByCase thc (RImplyIntro th1 a) (RImplyIntro th2 b)))
+  (match (concl thc)
+   (case `\/ ?a ?b`
+    (become ROrElimByCase thc (RImplyIntro th1 a) (RImplyIntro th2 b)))
+   (else (fail "or elim by case: th0 must be a disjunction"))))
 
 ; \/ is commutative
 (set OrComm
@@ -505,9 +521,10 @@
 ; from `a\/b` to `b\/a`
 (defn ROrComm [th]
   (doc "takes `F |- a\/b` and returns `F |- b\/a`")
-  (def a (e_app_rhs (e_app_lhs (concl th))))
-  (def b (e_app_rhs (concl th)))
-  (bool_eq th (subst OrComm "a" a "b" b)))
+  (match (concl th)
+   (case `\/ ?a ?b`
+    (bool_eq th (subst OrComm "a" a "b" b)))
+   (else (fail "or comm: need a disjunction"))))
 
 ; (a\/b)\/c = a\/(b\/c)
 (set OrAssoc
@@ -578,8 +595,9 @@
 ; turns `|- ~ ~ p` into `|- p`
 (defn RNotNotElim [th]
   (doc "takes `|- ~ ~ p` and returns `|- p`")
-  (def p (e_app_rhs (e_app_rhs (concl th))))
-  (bool_eq th (RNotNotElimConv p)))
+  (match (concl th)
+    (case `~ (~ ?p)` (bool_eq th (RNotNotElimConv p)))
+    (else (fail "not not elim: expect `~ ~ p`"))))
 
 ; `|- ~ ~ T`
 (set NotNotTrue
@@ -648,25 +666,34 @@
 ; Map over a list
 (defn list_map [f l]
   (doc "(map f l) maps f over list l")
-  (if (nil? l) nil (cons (f (car l)) (list_map f (cdr l)))))
+  (match l
+    (case (cons x l2) (cons x (list_map f l2)))
+    (else nil)))
 
 (defn list_fold [f acc l]
   (doc "(fold f acc l) left-folds f over l with accumulator acc.")
-  (if (nil? l) acc
-    (become list_fold f (f acc (car l)) (cdr l))))
+  (match l
+    (case (cons x tl)
+      (become list_fold f (f acc (car l)) (cdr l)))
+    (else acc)))
 
 ; length of list
 (defn list_len [l]
   (doc "length of input list")
-  (if (nil? l) 0 (+ 1 (list_len (cdr l)))))
+  (match l
+   (case (cons _ tl) (+ 1 (list_len tl)))
+   (else 0)))
 
 ; iterate on list
 (defn list_iter [f l]
   (doc "apply `f` on each element of `l`")
-  (if (nil? l) nil
-    { (f (car l))
-      (become list_iter f (cdr l))
-    }))
+  (match l
+   (case (cons x tl)
+     (f x)
+     (become list_iter f tl))
+   (else nil)))
+
+(list_iter (fn [x] (print "x: " x)) [1 2 3 4])
 
 ; # END OF FILE
 ; # avoid double include, see `load_prelude_hol` in `meta.rs`
