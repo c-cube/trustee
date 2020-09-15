@@ -162,7 +162,7 @@ impl Printer {
                     return self.pp_expr_paren_(e, k, out);
                 }
                 if is_arrow {
-                    // just print a lambda
+                    // just print an arrow
                     self.pp_expr(&ty_v, k, pl, mypl, out)?;
                     write!(out, " -> ")?;
                     self.pp_expr(&body, k + 1, mypr, pr, out)?;
@@ -191,6 +191,8 @@ impl Printer {
         fvars.sort_by_key(|v| (v.ty.clone(), v.name.name()));
         fvars.dedup();
 
+        let n_scope = self.scope.len(); // save `scope`
+
         let mut i = 0;
         while i < fvars.len() {
             write!(out, "with")?;
@@ -209,6 +211,7 @@ impl Printer {
 
             for v in &fvars[i..j] {
                 write!(out, " {}", v.name.name())?;
+                self.scope.push((*v).clone());
             }
             write!(out, ":")?;
             self.pp_expr(&fvars[i].ty, 0, 0, 0, out)?;
@@ -217,8 +220,6 @@ impl Printer {
             i = j;
         }
 
-        let n_scope = self.scope.len();
-        self.scope.extend(fvars.into_iter().cloned());
         let r = self.pp_expr(e, 0, 0, 0, out);
         self.scope.truncate(n_scope);
 
@@ -256,6 +257,10 @@ mod test {
             (
                 "(forall x:bool. x ==> x) ==> (forall y:bool. T = F ==> ~ ~ y)",
                 r#"(forall x0:bool. x0 ==> x0) ==> forall x0:bool. T = F ==> ~ ~ x0"#,
+            ),
+            (
+                "with (a b:type) (f g:a->b). f = g",
+                r#"with a b:type. with f g:a -> b. f = g"#,
             ),
         ];
 
