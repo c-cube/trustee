@@ -188,7 +188,10 @@ impl Printer {
         let mut fvars: Vec<_> = e.free_vars().collect();
 
         // group by type first, then name
-        fvars.sort_by_key(|v| (v.ty.clone(), v.name.name()));
+        fvars.sort_by_key(|v| {
+            let size = v.ty.size();
+            (size, v.ty.clone(), v.name.name())
+        });
         fvars.dedup();
 
         let n_scope = self.scope.len(); // save `scope`

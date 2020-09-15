@@ -309,7 +309,7 @@ impl ExprView {
     where
         F: FnMut(&Expr, DbIndex) -> Result<Expr>,
     {
-        Ok(match self {
+        let r = match self {
             EType | EKind => self.clone(),
             EConst(c) => EConst(Box::new(ConstContent {
                 ty: f(&c.ty, k)?,
@@ -329,7 +329,37 @@ impl ExprView {
             EApp(a, b) => EApp(f(a, k)?, f(b, k)?),
             EPi(ty_a, b) => EPi(f(ty_a, k)?, f(b, k + 1)?),
             ELambda(ty_a, b) => ELambda(f(ty_a, k)?, f(b, k + 1)?),
-        })
+        };
+        Ok(r)
+    }
+
+    /// Iterate on immediate subterms.
+    pub fn iter<F>(&self, mut f: F, k: DbIndex) -> Result<()>
+    where
+        F: FnMut(&Expr, DbIndex) -> Result<()>,
+    {
+        match self {
+            EType | EKind | EConst(..) => (),
+            EVar(v) => {
+                f(&v.ty, k)?;
+            }
+            EBoundVar(v) => {
+                f(&v.ty, k)?;
+            }
+            EApp(a, b) => {
+                f(a, k)?;
+                f(b, k)?;
+            }
+            EPi(ty_a, b) => {
+                f(ty_a, k)?;
+                f(b, k + 1)?;
+            }
+            ELambda(ty_a, b) => {
+                f(ty_a, k)?;
+                f(b, k + 1)?;
+            }
+        };
+        Ok(())
     }
 }
 
@@ -552,6 +582,31 @@ impl Expr {
     /// Does this contain any free variables?
     pub fn has_free_vars(&self) -> bool {
         self.free_vars().next().is_some()
+    }
+
+    fn size_(&self, tbl: &mut fnv::FnvHashMap<Expr, usize>) -> usize {
+        match tbl.get(self) {
+            Some(v) => *v,
+            None => {
+                let mut n = 1;
+                self.view()
+                    .iter(
+                        |u, _| {
+                            n += u.size_(tbl);
+                            Ok(())
+                        },
+                        0,
+                    )
+                    .unwrap();
+                n
+            }
+        }
+    }
+
+    /// Size of the expression, as a DAG.
+    pub fn size(&self) -> usize {
+        let mut tbl = fnv::new_table_with_cap(16);
+        self.size_(&mut tbl)
     }
 
     // helper for building expressions
