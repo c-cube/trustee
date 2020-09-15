@@ -627,7 +627,7 @@
   (RNotNotElim h4))
 
 ; `(~a \/ b) = (a ==> b)`
-(set ROrNotEqImply
+(set OrNotEqImply
   (def direct
     (def h1 (assume `with a b:bool. ~a \/ b`))
     ; prove `~a |- a==>b`
@@ -651,6 +651,10 @@
   (bool_eq_intro
   direct
   indirect))
+
+(defn ROrNotEqImply [a b]
+  (doc "takes `a` and `b` and returns `(~ a \/ b) = (a ==> b)`")
+  (subst OrNotEqImply "a" a "b" b))
 
 ; TODO: de morgan laws
 
