@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use lsp_types::{self as lsp};
 use trustee::{
-    self, kernel_of_trust as k, meta,
+    self, kernel as k, meta,
     meta::{Location, Position},
 };
 use trustee_utils as utils;

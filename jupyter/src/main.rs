@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use jupyter_kernel as jy;
 use std::{cell::RefCell, collections::HashMap, time};
 use trustee::{
-    self, kernel_of_trust as k,
+    self, kernel as k,
     meta::{self, lexer::Tok, Value},
     Error,
 };
