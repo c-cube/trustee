@@ -3,7 +3,7 @@
 //! These strings are accessed via a thin pointer and are refcounted
 //! with a `u32`. They cannot be bigger than `u32::MAX`.
 
-use crate::{kernel_of_trust as k, rptr::RPtr};
+use crate::{kernel as k, rptr::RPtr};
 use std::{fmt::Debug, ops::Deref, u32};
 
 /// A refcounted string in one block on the heap.

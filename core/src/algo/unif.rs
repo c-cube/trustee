@@ -99,11 +99,11 @@ impl<'a> UnifySubst<'a> {
         }
     }
 
-    pub fn to_k_subst(&self) -> k::Subst {
+    pub fn as_k_subst(&self) -> k::Subst {
         self.0
             .iter()
             .map(|(v, e)| ((*v).clone(), (*e).clone()))
-            .collect::<Vec<_>>()
+            .collect::<k::Subst>()
     }
 
     fn add_(&mut self, v: &'a Var, e: &'a Expr) {
@@ -116,12 +116,12 @@ impl<'a> UnifySubst<'a> {
     }
 }
 
-impl<'a> Into<kernel_of_trust::Subst> for UnifySubst<'a> {
-    fn into(self) -> kernel_of_trust::Subst {
+impl<'a> Into<k::Subst> for UnifySubst<'a> {
+    fn into(self) -> k::Subst {
         self.0
             .into_iter()
             .map(|(v, e)| ((*v).clone(), (*e).clone()))
-            .collect::<Vec<_>>()
+            .collect::<k::Subst>()
     }
 }
 

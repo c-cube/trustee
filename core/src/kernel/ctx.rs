@@ -1,802 +1,28 @@
-//! Kernel of Trust: Terms and Theorems
+//! # Context for Expressions and Theorem.
+//!
+//!  The proof context is responsible for creating new terms and new theorems,
+//!  in a way that ensures theorems are valid.
 
-use crate::{fnv, meta, rstr::RStr};
-use std::{fmt, ops::Deref, sync::atomic};
+use super::{
+    expr::{self, BoundVarContent, ConstContent, ConstTag, DbIndex, Var, WExpr},
+    symbol::{BuiltinSymbol, Symbol},
+    Expr, ExprView, Ref, Thm, Type, WeakRef,
+};
+use crate::{
+    error::{Error, Result},
+    fnv, meta,
+    rstr::RStr,
+};
+use std::{fmt, sync::atomic};
 
-pub type Ref<T> = std::rc::Rc<T>;
-pub type WeakRef<T> = std::rc::Weak<T>;
-pub type Lock<T> = std::cell::RefCell<T>;
+use ExprView::*;
 
-/// For infix/prefix/postfix constants.
+// re-export
 pub type Fixity = crate::syntax::Fixity;
 
-pub use crate::error::{Error, Result};
-
-///! # Symbols.
-
-/// Description of builtin symbols
-#[derive(Debug)]
-pub struct BuiltinSymbol<'a> {
-    eq: &'a str,
-    bool: &'a str,
-}
-
-impl<'a> BuiltinSymbol<'a> {
-    /// Default symbols.
-    pub fn default() -> Self {
-        Self {
-            eq: "=",
-            bool: "bool",
-        }
-    }
-}
-
-impl<'a> Default for BuiltinSymbol<'a> {
-    fn default() -> Self {
-        Self::default()
-    }
-}
-
-/// A logic symbol.
-#[derive(Debug, Clone, Ord, PartialOrd, Hash, Eq, PartialEq)]
-pub struct Symbol(RStr);
-
-impl Symbol {
-    /// New symbol from this string.
-    pub fn from_str(s: &str) -> Self {
-        let a = RStr::from(s);
-        Symbol(a)
-    }
-
-    pub fn from_rstr(s: &RStr) -> Self {
-        Symbol(s.clone())
-    }
-
-    pub fn to_rstr(&self) -> RStr {
-        self.0.clone()
-    }
-
-    pub fn from_rc_str(s: &std::rc::Rc<str>) -> Self {
-        let a: RStr = RStr::from(s.as_ref());
-        Symbol(a)
-    }
-
-    pub fn name(&self) -> &str {
-        &*self.0
-    }
-}
-
-impl std::borrow::Borrow<str> for Symbol {
-    fn borrow(&self) -> &str {
-        &*self.0
-    }
-}
-
-impl<'a> From<&'a str> for Symbol {
-    fn from(s: &str) -> Self {
-        Symbol::from_str(s)
-    }
-}
-
-/// De Buijn indices.
-pub type DbIndex = u32;
-
-///! # Expressions, types, variables
-
-/// An expression.
-///
-/// The expression is refcounted and is thus cheaply clonable.
-#[derive(Clone)]
-pub struct Expr(Ref<ExprImpl>);
-
-/// A weak reference to an expression.
-#[derive(Clone)]
-struct WExpr(WeakRef<ExprImpl>);
-
-/// Types and Terms are the same, but this is helpful for documentation.
-pub type Type = Expr;
-
-/// The public view of an expression's root.
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
-pub enum ExprView {
-    EType,
-    EKind,
-    EConst(Box<ConstContent>),
-    EVar(Var),
-    EBoundVar(BoundVarContent),
-    EApp(Expr, Expr),
-    ELambda(Type, Expr),
-    EPi(Type, Expr),
-}
-
-pub use ExprView::*;
-
-/// A free variable.
-///
-/// Variables are equal iff they have the same name and the same type.
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Var {
-    pub name: Symbol,
-    pub ty: Expr,
-}
-
-/// The content of an expression.
-struct ExprImpl {
-    /// The view of the expression.
-    view: ExprView,
-    /// Number of DB indices missing. 0 means the term is closed.
-    db_depth: DbIndex,
-    /// Unique ID of the expr manager responsible for creating this expr.
-    em_uid: u32,
-    /// Type of the expression. Always present except for `Kind`.
-    ty: Option<Expr>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ConstContent {
-    pub name: Symbol,
-    pub ty: Expr,
-    tag: ConstTag,
-    /// Generation of this constant, incremented to handle shadowing.
-    gen: u32,
-    fix: std::cell::Cell<Fixity>,
-}
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-#[repr(u8)]
-enum ConstTag {
-    None,
-    Eq,
-}
-
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
-pub struct BoundVarContent {
-    idx: DbIndex,
-    ty: Expr,
-}
-
-impl Eq for ConstContent {}
-impl PartialEq for ConstContent {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.ty == other.ty
-    }
-}
-
-impl std::hash::Hash for ConstContent {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
-        self.ty.hash(state)
-    }
-}
-
-impl Eq for Expr {}
-impl PartialEq for Expr {
-    fn eq(&self, other: &Self) -> bool {
-        // simple pointer equality
-        std::ptr::eq(
-            self.0.deref() as *const ExprImpl,
-            other.0.deref() as *const _,
-        )
-    }
-}
-
-impl PartialOrd for Expr {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        // simple pointer comparison
-        std::cmp::PartialOrd::partial_cmp(
-            &(self.0.deref() as *const ExprImpl),
-            &(other.0.deref() as *const _),
-        )
-    }
-}
-impl Ord for Expr {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // simple pointer comparison
-        std::cmp::Ord::cmp(
-            &(self.0.as_ref() as *const ExprImpl),
-            &(other.0.as_ref() as *const _),
-        )
-    }
-}
-
-impl fmt::Display for Expr {
-    // use the pretty-printer from `syntax`
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        crate::syntax::print_expr(self, out)
-    }
-}
-
-impl std::hash::Hash for Expr {
-    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
-        // hash pointer
-        std::ptr::hash(self.0.as_ref() as *const ExprImpl, h)
-    }
-}
-
-// used to be able to lookup in the hashconsing map using an `ExprView`
-impl std::borrow::Borrow<ExprView> for Expr {
-    fn borrow(&self) -> &ExprView {
-        &self.0.view
-    }
-}
-
-impl Var {
-    /// Symbol for the variable.
-    #[inline]
-    pub fn name(&self) -> &Symbol {
-        &self.name
-    }
-
-    /// Type of the variable.
-    #[inline]
-    pub fn ty(&self) -> &Type {
-        &self.ty
-    }
-
-    #[inline]
-    pub fn new(name: Symbol, ty: Type) -> Var {
-        Var { name, ty }
-    }
-
-    /// Make a free variable.
-    pub fn from_str(name: &str, ty: Type) -> Var {
-        Var {
-            name: Symbol::from_str(name),
-            ty,
-        }
-    }
-
-    pub fn from_rstr(name: &RStr, ty: Type) -> Var {
-        Var {
-            name: Symbol::from_rstr(name),
-            ty,
-        }
-    }
-}
-
-impl BoundVarContent {
-    /// De Bruijn index.
-    pub fn idx(&self) -> DbIndex {
-        self.idx
-    }
-
-    pub fn ty(&self) -> &Expr {
-        &self.ty
-    }
-}
-
-impl ConstContent {
-    #[inline]
-    pub fn fixity(&self) -> Fixity {
-        self.fix.get()
-    }
-}
-
-#[inline]
-fn pred_db_idx(n: DbIndex) -> DbIndex {
-    if n == 0 {
-        0
-    } else {
-        n - 1
-    }
-}
-
-// compute the deepest DB index
-fn compute_db_depth(e: &ExprView) -> DbIndex {
-    match e {
-        EKind | EType => 0u32,
-        EConst(c) => {
-            let d = c.ty.db_depth();
-            debug_assert_eq!(d, 0); // constants should be closed
-            d
-        }
-        EVar(v) => v.ty.db_depth(),
-        EBoundVar(v) => u32::max(v.idx + 1, v.ty.db_depth()),
-        EApp(a, b) => a.db_depth().max(b.db_depth()),
-        ELambda(v_ty, e) | EPi(v_ty, e) => {
-            // `e`'s depth is decremented here
-            v_ty.db_depth().max(pred_db_idx(e.db_depth()))
-        }
-    }
-}
-
-impl ExprView {
-    /// Shallow map, with a depth parameter.
-    ///
-    /// `k` is the current number of surrounding binders, it is passed back
-    /// to the callback `f`, possibly incremented by one.
-    pub fn map<F>(&self, mut f: F, k: DbIndex) -> Result<Self>
-    where
-        F: FnMut(&Expr, DbIndex) -> Result<Expr>,
-    {
-        let r = match self {
-            EType | EKind => self.clone(),
-            EConst(c) => EConst(Box::new(ConstContent {
-                ty: f(&c.ty, k)?,
-                name: c.name.clone(),
-                gen: c.gen,
-                tag: c.tag,
-                fix: c.fix.clone(),
-            })),
-            EVar(v) => EVar(Var {
-                ty: f(&v.ty, k)?,
-                name: v.name.clone(),
-            }),
-            EBoundVar(v) => EBoundVar(BoundVarContent {
-                ty: f(&v.ty, k)?,
-                idx: v.idx,
-            }),
-            EApp(a, b) => EApp(f(a, k)?, f(b, k)?),
-            EPi(ty_a, b) => EPi(f(ty_a, k)?, f(b, k + 1)?),
-            ELambda(ty_a, b) => ELambda(f(ty_a, k)?, f(b, k + 1)?),
-        };
-        Ok(r)
-    }
-
-    /// Iterate on immediate subterms.
-    pub fn iter<F>(&self, mut f: F, k: DbIndex) -> Result<()>
-    where
-        F: FnMut(&Expr, DbIndex) -> Result<()>,
-    {
-        match self {
-            EType | EKind | EConst(..) => (),
-            EVar(v) => {
-                f(&v.ty, k)?;
-            }
-            EBoundVar(v) => {
-                f(&v.ty, k)?;
-            }
-            EApp(a, b) => {
-                f(a, k)?;
-                f(b, k)?;
-            }
-            EPi(ty_a, b) => {
-                f(ty_a, k)?;
-                f(b, k + 1)?;
-            }
-            ELambda(ty_a, b) => {
-                f(ty_a, k)?;
-                f(b, k + 1)?;
-            }
-        };
-        Ok(())
-    }
-}
-
-struct FreeVars<'a> {
-    seen: fnv::FnvHashSet<&'a Expr>,
-    st: Vec<&'a Expr>,
-}
-
-impl<'a> Iterator for FreeVars<'a> {
-    type Item = &'a Var;
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(e) = self.st.pop() {
-            if self.seen.contains(&e) {
-                continue;
-            }
-            self.seen.insert(e);
-
-            match e.view() {
-                EVar(v) => {
-                    self.st.push(&v.ty);
-                    return Some(v);
-                }
-                EType | EKind => (),
-                EConst(c) => self.st.push(&c.ty),
-                EBoundVar(v) => self.st.push(&v.ty),
-                EApp(a, b) => {
-                    self.st.push(a);
-                    self.st.push(b);
-                }
-                EPi(ty, body) | ELambda(ty, body) => {
-                    self.st.push(ty);
-                    self.st.push(body);
-                }
-            }
-        }
-        None
-    }
-}
-
-impl<'a> FreeVars<'a> {
-    fn new() -> Self {
-        FreeVars {
-            seen: fnv::new_set_with_cap(16),
-            st: vec![],
-        }
-    }
-
-    /// Add an expression to explore
-    fn push(&mut self, e: &'a Expr) {
-        self.st.push(e)
-    }
-}
-
-impl Expr {
-    /// View the expression's root.
-    #[inline]
-    pub fn view(&self) -> &ExprView {
-        &self.0.view
-    }
-
-    /// Is this the representation of `Kind`?
-    #[inline]
-    pub fn is_kind(&self) -> bool {
-        match self.0.view {
-            EKind => true,
-            _ => false,
-        }
-    }
-
-    /// Is this the representation of `Type`?
-    #[inline]
-    pub fn is_type(&self) -> bool {
-        match self.0.view {
-            EType => true,
-            _ => false,
-        }
-    }
-
-    /// Is this a functional type?
-    pub fn is_fun_type(&self) -> bool {
-        match self.0.view {
-            EPi(..) => true,
-            _ => false,
-        }
-    }
-
-    /// Is this the representation of `=`?
-    pub fn is_eq(&self) -> bool {
-        match &self.0.view {
-            EConst(c) => c.tag == ConstTag::Eq,
-            _ => false,
-        }
-    }
-
-    /// Type of the expression. Panics if `self.is_kind()`.
-    #[inline]
-    pub fn ty(&self) -> &Expr {
-        match self.0.ty {
-            Some(ref ty) => &ty,
-            None => {
-                debug_assert!(self.is_kind());
-                panic!("cannot return type of expr (must be `kind`)")
-            }
-        }
-    }
-
-    /// Obtain a weak reference to this expression.
-    #[inline]
-    fn weak(&self) -> WExpr {
-        WExpr(Ref::downgrade(&self.0))
-    }
-
-    /// Safe version of `ty`, that works even for `Kind`.
-    pub fn ty_opt(&self) -> &Option<Expr> {
-        &self.0.ty
-    }
-
-    /// `e.unfold_app()` returns a tuple `(f, args)` where `args`
-    /// iterates over arguments.
-    pub fn unfold_app(&self) -> (&Expr, Vec<&Expr>) {
-        let mut e = self;
-        let mut v = vec![];
-        while let EApp(f, a) = e.view() {
-            e = f;
-            v.push(a);
-        }
-        v.reverse();
-        (e, v)
-    }
-
-    /// `e.unfold_pi()` returns a tuple `(ty_args, body)` such
-    /// that `e == pi 0:a1. pi 1:a2. …. body` with `ty_args = (a1,a2,…)`.
-    ///
-    /// The length of `ty_args` indicates how many pi abstractions have been done.
-    pub fn unfold_pi(&self) -> (Vec<&Type>, &Expr) {
-        let mut e = self;
-        let mut v = vec![];
-        while let EPi(ty_arg, body) = e.view() {
-            e = body;
-            v.push(ty_arg);
-        }
-        (v, e)
-    }
-
-    /// View a variable.
-    pub fn as_var(&self) -> Option<&Var> {
-        if let EVar(ref v) = self.0.view {
-            Some(&v)
-        } else {
-            None
-        }
-    }
-
-    /// View as constant.
-    pub fn as_const(&self) -> Option<&ConstContent> {
-        if let EConst(ref c) = self.0.view {
-            Some(&c)
-        } else {
-            None
-        }
-    }
-
-    /// View as application.
-    pub fn as_app(&self) -> Option<(&Expr, &Expr)> {
-        if let EApp(ref a, ref b) = self.0.view {
-            Some((&a, &b))
-        } else {
-            None
-        }
-    }
-
-    /// View as a lambda-expression.
-    pub fn as_lambda(&self) -> Option<(&Type, &Expr)> {
-        if let ELambda(ref ty, ref bod) = self.0.view {
-            Some((&ty, &bod))
-        } else {
-            None
-        }
-    }
-
-    /// View as a pi-expression.
-    pub fn as_pi(&self) -> Option<(&Type, &Expr)> {
-        if let EPi(ref ty, ref bod) = self.0.view {
-            Some((&ty, &bod))
-        } else {
-            None
-        }
-    }
-
-    /// `(a=b).unfold_eq()` returns `Some((a,b))`.
-    pub fn unfold_eq(&self) -> Option<(&Expr, &Expr)> {
-        let (hd1, b) = self.as_app()?;
-        let (hd2, a) = hd1.as_app()?;
-        let (c, _alpha) = hd2.as_app()?;
-        if c.as_const()?.name.name() == "=" {
-            Some((a, b))
-        } else {
-            None
-        }
-    }
-
-    /// Free variables of a given term.
-    pub fn free_vars(&self) -> impl Iterator<Item = &Var> {
-        let mut fv = FreeVars::new();
-        fv.push(self);
-        fv
-    }
-
-    /// Deepest bound variable in the expr.
-    ///
-    /// 0 means it's a closed term.
-    #[inline]
-    fn db_depth(&self) -> DbIndex {
-        self.0.db_depth
-    }
-
-    /// Is this a closed term?
-    #[inline]
-    pub fn is_closed(&self) -> bool {
-        self.db_depth() == 0
-    }
-
-    /// Does this contain any free variables?
-    pub fn has_free_vars(&self) -> bool {
-        self.free_vars().next().is_some()
-    }
-
-    // helper for building expressions
-    fn make_(v: ExprView, em_uid: u32, ty: Option<Expr>) -> Self {
-        let db_depth = compute_db_depth(&v);
-        Expr(Ref::new(ExprImpl {
-            view: v,
-            em_uid,
-            ty,
-            db_depth,
-        }))
-    }
-
-    // pretty print
-    fn pp_(&self, k: DbIndex, out: &mut fmt::Formatter, full: bool) -> fmt::Result {
-        match self.view() {
-            EKind => write!(out, "kind"),
-            EType => write!(out, "type"),
-            EConst(c) => write!(out, "{}", c.name.name()),
-            EVar(v) => write!(out, "{}", v.name.name()),
-            EBoundVar(v) => {
-                // we may want to print non closed terms, so we need isize
-                write!(out, "x{}", (k as isize - v.idx as isize - 1))
-            }
-            EApp(..) => {
-                let (f, args) = self.unfold_app();
-                write!(out, "(")?;
-                if !full && f.is_eq() && args.len() == 3 {
-                    // special: `a=b`, skip type arg
-                    args[1].pp_(k, out, full)?;
-                    write!(out, " = ")?;
-                    args[2].pp_(k, out, full)?;
-                } else {
-                    f.pp_(k, out, full)?;
-                    for x in args {
-                        write!(out, " ")?;
-                        x.pp_(k, out, full)?;
-                    }
-                }
-                write!(out, ")")
-            }
-            ELambda(ty_x, body) => {
-                if full {
-                    write!(out, "(\\x{} : ", k)?;
-                    ty_x.pp_(k, out, full)?;
-                } else {
-                    write!(out, "(\\x{}", k)?;
-                }
-                write!(out, ". ")?;
-                body.pp_(k + 1, out, full)?;
-                write!(out, ")")
-            }
-            // TODO: disable
-            EPi(x, body) if false && !x.is_type() && body.is_closed() => {
-                // TODO: precedence to know whether to print "()"
-                write!(out, "(")?;
-                x.pp_(k, out, full)?;
-                if full {
-                    write!(out, ":")?;
-                    x.ty().pp_(k, out, full)?;
-                }
-                write!(out, " -> ")?;
-                body.pp_(k + 1, out, full)?;
-                write!(out, ")")
-            }
-            EPi(x, body) => {
-                write!(out, "(Πx{}", k)?;
-                if full && !x.is_type() {
-                    write!(out, " : ")?;
-                    x.pp_(k, out, full)?;
-                }
-                write!(out, ". ")?;
-                body.pp_(k + 1, out, full)?;
-                write!(out, ")")
-            }
-        }?;
-        //write!(out, "/{:?}", self.0.as_ref() as *const _)?; // pp pointer
-        Ok(())
-    }
-
-    /// Basic printer.
-    pub fn to_string(&self) -> String {
-        format!("{}", self)
-    }
-}
-
-impl fmt::Debug for Expr {
-    // printer
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        self.pp_(0, out, true)
-    }
-}
-
-impl fmt::Debug for Var {
-    // printer
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        write!(out, "{}:{:?}", self.name.name(), self.ty)
-    }
-}
-
-///! # Theorems.
-///
-/// Theorems are proved correct by construction.
-
-/// A theorem.
-#[derive(Clone)]
-pub struct Thm(Ref<ThmImpl>);
-
-#[derive(Clone)]
-struct ThmImpl {
-    /// Conclusion of the theorem.
-    concl: Expr,
-    /// Hypothesis of the theorem.
-    hyps: Vec<Expr>,
-    /// Unique ID of the `ExprManager`
-    em_uid: u32,
-}
-
-/// Free variables of a set of terms
-pub fn free_vars_iter<'a, I>(i: I) -> impl Iterator<Item = &'a Var>
-where
-    I: Iterator<Item = &'a Expr>,
-{
-    let mut fv = FreeVars::new();
-    for t in i {
-        fv.push(t);
-    }
-    fv
-}
-
-impl Thm {
-    fn make_(concl: Expr, em_uid: u32, mut hyps: Vec<Expr>) -> Self {
-        if hyps.len() >= 2 {
-            hyps.sort_unstable();
-            hyps.dedup();
-            hyps.shrink_to_fit();
-        }
-        Thm(Ref::new(ThmImpl {
-            concl,
-            em_uid,
-            hyps,
-        }))
-    }
-
-    /// Conclusion of the theorem
-    #[inline]
-    pub fn concl(&self) -> &Expr {
-        &self.0.concl
-    }
-
-    /// Hypothesis of the theorem
-    #[inline]
-    pub fn hyps(&self) -> &[Expr] {
-        self.0.hyps.as_slice()
-    }
-
-    #[inline]
-    pub fn hyps_vec(&self) -> &Vec<Expr> {
-        &self.0.hyps
-    }
-}
-
-impl fmt::Display for Thm {
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        if self.hyps().len() == 0 {
-            write!(out, "`|- {}`", self.concl())
-        } else {
-            let mut first = true;
-            for h in self.hyps() {
-                if out.alternate() {
-                    write!(out, "    {}\n", h)?;
-                } else {
-                    if first {
-                        first = false;
-                        write!(out, "`")?;
-                    } else {
-                        write!(out, ", ")?;
-                    }
-                    write!(out, "{}", h)?;
-                }
-            }
-            write!(out, " |- {}`", self.concl())
-        }
-    }
-}
-
-impl fmt::Debug for Thm {
-    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        if self.hyps().len() == 0 {
-            write!(out, "|- {:?}", self.concl())
-        } else {
-            for h in self.hyps() {
-                write!(out, "    {:?}\n", h)?;
-            }
-            write!(out, " |- {:?}", self.concl())
-        }
-    }
-}
-
-impl PartialEq for Thm {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0.as_ref() as *const _, other.0.as_ref() as *const _)
-    }
-}
-
 /// A substitution.
-pub type Subst = Vec<(Var, Expr)>;
-
-///! # Context for Expressions and Theorem.
-///
-/// The proof context is responsible for creating new terms and new theorems,
-/// in a way that ensures theorems are valid.
+#[derive(Clone, Debug)]
+pub struct Subst(Vec<(Var, Expr)>);
 
 /// Global manager for expressions, used to implement perfect sharing, allocating
 /// new terms, etc.
@@ -834,12 +60,6 @@ pub struct NewTypeDef {
     /// `repr_thm` is `|- Phi x <=> repr (abs x) = x`
     pub repr_thm: Thm,
     pub repr_x: Var,
-}
-
-impl fmt::Debug for Ctx {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "<expr manager>")
-    }
 }
 
 // period between 2 cleanups
@@ -906,7 +126,7 @@ impl Ctx {
             let arr = ctx.mk_arrow(db0.clone(), bool.clone()).unwrap();
             let arr = ctx.mk_arrow(db0.clone(), arr).unwrap();
             let ty_eq = ctx.mk_pi_(ty.clone(), arr).unwrap();
-            let fix = FIXITY_EQ;
+            let fix = super::FIXITY_EQ;
             ctx.mk_const_with_(name, ty_eq, ConstTag::Eq, fix).unwrap()
         };
         ctx.eq = Some(eq);
@@ -960,7 +180,7 @@ impl Ctx {
     }
 
     fn add_const_(&mut self, e: Expr) {
-        let name = if let EConst(c) = &e.0.view {
+        let name = if let EConst(c) = e.view() {
             c.name.clone()
         } else {
             unreachable!("not a constant: {:?}", e);
@@ -1001,12 +221,12 @@ impl Ctx {
 
     #[inline]
     fn check_uid_(&self, e: &Expr) {
-        assert!(self.uid == e.0.em_uid); // term should belong to this EM
+        assert!(self.uid == e.ctx_uid()); // term should belong to this ctx
     }
 
     #[inline]
     fn check_thm_uid_(&self, th: &Thm) {
-        assert!(self.uid == th.0.em_uid); // theorem should belong to this EM
+        assert!(self.uid == th.0.ctx_uid); // theorem should belong to this ctx
     }
 
     #[inline]
@@ -1041,7 +261,7 @@ impl Ctx {
                 };
                 Some(self.builtins_().ty.clone())
             }
-            EApp(f, arg) => match &f.ty().0.view {
+            EApp(f, arg) => match f.ty().view() {
                 EPi(ty_var_f, ref ty_body_f) => {
                     // rule: `f: Πx:tya. b`, `arg: tya` ==> `f arg : b[arg/x]`
                     if ty_var_f != arg.ty() {
@@ -1193,11 +413,6 @@ impl Ctx {
         self.hashcons_(EPi(ty_var, body))
     }
 }
-
-pub(crate) const FIXITY_EQ: Fixity = Fixity::Infix((30, 31));
-pub(crate) const FIXITY_LAM: Fixity = Fixity::Binder((10, 11));
-pub(crate) const FIXITY_PI: Fixity = Fixity::Binder((24, 25));
-pub(crate) const FIXITY_ARROW: Fixity = Fixity::Infix((81, 80));
 
 // public interface
 impl Ctx {
@@ -1570,7 +785,7 @@ impl Ctx {
     pub fn thm_abs(&mut self, v: &Var, mut thm: Thm) -> Result<Thm> {
         self.check_uid_(&v.ty);
         self.check_thm_uid_(&thm);
-        if free_vars_iter(thm.0.hyps.iter()).any(|v2| v == v2) {
+        if expr::free_vars_iter(thm.0.hyps.iter()).any(|v2| v == v2) {
             return Err(Error::new("abs: variable occurs in one of the hypothesis"));
         }
 
@@ -1924,99 +1139,42 @@ impl Ctx {
     }
 }
 
-#[cfg(test)]
-mod test {
+mod impls {
     use super::*;
 
-    #[test]
-    fn test_hashcons1() {
-        let mut em = Ctx::new();
-        let b = em.mk_bool();
-        let t1 = em.mk_arrow(b.clone(), b.clone()).unwrap();
-        let t2 = em.mk_arrow(b.clone(), b.clone()).unwrap();
-        assert_eq!(t1, t2);
+    impl fmt::Debug for Ctx {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "<expr manager>")
+        }
     }
 
-    #[test]
-    fn test_sym() {
-        let s1 = Symbol::from_str("a");
-        let s2 = Symbol::from_str("a");
-        let s3 = Symbol::from_str("b");
-        assert_eq!(s1, s2);
-        assert_ne!(s1, s3);
-        assert_eq!(s1.name(), "a");
+    impl std::ops::Deref for Subst {
+        type Target = [(Var, Expr)];
+        #[inline(always)]
+        fn deref(&self) -> &Self::Target {
+            self.0.as_slice()
+        }
     }
 
-    #[test]
-    #[should_panic]
-    fn test_type_of_kind() {
-        let em = Ctx::new();
-        let k = em.mk_ty().ty().clone();
-        let _ = k.ty();
+    impl std::iter::FromIterator<(Var, Expr)> for Subst {
+        fn from_iter<T: IntoIterator<Item = (Var, Expr)>>(iter: T) -> Self {
+            let mut s = Self::new();
+            for e in iter.into_iter() {
+                s.add_binding(e.0, e.1)
+            }
+            s
+        }
     }
 
-    #[test]
-    fn test_apply() {
-        let mut em = Ctx::new();
-        let b = em.mk_bool();
-        let b2b = em.mk_arrow(b.clone(), b.clone()).unwrap();
-        let p = em.mk_var_str("p", b2b);
-        let a = em.mk_var_str("a", b);
-        let pa = em.mk_app(p, a).unwrap();
-        assert!(match pa.view() {
-            EApp(..) => true,
-            _ => false,
-        });
-        assert!(pa.is_closed());
-    }
+    impl Subst {
+        /// New substitution.
+        pub fn new() -> Self {
+            Self(vec![])
+        }
 
-    #[test]
-    fn test_lambda() {
-        let mut em = Ctx::new();
-        let b = em.mk_bool();
-        let b2b = em.mk_arrow(b.clone(), b.clone()).unwrap();
-        let p = em.mk_var_str("p", b2b);
-        let x = Var::from_str("x", b.clone());
-        let ex = em.mk_var(x.clone());
-        let body = em.mk_app(p, ex).unwrap();
-        let f = em.mk_lambda(x, body).unwrap();
-        assert!(match f.view() {
-            ELambda(..) => true,
-            _ => false,
-        });
-        assert!(f.is_closed());
-        let (ty_args, ty_body) = f.ty().unfold_pi();
-        assert_eq!(ty_args.len(), 1);
-        assert_eq!(ty_args[0], &em.mk_bool());
-        assert_eq!(ty_body, &em.mk_bool());
-    }
-
-    #[test]
-    fn test_assume() {
-        let mut em = Ctx::new();
-        let b = em.mk_bool();
-        let b2b = em.mk_arrow(b.clone(), b.clone()).unwrap();
-        let p = em.mk_var_str("p", b2b);
-        let a = em.mk_var_str("a", b);
-        let pa2 = em.mk_app(p.clone(), a.clone()).unwrap();
-        let pa = em.mk_app(p, a).unwrap();
-        assert_eq!(&pa, &pa2);
-        let th = em.thm_assume(pa.clone()).unwrap();
-        assert_eq!(th.concl(), &pa);
-        assert_eq!(th.hyps().len(), 1);
-    }
-
-    #[test]
-    fn test_bool_eq_intro() -> Result<()> {
-        let mut ctx = Ctx::new();
-        let b = ctx.mk_bool();
-        let e1 = ctx.mk_var_str("a", b.clone());
-        let e2 = ctx.mk_var_str("b", b.clone());
-        let th1 = ctx.thm_axiom(vec![e1.clone()], e2.clone())?;
-        let th_a_a = ctx.thm_bool_eq_intro(th1.clone(), th1.clone())?;
-        assert_eq!(th_a_a.concl(), &ctx.mk_eq_app(e2.clone(), e2.clone())?);
-        assert_eq!(th_a_a.hyps().len(), 1);
-        assert_eq!(th_a_a.hyps()[0].clone(), e1);
-        Ok(())
+        /// Add a binding to the substitution.
+        pub fn add_binding(&mut self, v: Var, e: Expr) {
+            self.0.push((v, e))
+        }
     }
 }

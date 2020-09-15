@@ -2,7 +2,7 @@ use super::conv::Converter;
 ///! ## Rewriting
 ///!
 ///! Rewriting algorithms.
-use crate::{kernel_of_trust as k, Ctx, Error, Expr, Result, Thm};
+use crate::{kernel as k, Ctx, Error, Expr, Result, Thm};
 
 /// Rewrite `e` using the converter `conv`.
 ///

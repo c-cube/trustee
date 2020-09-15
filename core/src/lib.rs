@@ -16,20 +16,23 @@
 pub mod algo;
 pub mod error;
 mod fnv;
-pub mod kernel_of_trust;
+pub mod kernel;
 pub mod meta;
 pub mod position;
 pub mod rptr;
 pub mod rstr;
 pub mod syntax;
 
+#[deprecated = "use kernel"]
+pub use kernel as kernel_of_trust;
+
 pub use fnv::{new_set_with_cap, new_table_with_cap, FnvHashMap, FnvHashSet};
 
 pub use crate::meta::{load_prelude_hol, run_code};
 pub use algo::pattern::{self, Pattern, PatternView};
 pub use error::{Error, Result};
-pub use kernel_of_trust::ExprView::*;
-pub use kernel_of_trust::{Ctx, Expr, ExprView, Symbol, Thm, Var};
+pub use kernel::ExprView::*;
+pub use kernel::{Ctx, Expr, ExprView, Symbol, Thm, Var};
 pub use syntax::{parse_expr, parse_expr_with_args, parse_pattern, parse_pattern_with_args};
 
 pub(crate) mod macros {

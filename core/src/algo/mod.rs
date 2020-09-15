@@ -1,6 +1,6 @@
 //! Algorithms that are outside the kernel of trust itself.
 
-use crate::{kernel_of_trust as k, *};
+use crate::{kernel as k, *};
 
 pub mod ac_rw;
 pub mod cc;

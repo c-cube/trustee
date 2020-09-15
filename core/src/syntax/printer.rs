@@ -1,7 +1,7 @@
 //! Pretty-printing terms.
 
 use {
-    crate::{kernel_of_trust as k, syntax::Fixity},
+    crate::{kernel as k, syntax::Fixity},
     std::fmt,
 };
 

@@ -7,7 +7,7 @@
 //! quite closely :-)
 
 use crate::syntax::{lexer::Position, Lexer, Tok};
-use crate::{kernel_of_trust as k, syntax::Fixity, Ctx, Error, Result};
+use crate::{kernel as k, syntax::Fixity, Ctx, Error, Result};
 
 /// Parse the string into an expression.
 pub fn parse_expr(ctx: &mut Ctx, s: &str) -> Result<k::Expr> {
@@ -546,7 +546,7 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{kernel_of_trust as k, Ctx, Error, Result};
+    use crate::{kernel as k, Ctx, Error, Result};
 
     fn mkctx() -> Result<k::Ctx> {
         let mut ctx = k::Ctx::new();

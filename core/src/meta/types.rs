@@ -3,7 +3,7 @@
 use {
     crate::{
         algo::{conv, pattern, Pattern, PatternSubst},
-        kernel_of_trust::{self as k, Ctx},
+        kernel::{self as k, Ctx},
         rptr::RPtr,
         rstr::RStr,
         Error, Result,

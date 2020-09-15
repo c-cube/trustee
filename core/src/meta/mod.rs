@@ -4,7 +4,7 @@
 //! expressions, goals, theorems, and other values. It is designed to be
 //! used both interactively and as an efficient way of storing proofs.
 
-use crate::{kernel_of_trust::Ctx, rstr::RStr, Result};
+use crate::{kernel::Ctx, rstr::RStr, Result};
 
 pub mod builtins;
 pub mod lexer;
@@ -57,7 +57,7 @@ pub fn load_prelude_hol(ctx: &mut Ctx) -> Result<()> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::kernel_of_trust as k;
+    use crate::kernel as k;
     use vm::VM;
 
     macro_rules! eval {

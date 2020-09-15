@@ -2,7 +2,7 @@
 
 use super::types::*;
 
-use crate::{algo, algo::conv, kernel_of_trust as k, rstr::RStr, syntax, Error, Result};
+use crate::{algo, algo::conv, kernel as k, rstr::RStr, syntax, Error, Result};
 
 /// Name and help of all the builtin constructs.
 pub fn all_builtin_names_and_help() -> impl Iterator<Item = (&'static str, &'static str)> {

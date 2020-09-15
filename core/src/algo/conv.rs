@@ -4,7 +4,7 @@
 //! an `Option<Thm>`. It returns `Some(… |- e = e2)` if `e` can be converted
 //! into `e2`, `None` otherwise.
 
-use crate::{kernel_of_trust as k, Ctx, Expr, Result, Thm};
+use crate::{kernel as k, Ctx, Expr, Result, Thm};
 use std::fmt;
 
 /// `converter.try_conv(ctx, e)` is called on a term `e` and can trigger a rewrite step.

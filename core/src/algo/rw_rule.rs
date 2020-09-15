@@ -1,7 +1,7 @@
 //! Equations seen as rewrite rules.
 
 use super::{conv::Converter, unif};
-use crate::{Ctx, Error, Expr, Result, Thm};
+use crate::{kernel as k, Ctx, Error, Expr, Result, Thm};
 
 /// A simple rewrite rule.
 #[derive(Debug, Clone)]
@@ -19,7 +19,8 @@ impl Converter for RewriteRule {
             None => Ok(None),
             Some(subst) => {
                 // match happened, substitute to get an equality.
-                let th = ctx.thm_instantiate(self.th.clone(), &subst.to_k_subst())?;
+                let subst: k::Subst = subst.into();
+                let th = ctx.thm_instantiate(self.th.clone(), &subst)?;
                 Ok(Some(th))
             }
         }

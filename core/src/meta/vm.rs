@@ -3,7 +3,7 @@
 use super::lexer;
 use super::types::*;
 use {
-    crate::{kernel_of_trust::Ctx, rptr::RPtr, rstr::RStr, Error, Result},
+    crate::{kernel::Ctx, rptr::RPtr, rstr::RStr, Error, Result},
     std::io,
 };
 

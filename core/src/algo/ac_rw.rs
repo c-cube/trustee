@@ -4,7 +4,7 @@
 
 use crate::{
     algo::{self, conv, kbo},
-    kernel_of_trust::{Ctx, Error, Expr, Result, Thm},
+    kernel::{Ctx, Error, Expr, Result, Thm},
     syntax,
 };
 

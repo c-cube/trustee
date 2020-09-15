@@ -5,7 +5,7 @@ use super::{lexer, lexer::Tok, types::*};
 use crate::{logdebug, logtrace, perror};
 use {
     crate::{
-        kernel_of_trust::{self as k, Ctx},
+        kernel::{self as k, Ctx},
         rptr::RPtr,
         rstr::RStr,
         syntax, Error, Result,

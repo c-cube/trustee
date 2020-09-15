@@ -7,7 +7,7 @@
 use {
     crate::{
         fnv,
-        kernel_of_trust::{self as k, Expr, ExprView as EV, Var},
+        kernel::{self as k, Expr, ExprView as EV, Var},
     },
     std::cmp::Ordering,
 };
@@ -314,7 +314,7 @@ mod impls {
 mod tests {
     use super::*;
     use crate::{
-        kernel_of_trust::{Ctx, Result},
+        kernel::{Ctx, Result},
         meta, syntax,
     };
 
