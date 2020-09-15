@@ -14,6 +14,7 @@ pub struct RewriteRule {
 
 impl Converter for RewriteRule {
     fn try_conv(&self, ctx: &mut Ctx, e: &Expr) -> Result<Option<Thm>> {
+        crate::logtrace!("rw-rule.try-conv {:?} with rule {:?}", e, self);
         match unif::match_(&self.lhs, e) {
             None => Ok(None),
             Some(subst) => {

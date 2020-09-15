@@ -8,6 +8,16 @@ use crate::{
     syntax,
 };
 
+// TODO: from the E paper: prove these and use them.
+// {f (x, y) = f (y, x),
+// f (f (x, y), z) = f (x, f (y, z)),
+// f (x, f (y, z)) = f (z, f (x, y)),
+// f (x, f (y, z)) = f (y, f (x, z)),
+// f (x, f (y, z)) = f (z, f (y, x))}
+
+// TODO: optionally take an idempotent axiom (and ground-complete it?)
+// TODO: optionally handle neutral elements (/\ + T,  \/ + F)
+
 /// AC-conversion rule for one symbol.
 ///
 /// Use functions from `conv` and `rw` to normalize deeply.
