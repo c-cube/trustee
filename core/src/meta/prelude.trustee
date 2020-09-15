@@ -656,6 +656,16 @@
   (doc "takes `a` and `b` and returns `(~ a \/ b) = (a ==> b)`")
   (subst OrNotEqImply "a" a "b" b))
 
+(defn RImplyToOrNot [th]
+  (doc "takes `|- a ==> b` and returns `|- ~a \/ b`")
+  (match (concl th)
+    (case `==> ?a ?b`
+      (def ornot (ROrNotEqImply a b))
+      (bool_eq th (sym ornot)))
+    (else (fail "RImplyToOrNot requires `|- a ==> b`"))))
+
+
+
 ; TODO: de morgan laws
 
 ; #### select ####
