@@ -378,7 +378,10 @@ impl<'a> Iterator for FreeVars<'a> {
             self.seen.insert(e);
 
             match e.view() {
-                EVar(v) => return Some(v),
+                EVar(v) => {
+                    self.st.push(&v.ty);
+                    return Some(v);
+                }
                 EType | EKind => (),
                 EConst(c) => self.st.push(&c.ty),
                 EBoundVar(v) => self.st.push(&v.ty),
@@ -582,31 +585,6 @@ impl Expr {
     /// Does this contain any free variables?
     pub fn has_free_vars(&self) -> bool {
         self.free_vars().next().is_some()
-    }
-
-    fn size_(&self, tbl: &mut fnv::FnvHashMap<Expr, usize>) -> usize {
-        match tbl.get(self) {
-            Some(v) => *v,
-            None => {
-                let mut n = 1;
-                self.view()
-                    .iter(
-                        |u, _| {
-                            n += u.size_(tbl);
-                            Ok(())
-                        },
-                        0,
-                    )
-                    .unwrap();
-                n
-            }
-        }
-    }
-
-    /// Size of the expression, as a DAG.
-    pub fn size(&self) -> usize {
-        let mut tbl = fnv::new_table_with_cap(16);
-        self.size_(&mut tbl)
     }
 
     // helper for building expressions

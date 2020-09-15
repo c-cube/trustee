@@ -187,10 +187,10 @@ impl Printer {
         // variables using `with a b:ty1. with c: ty2. <the expr>`.
         let mut fvars: Vec<_> = e.free_vars().collect();
 
-        // group by type first, then name
+        // put type variables first.
         fvars.sort_by_key(|v| {
-            let size = v.ty.size();
-            (size, v.ty.clone(), v.name.name())
+            let isty = 1 - ((v.ty.is_type() || v.ty.is_kind()) as u8);
+            (isty, v.ty.clone(), v.name.name())
         });
         fvars.dedup();
 

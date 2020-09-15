@@ -659,4 +659,16 @@ mod test {
         }
         Ok(())
     }
+
+    #[test]
+    fn test_fvars() -> Result<()> {
+        let mut ctx = Ctx::new();
+        let s = "with b:type. with t u:(a : type). with f g:(a : type) -> b. (f t) = (g u)";
+        let e = parse_expr(&mut ctx, s)?;
+        let mut fvars: Vec<_> = e.free_vars().map(|v| v.name.name()).collect();
+        fvars.sort();
+
+        assert_eq!(fvars, vec!["a", "b", "f", "g", "t", "u",]);
+        Ok(())
+    }
 }
