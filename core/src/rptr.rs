@@ -28,9 +28,7 @@ impl<T> Clone for RPtr<T> {
             let i = get_impl_ref!(self);
             let rc = i.rc.get();
             // saturating: if we reach u32::MAX we stay there
-            if rc < u32::MAX {
-                i.rc.set(1 + rc);
-            }
+            i.rc.set(rc.saturating_add(1));
         };
         RPtr(self.0)
     }
@@ -97,7 +95,7 @@ impl<T> Drop for RPtr<T> {
         unsafe {
             let i = get_impl_ref!(self);
             let rc = i.rc.get();
-            assert!(rc > 0);
+            debug_assert!(rc > 0);
             if rc == u32::MAX {
                 return; // saturating, just leak
             }
@@ -178,6 +176,12 @@ impl<T> RPtr<T> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_sz() {
+        let sz = std::mem::size_of::<RPtr<()>>();
+        assert_eq!(sz, std::mem::size_of::<*const ()>());
+    }
 
     #[derive(Debug, Eq, PartialEq, Clone)]
     struct Foo(isize);

@@ -145,10 +145,16 @@ impl RStr {
     }
 }
 
-// TODO: some tests
+// TODO: more tests
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_sz() {
+        let sz = std::mem::size_of::<RStr>();
+        assert_eq!(sz, std::mem::size_of::<*const ()>());
+    }
 
     #[test]
     fn test1() {
