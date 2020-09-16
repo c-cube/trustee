@@ -17,6 +17,7 @@ pub mod algo;
 pub mod error;
 mod fnv;
 pub mod kernel;
+pub mod llproof;
 pub mod meta;
 pub mod position;
 pub mod rptr;
