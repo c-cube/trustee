@@ -26,6 +26,7 @@ syn match       trusteeSym      "\<true\>"
 syn match       trusteeSym      "\<false\>"
 syn match       trusteeNum      "\<[0-9]\+\>"
 
+syn region trusteeExprReg  start='\$' end='\$' contains=trusteeExpr
 
 " TODO: handle this only within ``
 syn match       trusteeExpr      "\<let\>"
