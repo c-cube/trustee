@@ -8,15 +8,26 @@ use crate::{
 };
 
 mod eval;
+pub mod parser;
 
-/// A low-level proof, composed of a series of steps.
+pub use parser::Parser;
+
+/// A low-level proof rule, with a name and an arity.
 ///
 /// It can take some arguments.
-pub struct LLProof {
+pub struct LLProofRule {
     /// Number of arguments that will be consumed from the stack.
     pub n_args: u8,
-    /// Name of the proof rule, if any.
-    pub name: Option<RStr>,
+    /// Name of the proof rule.
+    pub name: RStr,
+    steps: LLProofSteps,
+}
+
+/// A low-level proof, composed of a series of steps.
+pub struct LLProof(LLProofSteps);
+
+/// A series of steps, used in other structures.
+pub struct LLProofSteps {
     /// Successive steps.
     steps: Box<[LLProofStep]>,
     /// Local values.
@@ -24,12 +35,15 @@ pub struct LLProof {
 }
 
 /// Index in `locals`
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct LocalIdx(u8);
 
-#[derive(Debug)]
+/// A single step in a proof; an instruction of the proof virtual machine.
+#[derive(Debug, Clone)]
 pub enum LLProofStep {
-    /// Parse expression in `locals[$0]`
+    /// Load `locals[$0]` onto the stack
+    LoadLocal(LocalIdx),
+    /// Parse expression in `locals[$0]` (a string)
     /// `-- e`
     ParseExpr(LocalIdx),
     /// Copy `st[-i]` to the top.
@@ -47,6 +61,8 @@ pub enum LLProofStep {
     EMkEq,
     /// `a b -- (app a b)`
     EApp,
+    /// `th1 th2 -- cut(th1, th2)`
+    ThCut,
     /// `e -- assume(e)`
     ThAssume,
     /// Call rule `locals[$0]`.
@@ -60,8 +76,6 @@ pub enum LLProofStep {
 
 /// Builder for a proof.
 pub struct LLProofBuilder {
-    n_args: u8,
-    name: Option<RStr>,
     steps: Vec<LLProofStep>,
     locals: Vec<LLValue>,
 }
@@ -83,7 +97,7 @@ pub enum LLValue {
     /// Substitution obtained from a pattern.
     PatSubst(RPtr<PatternSubst>),
     /// A proof rule.
-    Rule(RPtr<LLProof>),
+    Rule(RPtr<LLProofRule>),
 }
 
 const INIT_ST_SIZE: usize = 256;
@@ -103,8 +117,6 @@ pub fn eval_proof(ctx: &mut Ctx, p: &LLProof) -> Result<Thm> {
     Ok(th)
 }
 
-// TODO: add a syntax file to parse the proofs
-
 mod impls {
     use super::*;
     use std::{fmt, u8};
@@ -120,17 +132,41 @@ mod impls {
         }
     }
 
+    impl fmt::Debug for LocalIdx {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            write!(out, "loc({})", self.0)
+        }
+    }
+
+    // print series of steps
+    fn pp_steps(steps: &LLProofSteps, out: &mut fmt::Formatter) -> fmt::Result {
+        for s in &*steps.steps {
+            write!(out, "  {:?}", s)?;
+            if let Some(lix) = s.get_lix() {
+                write!(out, "  // {:?}", &steps.locals[lix.0 as usize])?;
+            }
+            writeln!(out, "")?;
+        }
+        Ok(())
+    }
+
     impl fmt::Debug for LLProof {
         fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-            let name = self.name.as_ref().map(|s| &**s).unwrap_or("<anon>");
-            writeln!(out, "llproof (n-args={}, name={}) [", self.n_args, name)?;
-            for s in &*self.steps {
-                write!(out, "  {:?}", s)?;
-                if let Some(lix) = s.get_lix() {
-                    write!(out, "  // {:?}", &self.locals[lix.0 as usize])?;
-                }
-                writeln!(out, "")?;
-            }
+            writeln!(out, "llproof[")?;
+            pp_steps(&self.0, out)?;
+            writeln!(out, "]")?;
+            Ok(())
+        }
+    }
+
+    impl fmt::Debug for LLProofRule {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            writeln!(
+                out,
+                "llproofrule (n-args={}, name={}) [",
+                self.n_args, &*self.name
+            )?;
+            pp_steps(&self.steps, out)?;
             writeln!(out, "]")?;
             Ok(())
         }
@@ -153,23 +189,35 @@ mod impls {
                 LLProofStep::SetByName(lix) => Some(*lix),
                 LLProofStep::GetByname(lix) => Some(*lix),
                 LLProofStep::CallRule(lix) => Some(*lix),
+                LLProofStep::LoadLocal(lix) => Some(*lix),
                 LLProofStep::LoadDeep(..)
                 | LLProofStep::EType
                 | LLProofStep::EGetType
                 | LLProofStep::EEq
                 | LLProofStep::EMkEq
                 | LLProofStep::EApp
+                | LLProofStep::ThCut
                 | LLProofStep::ThAssume => None,
+            }
+        }
+    }
+
+    impl LLProofRule {
+        /// Constructor.
+        pub fn new(name: RStr, n_args: u8, steps: LLProofSteps) -> Self {
+            // TODO: arity check.
+            Self {
+                name,
+                n_args,
+                steps,
             }
         }
     }
 
     impl LLProofBuilder {
         /// New proof builder.
-        pub fn new(n_args: u8, name: Option<RStr>) -> Self {
+        pub fn new() -> Self {
             Self {
-                n_args,
-                name,
                 steps: vec![],
                 locals: vec![],
             }
@@ -196,21 +244,23 @@ mod impls {
             self.steps.push(st)
         }
 
-        /// Convert into a proper proof.
+        /// Convert into a proper set of steps.
         pub fn into_proof(self) -> LLProof {
-            let LLProofBuilder {
-                steps,
-                locals,
-                n_args,
-                name,
-            } = self;
+            let LLProofBuilder { steps, locals } = self;
             let steps = steps.into_boxed_slice();
             let locals = locals.into_boxed_slice();
-            LLProof {
-                steps,
-                locals,
+            LLProof(LLProofSteps { steps, locals })
+        }
+
+        /// Convert into a proper set of steps.
+        pub fn into_proof_rule(self, name: impl Into<RStr>, n_args: u8) -> LLProofRule {
+            let LLProofBuilder { steps, locals } = self;
+            let steps = steps.into_boxed_slice();
+            let locals = locals.into_boxed_slice();
+            LLProofRule {
                 n_args,
-                name,
+                name: name.into(),
+                steps: LLProofSteps { steps, locals },
             }
         }
     }
@@ -233,7 +283,7 @@ mod test {
 
     #[test]
     fn test_eval1() {
-        let mut pr = LLProofBuilder::new(0, None);
+        let mut pr = LLProofBuilder::new();
         let lix = pr
             .alloc_local(LLValue::Str("with a b:bool. a = b".into()))
             .unwrap();

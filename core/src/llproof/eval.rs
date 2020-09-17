@@ -53,18 +53,14 @@ macro_rules! getv {
 
 getv!(getstr, LLValue::Str(v), &**v, "expected string");
 getv!(getexpr, LLValue::Expr(e), e, "expected expression");
+getv!(getthm, LLValue::Thm(th), th, "expected theorem");
 getv!(getrule, LLValue::Rule(r), &**r, "expected proof rule");
 
 impl<'a> Eval<'a> {
     /// Evaluate the given proof.
     pub fn eval(mut self, p: &LLProof) -> Result<LLValue> {
         // TODO: also add an entrypoint with some args
-        if p.n_args != 0 {
-            return Err(Error::new(
-                "cannot evaluate a proof that requires arguments",
-            ));
-        }
-        self.eval_loop_(p);
+        self.eval_loop_(&p.0);
 
         if let Some(e) = self.err {
             Err(e) // execution failed
@@ -79,10 +75,14 @@ impl<'a> Eval<'a> {
     /// Evaluate current proof.
     /// Returns `true` if evaluation was successful, otherwise set
     /// `err` to `Some(e)` and return `false`.
-    fn eval_loop_(&mut self, p: &LLProof) -> bool {
+    fn eval_loop_(&mut self, p: &LLProofSteps) -> bool {
         // linear execution
         for step in p.steps.iter() {
             match step {
+                LLProofStep::LoadLocal(lix) => {
+                    let v = p.locals[lix.0 as usize].clone();
+                    self.st.push(v)
+                }
                 LLProofStep::ParseExpr(lix) => {
                     let s = getstr!(self, &p.locals[lix.0 as usize]);
                     let e = tryev!(self, syntax::parse_expr(self.ctx, s));
@@ -129,6 +129,14 @@ impl<'a> Eval<'a> {
                     let th = tryev!(self, self.ctx.thm_assume(e));
                     self.st.push(LLValue::Thm(th));
                 }
+                LLProofStep::ThCut => {
+                    let v = popst!(self);
+                    let th2 = getthm!(self, v);
+                    let v = popst!(self);
+                    let th1 = getthm!(self, v);
+                    let th = tryev!(self, self.ctx.thm_cut(th1, th2));
+                    self.st.push(LLValue::Thm(th));
+                }
                 LLProofStep::CallRule(lix) => {
                     let p2 = getrule!(self, &p.locals[lix.0 as usize]);
                     crate::logtrace!("call proof rule {:?}", p2.name);
@@ -138,7 +146,7 @@ impl<'a> Eval<'a> {
                         return false;
                     }
 
-                    let ok = self.eval_loop_(p2);
+                    let ok = self.eval_loop_(&p2.steps);
                     if !ok {
                         return false;
                     }
