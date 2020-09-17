@@ -15,7 +15,7 @@ pub(super) struct ThmImpl {
     pub concl: Expr,
     /// Hypothesis of the theorem.
     pub hyps: Vec<Expr>,
-    /// Unique ID of the `ExprManager`
+    /// Unique ID of the `Ctx`
     pub ctx_uid: u32,
 }
 
@@ -57,7 +57,7 @@ mod impls {
     impl fmt::Display for Thm {
         fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
             if self.hyps().len() == 0 {
-                write!(out, "`|- {}`", self.concl())
+                write!(out, "$|- {}$", self.concl())
             } else {
                 let mut first = true;
                 for h in self.hyps() {
@@ -66,14 +66,14 @@ mod impls {
                     } else {
                         if first {
                             first = false;
-                            write!(out, "`")?;
+                            write!(out, "$")?;
                         } else {
                             write!(out, ", ")?;
                         }
                         write!(out, "{}", h)?;
                     }
                 }
-                write!(out, " |- {}`", self.concl())
+                write!(out, " |- {}$", self.concl())
             }
         }
     }
