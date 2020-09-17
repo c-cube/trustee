@@ -255,13 +255,13 @@ mod test {
     fn test_parse_expr() -> Result<()> {
         let mut ctx = k::Ctx::new();
         let prelude = r#"
-        (decl "a" `bool`)
-        (decl "b" `bool`)
-        (decl "f" `bool->bool->bool`)
+        (decl "a" $bool$)
+        (decl "b" $bool$)
+        (decl "f" $bool->bool->bool$)
         "#;
         run_code(&mut ctx, prelude, None)?;
-        let v1 = run_code(&mut ctx, "(parse_expr \"(f ? ?)\" `a` `b`)", None)?;
-        let v2 = run_code(&mut ctx, "`f a b`", None)?;
+        let v1 = run_code(&mut ctx, "(parse_expr \"(f ? ?)\" $a$ $b$)", None)?;
+        let v2 = run_code(&mut ctx, "$f a b$", None)?;
         assert_eq!(v1, v2);
         Ok(())
     }
@@ -340,19 +340,19 @@ mod test {
     }
 
     const PRELUDE: &'static str = r#"
-            (decl "tau" `type`)
-            (decl "a0" `tau`)
-            (decl "b0" `tau`)
-            (decl "c0" `tau`)
-            (decl "f1" `tau -> tau`)
-            (decl "g1" `tau -> tau`)
-            (decl "f2" `tau -> tau -> tau`)
-            (decl "p0" `bool`)
-            (decl "q0" `bool`)
-            (decl "r0" `bool`)
-            (decl "p1" `tau -> bool`)
-            (decl "q1" `tau -> bool`)
-            (decl "p2" `tau -> tau -> bool`)
+            (decl "tau" $type$)
+            (decl "a0" $tau$)
+            (decl "b0" $tau$)
+            (decl "c0" $tau$)
+            (decl "f1" $tau -> tau$)
+            (decl "g1" $tau -> tau$)
+            (decl "f2" $tau -> tau -> tau$)
+            (decl "p0" $bool$)
+            (decl "q0" $bool$)
+            (decl "r0" $bool$)
+            (decl "p1" $tau -> bool$)
+            (decl "q1" $tau -> bool$)
+            (decl "p2" $tau -> tau -> bool$)
             "#;
 
     #[test]
@@ -360,7 +360,7 @@ mod test {
         let mut ctx = k::Ctx::new();
         load_prelude_hol(&mut ctx)?;
         run_code(&mut ctx, PRELUDE, None)?;
-        let v = run_code(&mut ctx, "(MP (assume `p0 ==> q0`) (assume `p0`))", None)?;
+        let v = run_code(&mut ctx, "(MP (assume $p0 ==> q0$) (assume $p0$))", None)?;
         assert_eq!(v.as_thm().expect("thm").concl().clone().to_string(), "q0");
         Ok(())
     }
@@ -391,8 +391,8 @@ mod test {
         run_code(&mut ctx, PRELUDE, None)?;
         run_code(
             &mut ctx,
-            r#"(defthm "F1" (axiom `f2 (x:tau) (g1 (y:tau)) = f1 y`))
-                (defthm "TH" (axiom `p1 (f2 a0 (g1 c0))`))
+            r#"(defthm "F1" (axiom $f2 (x:tau) (g1 (y:tau)) = f1 y$))
+                (defthm "TH" (axiom $p1 (f2 a0 (g1 c0))$))
                 "#,
             None,
         )?;
@@ -411,16 +411,16 @@ mod test {
         load_prelude_hol(&mut ctx)?;
         let eT = eval!(ctx, "T")?;
         let eF = eval!(ctx, "F")?;
-        check_eval!(ctx, r#"(match `T /\ F` (else 1))"#, 1);
-        check_eval!(ctx, r#"(match `T /\ F` (case `_` 2) (else 1))"#, 2);
+        check_eval!(ctx, r#"(match $T /\ F$ (else 1))"#, 1);
+        check_eval!(ctx, r#"(match $T /\ F$ (case $_$ 2) (else 1))"#, 2);
         check_eval!(
             ctx,
-            r#"(match `T /\ F` (case `/\ ?a ?b` [a b]) (else 1))"#,
+            r#"(match $T /\ F$ (case $/\ ?a ?b$ [a b]) (else 1))"#,
             vec![eT.clone(), eF.clone()]
         );
         check_eval!(
             ctx,
-            r#"(match `T /\ F` (case `/\ ?a ?b` (def h [b a]) h) (else 1))"#,
+            r#"(match $T /\ F$ (case $/\ ?a ?b$ (def h [b a]) h) (else 1))"#,
             vec![eF.clone(), eT.clone()]
         );
         check_eval!(

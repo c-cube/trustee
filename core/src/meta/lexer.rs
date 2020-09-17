@@ -39,11 +39,11 @@ pub struct Lexer<'b> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Tok<'b> {
     Eof,
-    ColonId(&'b str),      // `:foo`
+    ColonId(&'b str),      // :foo
     Id(&'b str),           // identifier
     QuotedString(&'b str), // "some string"
-    QuotedExpr(&'b str),   // `some expr`
-    Trace,                 // `>>`
+    QuotedExpr(&'b str),   // $some expr$
+    Trace,                 // '>>'
     Int(i64),
     LParen,        // '('
     RParen,        // ')'
@@ -66,7 +66,6 @@ fn is_id_char(c: u8) -> bool {
         | b'.'
         | b'@'
         | b'!'
-        | b'$'
         | b'%'
         | b'^'
         | b'&'
@@ -182,9 +181,9 @@ impl<'b> Lexer<'b> {
                 self.pos.col += 1;
                 Tok::RBracket
             }
-            b'`' => {
+            b'$' => {
                 let mut j = self.i + 1;
-                while j < self.bytes.len() && self.bytes[j] != b'`' {
+                while j < self.bytes.len() && self.bytes[j] != b'$' {
                     j += 1;
                 }
                 let src_expr =
@@ -377,13 +376,13 @@ mod test {
     fn test_lexer4() {
         use Tok as T;
         let a = vec![(
-            r#"(match `T/\F` ("?a /\ ?b" (def l [a b]) l) (else 1))"#,
+            r#"(match $T/\F$ ($?a /\ ?b$ (def l [a b]) l) (else 1))"#,
             vec![
                 T::LParen,
                 T::Id("match"),
                 T::QuotedExpr("T/\\F"),
                 T::LParen,
-                T::QuotedString("?a /\\ ?b"),
+                T::QuotedExpr("?a /\\ ?b"),
                 T::LParen,
                 T::Id("def"),
                 T::Id("l"),

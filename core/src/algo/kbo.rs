@@ -319,16 +319,16 @@ mod tests {
     };
 
     const PRELUDE: &'static str = r#"
-    (decl "tau" `type`)
-    (decl "p0" `bool`)
-    (decl "f1" `tau -> tau`)
-    (decl "g1" `tau -> tau`)
-    (decl "f2" `tau -> tau -> tau`)
-    (decl "g2" `tau -> tau -> tau`)
-    (decl "a" `tau`)
-    (decl "b" `tau`)
-    (decl "c" `tau`)
-    (decl "d" `tau`)
+    (decl "tau" $type$)
+    (decl "p0" $bool$)
+    (decl "f1" $tau -> tau$)
+    (decl "g1" $tau -> tau$)
+    (decl "f2" $tau -> tau -> tau$)
+    (decl "g2" $tau -> tau -> tau$)
+    (decl "a" $tau$)
+    (decl "b" $tau$)
+    (decl "c" $tau$)
+    (decl "d" $tau$)
     "#;
 
     #[test]

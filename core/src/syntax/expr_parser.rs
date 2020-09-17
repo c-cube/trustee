@@ -385,7 +385,7 @@ impl<'a> Parser<'a> {
                         Fixity::Nullary => self.parse_nullary_(s)?,
                     }
                 }
-                DOLLAR_SYM(s) => self.expr_of_atom_(s)?,
+                AT_SYM(s) => self.expr_of_atom_(s)?,
                 QUESTION_MARK => self.interpol_expr_()?,
                 WILDCARD | QUESTION_MARK_STR(..) => {
                     return Err(perror!(self, "invalid token in expression: {:?}", t))
@@ -452,7 +452,7 @@ impl<'a> Parser<'a> {
                     lhs = self.ctx.mk_app(lhs, t)?;
                     continue;
                 }
-                DOLLAR_SYM(s) => {
+                AT_SYM(s) => {
                     let arg = self.expr_of_atom_(s)?;
 
                     self.lexer.next();
@@ -567,7 +567,7 @@ mod test {
                 "(myb bool (\\x0 : bool. (= bool x0 a)))",
             ),
             (
-                r#"with a:bool. $myb bool (\x:bool. x=a)"#,
+                r#"with a:bool. @myb bool (\x:bool. x=a)"#,
                 "(myb bool (\\x0 : bool. (= bool x0 a)))",
             ),
             (r#"(\x:bool. x= x) "#, "(\\x0 : bool. (= bool x0 x0))"),

@@ -12,6 +12,9 @@ pub mod parser;
 
 pub use parser::Parser;
 
+// TODO: printing of proofs (in a format that can be read back)
+// TODO: proof generation for opentheory, with a small CLI tool
+
 /// A low-level proof rule, with a name and an arity.
 ///
 /// It can take some arguments.

@@ -18,7 +18,7 @@ pub(super) enum Tok<'a> {
     QUOTED_STR(&'a str),
     LET,
     IN,
-    DOLLAR_SYM(&'a str),
+    AT_SYM(&'a str),
     NUM(&'a str),
     ERROR(u8),
     EOF,
@@ -141,7 +141,7 @@ impl<'a> Lexer<'a> {
                 self.i = j;
                 QUESTION_MARK_STR(slice)
             }
-        } else if c == b'$' {
+        } else if c == b'@' {
             // operator but without any precedence
             let mut j = self.i + 1;
             while j < bytes.len() {
@@ -155,7 +155,7 @@ impl<'a> Lexer<'a> {
             let slice = &self.src[self.i + 1..j];
             self.pos.col += (j - self.i) as u32;
             self.i = j;
-            return DOLLAR_SYM(slice);
+            return AT_SYM(slice);
         } else if c == b'"' {
             // TODO: escaping of inner '"' ?
             let mut j = self.i + 1;

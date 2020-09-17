@@ -526,7 +526,7 @@ mod impls {
                     Ok(())
                 }
                 Value::Str(s) => write!(out, "{:?}", s),
-                Value::Expr(e) => write!(out, "`{}`", e),
+                Value::Expr(e) => write!(out, "${}$", e),
                 Value::Thm(th) => write!(out, "{}", th),
                 Value::Closure(cl) => {
                     let nup = cl.upvalues().len();
@@ -537,7 +537,7 @@ mod impls {
                     }
                 }
                 Value::Builtin(b) => write!(out, "<builtin {}>", b.name),
-                Value::Pattern(p) => write!(out, "<pattern `{:?}`>", p),
+                Value::Pattern(p) => write!(out, "<pattern ${:?}$>", p),
                 Value::PatSubst(s) => write!(out, "<pattern-subst {:?}>", s),
                 Value::Pos(p) => write!(out, "<position {}>", p),
                 Value::Error(e) => write!(out, "<error {}>", e),

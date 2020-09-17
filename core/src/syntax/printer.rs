@@ -57,7 +57,7 @@ impl Printer {
             EV::EConst(c) => match c.fixity() {
                 Fixity::Infix(..) | Fixity::Prefix(..) | Fixity::Binder(..) => {
                     // must escape that.
-                    write!(out, "${}", c.name.name())?
+                    write!(out, "@{}", c.name.name())?
                 }
                 _ => write!(out, "{}", c.name.name())?,
             },
@@ -117,7 +117,7 @@ impl Printer {
                     | Fixity::Prefix(..)
                     | Fixity::Postfix(..) => {
                         // default, safe case: print `f` independently,
-                        // it'll have `$` as prefix.
+                        // it'll have `@` as prefix.
                         write!(out, "(")?;
                         self.pp_expr(f, k, P_MAX, P_MAX, out)?;
                         for x in &args {
@@ -239,7 +239,7 @@ mod test {
     fn test_printer() -> Result<()> {
         let pairs = [
             ("with a: type. (a -> a) -> a", "with a:type. (a -> a) -> a"),
-            ("$~", "$~"),
+            ("@~", "@~"),
             (
                 // test that /\ is printed as right-assoc
                 r#"with a b : bool. a /\ (a/\ T) /\ b"#,
@@ -289,7 +289,7 @@ mod test {
         assert_eq!(s, "with x y:bool. x = y");
         let e1 = e.as_app().ok_or_else(|| Error::new("is not app"))?.0;
         let s1 = format!("{}", e1);
-        assert_eq!(s1, "with x:bool. ($= bool x)");
+        assert_eq!(s1, "with x:bool. (@= bool x)");
         Ok(())
     }
 }

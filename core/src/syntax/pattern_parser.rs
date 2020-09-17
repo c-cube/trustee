@@ -90,7 +90,7 @@ mod parser {
                 | Tok::QUOTED_STR(_)
                 | Tok::LET
                 | Tok::IN
-                | Tok::DOLLAR_SYM(_)
+                | Tok::AT_SYM(_)
                 | Tok::NUM(_)
                 | Tok::EOF => {
                     return Err(Error::new_string(format!(

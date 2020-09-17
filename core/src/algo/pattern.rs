@@ -306,7 +306,7 @@ mod test {
         let s = r#"(/\ ?a (\/ ?a (~ ?b)))"#;
         let p = syntax::parse_pattern(&mut ctx, &s)?;
         let s2 = format!("{:?}", p);
-        assert_eq!(r#"($/\ ?a ($\/ .?a ($~ ?b)))"#, s2);
+        assert_eq!(r#"(@/\ ?a (@\/ .?a (@~ ?b)))"#, s2);
         Ok(())
     }
 
