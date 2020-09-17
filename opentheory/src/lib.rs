@@ -310,6 +310,10 @@ impl OConst for CustomConst {
     }
 }
 
+const PRELUDE: &str = r#"
+(decl "ind" $type$)
+"#;
+
 impl<'a, CB: Callbacks> VM<'a, CB> {
     /// Create a new VM using the given expression manager.
     pub fn new_with(ctx: &'a mut k::Ctx, cb: CB) -> Self {
@@ -318,8 +322,8 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             eprintln!("cannot load HOL prelude into the context: {}", e)
         }
         // declare `ind`
-        if let Err(e) = meta::run_code(ctx, r#" "ind" `type` decl "#, None) {
-            eprintln!("cannot declare `ind`: {}", e)
+        if let Err(e) = meta::run_code(ctx, PRELUDE, Some("OT prelude".into())) {
+            eprintln!("cannot parse prelude: {}", e)
         }
         VM {
             ctx,

@@ -16,7 +16,7 @@ impl open_theory::Callbacks for LogCB {
 }
 
 const PRELUDE: &'static str = r#"
-(decl "ind" `type`)
+(decl "ind" $type$)
 "#;
 
 fn parse_all() -> trustee::Result<()> {

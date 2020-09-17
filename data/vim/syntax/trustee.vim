@@ -50,6 +50,7 @@ syn match       trusteeExpr      "==>"
 
 "syn match       trusteeDelim      "("
 "syn match       trusteeDelim      ")"
+syn match       trusteeDelim      "\$"
 
 syn keyword trusteeThm   assume axiom mp bool_eq bool_eq_intro congr
 syn keyword trusteeThm   trans refl abs absv congr_ty beta_conv sym cut
@@ -73,7 +74,7 @@ if version >= 508 || !exists("did_trustee_syntax_inits")
   HiLink trusteeStr         String
   HiLink trusteeSym         Special
   HiLink trusteeTodo        Todo
-  HiLink trusteeDelim       Delimiter
+  HiLink trusteeDelim       Label
   delcommand HiLink
 end
 
