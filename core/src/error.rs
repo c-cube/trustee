@@ -54,6 +54,11 @@ mod impls {
             }
         }
     }
+    impl From<std::io::Error> for Error {
+        fn from(e: std::io::Error) -> Self {
+            Self::new_string(format!("IO error: {}", e))
+        }
+    }
 }
 
 impl Error {

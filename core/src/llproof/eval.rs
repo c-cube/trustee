@@ -1,11 +1,14 @@
 //! # Evaluation.
 
-use super::*;
+use super::{
+    proof::{LLProofSteps, LocalValue},
+    *,
+};
 
 /// Evaluator.
 pub struct Eval<'a> {
     pub ctx: &'a mut Ctx,
-    pub st: &'a mut Vec<LLValue>,
+    pub st: &'a mut Vec<StackValue>,
     pub err: Option<Error>,
 }
 
@@ -51,14 +54,16 @@ macro_rules! getv {
     };
 }
 
-getv!(getstr, LLValue::Str(v), &**v, "expected string");
-getv!(getexpr, LLValue::Expr(e), e, "expected expression");
-getv!(getthm, LLValue::Thm(th), th, "expected theorem");
-getv!(getrule, LLValue::Rule(r), &**r, "expected proof rule");
+getv!(lgetstr, LocalValue::Str(ref v), v, "expected string");
+getv!(lgetexpr, LocalValue::Expr(ref e), e, "expected expression");
+getv!(getstr, StackValue::Str(v), v, "expected string");
+getv!(getexpr, StackValue::Expr(e), e, "expected expression");
+getv!(getthm, StackValue::Thm(th), th, "expected theorem");
+getv!(lgetrule, LocalValue::Rule(r), &*r, "expected proof rule");
 
 impl<'a> Eval<'a> {
     /// Evaluate the given proof.
-    pub fn eval(mut self, p: &LLProof) -> Result<LLValue> {
+    pub fn eval(mut self, p: &LLProof) -> Result<StackValue> {
         // TODO: also add an entrypoint with some args
         self.eval_loop_(&p.0);
 
@@ -80,13 +85,14 @@ impl<'a> Eval<'a> {
         for step in p.steps.iter() {
             match step {
                 LLProofStep::LoadLocal(lix) => {
-                    let v = p.locals[lix.0 as usize].clone();
+                    let v = p.locals[lix.0 as usize].clone().into();
                     self.st.push(v)
                 }
-                LLProofStep::ParseExpr(lix) => {
-                    let s = getstr!(self, &p.locals[lix.0 as usize]);
+                LLProofStep::ParseExpr => {
+                    let v = popst!(self);
+                    let s = &*getstr!(self, v);
                     let e = tryev!(self, syntax::parse_expr(self.ctx, s));
-                    self.st.push(LLValue::Expr(e))
+                    self.st.push(StackValue::Expr(e))
                 }
                 LLProofStep::LoadDeep(i) => {
                     let n = self.st.len();
@@ -94,18 +100,18 @@ impl<'a> Eval<'a> {
                     let v = self.st[n - (*i as usize)].clone();
                     self.st.push(v)
                 }
-                LLProofStep::EType => {
+                LLProofStep::EMkType => {
                     let v = self.ctx.mk_ty();
-                    self.st.push(LLValue::Expr(v))
+                    self.st.push(StackValue::Expr(v))
                 }
                 LLProofStep::EGetType => {
                     let v = popst!(self);
                     let e = getexpr!(self, v);
-                    self.st.push(LLValue::Expr(e.ty().clone()));
+                    self.st.push(StackValue::Expr(e.ty().clone()));
                 }
                 LLProofStep::EEq => {
                     let e = self.ctx.mk_eq();
-                    self.st.push(LLValue::Expr(e));
+                    self.st.push(StackValue::Expr(e));
                 }
                 LLProofStep::EMkEq => {
                     let v = popst!(self);
@@ -113,7 +119,7 @@ impl<'a> Eval<'a> {
                     let v = popst!(self);
                     let e1 = getexpr!(self, v);
                     let e = tryev!(self, self.ctx.mk_eq_app(e1, e2));
-                    self.st.push(LLValue::Expr(e));
+                    self.st.push(StackValue::Expr(e));
                 }
                 LLProofStep::EApp => {
                     let v = popst!(self);
@@ -121,13 +127,13 @@ impl<'a> Eval<'a> {
                     let v = popst!(self);
                     let e1 = getexpr!(self, v);
                     let e = tryev!(self, self.ctx.mk_app(e1, e2));
-                    self.st.push(LLValue::Expr(e));
+                    self.st.push(StackValue::Expr(e));
                 }
                 LLProofStep::ThAssume => {
                     let v = popst!(self);
                     let e = getexpr!(self, v);
                     let th = tryev!(self, self.ctx.thm_assume(e));
-                    self.st.push(LLValue::Thm(th));
+                    self.st.push(StackValue::Thm(th));
                 }
                 LLProofStep::ThCut => {
                     let v = popst!(self);
@@ -135,10 +141,10 @@ impl<'a> Eval<'a> {
                     let v = popst!(self);
                     let th1 = getthm!(self, v);
                     let th = tryev!(self, self.ctx.thm_cut(th1, th2));
-                    self.st.push(LLValue::Thm(th));
+                    self.st.push(StackValue::Thm(th));
                 }
                 LLProofStep::CallRule(lix) => {
-                    let p2 = getrule!(self, &p.locals[lix.0 as usize]);
+                    let p2 = lgetrule!(self, &p.locals[lix.0 as usize]);
                     crate::logtrace!("call proof rule {:?}", p2.name);
 
                     if p2.n_args as usize > self.st.len() {

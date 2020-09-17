@@ -1,6 +1,10 @@
 //! # Parser for LLProof
 
-use super::*;
+use super::{
+    proof::{LLProofBuilder, LLStatement},
+    *,
+};
+use crate::Ctx;
 use std::u8;
 
 /// A parser for a series of `LLProof`.
@@ -30,14 +34,6 @@ enum Tok<'b> {
     LParen,                // '('
     RParen,                // ')'
     Invalid(char),         // to report an error
-}
-
-#[derive(Debug)]
-pub enum Statement<'a> {
-    /// Define a rule.
-    DefRule(LLProofRule),
-    /// Declare a lemma in the context, using the proof's result.
-    Set(&'a str, LLProof),
 }
 
 // TODO: eval statements
@@ -127,7 +123,7 @@ impl<'a> Parser<'a> {
         Ok((pb, n_st_size))
     }
 
-    fn parse_(&mut self) -> Result<Option<Statement<'a>>> {
+    fn parse_(&mut self) -> Result<Option<LLStatement<'a>>> {
         if self.lexer.eof() {
             return Ok(None);
         }
@@ -144,7 +140,7 @@ impl<'a> Parser<'a> {
                     return Err(Error::new("set: requires result stack to have size 1"));
                 }
                 let proof = pb.into_proof();
-                Statement::Set(name, proof)
+                LLStatement::Set(name, proof)
             }
             "defrule" => {
                 // parse name+arity
@@ -169,7 +165,7 @@ impl<'a> Parser<'a> {
                 }
 
                 let rule = pb.into_proof_rule(name, n_args);
-                Statement::DefRule(rule)
+                LLStatement::DefRule(rule)
             }
             _ => return Err(Error::new("unknown statement")),
         };
@@ -179,7 +175,7 @@ impl<'a> Parser<'a> {
         Ok(Some(st))
     }
 
-    pub fn parse(&mut self) -> Result<Option<Statement<'a>>> {
+    pub fn parse(&mut self) -> Result<Option<LLStatement<'a>>> {
         self.parse_()
             .map_err(|e| e.with_source(Error::new_string(format!("at line {}", self.lexer.line))))
     }
