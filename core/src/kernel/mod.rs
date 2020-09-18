@@ -103,18 +103,4 @@ mod test {
         assert_eq!(th.concl(), &pa);
         assert_eq!(th.hyps().len(), 1);
     }
-
-    #[test]
-    fn test_bool_eq_intro() -> Result<()> {
-        let mut ctx = Ctx::new();
-        let b = ctx.mk_bool();
-        let e1 = ctx.mk_var_str("a", b.clone());
-        let e2 = ctx.mk_var_str("b", b.clone());
-        let th1 = ctx.thm_axiom(vec![e1.clone()], e2.clone())?;
-        let th_a_a = ctx.thm_bool_eq_intro(th1.clone(), th1.clone())?;
-        assert_eq!(th_a_a.concl(), &ctx.mk_eq_app(e2.clone(), e2.clone())?);
-        assert_eq!(th_a_a.hyps().len(), 1);
-        assert_eq!(th_a_a.hyps()[0].clone(), e1);
-        Ok(())
-    }
 }

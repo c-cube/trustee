@@ -479,7 +479,10 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
                 Some(th) => th.clone(),
                 None => {
                     let ThmKey(concl, hyps) = th_key; // consume key
-                    let ax = vm.ctx.thm_axiom(hyps, concl)?;
+                    if !hyps.is_empty() {
+                        return Err(Error::new("cannot introduce axiom with hypothesis"));
+                    }
+                    let ax = vm.ctx.thm_axiom(concl)?;
                     vm.cb.debug(|| format!("## add axiom {:?}", ax));
                     vm.assumptions.push(ax.clone());
                     ax

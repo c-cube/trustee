@@ -1,5 +1,3 @@
-#[macro_use]
-extern crate log;
 use std::{env::args, fs::File, io::BufReader};
 use trustee::*;
 use trustee_opentheory as open_theory;
@@ -11,28 +9,23 @@ impl open_theory::Callbacks for LogCB {
     where
         F: Fn() -> String,
     {
-        debug!("{}", f());
+        log::debug!("{}", f());
     }
 }
 
-const PRELUDE: &'static str = r#"
-(decl "ind" $type$)
-"#;
-
 fn parse_all() -> trustee::Result<()> {
     let mut ctx = Ctx::new();
-    meta::run_code(&mut ctx, PRELUDE, Some(PRELUDE.into()))?; // declare basics
     let mut vm = open_theory::VM::new_with(&mut ctx, LogCB);
     for f in args().skip(1) {
-        info!("# parsing file {:?}", f);
+        log::info!("# parsing file {:?}", f);
         let file = File::open(f).map_err(|e| Error::new_string(format!("{:?}", e)))?;
         let mut read = BufReader::new(file);
         vm.parse_str(&mut read)?;
     }
-    info!("done parsing!");
+    log::info!("done parsing!");
     let article = vm.into_article();
-    info!("article: {}", &article);
-    info!("success!");
+    log::info!("article: {}", &article);
+    log::info!("success!");
 
     Ok(())
 }

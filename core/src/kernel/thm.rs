@@ -2,7 +2,7 @@
 //!
 //! Theorems are proved correct by construction.
 
-use super::{Expr, Ref};
+use super::{Expr, Ref, Var};
 use std::fmt;
 
 /// A theorem.
@@ -17,19 +17,48 @@ pub(super) struct ThmImpl {
     pub hyps: Vec<Expr>,
     /// Unique ID of the `Ctx`
     pub ctx_uid: u32,
+    /// Proof of the theorem, if any.
+    pub proof: Option<Ref<Proof>>,
+}
+
+/// The proof step for a theorem, if proof recording is enabled.
+pub enum Proof {
+    Assume(Expr),
+    Refl(Expr),
+    Trans(Thm, Thm),
+    Congr(Thm, Thm),
+    CongrTy(Thm, Expr),
+    Instantiate(Thm, Box<[(Var, Expr)]>),
+    Abs(Var, Thm),
+    /// Point to self as an axiom.
+    Axiom(Expr),
+    Cut(Thm, Thm),
+    BoolEq(Thm, Thm),
+    BoolEqIntro(Thm, Thm),
+    BetaConv(Expr),
+    NewDef(Expr),
+    NewTyDef(Expr, Thm),
+    // TODO: custom rules
 }
 
 impl Thm {
-    pub(super) fn make_(concl: Expr, em_uid: u32, mut hyps: Vec<Expr>) -> Self {
-        if hyps.len() >= 2 {
-            hyps.sort_unstable();
-            hyps.dedup();
-            hyps.shrink_to_fit();
-        }
+    pub(super) fn make_(
+        concl: Expr,
+        em_uid: u32,
+        hyps: Vec<Expr>,
+        proof: Option<Ref<Proof>>,
+    ) -> Self {
+        // TODO: remove
+        //if hyps.len() >= 2 {
+        //    hyps.sort_unstable();
+        //    hyps.dedup();
+        //    hyps.shrink_to_fit();
+        //}
         Thm(Ref::new(ThmImpl {
             concl,
             ctx_uid: em_uid,
             hyps,
+            proof: None,
         }))
     }
 
@@ -37,6 +66,14 @@ impl Thm {
     #[inline]
     pub fn concl(&self) -> &Expr {
         &self.0.concl
+    }
+
+    /// Access the proof of this theorem, if it was recorded.
+    pub fn proof(&self) -> Option<&Proof> {
+        match self.0.proof {
+            None => None,
+            Some(ref p) => Some(p),
+        }
     }
 
     /// Hypothesis of the theorem

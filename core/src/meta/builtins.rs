@@ -273,7 +273,7 @@ pub(super) mod logic_builtins {
             |ctx, args| {
                 check_arity!("axiom", args, 1);
                 let e = get_arg_expr!(args, 0);
-                let th = ctx.ctx.thm_axiom(vec![], e.clone())?;
+                let th = ctx.ctx.thm_axiom(e.clone())?;
                 Ok(Value::Thm(th))
             }
         ),

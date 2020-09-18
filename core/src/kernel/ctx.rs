@@ -6,6 +6,7 @@
 use super::{
     expr::{self, BoundVarContent, ConstContent, ConstTag, DbIndex, Var, WExpr},
     symbol::{BuiltinSymbol, Symbol},
+    thm::Proof,
     Expr, ExprView, Ref, Thm, Type, WeakRef,
 };
 use crate::{
@@ -20,6 +21,7 @@ use ExprView::*;
 // re-export
 pub type Fixity = crate::syntax::Fixity;
 
+//  TODO: use a smallvec
 /// A substitution.
 #[derive(Clone, Debug)]
 pub struct Subst(Vec<(Var, Expr)>);
@@ -36,12 +38,15 @@ pub struct Ctx {
     tmp_hyps: Vec<Expr>,
     /// The defined chunks of code. These comprise some user defined tactics,
     /// derived rules, etc.
+    // TODO: remove and replace with LLProof::StackValue?
     meta_values: fnv::FnvHashMap<RStr, meta::Value>,
     eq: Option<Expr>,
     next_cleanup: usize,
     axioms: Vec<Thm>,
     uid: u32, // Unique to this ctx
     allow_new_axioms: bool,
+    /// Enable proof generation?
+    proof_gen: bool,
 }
 
 /// Helper for defining new type.
@@ -95,6 +100,7 @@ impl Ctx {
             uid: uid as u32,
             eq: None,
             allow_new_axioms: true,
+            proof_gen: false,
         };
         // insert initial builtins
         let kind = ctx.hashcons_builtin_(EKind, None);
@@ -137,6 +143,11 @@ impl Ctx {
     /// New context with the default builtin symbols.
     pub fn new() -> Self {
         Self::with_capacity(&BuiltinSymbol::default(), 2_048)
+    }
+
+    /// Enable or disable proofs.
+    pub fn set_proof(&mut self, b: bool) {
+        self.proof_gen = b;
     }
 
     /// Add to the internal table, return the canonical representant.
@@ -684,14 +695,26 @@ impl Ctx {
         if e.ty() != &self.builtins_().bool {
             return Err(Error::new("cannot assume non-boolean expression"));
         }
-        Ok(Thm::make_(e.clone(), self.uid, vec![e.clone()]))
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::Assume(e.clone())))
+        } else {
+            None
+        };
+
+        let th = Thm::make_(e.clone(), self.uid, vec![e.clone()], pr);
+        Ok(th)
     }
 
     /// `refl t` is `|- t=t`
     pub fn thm_refl(&mut self, e: Expr) -> Thm {
         self.check_uid_(&e);
         let t = self.mk_eq_app(e.clone(), e.clone()).expect("refl");
-        Thm::make_(t, self.uid, vec![])
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::Refl(e)))
+        } else {
+            None
+        };
+        Thm::make_(t, self.uid, vec![], pr)
     }
 
     /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
@@ -713,8 +736,13 @@ impl Ctx {
         }
 
         let eq_a_c = self.mk_eq_app(a.clone(), c.clone())?;
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::Trans(th1.clone(), th2.clone())))
+        } else {
+            None
+        };
         let hyps = self.merge_hyps_th(th1, th2);
-        let th = Thm::make_(eq_a_c, self.uid, hyps);
+        let th = Thm::make_(eq_a_c, self.uid, hyps, pr);
         Ok(th)
     }
 
@@ -733,8 +761,13 @@ impl Ctx {
         let ft = self.mk_app(f.clone(), t.clone())?;
         let gu = self.mk_app(g.clone(), u.clone())?;
         let eq = self.mk_eq_app(ft, gu)?;
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::Congr(th1.clone(), th2.clone())))
+        } else {
+            None
+        };
         let hyps = self.merge_hyps_th(th1, th2);
-        Ok(Thm::make_(eq, self.uid, hyps))
+        Ok(Thm::make_(eq, self.uid, hyps, pr))
     }
 
     /// `congr_ty (F1 |- f=g) ty` is `F1 |- f ty=g ty`
@@ -750,10 +783,16 @@ impl Ctx {
         }
         let ft = self.mk_app(f.clone(), ty.clone())?;
         let gu = self.mk_app(g.clone(), ty.clone())?;
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::CongrTy(th.clone(), ty.clone())))
+        } else {
+            None
+        };
         let eq = self.mk_eq_app(ft, gu)?;
         {
             let thref = Ref::make_mut(&mut th.0);
             thref.concl = eq;
+            thref.proof = pr;
         }
         Ok(th)
     }
@@ -769,9 +808,21 @@ impl Ctx {
             ));
         }
 
+        let pr = if self.proof_gen {
+            // copy subst
+            let subst: Vec<_> = subst.iter().cloned().collect();
+            Some(Ref::new(Proof::Instantiate(
+                th.clone(),
+                subst.into_boxed_slice(),
+            )))
+        } else {
+            None
+        };
+
         {
             let thref = Ref::make_mut(&mut th.0);
             thref.concl = self.subst(&thref.concl, subst)?;
+            thref.proof = pr;
             for t in thref.hyps.iter_mut() {
                 *t = self.subst(t, subst)?;
             }
@@ -797,10 +848,16 @@ impl Ctx {
 
         let lam_t = self.mk_lambda(v.clone(), t.clone())?;
         let lam_u = self.mk_lambda(v.clone(), u.clone())?;
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::Abs(v.clone(), thm.clone())))
+        } else {
+            None
+        };
         let eq = self.mk_eq_app(lam_t, lam_u)?;
         {
             let thref = Ref::make_mut(&mut thm.0); // clone or acquire
             thref.concl = eq;
+            thref.proof = pr;
         }
         Ok(thm)
     }
@@ -916,13 +973,19 @@ impl Ctx {
         }
         let th2_c = th2.0.concl.clone();
 
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::Cut(th1.clone(), th2.clone())))
+        } else {
+            None
+        };
+
         let hyps = {
             self.merge_hyps_iter_(
                 th1.0.hyps.iter().cloned(),
                 th2.0.hyps.iter().filter(|u| **u != th1_c).cloned(),
             )
         };
-        let th_res = Thm::make_(th2_c, self.uid, hyps);
+        let th_res = Thm::make_(th2_c, self.uid, hyps, pr);
         Ok(th_res)
     }
 
@@ -939,6 +1002,13 @@ impl Ctx {
                 //Some((a, b)) if a.ty() == &self.builtins_().bool => (a, b),
                 Error::new("bool-eq: th2 should have a boleean equality as conclusion")
             })?;
+
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::BoolEq(th1.clone(), th2.clone())))
+        } else {
+            None
+        };
+
         if a != &th1.0.concl {
             return Err(Error::new_string(format!(
                 "bool-eq: the conclusion of th1, `{}` is not compatible with th2's concl LHS `{}`",
@@ -948,7 +1018,7 @@ impl Ctx {
         let b = b.clone();
 
         let hyps = self.merge_hyps_th(th1, th2);
-        Ok(Thm::make_(b, self.uid, hyps))
+        Ok(Thm::make_(b, self.uid, hyps, pr))
     }
 
     /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
@@ -958,11 +1028,18 @@ impl Ctx {
         self.check_thm_uid_(&th1);
         self.check_thm_uid_(&th2);
         let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
+
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::BoolEqIntro(th1.clone(), th2.clone())))
+        } else {
+            None
+        };
+
         let hyps = self.merge_hyps_iter_(
             th1.0.hyps.iter().filter(|x| *x != &th2.0.concl).cloned(),
             th2.0.hyps.iter().filter(|x| *x != &th1.0.concl).cloned(),
         );
-        let th = Thm::make_(eq, self.uid, hyps);
+        let th = Thm::make_(eq, self.uid, hyps, pr);
         Ok(th)
     }
 
@@ -978,10 +1055,16 @@ impl Ctx {
             .ok_or_else(|| Error::new("beta-conv: expect a lambda in the application"))?;
         debug_assert_eq!(ty, arg.ty()); // should already be enforced by typing.
 
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::BetaConv(e.clone())))
+        } else {
+            None
+        };
+
         let lhs = e.clone();
         let rhs = self.subst1_(bod, 0, arg)?;
         let eq = self.mk_eq_app(lhs, rhs)?;
-        Ok(Thm::make_(eq, self.uid, vec![]))
+        Ok(Thm::make_(eq, self.uid, vec![], pr))
     }
 
     /// `new_basic_definition (x=t)` where `x` is a variable and `t` a term
@@ -1004,26 +1087,37 @@ impl Ctx {
             return Err(Error::new("LHS of equation should have a closed type"));
         }
 
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::NewDef(e.clone())))
+        } else {
+            None
+        };
+
         let c = self.mk_new_const(x.name.clone(), x.ty.clone())?;
         let eqn = self.mk_eq_app(c.clone(), rhs.clone())?;
-        let thm = Thm::make_(eqn, self.uid, vec![]);
+        let thm = Thm::make_(eqn, self.uid, vec![], pr);
         Ok((thm, c))
     }
 
-    /// Create a new axiom `assumptions |- concl`.
+    /// Create a new axiom `|- concl`.
     /// **use with caution**
     ///
     /// Fails if `pledge_no_new_axiom` was called earlier on this context.
-    pub fn thm_axiom(&mut self, hyps: Vec<Expr>, concl: Expr) -> Result<Thm> {
+    pub fn thm_axiom(&mut self, concl: Expr) -> Result<Thm> {
         if !self.allow_new_axioms {
             return Err(Error::new(
                 "this context has pledged to not take new axioms",
             ));
         }
         self.check_uid_(&concl);
-        hyps.iter().for_each(|e| self.check_uid_(e));
 
-        let thm = Thm::make_(concl, self.uid, hyps);
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::NewDef(concl.clone())))
+        } else {
+            None
+        };
+
+        let thm = Thm::make_(concl, self.uid, vec![], pr);
         self.axioms.push(thm.clone());
         Ok(thm)
     }
@@ -1082,6 +1176,12 @@ impl Ctx {
         // free vars, as expressions
         let fvars_exprs: Vec<_> = fvars.iter().map(|v| self.mk_var(v.clone())).collect();
 
+        let pr = if self.proof_gen {
+            Some(Ref::new(Proof::NewTyDef(ty.clone(), thm_inhabited.clone())))
+        } else {
+            None
+        };
+
         // construct new type and mapping functions
         let tau = {
             let ttype = self.mk_ty();
@@ -1111,7 +1211,7 @@ impl Ctx {
             let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
             let abs_t = self.mk_app(abs, t)?;
             let eqn = self.mk_eq_app(abs_t.clone(), abs_x.clone())?;
-            Thm::make_(eqn, self.uid, vec![])
+            Thm::make_(eqn, self.uid, vec![], pr.clone())
         };
         let repr_x = self.mk_var_str("x", ty.clone());
         let repr_thm = {
@@ -1122,7 +1222,12 @@ impl Ctx {
             let t2 = self.mk_app(repr, t1)?;
             let eq_t2_x = self.mk_eq_app(t2, repr_x.clone())?;
             let phi_x = self.mk_app(phi.clone(), repr_x.clone())?;
-            Thm::make_(self.mk_eq_app(phi_x, eq_t2_x)?, self.uid, vec![])
+            Thm::make_(
+                self.mk_eq_app(phi_x, eq_t2_x)?,
+                self.uid,
+                vec![],
+                pr.clone(),
+            )
         };
 
         let c = NewTypeDef {

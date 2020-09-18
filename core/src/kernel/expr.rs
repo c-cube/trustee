@@ -14,6 +14,9 @@ pub type DbIndex = u32;
 pub struct Expr(pub(super) Ref<ExprImpl>);
 
 /// A weak reference to an expression.
+///
+/// This is only used in the hashconsing table, so that it is not
+/// the only reference keeping a term alive.
 #[derive(Clone)]
 pub(super) struct WExpr(pub(super) WeakRef<ExprImpl>);
 
@@ -238,6 +241,7 @@ where
     fv
 }
 
+/// Iterator over free variables of an expr.
 struct FreeVars<'a> {
     seen: fnv::FnvHashSet<&'a Expr>,
     st: Vec<&'a Expr>,

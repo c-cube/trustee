@@ -4,6 +4,7 @@ use super::{
     proof::{LLProofSteps, LLStatement, LocalValue},
     *,
 };
+use crate::rstr::RStr;
 use std::io;
 
 pub fn print_set(name: &str, p: &LLProof, out: &mut dyn io::Write) -> Result<()> {
@@ -54,6 +55,44 @@ pub fn print_steps(p: &LLProofSteps, out: &mut dyn io::Write) -> Result<()> {
         }
     }
     write!(out, ")")?;
+    Ok(())
+}
+
+/// Print proofs of the given theorems, if present, in low-level proof format.
+pub fn print_thm_proofs(
+    thms: impl Iterator<Item = (RStr, Thm)>,
+    out: &mut dyn io::Write,
+) -> Result<()> {
+    // TODO: print each theorem as a "set", store it in a hashset
+    // so that next steps can use refer to it by name.
+    //
+    // Locally, also use the hashset for a graph traversal and use stack operations
+    // to re-use proofs.
+    // Test on opentheory with fake names.
+
+    /*
+    impl fmt::Debug for Proof {
+        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+            match self {
+                Proof::Axiom(_) => write!(out, "<axiom ø>"),
+                Proof::Assume(e) => write!(out, "(assume ${}$)", e),
+                Proof::Refl(e) => write!(out, "(refl ${}$)", e),
+                Proof::Trans(th1, th2) => {}
+                Proof::Congr(_, _) => {}
+                Proof::CongrTy(_, _) => {}
+                Proof::Instantiate(_, _) => {}
+                Proof::Abs(_, _) => {}
+                Proof::Cut(_, _) => {}
+                Proof::BoolEq(_, _) => {}
+                Proof::BoolEqIntro(_, _) => {}
+                Proof::BetaConv(_) => {}
+                Proof::NewDef(_) => {}
+                Proof::NewTyDef(_, _) => {}
+            }
+        }
+    }
+    */
+
     Ok(())
 }
 
