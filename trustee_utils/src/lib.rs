@@ -233,6 +233,12 @@ pub fn inspect(
                     }
                     write!(s, "|------------------------------\n").unwrap();
                     write!(s, " {}\n```\n", th.concl()).unwrap();
+
+                    // print proof, if available
+                    if let Some(spr) = th.proof_to_string() {
+                        writeln!(s, "").unwrap();
+                        writeln!(s, "{}", spr).unwrap();
+                    }
                     (false, s)
                 }
                 _ => (true, "".to_string()),

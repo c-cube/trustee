@@ -41,6 +41,7 @@ fn loc_to_lsp(l: &Location) -> lsp::Range {
 impl server::Handler for TrusteeSt {
     fn on_doc_update(&mut self, _id: DocID, txt: &str) -> Result<Vec<lsp::Diagnostic>> {
         let mut ctx = k::Ctx::new();
+        ctx.set_proof(true);
 
         let mut r = utils::eval(&mut ctx, txt, None);
         log::debug!("eval: got {} results in {:?}", r.res.len(), r.duration);
@@ -103,7 +104,16 @@ impl server::Handler for TrusteeSt {
                         (msg, range)
                     }
                     Ok(meta::Value::Nil) => continue,
-                    Ok(v) => (format!("yield value {}", v), range),
+                    Ok(v) => {
+                        // print proof, if available
+                        let pr = match v {
+                            meta::Value::Thm(th) => {
+                                th.proof_to_string().unwrap_or_else(|| String::new())
+                            }
+                            _ => String::new(),
+                        };
+                        (format!("yield value {}\n{}", v, pr), range)
+                    }
                 };
                 diags.push(mk_diag!(severity, range, msg));
             }
@@ -119,6 +129,7 @@ impl server::Handler for TrusteeSt {
         if let Some(doc) = st.get_doc(&d) {
             log::debug!("inspect in document {:?} at {:?}", &d, pos);
             let mut ctx = k::Ctx::new();
+            ctx.set_proof(true);
 
             // FIXME: redirect stdout
             // ignore errors here!
@@ -153,6 +164,7 @@ impl server::Handler for TrusteeSt {
         if let Some(doc) = st.get_doc(&d) {
             log::debug!("complete in document {:?} at {:?}", &d, pos);
             let mut ctx = k::Ctx::new();
+            ctx.set_proof(true);
 
             // FIXME: redirect stdout
             // ignore errors here!

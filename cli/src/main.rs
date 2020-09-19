@@ -12,6 +12,8 @@ struct Opts {
     include: Vec<String>,
     #[options(help = "do not enter interactive mode")]
     batch: bool,
+    #[options(help = "print proofs", default = "true")]
+    proofs: bool,
     #[options(help = "print help")]
     help: bool,
 }
@@ -86,6 +88,7 @@ fn main() -> anyhow::Result<()> {
     log::info!("start cli");
 
     let mut ctx = Ctx::new();
+    ctx.set_proof(true);
 
     let opts = Opts::parse_args_default_or_exit();
 
@@ -127,6 +130,14 @@ fn main() -> anyhow::Result<()> {
 
                 match vm.run(&line, None) {
                     Ok(meta::Value::Nil) => {}
+                    Ok(meta::Value::Thm(th)) => {
+                        println!("  {}", th);
+                        if opts.proofs {
+                            if let Some(spr) = th.proof_to_string() {
+                                println!("proof:\n{}", spr);
+                            }
+                        }
+                    }
                     Ok(v) => {
                         println!("  {}", v);
                     }

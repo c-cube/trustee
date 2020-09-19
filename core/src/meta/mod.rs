@@ -448,4 +448,11 @@ mod test {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_proof_prelude() {
+        let mut ctx = Ctx::new();
+        ctx.set_proof(true);
+        load_prelude_hol(&mut ctx).expect("cannot load prelude");
+    }
 }

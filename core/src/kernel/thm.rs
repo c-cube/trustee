@@ -2,7 +2,8 @@
 //!
 //! Theorems are proved correct by construction.
 
-use super::{Expr, Ref, Var};
+use super::{Expr, Ref, Result, Var};
+use crate::fnv::FnvHashMap as HM;
 use std::fmt;
 
 /// A theorem.
@@ -22,12 +23,14 @@ pub(super) struct ThmImpl {
 }
 
 /// The proof step for a theorem, if proof recording is enabled.
+#[derive(Clone)]
 pub enum Proof {
     Assume(Expr),
     Refl(Expr),
     Trans(Thm, Thm),
     Congr(Thm, Thm),
     CongrTy(Thm, Expr),
+    // FIXME: use a Rc<[…]> when I find how to turn a Vec into it
     Instantiate(Thm, Box<[(Var, Expr)]>),
     Abs(Var, Thm),
     /// Point to self as an axiom.
@@ -58,7 +61,7 @@ impl Thm {
             concl,
             ctx_uid: em_uid,
             hyps,
-            proof: None,
+            proof,
         }))
     }
 
@@ -85,6 +88,108 @@ impl Thm {
     #[inline]
     pub fn hyps_vec(&self) -> &Vec<Expr> {
         &self.0.hyps
+    }
+
+    fn print_proof_(&self, seen: &mut HM<Thm, usize>, out: &mut dyn std::io::Write) -> Result<()> {
+        if seen.contains_key(&self) {
+            return Ok(());
+        }
+
+        let pr = match self.proof() {
+            None => return Ok(()),
+            Some(pr) => pr,
+        };
+
+        {
+            // explore parents first
+            let mut e = Ok(());
+            pr.premises(|th2| match th2.print_proof_(seen, out) {
+                Ok(()) => (),
+                Err(e2) => e = Err(e2),
+            });
+            e?;
+        }
+
+        let n = seen.len();
+        seen.insert(self.clone(), n);
+        write!(out, "  [{:4}] ", n)?;
+
+        match pr {
+            Proof::Assume(e) => {
+                writeln!(out, "assume ${}$", e)?;
+            }
+            Proof::Refl(e) => {
+                writeln!(out, "refl ${}$", e)?;
+            }
+            Proof::Trans(th1, th2) => {
+                let n1 = seen.get(&th1).unwrap();
+                let n2 = seen.get(&th2).unwrap();
+                writeln!(out, "trans {} {}", n1, n2)?;
+            }
+            Proof::Congr(th1, th2) => {
+                let n1 = seen.get(&th1).unwrap();
+                let n2 = seen.get(&th2).unwrap();
+                writeln!(out, "congr {} {}", n1, n2)?;
+            }
+            Proof::CongrTy(th1, ty) => {
+                let n1 = seen.get(&th1).unwrap();
+                writeln!(out, "congr_ty {} ${}$", n1, ty)?;
+            }
+            Proof::Instantiate(th1, _) => {
+                // TODO: print subst
+                let n1 = seen.get(&th1).unwrap();
+                writeln!(out, "instantiate {}", n1,)?;
+            }
+            Proof::Abs(v, th1) => {
+                let n1 = seen.get(&th1).unwrap();
+                writeln!(out, "abs ${:?}$ {}", v, n1,)?;
+            }
+            Proof::Axiom(e) => {
+                writeln!(out, "axiom ${}$", e,)?;
+            }
+            Proof::Cut(th1, th2) => {
+                let n1 = seen.get(&th1).unwrap();
+                let n2 = seen.get(&th2).unwrap();
+                writeln!(out, "cut {} {}", n1, n2)?;
+            }
+            Proof::BoolEq(th1, th2) => {
+                let n1 = seen.get(&th1).unwrap();
+                let n2 = seen.get(&th2).unwrap();
+                writeln!(out, "bool_eq {} {}", n1, n2)?;
+            }
+            Proof::BoolEqIntro(th1, th2) => {
+                let n1 = seen.get(&th1).unwrap();
+                let n2 = seen.get(&th2).unwrap();
+                writeln!(out, "bool_eq_intro {} {}", n1, n2)?;
+            }
+            Proof::BetaConv(e) => {
+                writeln!(out, "beta-conv ${}$", e)?;
+            }
+            Proof::NewDef(e) => {
+                writeln!(out, "new-def ${}$", e)?;
+            }
+            Proof::NewTyDef(e, _) => {
+                writeln!(out, "new-ty-def ${}$", e)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn print_proof(&self, out: &mut dyn std::io::Write) -> Result<()> {
+        let mut seen = HM::default();
+        writeln!(out, "llproof [")?;
+        self.print_proof_(&mut seen, out)?;
+        writeln!(out, "]")?;
+        Ok(())
+    }
+
+    /// Print proof into stirng, if present.
+    pub fn proof_to_string(&self) -> Option<String> {
+        let mut v = vec![];
+        if let Err(_e) = self.print_proof(&mut v) {
+            return None;
+        }
+        std::string::String::from_utf8(v).ok()
     }
 }
 
@@ -131,6 +236,56 @@ mod impls {
     impl PartialEq for Thm {
         fn eq(&self, other: &Self) -> bool {
             std::ptr::eq(self.0.as_ref() as *const _, other.0.as_ref() as *const _)
+        }
+    }
+
+    impl Eq for Thm {}
+
+    impl std::hash::Hash for Thm {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            let p = self.0.as_ref();
+            std::ptr::hash(p, state)
+        }
+    }
+
+    impl Proof {
+        /// Call `f` on immediate premises of this proof.
+        pub fn premises<F>(&self, mut f: F)
+        where
+            F: FnMut(&Thm),
+        {
+            match self {
+                Proof::Assume(_) | Proof::Refl(_) => {}
+                Proof::Trans(a, b) => {
+                    f(a);
+                    f(b)
+                }
+                Proof::Congr(a, b) => {
+                    f(a);
+                    f(b)
+                }
+                Proof::CongrTy(a, _) => {
+                    f(a);
+                }
+                Proof::Instantiate(a, _) => f(a),
+                Proof::Abs(_, a) => f(a),
+                Proof::Axiom(_) => {}
+                Proof::Cut(a, b) => {
+                    f(a);
+                    f(b);
+                }
+                Proof::BoolEq(a, b) => {
+                    f(a);
+                    f(b)
+                }
+                Proof::BoolEqIntro(a, b) => {
+                    f(a);
+                    f(b)
+                }
+                Proof::BetaConv(_) => {}
+                Proof::NewDef(_) => {}
+                Proof::NewTyDef(_, th) => f(th),
+            }
         }
     }
 }

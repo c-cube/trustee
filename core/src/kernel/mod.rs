@@ -13,7 +13,7 @@ pub mod thm;
 pub use ctx::{Ctx, NewTypeDef, Subst};
 pub use expr::{Expr, ExprView, Type, Var};
 pub use symbol::Symbol;
-pub use thm::Thm;
+pub use thm::{Proof, Thm};
 pub use ExprView::*;
 
 pub type Fixity = crate::syntax::Fixity;

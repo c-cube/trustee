@@ -4,7 +4,7 @@ use super::{
     proof::{LLProofSteps, LLStatement, LocalValue},
     *,
 };
-use crate::rstr::RStr;
+use crate::{fnv::FnvHashMap as HM, kernel as k, rstr::RStr};
 use std::io;
 
 pub fn print_set(name: &str, p: &LLProof, out: &mut dyn io::Write) -> Result<()> {
@@ -58,42 +58,106 @@ pub fn print_steps(p: &LLProofSteps, out: &mut dyn io::Write) -> Result<()> {
     Ok(())
 }
 
-/// Print proofs of the given theorems, if present, in low-level proof format.
-pub fn print_thm_proofs(
-    thms: impl Iterator<Item = (RStr, Thm)>,
-    out: &mut dyn io::Write,
-) -> Result<()> {
-    // TODO: print each theorem as a "set", store it in a hashset
-    // so that next steps can use refer to it by name.
-    //
-    // Locally, also use the hashset for a graph traversal and use stack operations
-    // to re-use proofs.
-    // Test on opentheory with fake names.
+/// A proof printer.
+pub struct ProofPrinter {
+    /// Map from named theorems to their name
+    pub named: HM<Thm, RStr>,
+}
 
-    /*
-    impl fmt::Debug for Proof {
-        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-            match self {
-                Proof::Axiom(_) => write!(out, "<axiom ø>"),
-                Proof::Assume(e) => write!(out, "(assume ${}$)", e),
-                Proof::Refl(e) => write!(out, "(refl ${}$)", e),
-                Proof::Trans(th1, th2) => {}
-                Proof::Congr(_, _) => {}
-                Proof::CongrTy(_, _) => {}
-                Proof::Instantiate(_, _) => {}
-                Proof::Abs(_, _) => {}
-                Proof::Cut(_, _) => {}
-                Proof::BoolEq(_, _) => {}
-                Proof::BoolEqIntro(_, _) => {}
-                Proof::BetaConv(_) => {}
-                Proof::NewDef(_) => {}
-                Proof::NewTyDef(_, _) => {}
-            }
+impl ProofPrinter {
+    /// New proof printer.
+    pub fn new() -> Self {
+        Self {
+            named: HM::default(),
         }
     }
-    */
 
-    Ok(())
+    /// Add a collection of named theorems to the printer.
+    pub fn add_named(&mut self, i: impl Iterator<Item = (impl Into<RStr>, Thm)>) {
+        for (n, th) in i {
+            self.named.insert(th.clone(), n.into());
+        }
+    }
+
+    /// Print proofs of the given theorem, if present, in low-level proof format.
+    pub fn print_proof<'a>(&mut self, th0: &'a Thm, out: &mut dyn io::Write) -> Result<()> {
+        // local proof graph.
+        enum GraphCell {
+            Named(RStr),
+            Proof {
+                // TODO: store whether this is used several times, so as to
+                // put it on the stack and `dup` it
+                pr: k::Proof,
+                parents: Vec<Thm>,
+            },
+        }
+
+        let mut graph: HM<_, GraphCell> = HM::default();
+
+        // DFS to build the graph, stopping when we meet a named theorem.
+        let mut to_explore = vec![];
+        to_explore.push(th0);
+        while let Some(th) = to_explore.pop() {
+            if graph.contains_key(th) {
+                continue;
+            }
+            if th != th0 {
+                if let Some(n) = self.named.get(th) {
+                    graph.insert(th, GraphCell::Named(n.clone()));
+                    continue;
+                };
+            }
+            let proof = th
+                .proof()
+                .ok_or_else(|| Error::new("theorem has no proof"))?;
+
+            let mut v = vec![];
+            proof.premises(|th2| {
+                v.push(th2.clone());
+            });
+            let cell = GraphCell::Proof {
+                pr: proof.clone(),
+                parents: v,
+            };
+            graph.insert(th, cell);
+        }
+
+        // now, traversal and printing
+        write!(out, "(")?;
+
+        // TODO: print each theorem as a "set", store it in a hashset
+        // so that next steps can use refer to it by name.
+        //
+        // Locally, also use the hashset for a graph traversal and use stack operations
+        // to re-use proofs.
+        // Test on opentheory with fake names.
+
+        /*
+        impl fmt::Debug for Proof {
+            fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+                match self {
+                    Proof::Axiom(_) => write!(out, "<axiom ø>"),
+                    Proof::Assume(e) => write!(out, "(assume ${}$)", e),
+                    Proof::Refl(e) => write!(out, "(refl ${}$)", e),
+                    Proof::Trans(th1, th2) => {}
+                    Proof::Congr(_, _) => {}
+                    Proof::CongrTy(_, _) => {}
+                    Proof::Instantiate(_, _) => {}
+                    Proof::Abs(_, _) => {}
+                    Proof::Cut(_, _) => {}
+                    Proof::BoolEq(_, _) => {}
+                    Proof::BoolEqIntro(_, _) => {}
+                    Proof::BetaConv(_) => {}
+                    Proof::NewDef(_) => {}
+                    Proof::NewTyDef(_, _) => {}
+                }
+            }
+        }
+        */
+
+        write!(out, ")")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
