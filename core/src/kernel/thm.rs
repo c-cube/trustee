@@ -90,6 +90,18 @@ impl Thm {
         &self.0.hyps
     }
 
+    // TODO: something to replace the proof of a theorem with a named
+    // proof, called from the context (`pub(super)`) so we can
+    // change the proof of `th` to `"foo"` when `(set "foo" th)` is emitted.
+
+    /// Forget the proof of this theorem, if any.
+    pub fn forget_proof(mut self) -> Self {
+        let r = Ref::make_mut(&mut self.0); // no copy if single use
+        r.proof = None;
+        self
+    }
+
+    // recursive implementation of `print_proof`
     fn print_proof_(&self, seen: &mut HM<Thm, usize>, out: &mut dyn std::io::Write) -> Result<()> {
         if seen.contains_key(&self) {
             return Ok(());
