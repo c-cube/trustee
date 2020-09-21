@@ -2,7 +2,7 @@
 //!
 //! Theorems are proved correct by construction.
 
-use super::{Expr, Ref, Result, Var};
+use super::{Expr, Proof, Ref, Result, Var};
 use crate::fnv::FnvHashMap as HM;
 use std::fmt;
 
@@ -20,28 +20,6 @@ pub(super) struct ThmImpl {
     pub ctx_uid: u32,
     /// Proof of the theorem, if any.
     pub proof: Option<Ref<Proof>>,
-}
-
-/// The proof step for a theorem, if proof recording is enabled.
-#[derive(Clone)]
-pub enum Proof {
-    Assume(Expr),
-    Refl(Expr),
-    Trans(Thm, Thm),
-    Congr(Thm, Thm),
-    CongrTy(Thm, Expr),
-    // FIXME: use a Rc<[…]> when I find how to turn a Vec into it
-    Instantiate(Thm, Box<[(Var, Expr)]>),
-    Abs(Var, Thm),
-    /// Point to self as an axiom.
-    Axiom(Expr),
-    Cut(Thm, Thm),
-    BoolEq(Thm, Thm),
-    BoolEqIntro(Thm, Thm),
-    BetaConv(Expr),
-    NewDef(Expr),
-    NewTyDef(Expr, Thm),
-    // TODO: custom rules
 }
 
 impl Thm {
@@ -101,6 +79,16 @@ impl Thm {
         self
     }
 
+    /// Make a copy of the theorem with a different proof.
+    ///
+    /// This is sound, per se, but if the proof is wrong it can be misleading
+    /// because it will not be reproducible from the proof itself.
+    pub fn set_proof(mut self, pr: Proof) -> Self {
+        let r = Ref::make_mut(&mut self.0); // no copy if single use
+        r.proof = Some(Ref::new(pr));
+        self
+    }
+
     // recursive implementation of `print_proof`
     fn print_proof_(&self, seen: &mut HM<Thm, usize>, out: &mut dyn std::io::Write) -> Result<()> {
         if seen.contains_key(&self) {
@@ -124,64 +112,64 @@ impl Thm {
 
         let n = seen.len();
         seen.insert(self.clone(), n);
-        write!(out, "  [{:4}] ", n)?;
+        write!(out, " ({} ", n)?;
 
         match pr {
             Proof::Assume(e) => {
-                writeln!(out, "assume ${}$", e)?;
+                writeln!(out, "assume ${}$)", e)?;
             }
             Proof::Refl(e) => {
-                writeln!(out, "refl ${}$", e)?;
+                writeln!(out, "refl ${}$)", e)?;
             }
             Proof::Trans(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "trans {} {}", n1, n2)?;
+                writeln!(out, "trans {} {})", n1, n2)?;
             }
             Proof::Congr(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "congr {} {}", n1, n2)?;
+                writeln!(out, "congr {} {})", n1, n2)?;
             }
             Proof::CongrTy(th1, ty) => {
                 let n1 = seen.get(&th1).unwrap();
-                writeln!(out, "congr_ty {} ${}$", n1, ty)?;
+                writeln!(out, "congr_ty {} ${}$)", n1, ty)?;
             }
             Proof::Instantiate(th1, _) => {
                 // TODO: print subst
                 let n1 = seen.get(&th1).unwrap();
-                writeln!(out, "instantiate {}", n1,)?;
+                writeln!(out, "instantiate {})", n1,)?;
             }
             Proof::Abs(v, th1) => {
                 let n1 = seen.get(&th1).unwrap();
-                writeln!(out, "abs ${:?}$ {}", v, n1,)?;
+                writeln!(out, "abs ${:?}$ {})", v, n1,)?;
             }
             Proof::Axiom(e) => {
-                writeln!(out, "axiom ${}$", e,)?;
+                writeln!(out, "axiom ${}$)", e,)?;
             }
             Proof::Cut(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "cut {} {}", n1, n2)?;
+                writeln!(out, "cut {} {})", n1, n2)?;
             }
             Proof::BoolEq(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "bool_eq {} {}", n1, n2)?;
+                writeln!(out, "bool_eq {} {})", n1, n2)?;
             }
             Proof::BoolEqIntro(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "bool_eq_intro {} {}", n1, n2)?;
+                writeln!(out, "bool_eq_intro {} {})", n1, n2)?;
             }
             Proof::BetaConv(e) => {
-                writeln!(out, "beta-conv ${}$", e)?;
+                writeln!(out, "beta_conv ${}$)", e)?;
             }
             Proof::NewDef(e) => {
-                writeln!(out, "new-def ${}$", e)?;
+                writeln!(out, "new_def ${}$)", e)?;
             }
             Proof::NewTyDef(e, _) => {
-                writeln!(out, "new-ty-def ${}$", e)?;
+                writeln!(out, "new_ty_def ${}$)", e)?;
             }
         }
         Ok(())
@@ -257,47 +245,6 @@ mod impls {
         fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
             let p = self.0.as_ref();
             std::ptr::hash(p, state)
-        }
-    }
-
-    impl Proof {
-        /// Call `f` on immediate premises of this proof.
-        pub fn premises<F>(&self, mut f: F)
-        where
-            F: FnMut(&Thm),
-        {
-            match self {
-                Proof::Assume(_) | Proof::Refl(_) => {}
-                Proof::Trans(a, b) => {
-                    f(a);
-                    f(b)
-                }
-                Proof::Congr(a, b) => {
-                    f(a);
-                    f(b)
-                }
-                Proof::CongrTy(a, _) => {
-                    f(a);
-                }
-                Proof::Instantiate(a, _) => f(a),
-                Proof::Abs(_, a) => f(a),
-                Proof::Axiom(_) => {}
-                Proof::Cut(a, b) => {
-                    f(a);
-                    f(b);
-                }
-                Proof::BoolEq(a, b) => {
-                    f(a);
-                    f(b)
-                }
-                Proof::BoolEqIntro(a, b) => {
-                    f(a);
-                    f(b)
-                }
-                Proof::BetaConv(_) => {}
-                Proof::NewDef(_) => {}
-                Proof::NewTyDef(_, th) => f(th),
-            }
         }
     }
 }

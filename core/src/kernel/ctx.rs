@@ -6,8 +6,7 @@
 use super::{
     expr::{self, BoundVarContent, ConstContent, ConstTag, DbIndex, Var, WExpr},
     symbol::{BuiltinSymbol, Symbol},
-    thm::Proof,
-    Expr, ExprView, Ref, Thm, Type, WeakRef,
+    Expr, ExprView, Proof, Ref, Subst, Thm, Type, WeakRef,
 };
 use crate::{
     error::{Error, Result},
@@ -20,11 +19,6 @@ use ExprView::*;
 
 // re-export
 pub type Fixity = crate::syntax::Fixity;
-
-//  TODO: use a smallvec
-/// A substitution.
-#[derive(Clone, Debug)]
-pub struct Subst(Vec<(Var, Expr)>);
 
 /// Global manager for expressions, used to implement perfect sharing, allocating
 /// new terms, etc.
@@ -800,7 +794,7 @@ impl Ctx {
     /// `instantiate thm σ` produces `Fσ |- Gσ`  where `thm` is `F |- G`
     ///
     /// Returns an error if the substitution is not closed.
-    pub fn thm_instantiate(&mut self, mut th: Thm, subst: &[(Var, Expr)]) -> Result<Thm> {
+    pub fn thm_instantiate(&mut self, mut th: Thm, subst: Subst) -> Result<Thm> {
         self.check_thm_uid_(&th);
         if subst.iter().any(|(_, t)| !t.is_closed()) {
             return Err(Error::new(
@@ -809,22 +803,17 @@ impl Ctx {
         }
 
         let pr = if self.proof_gen {
-            // copy subst
-            let subst: Vec<_> = subst.iter().cloned().collect();
-            Some(Ref::new(Proof::Instantiate(
-                th.clone(),
-                subst.into_boxed_slice(),
-            )))
+            Some(Ref::new(Proof::Instantiate(th.clone(), subst.clone())))
         } else {
             None
         };
 
         {
             let thref = Ref::make_mut(&mut th.0);
-            thref.concl = self.subst(&thref.concl, subst)?;
+            thref.concl = self.subst(&thref.concl, &subst[..])?;
             thref.proof = pr;
             for t in thref.hyps.iter_mut() {
-                *t = self.subst(t, subst)?;
+                *t = self.subst(t, &subst[..])?;
             }
         }
         Ok(th)
@@ -1112,7 +1101,7 @@ impl Ctx {
         self.check_uid_(&concl);
 
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::NewDef(concl.clone())))
+            Some(Ref::new(Proof::Axiom(concl.clone())))
         } else {
             None
         };
@@ -1250,36 +1239,6 @@ mod impls {
     impl fmt::Debug for Ctx {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "<expr manager>")
-        }
-    }
-
-    impl std::ops::Deref for Subst {
-        type Target = [(Var, Expr)];
-        #[inline(always)]
-        fn deref(&self) -> &Self::Target {
-            self.0.as_slice()
-        }
-    }
-
-    impl std::iter::FromIterator<(Var, Expr)> for Subst {
-        fn from_iter<T: IntoIterator<Item = (Var, Expr)>>(iter: T) -> Self {
-            let mut s = Self::new();
-            for e in iter.into_iter() {
-                s.add_binding(e.0, e.1)
-            }
-            s
-        }
-    }
-
-    impl Subst {
-        /// New substitution.
-        pub fn new() -> Self {
-            Self(vec![])
-        }
-
-        /// Add a binding to the substitution.
-        pub fn add_binding(&mut self, v: Var, e: Expr) {
-            self.0.push((v, e))
         }
     }
 }

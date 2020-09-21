@@ -20,7 +20,7 @@ impl Converter for RewriteRule {
             Some(subst) => {
                 // match happened, substitute to get an equality.
                 let subst: k::Subst = subst.into();
-                let th = ctx.thm_instantiate(self.th.clone(), &subst)?;
+                let th = ctx.thm_instantiate(self.th.clone(), subst)?;
                 Ok(Some(th))
             }
         }

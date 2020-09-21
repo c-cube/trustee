@@ -542,7 +542,7 @@ pub(super) mod logic_builtins {
                 check_arity!("instantiate", args, >= 1);
                 let th = get_arg_thm!(args, 0);
 
-                let mut subst = vec![];
+                let mut subst = k::subst::SubstBuilder::new();
                 let mut args = &args[1..];
                 if args.len() % 2 != 0 {
                     return Err(Error::new(
@@ -553,11 +553,12 @@ pub(super) mod logic_builtins {
                 while args.len() > 0 {
                     let x = get_arg_str!(args, 0);
                     let e = get_arg_expr!(args, 1);
-                    subst.push((k::Var::from_rstr(x, e.ty().clone()), e.clone()));
+                    subst.add_binding(k::Var::from_rstr(x, e.ty().clone()), e.clone());
                     args = &args[2..];
                 }
 
-                let th = ctx.ctx.thm_instantiate(th.clone(), &subst)?;
+                let subst = subst.into_subst();
+                let th = ctx.ctx.thm_instantiate(th.clone(), subst)?;
                 Ok(Value::Thm(th))
             }
         ),

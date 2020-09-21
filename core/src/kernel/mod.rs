@@ -7,13 +7,17 @@ pub use crate::error::{Error, Result};
 
 pub mod ctx;
 pub mod expr;
+pub mod proof;
+pub mod subst;
 pub mod symbol;
 pub mod thm;
 
-pub use ctx::{Ctx, NewTypeDef, Subst};
+pub use ctx::{Ctx, NewTypeDef};
 pub use expr::{Expr, ExprView, Type, Var};
+pub use proof::Proof;
+pub use subst::Subst;
 pub use symbol::Symbol;
-pub use thm::{Proof, Thm};
+pub use thm::Thm;
 pub use ExprView::*;
 
 pub type Fixity = crate::syntax::Fixity;
