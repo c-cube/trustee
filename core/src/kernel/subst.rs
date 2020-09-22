@@ -5,11 +5,11 @@
 //! prove a general theorem with free variables; then, instantiate it
 //! every time it is required.
 
-use super::*;
+use {super::*, crate::rptr::RPtr};
 
 /// A substitution.
 #[derive(Clone)]
-pub struct Subst(Ref<SubstImpl>);
+pub struct Subst(RPtr<SubstImpl>);
 
 type Binding = (Var, Expr);
 
@@ -50,6 +50,23 @@ mod impls {
                 SubstImpl::S3(a) => &a[..],
                 SubstImpl::S4(v) => &*v,
             }
+        }
+    }
+
+    impl std::cmp::PartialEq for Subst {
+        fn eq(&self, other: &Self) -> bool {
+            let s1 = &self[..];
+            let s2 = &other[..];
+            s1 == s2
+        }
+    }
+
+    impl std::cmp::Eq for Subst {}
+
+    impl std::hash::Hash for Subst {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            let s = &self[..];
+            s.hash(state)
         }
     }
 
@@ -103,7 +120,7 @@ mod impls {
                 }
                 _ => SubstImpl::S4(self.0.into_boxed_slice()),
             };
-            Subst(Ref::new(i))
+            Subst(RPtr::new(i))
         }
     }
 }

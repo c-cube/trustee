@@ -2,7 +2,7 @@
 //!
 //! Theorems are proved correct by construction.
 
-use super::{Expr, Proof, Ref, Result, Var};
+use super::{Expr, Proof, ProofView, Ref, Result};
 use crate::fnv::FnvHashMap as HM;
 use std::fmt;
 
@@ -19,16 +19,11 @@ pub(super) struct ThmImpl {
     /// Unique ID of the `Ctx`
     pub ctx_uid: u32,
     /// Proof of the theorem, if any.
-    pub proof: Option<Ref<Proof>>,
+    pub proof: Option<Proof>,
 }
 
 impl Thm {
-    pub(super) fn make_(
-        concl: Expr,
-        em_uid: u32,
-        hyps: Vec<Expr>,
-        proof: Option<Ref<Proof>>,
-    ) -> Self {
+    pub(super) fn make_(concl: Expr, em_uid: u32, hyps: Vec<Expr>, proof: Option<Proof>) -> Self {
         // TODO: remove
         //if hyps.len() >= 2 {
         //    hyps.sort_unstable();
@@ -85,7 +80,7 @@ impl Thm {
     /// because it will not be reproducible from the proof itself.
     pub fn set_proof(mut self, pr: Proof) -> Self {
         let r = Ref::make_mut(&mut self.0); // no copy if single use
-        r.proof = Some(Ref::new(pr));
+        r.proof = Some(pr);
         self
     }
 
@@ -114,72 +109,73 @@ impl Thm {
         seen.insert(self.clone(), n);
         write!(out, " ({} ", n)?;
 
-        match pr {
-            Proof::Assume(e) => {
+        match &**pr {
+            ProofView::Assume(e) => {
                 writeln!(out, "assume ${}$)", e)?;
             }
-            Proof::Refl(e) => {
+            ProofView::Refl(e) => {
                 writeln!(out, "refl ${}$)", e)?;
             }
-            Proof::Trans(th1, th2) => {
+            ProofView::Trans(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
                 writeln!(out, "trans {} {})", n1, n2)?;
             }
-            Proof::Congr(th1, th2) => {
+            ProofView::Congr(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
                 writeln!(out, "congr {} {})", n1, n2)?;
             }
-            Proof::CongrTy(th1, ty) => {
+            ProofView::CongrTy(th1, ty) => {
                 let n1 = seen.get(&th1).unwrap();
                 writeln!(out, "congr_ty {} ${}$)", n1, ty)?;
             }
-            Proof::Instantiate(th1, _) => {
+            ProofView::Instantiate(th1, _) => {
                 // TODO: print subst
                 let n1 = seen.get(&th1).unwrap();
                 writeln!(out, "instantiate {})", n1,)?;
             }
-            Proof::Abs(v, th1) => {
+            ProofView::Abs(v, th1) => {
                 let n1 = seen.get(&th1).unwrap();
                 writeln!(out, "abs ${:?}$ {})", v, n1,)?;
             }
-            Proof::Axiom(e) => {
+            ProofView::Axiom(e) => {
                 writeln!(out, "axiom ${}$)", e,)?;
             }
-            Proof::Cut(th1, th2) => {
+            ProofView::Cut(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
                 writeln!(out, "cut {} {})", n1, n2)?;
             }
-            Proof::BoolEq(th1, th2) => {
+            ProofView::BoolEq(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
                 writeln!(out, "bool_eq {} {})", n1, n2)?;
             }
-            Proof::BoolEqIntro(th1, th2) => {
+            ProofView::BoolEqIntro(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
                 writeln!(out, "bool_eq_intro {} {})", n1, n2)?;
             }
-            Proof::BetaConv(e) => {
+            ProofView::BetaConv(e) => {
                 writeln!(out, "beta_conv ${}$)", e)?;
             }
-            Proof::NewDef(e) => {
+            ProofView::NewDef(e) => {
                 writeln!(out, "new_def ${}$)", e)?;
             }
-            Proof::NewTyDef(e, _) => {
+            ProofView::NewTyDef(e, _) => {
                 writeln!(out, "new_ty_def ${}$)", e)?;
             }
         }
         Ok(())
     }
 
+    /// Print proof of this theorem and its parents, recursively.
     pub fn print_proof(&self, out: &mut dyn std::io::Write) -> Result<()> {
         let mut seen = HM::default();
-        writeln!(out, "llproof [")?;
+        writeln!(out, "(proof ")?;
         self.print_proof_(&mut seen, out)?;
-        writeln!(out, "]")?;
+        writeln!(out, ")")?;
         Ok(())
     }
 

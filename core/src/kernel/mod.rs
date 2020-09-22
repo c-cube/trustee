@@ -14,7 +14,7 @@ pub mod thm;
 
 pub use ctx::{Ctx, NewTypeDef};
 pub use expr::{Expr, ExprView, Type, Var};
-pub use proof::Proof;
+pub use proof::{Proof, ProofView};
 pub use subst::Subst;
 pub use symbol::Symbol;
 pub use thm::Thm;

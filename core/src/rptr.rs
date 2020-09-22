@@ -3,10 +3,10 @@
 //! A lightweight version of `std::rc::Rc`, with only one `u32` counter,
 //! and no weak count.
 
-use std::{cell::Cell, fmt::Debug, ops::Deref, ptr, u32};
+use std::{cell::Cell, fmt::Debug, ops::Deref, ptr::NonNull, u32};
 
 /// A refcounted pointer.
-pub struct RPtr<T>(*const RPtrImpl<T>);
+pub struct RPtr<T>(NonNull<RPtrImpl<T>>);
 
 struct RPtrImpl<T> {
     rc: Cell<u32>,
@@ -15,7 +15,7 @@ struct RPtrImpl<T> {
 
 macro_rules! get_impl_ref {
     ($p: expr) => {{
-        let p: &RPtrImpl<T> = &*$p.0;
+        let p: &RPtrImpl<T> = $p.0.as_ref();
         p
     }};
 }
@@ -101,9 +101,9 @@ impl<T> Drop for RPtr<T> {
             }
             i.rc.set(rc - 1);
             if rc == 0 {
-                let b = Box::from_raw(self.0 as *mut RPtrImpl<T>);
+                let b = Box::from_raw(self.0.as_ptr() as *mut RPtrImpl<T>);
                 drop(b);
-                self.0 = ptr::null_mut();
+                self.0 = NonNull::dangling();
             }
         }
     }
@@ -154,8 +154,7 @@ impl<T> RPtr<T> {
             rc: Cell::new(1),
             v,
         });
-        let res = RPtr(s.as_ref() as *const _);
-        std::mem::forget(s);
+        let res = unsafe { RPtr(NonNull::new_unchecked(Box::into_raw(s) as *mut _)) };
         res
     }
 

@@ -6,7 +6,7 @@
 use super::{
     expr::{self, BoundVarContent, ConstContent, ConstTag, DbIndex, Var, WExpr},
     symbol::{BuiltinSymbol, Symbol},
-    Expr, ExprView, Proof, Ref, Subst, Thm, Type, WeakRef,
+    Expr, ExprView, Proof, ProofView, Ref, Subst, Thm, Type, WeakRef,
 };
 use crate::{
     error::{Error, Result},
@@ -690,7 +690,7 @@ impl Ctx {
             return Err(Error::new("cannot assume non-boolean expression"));
         }
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::Assume(e.clone())))
+            Some(Proof::new(ProofView::Assume(e.clone())))
         } else {
             None
         };
@@ -704,7 +704,7 @@ impl Ctx {
         self.check_uid_(&e);
         let t = self.mk_eq_app(e.clone(), e.clone()).expect("refl");
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::Refl(e)))
+            Some(Proof::new(ProofView::Refl(e)))
         } else {
             None
         };
@@ -731,7 +731,7 @@ impl Ctx {
 
         let eq_a_c = self.mk_eq_app(a.clone(), c.clone())?;
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::Trans(th1.clone(), th2.clone())))
+            Some(Proof::new(ProofView::Trans(th1.clone(), th2.clone())))
         } else {
             None
         };
@@ -756,7 +756,7 @@ impl Ctx {
         let gu = self.mk_app(g.clone(), u.clone())?;
         let eq = self.mk_eq_app(ft, gu)?;
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::Congr(th1.clone(), th2.clone())))
+            Some(Proof::new(ProofView::Congr(th1.clone(), th2.clone())))
         } else {
             None
         };
@@ -778,7 +778,7 @@ impl Ctx {
         let ft = self.mk_app(f.clone(), ty.clone())?;
         let gu = self.mk_app(g.clone(), ty.clone())?;
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::CongrTy(th.clone(), ty.clone())))
+            Some(Proof::new(ProofView::CongrTy(th.clone(), ty.clone())))
         } else {
             None
         };
@@ -803,7 +803,10 @@ impl Ctx {
         }
 
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::Instantiate(th.clone(), subst.clone())))
+            Some(Proof::new(ProofView::Instantiate(
+                th.clone(),
+                subst.clone(),
+            )))
         } else {
             None
         };
@@ -838,7 +841,7 @@ impl Ctx {
         let lam_t = self.mk_lambda(v.clone(), t.clone())?;
         let lam_u = self.mk_lambda(v.clone(), u.clone())?;
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::Abs(v.clone(), thm.clone())))
+            Some(Proof::new(ProofView::Abs(v.clone(), thm.clone())))
         } else {
             None
         };
@@ -963,7 +966,7 @@ impl Ctx {
         let th2_c = th2.0.concl.clone();
 
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::Cut(th1.clone(), th2.clone())))
+            Some(Proof::new(ProofView::Cut(th1.clone(), th2.clone())))
         } else {
             None
         };
@@ -993,7 +996,7 @@ impl Ctx {
             })?;
 
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::BoolEq(th1.clone(), th2.clone())))
+            Some(Proof::new(ProofView::BoolEq(th1.clone(), th2.clone())))
         } else {
             None
         };
@@ -1019,7 +1022,7 @@ impl Ctx {
         let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
 
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::BoolEqIntro(th1.clone(), th2.clone())))
+            Some(Proof::new(ProofView::BoolEqIntro(th1.clone(), th2.clone())))
         } else {
             None
         };
@@ -1045,7 +1048,7 @@ impl Ctx {
         debug_assert_eq!(ty, arg.ty()); // should already be enforced by typing.
 
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::BetaConv(e.clone())))
+            Some(Proof::new(ProofView::BetaConv(e.clone())))
         } else {
             None
         };
@@ -1077,7 +1080,7 @@ impl Ctx {
         }
 
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::NewDef(e.clone())))
+            Some(Proof::new(ProofView::NewDef(e.clone())))
         } else {
             None
         };
@@ -1101,7 +1104,7 @@ impl Ctx {
         self.check_uid_(&concl);
 
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::Axiom(concl.clone())))
+            Some(Proof::new(ProofView::Axiom(concl.clone())))
         } else {
             None
         };
@@ -1166,7 +1169,10 @@ impl Ctx {
         let fvars_exprs: Vec<_> = fvars.iter().map(|v| self.mk_var(v.clone())).collect();
 
         let pr = if self.proof_gen {
-            Some(Ref::new(Proof::NewTyDef(ty.clone(), thm_inhabited.clone())))
+            Some(Proof::new(ProofView::NewTyDef(
+                ty.clone(),
+                thm_inhabited.clone(),
+            )))
         } else {
             None
         };
