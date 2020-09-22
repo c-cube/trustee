@@ -85,6 +85,7 @@ impl<'a> liner::Completer for CliCompleter<'a> {
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
+    trustee::tef::init();
     log::info!("start cli");
 
     let mut ctx = Ctx::new();

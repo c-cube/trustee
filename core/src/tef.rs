@@ -3,6 +3,7 @@
 //! This uses the Tracing Event Format, or "catapult", accessible from
 //! `chrome://tracing` in chromium.
 
+use crate::Result;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -48,18 +49,26 @@ thread_local! {
 }
 
 // logger thread
-fn log_thread(c: mpsc::Receiver<Event>) {
+fn log_thread(c: mpsc::Receiver<Event>) -> Result<()> {
     use std::io::Write;
 
-    let mut out = std::fs::File::create("/tmp/trace.json").expect("trace");
+    let mut out = std::fs::File::create("/tmp/trace.json")?;
     let mut out = std::io::BufWriter::new(&mut out);
     let pid = std::process::id();
-    write!(out, "[").expect("trace");
+    write!(out, "[")?;
 
     let mut first = true;
-    while let Ok(ev) = c.recv_timeout(std::time::Duration::from_millis(5)) {
+    loop {
+        let ev = match c.recv_timeout(std::time::Duration::from_millis(2)) {
+            Ok(ev) => ev,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                out.flush()?; // better chances of non corrupted data
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         if !first {
-            write!(out, ",").unwrap()
+            write!(out, ",")?;
         }
         first = false;
 
@@ -72,17 +81,16 @@ fn log_thread(c: mpsc::Receiver<Event>) {
             out,
             r#"{{"ph":{},"pid":{},"tid":{},"ts":{},"name":"{}"}}"#,
             ph, pid, ev.tid, dur, ev.name
-        )
-        .unwrap();
-        out.flush().expect("flush");
+        )?;
     }
-    write!(out, "]").expect("write");
+    write!(out, "]")?;
     drop(out);
+    Ok(())
 }
 
 // check environment and set variable
 #[allow(unsafe_code)]
-fn init() {
+fn init_() {
     let b = std::env::var("TEF")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -96,7 +104,11 @@ fn init() {
             *s = Some(send);
         }
         // start thread after `CHAN` is ready.
-        let _th = thread::spawn(|| log_thread(recv));
+        let _th = thread::spawn(|| {
+            if let Err(e) = log_thread(recv) {
+                crate::logerr!("log thread failed with {}", e)
+            }
+        });
     }
 }
 
@@ -105,8 +117,13 @@ fn init() {
 /// This is computed once, based on the environment variable "TEF".
 #[inline(always)]
 pub fn enabled() -> bool {
-    START.call_once(|| init());
+    START.call_once(|| init_());
     ENABLED.load(Ordering::Acquire)
+}
+
+/// Initialize TEF, if needed.
+pub fn init() {
+    START.call_once(|| init_());
 }
 
 /// Send an event explicitly.

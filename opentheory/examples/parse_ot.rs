@@ -32,6 +32,8 @@ fn parse_all() -> trustee::Result<()> {
 }
 fn main() {
     env_logger::init();
+    trustee::tef::init();
+
     match parse_all() {
         Ok(()) => (),
         Err(s) => {
