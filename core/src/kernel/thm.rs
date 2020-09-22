@@ -166,6 +166,26 @@ impl Thm {
             ProofView::NewTyDef(e, _) => {
                 writeln!(out, "new_ty_def ${}$)", e)?;
             }
+            ProofView::GetThm(r) => {
+                writeln!(out, "get {})", r)?;
+            }
+            ProofView::CallRule1(r, th1) => {
+                let n1 = seen.get(&th1).unwrap();
+                writeln!(out, "call1 {} {})", r, n1)?;
+            }
+            ProofView::CallRule2(r, th1, th2) => {
+                let n1 = seen.get(&th1).unwrap();
+                let n2 = seen.get(&th2).unwrap();
+                writeln!(out, "call2 {} {} {})", r, n1, n2)?;
+            }
+            ProofView::CallRuleN(r, a) => {
+                write!(out, "calln {}", r)?;
+                for th in a.iter() {
+                    let n = seen.get(&th).unwrap();
+                    write!(out, " {}", n)?;
+                }
+                writeln!(out, ")")?;
+            }
         }
         Ok(())
     }
@@ -229,6 +249,7 @@ mod impls {
         }
     }
 
+    // TODO: use structural equality instead?
     impl PartialEq for Thm {
         fn eq(&self, other: &Self) -> bool {
             std::ptr::eq(self.0.as_ref() as *const _, other.0.as_ref() as *const _)

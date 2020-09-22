@@ -25,19 +25,25 @@ pub type Fixity = crate::syntax::Fixity;
 pub struct Ctx {
     /// Hashconsing table, with weak semantics.
     tbl: fnv::FnvHashMap<ExprView, WExpr>,
+    /// The equality symbol, lazily initialized.
+    eq: Option<Expr>,
+    /// Some builtins, lazily initialized.
     builtins: Option<ExprBuiltins>,
-    /// Generation for constants
-    c_gen: u32,
     /// Temporary used to merge sets of hypotheses
     tmp_hyps: Vec<Expr>,
     /// The defined chunks of code. These comprise some user defined tactics,
     /// derived rules, etc.
     // TODO: remove and replace with LLProof::StackValue?
     meta_values: fnv::FnvHashMap<RStr, meta::Value>,
-    eq: Option<Expr>,
     next_cleanup: usize,
+    /// All the axioms created so far.
     axioms: Vec<Thm>,
+    /// Generation for constants. Each constant is tagged with a generation
+    /// so that two constants with the same name are not confused with
+    /// one another.
+    c_gen: u32,
     uid: u32, // Unique to this ctx
+    /// If false, `thm_axiom` will fail.
     allow_new_axioms: bool,
     /// Enable proof generation?
     proof_gen: bool,
@@ -61,8 +67,11 @@ pub struct NewTypeDef {
     pub repr_x: Var,
 }
 
-// period between 2 cleanups
-const CLEANUP_PERIOD: usize = 5000;
+/// Period between 2 cleanups.
+///
+/// The cleanup of dead entries from the hashconsing table is done
+/// every time `CLEANUP_PERIOD` new terms are added.
+const CLEANUP_PERIOD: usize = 5_000;
 
 /// A set of builtin symbols.
 struct ExprBuiltins {
@@ -157,7 +166,7 @@ impl Ctx {
         // need to use `self` to build the type, so drop `tbl` first.
         drop(tbl);
 
-        // every n cycles, do a `cleanup`
+        // every n new terms, do a `cleanup`
         // TODO: maybe if last cleanups were ineffective, increase n,
         // otherwise decrease n (down to some min value)
         if self.next_cleanup == 0 {

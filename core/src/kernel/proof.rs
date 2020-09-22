@@ -2,7 +2,10 @@
 //!
 //! Such proofs are direct justifications for theorem (see `thm.rs`).
 
-use {super::*, crate::rptr::RPtr};
+use {
+    super::*,
+    crate::{rptr::RPtr, rstr::RStr},
+};
 
 /// The proof step for a theorem, if proof recording is enabled.
 #[derive(Clone, Eq, PartialEq, Hash)]
@@ -25,6 +28,14 @@ pub enum ProofView {
     BetaConv(Expr),
     NewDef(Expr),
     NewTyDef(Expr, Thm),
+    /// Get existing theorem by its name
+    GetThm(RStr),
+    /// Call rule with one argument
+    CallRule1(RStr, Thm),
+    /// Call rule with two argument
+    CallRule2(RStr, Thm, Thm),
+    /// Call rule with three argument
+    CallRuleN(RStr, Box<[Thm]>),
     // TODO: custom rules
 }
 
@@ -78,6 +89,17 @@ mod impls {
                 PV::BetaConv(_) => {}
                 PV::NewDef(_) => {}
                 PV::NewTyDef(_, th) => f(th),
+                PV::GetThm(_) => {}
+                PV::CallRule1(_, th) => f(th),
+                PV::CallRule2(_, th1, th2) => {
+                    f(th1);
+                    f(th2)
+                }
+                PV::CallRuleN(_, a) => {
+                    for th in a.iter() {
+                        f(th)
+                    }
+                }
             }
         }
 
