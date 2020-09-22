@@ -43,6 +43,7 @@ pub fn call_closure(ctx: &mut Ctx, f: &Closure, args: &[Value]) -> Result<Value>
 ///
 /// This uses a temporary VM. See `run_code` for more details.
 pub fn load_prelude_hol(ctx: &mut Ctx) -> Result<()> {
+    crate::tefbegin!("meta.load-prelude.hol");
     let loaded = ctx
         .find_meta_value("hol_prelude_loaded")
         .and_then(|v| v.as_bool())

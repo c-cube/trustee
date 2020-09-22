@@ -23,6 +23,7 @@ pub mod position;
 pub mod rptr;
 pub mod rstr;
 pub mod syntax;
+pub mod tef;
 
 #[deprecated = "use kernel"]
 pub use kernel as kernel_of_trust;

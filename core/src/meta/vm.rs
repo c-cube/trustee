@@ -370,6 +370,7 @@ impl<'a> VM<'a> {
                     self.stack[s1] = Value::Closure(cl);
                 }
                 I::Call(sl_f, n_args, sl_ret) => {
+                    crate::tefbegin!("meta.i.call");
                     let sl_f = abs_offset!(sf, sl_f);
                     let offset_ret = abs_offset!(sf, sl_ret);
 
@@ -647,6 +648,7 @@ impl<'a> VM<'a> {
     /// Parse and execute the first top-level expression from the given code.
     pub fn run_lexer_one(&mut self, lexer: &mut lexer::Lexer) -> Result<Option<Value>> {
         use super::parser::*;
+        crate::tefbegin!("meta.run-lexer-one");
 
         self.reset();
         let p = Parser::new(self.ctx, lexer);
@@ -657,6 +659,7 @@ impl<'a> VM<'a> {
                 return Err(e);
             }
             Ok(Some(c)) => {
+                //crate::tefbegin!("meta.eval-chunk");
                 crate::logtrace!("chunk: {:?}", &c);
                 debug_assert_eq!(c.0.n_captured, 0); // no parent to capture from
                 let cl = Closure::new(c, None);
@@ -689,6 +692,7 @@ impl<'a> VM<'a> {
 
     /// Parse and execute the given code.
     pub fn run(&mut self, s: &str, file_name: Option<RStr>) -> Result<Value> {
+        crate::tefbegin!("meta.run");
         crate::logdebug!("meta.run {}", s);
         let mut lexer = lexer::Lexer::new(s, file_name);
         let mut last_r = Value::Nil;
