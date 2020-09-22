@@ -88,7 +88,7 @@ fn init() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(false);
     crate::logdebug!("enable tracing: {}", b);
-    ENABLED.store(b, Ordering::SeqCst);
+    ENABLED.store(b, Ordering::Release);
     if b {
         let (send, recv) = mpsc::sync_channel(256);
         unsafe {
@@ -106,7 +106,7 @@ fn init() {
 #[inline(always)]
 pub fn enabled() -> bool {
     START.call_once(|| init());
-    ENABLED.load(Ordering::Relaxed)
+    ENABLED.load(Ordering::Acquire)
 }
 
 /// Send an event explicitly.
@@ -120,7 +120,11 @@ pub fn send_event(case: Case, name: &'static str) {
         tid: 0, // FIXME: this is unstable for now
         dur,
     };
-    SEND.with(|c| c.send(ev).expect("cannot send TEF event"))
+    SEND.with(|c| {
+        if let Err(e) = c.send(ev) {
+            crate::logerr!("cannot send TEF event: {}", e)
+        }
+    })
 }
 
 /// A RAII guard for closing a duration or other range.
