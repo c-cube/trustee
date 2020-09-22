@@ -638,9 +638,10 @@ impl<'a> VM<'a> {
 
     /// Reset execution state.
     fn reset(&mut self) {
-        for i in 0..STACK_SIZE {
-            self.stack[i] = Value::Nil
-        }
+        // NOTE(perf): very slow, it drops every existing value.
+        // for i in 0..STACK_SIZE {
+        //     self.stack[i] = Value::Nil
+        // }
         self.ctrl_stack.clear();
         self.result = Ok(Value::Nil);
     }
@@ -651,7 +652,7 @@ impl<'a> VM<'a> {
         crate::tefbegin!("meta.run-lexer-one");
 
         self.reset();
-        let p = Parser::new(self.ctx, lexer);
+        let p = { Parser::new(self.ctx, lexer) };
 
         match p.parse_top_expr() {
             Err(e) => {
@@ -659,7 +660,7 @@ impl<'a> VM<'a> {
                 return Err(e);
             }
             Ok(Some(c)) => {
-                //crate::tefbegin!("meta.eval-chunk");
+                crate::tefbegin!("meta.eval-chunk");
                 crate::logtrace!("chunk: {:?}", &c);
                 debug_assert_eq!(c.0.n_captured, 0); // no parent to capture from
                 let cl = Closure::new(c, None);

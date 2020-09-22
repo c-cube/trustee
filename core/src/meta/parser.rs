@@ -181,6 +181,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
     /// Returns `Ok(None)` if no more statements could be read.
     /// Otherwise returns `Ok((chunk, lexer))`.
     pub(super) fn parse_top_expr(mut self) -> Result<Option<Chunk>> {
+        crate::tefbegin!("meta.parse-top-expr");
         let t = self.lexer.cur();
         let start = self.lexer.loc();
 
