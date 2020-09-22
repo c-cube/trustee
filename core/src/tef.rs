@@ -17,6 +17,7 @@ use std::{
 pub enum Case {
     B,
     E,
+    I,
 }
 
 /// An event to log.
@@ -75,6 +76,7 @@ fn log_thread(c: mpsc::Receiver<Event>) -> Result<()> {
         let ph = match ev.case {
             Case::B => "\"B\"",
             Case::E => "\"E\"",
+            Case::I => "\"I\"",
         };
         let dur = ev.dur.as_micros();
         writeln!(
@@ -150,13 +152,22 @@ pub struct GuardClose<F: Fn()>(pub Option<F>);
 #[macro_export]
 macro_rules! tefbegin {
     ($name: expr) => {
-        let _guard = if crate::tef::enabled() {
-            crate::tef::send_event(crate::tef::Case::B, $name);
-            crate::tef::GuardClose(Some(move || {
-                crate::tef::send_event(crate::tef::Case::E, $name)
+        let _guard = if $crate::tef::enabled() {
+            $crate::tef::send_event($crate::tef::Case::B, $name);
+            $crate::tef::GuardClose(Some(move || {
+                $crate::tef::send_event($crate::tef::Case::E, $name)
             }))
         } else {
-            crate::tef::GuardClose(None)
+            $crate::tef::GuardClose(None)
+        };
+    };
+}
+
+#[macro_export]
+macro_rules! tefinstant {
+    ($name: expr) => {
+        if $crate::tef::enabled() {
+            $crate::tef::send_event($crate::tef::Case::I, $name);
         };
     };
 }

@@ -2,7 +2,7 @@
 
 use {
     std::{collections::HashMap, fmt, io::BufRead, rc::Rc},
-    trustee::kernel_of_trust as k,
+    trustee::kernel as k,
     trustee::{algo, meta, Error, Expr, Result, Symbol, Thm, Var},
 };
 
@@ -341,6 +341,7 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
     /// Turn into an article.
     pub fn into_article(self) -> Article {
+        trustee::tefbegin!("OT.into-article");
         let VM {
             defs,
             assumptions,

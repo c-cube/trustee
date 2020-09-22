@@ -370,7 +370,6 @@ impl<'a> VM<'a> {
                     self.stack[s1] = Value::Closure(cl);
                 }
                 I::Call(sl_f, n_args, sl_ret) => {
-                    crate::tefbegin!("meta.i.call");
                     let sl_f = abs_offset!(sf, sl_f);
                     let offset_ret = abs_offset!(sf, sl_ret);
 
