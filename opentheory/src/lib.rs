@@ -879,11 +879,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
 
             // instantiate `thm` with `v_i := c_i`
             thm = {
-                let subst: Vec<_> = c_l
+                let subst: k::Subst = c_l
                     .iter()
                     .map(|ldef| (ldef.v.clone(), ldef.c_applied.clone()))
                     .collect();
-                vm.ctx.thm_instantiate(thm, &subst)?
+                vm.ctx.thm_instantiate(thm, subst)?
             };
 
             // resolve instantiated theorem with each constant definition thm
@@ -1102,50 +1102,54 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             let thm = x.as_thm()?;
             let mut l = y.as_list()?;
             // build type substitution first
-            let mut subst = vec![];
             if l.len() != 2 {
                 return Err(Error::new("expected pair of subst"));
             }
             let subst_t = l.pop().unwrap();
             let subst_ty = l.pop().unwrap();
             debug_assert_eq!(l.len(), 0);
-            subst_ty.as_list()?.into_iter().try_for_each(|x| {
-                let mut l = x.as_list()?;
-                if l.len() != 2 {
-                    return Err(Error::new("expected <name>,<ty> in subst"));
-                }
-                let ty = l.pop().unwrap().as_type()?;
-                let v = l.pop().unwrap().as_name()?;
-                let pair = (Var::from_str(&v.to_string(), vm.ctx.mk_ty()), ty);
-                subst.push(pair);
-                Ok(())
-            })?;
+            let subst_ty = subst_ty
+                .as_list()?
+                .into_iter()
+                .map(|x| {
+                    let mut l = x.as_list()?;
+                    if l.len() != 2 {
+                        return Err(Error::new("expected <name>,<ty> in subst"));
+                    }
+                    let ty = l.pop().unwrap().as_type()?;
+                    let v = l.pop().unwrap().as_name()?;
+                    let pair = (Var::from_str(&v.to_string(), vm.ctx.mk_ty()), ty);
+                    Ok(pair)
+                })
+                .collect::<Result<k::Subst>>()?;
             vm.cb.debug(|| {
                 format!(
                     "instantiating\n  {:#?}\n  with type subst {:#?}",
-                    &thm, subst
+                    &thm, subst_ty
                 )
             });
-            let th1 = vm.ctx.thm_instantiate(thm, &subst[..])?;
+            let th1 = vm.ctx.thm_instantiate(thm, subst_ty)?;
             vm.cb.debug(|| format!("instantiated\n  into {:#?}", &th1));
             // then instantiate terms
-            subst.clear();
-            subst_t.as_list()?.into_iter().try_for_each(|x| {
-                let mut l = x.as_list()?;
-                if l.len() != 2 {
-                    return Err(Error::new("expected <var>,<expr>"));
-                }
-                let ty = l.pop().unwrap().as_term()?;
-                let v = l.pop().unwrap().as_var()?;
-                let pair = (v, ty);
-                subst.push(pair);
-                Ok(())
-            })?;
-            let th2 = vm.ctx.thm_instantiate(th1, &subst[..])?;
+            let subst_t = subst_t
+                .as_list()?
+                .into_iter()
+                .map(|x| {
+                    let mut l = x.as_list()?;
+                    if l.len() != 2 {
+                        return Err(Error::new("expected <var>,<expr>"));
+                    }
+                    let ty = l.pop().unwrap().as_term()?;
+                    let v = l.pop().unwrap().as_var()?;
+                    let pair = (v, ty);
+                    Ok(pair)
+                })
+                .collect::<Result<k::Subst>>()?;
+            let th2 = vm.ctx.thm_instantiate(th1, subst_t.clone())?;
             vm.cb.debug(|| {
                 format!(
                     "instantiated\n  into {:#?}\n  with subst {:#?}",
-                    &th2, subst,
+                    &th2, subst_t,
                 )
             });
             vm.push_obj(O::Thm(th2));
