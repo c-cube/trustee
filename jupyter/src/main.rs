@@ -19,7 +19,7 @@ const BUILTINS: &'static [&'static meta::InstrBuiltin] = &[&trustee::defbuiltin!
             log::info!("parse opentheory file '{}'", file);
             vm.parse_file(file)?;
         }
-        let art = vm.into_article();
+        let art = vm.into_article().0;
         log::debug!("got article: {:#?}", &art);
         let l: Value = art.theorems.into();
         Ok(l)
