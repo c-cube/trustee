@@ -212,6 +212,11 @@ pub trait Callbacks {
         F: Fn() -> String,
     {
     }
+
+    /// Called before a theorem is added to the article.
+    fn on_add_thm(&mut self, th: Thm) -> Thm {
+        th
+    }
 }
 
 /// Trivial implementation for callbacks.
@@ -221,7 +226,7 @@ impl Callbacks for () {}
 ///
 /// This is used to parse and interpret an OpenTheory file.
 #[derive(Debug)]
-pub struct VM<'a, CB: Callbacks> {
+pub struct VM<'a, CB: Callbacks + 'a> {
     ctx: &'a mut k::Ctx,
     cb: CB,
     ty_vars: HashMap<String, Var>,
@@ -339,14 +344,15 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
         }
     }
 
-    /// Turn into an article.
-    pub fn into_article(self) -> Article {
+    /// Turn into an article. Also recover callbacks.
+    pub fn into_article(self) -> (Article, CB) {
         trustee::tefbegin!("OT.into-article");
         let VM {
             defs,
             assumptions,
             theorems,
             ctx,
+            cb,
             ..
         } = self;
         let defs = defs
@@ -354,11 +360,14 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             .map(|(n, oc)| (n.to_string(), oc.expr(ctx).clone()))
             .collect();
         let theorems: Vec<_> = theorems.into_iter().map(|x| x.1).collect();
-        Article {
-            defs,
-            assumptions,
-            theorems,
-        }
+        (
+            Article {
+                defs,
+                assumptions,
+                theorems,
+            },
+            cb,
+        )
     }
 
     #[inline]
@@ -1092,7 +1101,11 @@ impl<'a, CB: Callbacks> VM<'a, CB> {
             vm.cb
                 .debug(|| format!("## add theorem {:?} phi={:?}", thm, _phi));
             let k = ThmKey::new(&thm);
-            vm.theorems.insert(k, thm.clone());
+            {
+                // use callback to transform `thm`, if needed.
+                let thm = vm.cb.on_add_thm(thm.clone());
+                vm.theorems.insert(k, thm);
+            }
             Ok(())
         })
         .map_err(|e| e.with_source(Error::new("OT: failure in thm")))

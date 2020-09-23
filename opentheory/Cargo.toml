@@ -12,6 +12,7 @@ trustee = {path = "../core", features=["logging"]}
 [dev-dependencies]
 log = "0.4"
 env_logger = {version="0.7", default-features=false, features=["termcolor", "atty"]}
+gumdrop="0.6"
 
 [[example]]
 name = "parse_ot"
