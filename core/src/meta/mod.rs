@@ -453,7 +453,7 @@ mod test {
     #[test]
     fn test_proof_prelude() {
         let mut ctx = Ctx::new();
-        ctx.set_proof(true);
-        load_prelude_hol(&mut ctx).expect("cannot load prelude");
+        ctx.enable_proof_recording(true);
+        load_prelude_hol(&mut ctx).expect("cannot load prelude with proof recording on");
     }
 }
