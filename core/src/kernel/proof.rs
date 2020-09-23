@@ -11,7 +11,7 @@ use {
 #[derive(Clone, Eq, PartialEq, Hash)]
 pub struct Proof(RPtr<ProofView>);
 
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum ProofView {
     Assume(Expr),
     Refl(Expr),

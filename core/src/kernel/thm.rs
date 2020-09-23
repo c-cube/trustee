@@ -85,98 +85,110 @@ impl Thm {
     }
 
     // recursive implementation of `print_proof`
-    fn print_proof_(&self, seen: &mut HM<Thm, usize>, out: &mut dyn std::io::Write) -> Result<()> {
+    fn print_proof_(
+        &self,
+        seen: &mut HM<Thm, usize>,
+        newlines: bool,
+        out: &mut dyn std::io::Write,
+    ) -> Result<()> {
         if seen.contains_key(&self) {
             return Ok(());
         }
 
         let pr = match self.proof() {
-            None => return Ok(()),
+            None => {
+                crate::logdebug!("no proof for {:?}", self);
+                return Ok(());
+            }
             Some(pr) => pr,
         };
 
         {
             // explore parents first
             let mut e = Ok(());
-            pr.premises(|th2| match th2.print_proof_(seen, out) {
-                Ok(()) => (),
-                Err(e2) => e = Err(e2),
+            pr.premises(|th2| {
+                crate::logdebug!("explore premise: {:?}", th2);
+                match th2.print_proof_(seen, newlines, out) {
+                    Ok(()) => (),
+                    Err(e2) => e = Err(e2),
+                }
             });
             e?;
         }
 
         let n = seen.len();
         seen.insert(self.clone(), n);
+        crate::logdebug!("print proof for {:?} (proof={:?})", self, &**pr);
         write!(out, " ({} ", n)?;
 
         match &**pr {
             ProofView::Assume(e) => {
-                writeln!(out, "assume ${}$)", e)?;
+                write!(out, "assume ${}$)", e)?;
             }
             ProofView::Refl(e) => {
-                writeln!(out, "refl ${}$)", e)?;
+                write!(out, "refl ${}$)", e)?;
             }
             ProofView::Trans(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "trans {} {})", n1, n2)?;
+                write!(out, "trans {} {})", n1, n2)?;
             }
             ProofView::Congr(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "congr {} {})", n1, n2)?;
+                write!(out, "congr {} {})", n1, n2)?;
             }
             ProofView::CongrTy(th1, ty) => {
                 let n1 = seen.get(&th1).unwrap();
-                writeln!(out, "congr_ty {} ${}$)", n1, ty)?;
+                write!(out, "congr_ty {} ${}$)", n1, ty)?;
             }
             ProofView::Instantiate(th1, _) => {
                 // TODO: print subst
                 let n1 = seen.get(&th1).unwrap();
-                writeln!(out, "instantiate {})", n1,)?;
+                write!(out, "instantiate {})", n1,)?;
             }
             ProofView::Abs(v, th1) => {
                 let n1 = seen.get(&th1).unwrap();
-                writeln!(out, "abs ${:?}$ {})", v, n1,)?;
+                write!(out, "abs ${:?}$ {})", v, n1,)?;
             }
             ProofView::Axiom(e) => {
-                writeln!(out, "axiom ${}$)", e,)?;
+                write!(out, "axiom ${}$)", e,)?;
             }
             ProofView::Cut(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "cut {} {})", n1, n2)?;
+                write!(out, "cut {} {})", n1, n2)?;
             }
             ProofView::BoolEq(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "bool_eq {} {})", n1, n2)?;
+                write!(out, "bool_eq {} {})", n1, n2)?;
             }
             ProofView::BoolEqIntro(th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "bool_eq_intro {} {})", n1, n2)?;
+                write!(out, "bool_eq_intro {} {})", n1, n2)?;
             }
             ProofView::BetaConv(e) => {
-                writeln!(out, "beta_conv ${}$)", e)?;
+                write!(out, "beta_conv ${}$)", e)?;
             }
             ProofView::NewDef(e) => {
-                writeln!(out, "new_def ${}$)", e)?;
+                write!(out, "new_def ${}$)", e)?;
             }
             ProofView::NewTyDef(e, _) => {
-                writeln!(out, "new_ty_def ${}$)", e)?;
+                write!(out, "new_ty_def ${}$)", e)?;
             }
             ProofView::GetThm(r) => {
-                writeln!(out, "get {})", r)?;
+                write!(out, "get {})", r)?;
             }
             ProofView::CallRule1(r, th1) => {
                 let n1 = seen.get(&th1).unwrap();
-                writeln!(out, "call1 {} {})", r, n1)?;
+                write!(out, "call1 {} {})", r, n1)?;
             }
             ProofView::CallRule2(r, th1, th2) => {
                 let n1 = seen.get(&th1).unwrap();
                 let n2 = seen.get(&th2).unwrap();
-                writeln!(out, "call2 {} {} {})", r, n1, n2)?;
+                write!(out, "call2 {} {} {})", r, n1, n2)?;
             }
             ProofView::CallRuleN(r, a) => {
                 write!(out, "calln {}", r)?;
@@ -184,25 +196,34 @@ impl Thm {
                     let n = seen.get(&th).unwrap();
                     write!(out, " {}", n)?;
                 }
-                writeln!(out, ")")?;
+                write!(out, ")")?;
             }
+        }
+        if newlines {
+            writeln!(out, "")?;
         }
         Ok(())
     }
 
     /// Print proof of this theorem and its parents, recursively.
-    pub fn print_proof(&self, out: &mut dyn std::io::Write) -> Result<()> {
+    pub fn print_proof(&self, newlines: bool, out: &mut dyn std::io::Write) -> Result<()> {
         let mut seen = HM::default();
-        writeln!(out, "(proof ")?;
-        self.print_proof_(&mut seen, out)?;
-        writeln!(out, ")")?;
+        write!(out, "(")?;
+        if newlines {
+            writeln!(out, "")?;
+        }
+        self.print_proof_(&mut seen, newlines, out)?;
+        write!(out, ")")?;
+        if newlines {
+            writeln!(out, "")?;
+        }
         Ok(())
     }
 
     /// Print proof into stirng, if present.
     pub fn proof_to_string(&self) -> Option<String> {
         let mut v = vec![];
-        if let Err(_e) = self.print_proof(&mut v) {
+        if let Err(_e) = self.print_proof(true, &mut v) {
             return None;
         }
         std::string::String::from_utf8(v).ok()
@@ -249,10 +270,9 @@ mod impls {
         }
     }
 
-    // TODO: use structural equality instead?
     impl PartialEq for Thm {
         fn eq(&self, other: &Self) -> bool {
-            std::ptr::eq(self.0.as_ref() as *const _, other.0.as_ref() as *const _)
+            self.concl() == other.concl() && self.hyps() == other.hyps()
         }
     }
 
@@ -260,8 +280,10 @@ mod impls {
 
     impl std::hash::Hash for Thm {
         fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-            let p = self.0.as_ref();
-            std::ptr::hash(p, state)
+            self.concl().hash(state);
+            for x in self.hyps() {
+                x.hash(state)
+            }
         }
     }
 }

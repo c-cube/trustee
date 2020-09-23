@@ -149,7 +149,7 @@ impl Ctx {
     }
 
     /// Enable or disable proofs.
-    pub fn set_proof(&mut self, b: bool) {
+    pub fn enable_proof_recording(&mut self, b: bool) {
         self.proof_gen = b;
     }
 

@@ -41,7 +41,7 @@ fn loc_to_lsp(l: &Location) -> lsp::Range {
 impl server::Handler for TrusteeSt {
     fn on_doc_update(&mut self, _id: DocID, txt: &str) -> Result<Vec<lsp::Diagnostic>> {
         let mut ctx = k::Ctx::new();
-        ctx.set_proof(true);
+        ctx.enable_proof_recording(true);
 
         let mut r = utils::eval(&mut ctx, txt, None);
         log::debug!("eval: got {} results in {:?}", r.res.len(), r.duration);
@@ -129,7 +129,7 @@ impl server::Handler for TrusteeSt {
         if let Some(doc) = st.get_doc(&d) {
             log::debug!("inspect in document {:?} at {:?}", &d, pos);
             let mut ctx = k::Ctx::new();
-            ctx.set_proof(true);
+            ctx.enable_proof_recording(true);
 
             // FIXME: redirect stdout
             // ignore errors here!
@@ -164,7 +164,7 @@ impl server::Handler for TrusteeSt {
         if let Some(doc) = st.get_doc(&d) {
             log::debug!("complete in document {:?} at {:?}", &d, pos);
             let mut ctx = k::Ctx::new();
-            ctx.set_proof(true);
+            ctx.enable_proof_recording(true);
 
             // FIXME: redirect stdout
             // ignore errors here!

@@ -89,7 +89,7 @@ fn main() -> anyhow::Result<()> {
     log::info!("start cli");
 
     let mut ctx = Ctx::new();
-    ctx.set_proof(true);
+    ctx.enable_proof_recording(true);
 
     let opts = Opts::parse_args_default_or_exit();
 
