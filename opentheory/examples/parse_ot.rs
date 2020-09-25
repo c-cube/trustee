@@ -1,17 +1,16 @@
 use gumdrop::Options;
 use std::{collections::HashMap, fs::File, io::BufReader};
-use trustee::*;
+use trustee::{kernel::print_proof, *};
 use trustee_opentheory as open_theory;
 
 /// Logger.
-struct LogCB {
+struct LogCB<'a> {
     store_proof: bool,
-    thms: HashMap<String, Thm>,
-    proof: Vec<u8>,
+    proof: &'a mut print_proof::Printer<'a>,
     n: usize,
 }
 
-impl<'a> open_theory::Callbacks for &'a mut LogCB {
+impl<'a> open_theory::Callbacks for &'a mut LogCB<'a> {
     fn debug<F>(&mut self, f: F)
     where
         F: Fn() -> String,
@@ -20,19 +19,18 @@ impl<'a> open_theory::Callbacks for &'a mut LogCB {
     }
 
     fn on_add_thm(&mut self, th: Thm) -> Thm {
-        use {
-            kernel::{Proof, ProofView},
-            std::io::Write,
-        };
+        use kernel::{Proof, ProofView};
+        if !self.store_proof {
+            return th;
+        }
 
         let name = format!("th-{}", self.n);
         self.n += 1;
 
-        write!(&mut self.proof, "(set {} ", name).unwrap();
-        th.print_proof(false, &mut self.proof).unwrap();
-        writeln!(&mut self.proof, ")").unwrap();
+        let id = self.proof.print_proof(&th).expect("print proof failed");
+        self.proof.set_name(id, &name).expect("set name failed");
 
-        // update proof
+        // update proof to use the name
         let newpr = Proof::new(ProofView::GetThm(name.into()));
         let th = th.set_proof(newpr);
         th
@@ -55,10 +53,11 @@ fn parse_all(opt: Opts) -> trustee::Result<()> {
         ctx.enable_proof_recording(true);
     }
 
+    let mut proof = vec![];
+    let mut printer = print_proof::Printer::new(&mut proof);
     let mut cb = LogCB {
         store_proof: opt.dump_proof.is_some(),
-        thms: HashMap::new(),
-        proof: vec![],
+        proof: &mut printer,
         n: 0,
     };
 
@@ -72,13 +71,13 @@ fn parse_all(opt: Opts) -> trustee::Result<()> {
     }
     log::info!("done parsing!");
 
-    let (article, cb) = vm.into_article();
+    let (article, _cb) = vm.into_article();
     log::info!("article: {}", &article);
 
     if let Some(file) = &opt.dump_proof {
         log::info!("dump proof into {}", file);
         trustee::tefbegin!("ot.dump-proof");
-        std::fs::write(file, &cb.proof)?;
+        std::fs::write(file, &proof)?;
     }
 
     log::info!("success!");

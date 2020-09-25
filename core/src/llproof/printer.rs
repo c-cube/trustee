@@ -112,9 +112,12 @@ impl ProofPrinter {
                 .ok_or_else(|| Error::new("theorem has no proof"))?;
 
             let mut v = vec![];
-            proof.premises(|th2| {
-                v.push(th2.clone());
-            });
+            proof.premises(
+                |_| {},
+                |th2| {
+                    v.push(th2.clone());
+                },
+            );
             let cell = GraphCell::Proof {
                 pr: proof.clone(),
                 parents: v,

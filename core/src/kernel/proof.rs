@@ -53,13 +53,14 @@ mod impls {
 
     impl Proof {
         /// Call `f` on immediate premises of this proof.
-        pub fn premises<F>(&self, mut f: F)
+        pub fn premises<FThm, FE>(&self, mut fe: FE, mut f: FThm)
         where
-            F: FnMut(&Thm),
+            FE: FnMut(&Expr),
+            FThm: FnMut(&Thm),
         {
             use ProofView as PV;
             match &*self.0 {
-                PV::Assume(_) | PV::Refl(_) => {}
+                PV::Assume(e) | PV::Refl(e) => fe(e),
                 PV::Trans(a, b) => {
                     f(a);
                     f(b)
@@ -68,12 +69,22 @@ mod impls {
                     f(a);
                     f(b)
                 }
-                PV::CongrTy(a, _) => {
+                PV::CongrTy(a, e) => {
                     f(a);
+                    fe(&e)
                 }
-                PV::Instantiate(a, _) => f(a),
-                PV::Abs(_, a) => f(a),
-                PV::Axiom(_) => {}
+                PV::Instantiate(a, subst) => {
+                    f(a);
+                    for (v, e) in &**subst {
+                        fe(v.ty());
+                        fe(e);
+                    }
+                }
+                PV::Abs(v, a) => {
+                    fe(v.ty());
+                    f(a)
+                }
+                PV::Axiom(e) => fe(e),
                 PV::Cut(a, b) => {
                     f(a);
                     f(b);
@@ -86,9 +97,12 @@ mod impls {
                     f(a);
                     f(b)
                 }
-                PV::BetaConv(_) => {}
+                PV::BetaConv(e) => fe(e),
                 PV::NewDef(_) => {}
-                PV::NewTyDef(_, th) => f(th),
+                PV::NewTyDef(ty, th) => {
+                    fe(ty);
+                    f(th)
+                }
                 PV::GetThm(_) => {}
                 PV::CallRule1(_, th) => f(th),
                 PV::CallRule2(_, th1, th2) => {
