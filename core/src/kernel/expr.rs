@@ -205,7 +205,10 @@ impl ExprView {
         F: FnMut(&Expr, DbIndex) -> Result<()>,
     {
         match self {
-            EType | EKind | EConst(..) => (),
+            EType | EKind => {}
+            EConst(c) => {
+                f(&c.ty, k)?;
+            }
             EVar(v) => {
                 f(&v.ty, k)?;
             }

@@ -98,7 +98,9 @@ mod impls {
                     f(b)
                 }
                 PV::BetaConv(e) => fe(e),
-                PV::NewDef(_) => {}
+                PV::NewDef(e) => {
+                    fe(e);
+                }
                 PV::NewTyDef(ty, th) => {
                     fe(ty);
                     f(th)

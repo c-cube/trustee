@@ -66,30 +66,45 @@ impl<'a> Printer<'a> {
         self.expr_seen
             .get(e)
             .map(|r| r.id)
-            .ok_or_else(|| Error::new("cannot find name for expression"))
+            .ok_or_else(|| Error::new_string(format!("cannot find name for expression `{}`", e)))
     }
 
     fn get_thm_id(&self, th: &Thm) -> Result<Id> {
         self.thm_seen
             .get(th)
             .map(|r| r.id)
-            .ok_or_else(|| Error::new("cannot find name for theorem"))
+            .ok_or_else(|| Error::new_string(format!("cannot find name for theorem `{}`", th)))
     }
 
     fn print_loop(&mut self) -> Result<()> {
         while let Some(t) = self.to_explore.pop() {
+            crate::logtrace!("explore {:?}", t);
             match t {
                 Task::EnterExpr(e) => {
                     if let Some(eref) = self.expr_seen.get_mut(&e) {
                         // already printed, be need to hold on to it
                         eref.count += 1;
                     } else {
-                        // print expr, after dependencies have been printed
-                        self.to_explore.push(Task::PrintExpr(e.clone()));
+                        let id = self.alloc_ref_();
+                        let eref = Ref { id, count: 1 };
+                        self.expr_seen.insert(e.clone(), eref);
+
                         e.view()
                             .iter(
                                 |e2, _| {
                                     self.to_explore.push(Task::ExitExpr(e2.clone()));
+                                    Ok(())
+                                },
+                                0,
+                            )
+                            .unwrap();
+
+                        // print expr, after dependencies have been printed
+                        self.to_explore.push(Task::PrintExpr(e.clone()));
+
+                        e.view()
+                            .iter(
+                                |e2, _| {
                                     self.to_explore.push(Task::EnterExpr(e2.clone()));
                                     Ok(())
                                 },
@@ -113,10 +128,7 @@ impl<'a> Printer<'a> {
                     }
                 }
                 Task::PrintExpr(e) => {
-                    assert!(!self.expr_seen.contains_key(&e));
-                    let id = self.alloc_ref_();
-                    let eref = Ref { id, count: 1 };
-                    self.expr_seen.insert(e.clone(), eref);
+                    let id = self.get_term_id(&e)?;
 
                     match e.view() {
                         EType => {
@@ -138,17 +150,17 @@ impl<'a> Printer<'a> {
                         EApp(f, a) => {
                             let idf = self.get_term_id(&f)?;
                             let ida = self.get_term_id(&a)?;
-                            writeln!(self.out, "{} @ {} {}", id, idf, ida);
+                            writeln!(self.out, "{} @ {} {}", id, idf, ida)?;
                         }
                         ELambda(tyv, bod) => {
                             let idty = self.get_term_id(&tyv)?;
                             let idbod = self.get_term_id(&bod)?;
-                            writeln!(self.out, "{} \\ {} {}", id, idty, idbod);
+                            writeln!(self.out, "{} \\ {} {}", id, idty, idbod)?;
                         }
                         EPi(tyv, bod) => {
                             let idty = self.get_term_id(&tyv)?;
                             let idbod = self.get_term_id(&bod)?;
-                            writeln!(self.out, "{} P {} {}", id, idty, idbod);
+                            writeln!(self.out, "{} P {} {}", id, idty, idbod)?;
                         }
                     }
                 }
@@ -162,20 +174,30 @@ impl<'a> Printer<'a> {
                             Some(pr) => pr,
                         };
 
-                        // print th, after dependencies have been printed
-                        self.to_explore.push(Task::PrintThm(th.clone()));
+                        let id = self.alloc_ref_();
+                        let thref = Ref { id, count: 1 };
+                        self.thm_seen.insert(th.clone(), thref);
 
                         // print dependencies
                         let mut ve = vec![];
                         let mut vth = vec![];
                         pr.premises(|e| ve.push(e.clone()), |th| vth.push(th.clone()));
-                        for e in ve {
-                            self.to_explore.push(Task::ExitExpr(e.clone()));
-                            self.to_explore.push(Task::EnterExpr(e.clone()));
-                        }
-                        for th in vth {
+
+                        for th in vth.clone() {
                             self.to_explore.push(Task::ExitThm(th.clone()));
+                        }
+                        for e in ve.clone() {
+                            self.to_explore.push(Task::ExitExpr(e.clone()));
+                        }
+
+                        // print th, after dependencies have been printed
+                        self.to_explore.push(Task::PrintThm(th.clone()));
+
+                        for th in vth {
                             self.to_explore.push(Task::EnterThm(th.clone()));
+                        }
+                        for e in ve {
+                            self.to_explore.push(Task::EnterExpr(e.clone()));
                         }
                     }
                 }
@@ -306,6 +328,7 @@ impl<'a> Printer<'a> {
     }
 
     pub fn set_name(&mut self, id: Id, name: &str) -> Result<()> {
+        crate::logdebug!("set name {} := {}", id, name);
         writeln!(self.out, "SET {} {}", id, name)?;
         Ok(())
     }
