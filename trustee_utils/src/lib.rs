@@ -235,7 +235,7 @@ pub fn inspect(
                     write!(s, " {}\n```\n", th.concl()).unwrap();
 
                     // print proof, if available
-                    if let Some(spr) = th.proof_to_string() {
+                    if let Some(spr) = trustee::kernel::print_proof::proof_to_string(&th) {
                         writeln!(s, "").unwrap();
                         writeln!(s, "{}", spr).unwrap();
                     }
