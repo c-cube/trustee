@@ -108,7 +108,8 @@ impl server::Handler for TrusteeSt {
                         // print proof, if available
                         let pr = match v {
                             meta::Value::Thm(th) => {
-                                th.proof_to_string().unwrap_or_else(|| String::new())
+                                trustee::kernel::print_proof::proof_to_string(&th)
+                                    .unwrap_or_else(|| String::new())
                             }
                             _ => String::new(),
                         };
