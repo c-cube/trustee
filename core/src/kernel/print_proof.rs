@@ -5,43 +5,52 @@ use {super::*, crate::fnv::FnvHashMap as HM, std::io::Write};
 pub struct Printer<'a> {
     out: &'a mut dyn Write,
     /// For each expressions to print, number of times it is required.
-    expr_seen: HM<Expr, Ref>,
+    rc_expr: HM<Expr, u32>,
     /// For each theorem to print, number of times it is required.
-    thm_seen: HM<Thm, Ref>,
+    rc_thm: HM<Thm, u32>,
+    /// Id for expressions already printed
+    id_expr: HM<Expr, Id>,
+    /// Id for theorems already printed
+    id_thm: HM<Thm, Id>,
     max_id: u32,
     free_ids: Vec<u32>,
-    to_explore: Vec<Task>,
     last_id: Id,
 }
 
+/// Tasks during first DFS
 #[derive(Debug)]
-enum Task {
+enum Task1 {
+    ExploreExpr(Expr),
+    ExploreThm(Thm),
+}
+
+/// Tasks during second DFS
+#[derive(Debug)]
+enum Task2 {
+    /// Start processing `e` in the traversal. Means we also explore its deps.
     EnterExpr(Expr),
-    ExitExpr(Expr),
+    /// Print `e`. Deps must have been printed.
     PrintExpr(Expr),
+    /// Decrement refcount of `e`, as it's no longer needed by some parent.
+    ExitExpr(Expr),
     EnterThm(Thm),
-    ExitThm(Thm),
     PrintThm(Thm),
+    ExitThm(Thm),
 }
 
 type Id = u32;
-
-#[derive(Debug, Clone, Copy)]
-struct Ref {
-    id: Id,
-    count: u32,
-}
 
 impl<'a> Printer<'a> {
     /// New printer
     pub fn new(out: &'a mut dyn Write) -> Self {
         Self {
             out,
-            expr_seen: HM::default(),
-            thm_seen: HM::default(),
+            rc_expr: HM::default(),
+            rc_thm: HM::default(),
+            id_expr: HM::default(),
+            id_thm: HM::default(),
             max_id: 0,
             free_ids: vec![],
-            to_explore: vec![],
             last_id: 0,
         }
     }
@@ -63,49 +72,38 @@ impl<'a> Printer<'a> {
     }
 
     fn get_term_id(&self, e: &Expr) -> Result<Id> {
-        self.expr_seen
+        self.id_expr
             .get(e)
-            .map(|r| r.id)
+            .copied()
             .ok_or_else(|| Error::new_string(format!("cannot find name for expression `{}`", e)))
     }
 
     fn get_thm_id(&self, th: &Thm) -> Result<Id> {
-        self.thm_seen
+        self.id_thm
             .get(th)
-            .map(|r| r.id)
+            .copied()
             .ok_or_else(|| Error::new_string(format!("cannot find name for theorem `{}`", th)))
     }
 
-    fn print_loop(&mut self) -> Result<()> {
-        while let Some(t) = self.to_explore.pop() {
-            crate::logtrace!("explore {:?}", t);
+    /// Compute refcount of each element of the proof (expression or theorem).
+    fn gather_refcounts(&mut self, th: &Thm) -> Result<()> {
+        let mut to_explore = vec![];
+        to_explore.push(Task1::ExploreThm(th.clone()));
+
+        while let Some(t) = to_explore.pop() {
+            crate::logtrace!("dfs1.explore {:?}", t);
             match t {
-                Task::EnterExpr(e) => {
-                    if let Some(eref) = self.expr_seen.get_mut(&e) {
-                        // already printed, be need to hold on to it
-                        eref.count += 1;
+                Task1::ExploreExpr(e) => {
+                    if let Some(rc) = self.rc_expr.get_mut(&e) {
+                        *rc += 1
                     } else {
-                        let id = self.alloc_ref_();
-                        let eref = Ref { id, count: 1 };
-                        self.expr_seen.insert(e.clone(), eref);
+                        self.rc_expr.insert(e.clone(), 1);
 
+                        // explore sub-terms
                         e.view()
                             .iter(
                                 |e2, _| {
-                                    self.to_explore.push(Task::ExitExpr(e2.clone()));
-                                    Ok(())
-                                },
-                                0,
-                            )
-                            .unwrap();
-
-                        // print expr, after dependencies have been printed
-                        self.to_explore.push(Task::PrintExpr(e.clone()));
-
-                        e.view()
-                            .iter(
-                                |e2, _| {
-                                    self.to_explore.push(Task::EnterExpr(e2.clone()));
+                                    to_explore.push(Task1::ExploreExpr(e2.clone()));
                                     Ok(())
                                 },
                                 0,
@@ -113,21 +111,80 @@ impl<'a> Printer<'a> {
                             .unwrap();
                     }
                 }
-                Task::ExitExpr(e) => {
-                    let eref = self
-                        .expr_seen
-                        .get_mut(&e)
-                        .ok_or_else(|| Error::new("refcount error"))?;
-                    eref.count -= 1;
+                Task1::ExploreThm(th) => {
+                    if let Some(rc) = self.rc_thm.get_mut(&th) {
+                        *rc += 1;
+                    } else {
+                        let pr = match th.proof() {
+                            None => return Err(Error::new("theorem has no proof")),
+                            Some(pr) => pr,
+                        };
 
-                    // not needed anymore
-                    if eref.count == 0 {
-                        let id = eref.id;
-                        self.free_id(id);
-                        self.expr_seen.remove(&e);
+                        self.rc_thm.insert(th.clone(), 1);
+
+                        // print dependencies
+                        let mut ve = vec![];
+                        let mut vth = vec![];
+                        pr.premises(|e| ve.push(e.clone()), |th| vth.push(th.clone()));
+
+                        for th in vth {
+                            to_explore.push(Task1::ExploreThm(th));
+                        }
+                        for e in ve {
+                            to_explore.push(Task1::ExploreExpr(e));
+                        }
                     }
                 }
-                Task::PrintExpr(e) => {
+            }
+        }
+
+        Ok(())
+    }
+
+    fn print_loop(&mut self, th: &Thm) -> Result<()> {
+        let mut to_explore = vec![];
+        to_explore.push(Task2::ExitThm(th.clone()));
+        to_explore.push(Task2::EnterThm(th.clone()));
+
+        while let Some(t) = to_explore.pop() {
+            crate::logtrace!("dfs2.explore {:?}", t);
+            match t {
+                Task2::EnterExpr(e) => {
+                    assert!(self.rc_expr.contains_key(&e));
+
+                    if let Some(_) = self.id_expr.get_mut(&e) {
+                        continue; // already printed, nothing to do
+                    }
+
+                    let id = self.alloc_ref_();
+                    self.id_expr.insert(e.clone(), id);
+
+                    // release dependencies
+                    e.view()
+                        .iter(
+                            |e2, _| {
+                                to_explore.push(Task2::ExitExpr(e2.clone()));
+                                Ok(())
+                            },
+                            0,
+                        )
+                        .unwrap();
+
+                    // print expr, after dependencies have been printed
+                    to_explore.push(Task2::PrintExpr(e.clone()));
+
+                    // print dependencies
+                    e.view()
+                        .iter(
+                            |e2, _| {
+                                to_explore.push(Task2::EnterExpr(e2.clone()));
+                                Ok(())
+                            },
+                            0,
+                        )
+                        .unwrap();
+                }
+                Task2::PrintExpr(e) => {
                     let id = self.get_term_id(&e)?;
 
                     match e.view() {
@@ -164,56 +221,64 @@ impl<'a> Printer<'a> {
                         }
                     }
                 }
-                Task::EnterThm(th) => {
-                    if let Some(thref) = self.thm_seen.get_mut(&th) {
-                        // already printed, be need to hold on to it
-                        thref.count += 1;
-                    } else {
-                        let pr = match th.proof() {
-                            None => return Err(Error::new("theorem has no proof")),
-                            Some(pr) => pr,
-                        };
+                Task2::ExitExpr(e) => {
+                    let n = self.rc_expr.get_mut(&e).expect("refcount err");
+                    *n -= 1;
 
-                        let id = self.alloc_ref_();
-                        let thref = Ref { id, count: 1 };
-                        self.thm_seen.insert(th.clone(), thref);
-
-                        // print dependencies
-                        let mut ve = vec![];
-                        let mut vth = vec![];
-                        pr.premises(|e| ve.push(e.clone()), |th| vth.push(th.clone()));
-
-                        for th in vth.clone() {
-                            self.to_explore.push(Task::ExitThm(th.clone()));
-                        }
-                        for e in ve.clone() {
-                            self.to_explore.push(Task::ExitExpr(e.clone()));
-                        }
-
-                        // print th, after dependencies have been printed
-                        self.to_explore.push(Task::PrintThm(th.clone()));
-
-                        for th in vth {
-                            self.to_explore.push(Task::EnterThm(th.clone()));
-                        }
-                        for e in ve {
-                            self.to_explore.push(Task::EnterExpr(e.clone()));
-                        }
-                    }
-                }
-                Task::ExitThm(th) => {
-                    let thref = self
-                        .thm_seen
-                        .get_mut(&th)
-                        .ok_or_else(|| Error::new("theorem refcount error"))?;
-                    thref.count -= 1;
-                    if thref.count == 0 {
-                        let id = thref.id;
-                        self.thm_seen.remove(&th);
+                    // not needed anymore
+                    if *n == 0 {
+                        let id = self.get_term_id(&e)?;
                         self.free_id(id);
+                        self.rc_expr.remove(&e);
                     }
                 }
-                Task::PrintThm(th) => {
+                Task2::EnterThm(th) => {
+                    assert!(self.rc_thm.contains_key(&th));
+
+                    if let Some(_) = self.id_thm.get_mut(&th) {
+                        continue; // already printed, nothing to do
+                    }
+
+                    let id = self.alloc_ref_();
+                    self.id_thm.insert(th.clone(), id);
+
+                    let pr = match th.proof() {
+                        None => return Err(Error::new("theorem has no proof")),
+                        Some(pr) => pr,
+                    };
+
+                    // print dependencies
+                    let mut ve = vec![];
+                    let mut vth = vec![];
+                    pr.premises(|e| ve.push(e.clone()), |th| vth.push(th.clone()));
+
+                    for th in vth.clone() {
+                        to_explore.push(Task2::ExitThm(th.clone()));
+                    }
+                    for e in ve.clone() {
+                        to_explore.push(Task2::ExitExpr(e.clone()));
+                    }
+
+                    // print th, after dependencies have been printed
+                    to_explore.push(Task2::PrintThm(th.clone()));
+
+                    for th in vth {
+                        to_explore.push(Task2::EnterThm(th.clone()));
+                    }
+                    for e in ve {
+                        to_explore.push(Task2::EnterExpr(e.clone()));
+                    }
+                }
+                Task2::ExitThm(th) => {
+                    let n = self.rc_thm.get_mut(&th).expect("refcount err");
+                    *n -= 1;
+                    if *n == 0 {
+                        let id = self.get_thm_id(&th)?;
+                        self.free_id(id);
+                        self.rc_thm.remove(&th);
+                    }
+                }
+                Task2::PrintThm(th) => {
                     let id = self.get_thm_id(&th)?;
 
                     let pr = match th.proof() {
@@ -320,9 +385,8 @@ impl<'a> Printer<'a> {
 
     /// Print proof of this theorem and its parents, recursively.
     pub fn print_proof(&mut self, th: &Thm) -> Result<Id> {
-        self.to_explore.push(Task::ExitThm(th.clone()));
-        self.to_explore.push(Task::EnterThm(th.clone()));
-        self.print_loop()?;
+        self.gather_refcounts(th)?;
+        self.print_loop(th)?;
         let id = self.last_id;
         Ok(id)
     }
