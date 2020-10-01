@@ -1,6 +1,6 @@
 //! # Proof Printing
 
-use {super::*, crate::fnv::FnvHashMap as HM, std::io::Write};
+use {crate::fnv::FnvHashMap as HM, crate::kernel::*, crate::*, std::io::Write};
 
 pub struct Printer<'a> {
     out: &'a mut dyn Write,
@@ -57,18 +57,19 @@ impl<'a> Printer<'a> {
 
     // find a free number
     fn alloc_ref_(&mut self) -> u32 {
-        if let Some(u) = self.free_ids.pop() {
+        let id = if let Some(u) = self.free_ids.pop() {
             u
         } else {
             let i = self.max_id;
             self.max_id += 1;
             i
-        }
+        };
+        self.last_id = id;
+        id
     }
 
     fn free_id(&mut self, i: Id) {
         self.free_ids.push(i);
-        self.last_id = i;
     }
 
     fn get_term_id(&self, e: &Expr) -> Result<Id> {
@@ -141,6 +142,8 @@ impl<'a> Printer<'a> {
         Ok(())
     }
 
+    /// Traverse the graph of theorems and expressions, printing them on
+    /// the fly.
     fn print_loop(&mut self, th: &Thm) -> Result<()> {
         let mut to_explore = vec![];
         to_explore.push(Task2::ExitThm(th.clone()));
@@ -157,6 +160,7 @@ impl<'a> Printer<'a> {
                     }
 
                     let id = self.alloc_ref_();
+                    assert!(self.id_expr.iter().all(|(_, id2)| id != *id2));
                     self.id_expr.insert(e.clone(), id);
 
                     // release dependencies
@@ -189,35 +193,36 @@ impl<'a> Printer<'a> {
 
                     match e.view() {
                         EType => {
-                            writeln!(self.out, "{} #type", id)?;
+                            writeln!(self.out, "ty {}", id)?;
                         }
                         EKind => return Err(Error::new("cannot print kind")),
                         EConst(c) => {
                             let tyid = self.get_term_id(&c.ty)?;
-                            writeln!(self.out, "{} c {} {}", id, c.name.name(), tyid)?;
+                            writeln!(self.out, "c {} {} {}", id, c.name.name(), tyid)?;
                         }
                         EVar(v) => {
                             let tyid = self.get_term_id(&v.ty)?;
-                            writeln!(self.out, "{} v {} {}", id, v.name.name(), tyid)?;
+                            writeln!(self.out, "v {} {} {}", id, v.name.name(), tyid)?;
                         }
                         EBoundVar(v) => {
-                            let tyid = self.get_term_id(&v.ty)?;
-                            writeln!(self.out, "{} bv {} {}", id, v.idx, tyid)?;
+                            let tyid = self.get_term_id(v.ty())?;
+                            writeln!(self.out, "bv {} {} {}", id, v.idx(), tyid)?;
                         }
                         EApp(f, a) => {
                             let idf = self.get_term_id(&f)?;
                             let ida = self.get_term_id(&a)?;
-                            writeln!(self.out, "{} @ {} {}", id, idf, ida)?;
+                            assert_ne!(idf, ida);
+                            writeln!(self.out, "@ {} {} {}", id, idf, ida)?;
                         }
                         ELambda(tyv, bod) => {
                             let idty = self.get_term_id(&tyv)?;
                             let idbod = self.get_term_id(&bod)?;
-                            writeln!(self.out, "{} \\ {} {}", id, idty, idbod)?;
+                            writeln!(self.out, "\\ {} {} {}", id, idty, idbod)?;
                         }
                         EPi(tyv, bod) => {
                             let idty = self.get_term_id(&tyv)?;
                             let idbod = self.get_term_id(&bod)?;
-                            writeln!(self.out, "{} P {} {}", id, idty, idbod)?;
+                            writeln!(self.out, "P {} {} {}", id, idty, idbod)?;
                         }
                     }
                 }
@@ -229,6 +234,7 @@ impl<'a> Printer<'a> {
                     if *n == 0 {
                         let id = self.get_term_id(&e)?;
                         self.free_id(id);
+                        self.id_expr.remove(&e);
                         self.rc_expr.remove(&e);
                     }
                 }
@@ -240,6 +246,7 @@ impl<'a> Printer<'a> {
                     }
 
                     let id = self.alloc_ref_();
+                    assert!(self.id_thm.iter().all(|(_, id2)| id != *id2));
                     self.id_thm.insert(th.clone(), id);
 
                     let pr = match th.proof() {
@@ -263,10 +270,10 @@ impl<'a> Printer<'a> {
                     to_explore.push(Task2::PrintThm(th.clone()));
 
                     for th in vth {
-                        to_explore.push(Task2::EnterThm(th.clone()));
+                        to_explore.push(Task2::EnterThm(th));
                     }
                     for e in ve {
-                        to_explore.push(Task2::EnterExpr(e.clone()));
+                        to_explore.push(Task2::EnterExpr(e));
                     }
                 }
                 Task2::ExitThm(th) => {
@@ -275,6 +282,7 @@ impl<'a> Printer<'a> {
                     if *n == 0 {
                         let id = self.get_thm_id(&th)?;
                         self.free_id(id);
+                        self.id_thm.remove(&th);
                         self.rc_thm.remove(&th);
                     }
                 }
@@ -289,30 +297,30 @@ impl<'a> Printer<'a> {
                     match &**pr {
                         ProofView::Assume(e) => {
                             let ide = self.get_term_id(e)?;
-                            writeln!(self.out, "{} ASS {}", id, ide)?;
+                            writeln!(self.out, "ASS {} {}", id, ide)?;
                         }
                         ProofView::Refl(e) => {
                             let ide = self.get_term_id(e)?;
-                            writeln!(self.out, "{} RFL {}", id, ide)?;
+                            writeln!(self.out, "RFL {} {}", id, ide)?;
                         }
                         ProofView::Trans(th1, th2) => {
                             let n1 = self.get_thm_id(&th1)?;
                             let n2 = self.get_thm_id(&th2)?;
-                            writeln!(self.out, "{} TRNS {} {}", id, n1, n2)?;
+                            writeln!(self.out, "TRNS {} {} {}", id, n1, n2)?;
                         }
                         ProofView::Congr(th1, th2) => {
                             let n1 = self.get_thm_id(&th1)?;
                             let n2 = self.get_thm_id(&th2)?;
-                            writeln!(self.out, "{} CGR {} {})", id, n1, n2)?;
+                            writeln!(self.out, "CGR {} {} {}", id, n1, n2)?;
                         }
                         ProofView::CongrTy(th1, ty) => {
                             let idty = self.get_term_id(&ty)?;
                             let n1 = self.get_thm_id(&th1)?;
-                            writeln!(self.out, "{} CGRTY {} {})", id, n1, idty)?;
+                            writeln!(self.out, "CGRTY {} {} {}", id, n1, idty)?;
                         }
                         ProofView::Instantiate(th1, subst) => {
                             let n1 = self.get_thm_id(&th1)?;
-                            write!(self.out, "{} SBST {}", id, n1)?;
+                            write!(self.out, "SBST {} {}", id, n1)?;
                             for (v, e) in &subst[..] {
                                 let eid = self.get_term_id(e)?;
                                 write!(self.out, " {} {}", v.name.name(), eid)?;
@@ -322,54 +330,54 @@ impl<'a> Printer<'a> {
                         ProofView::Abs(v, th1) => {
                             let ty = self.get_term_id(&v.ty)?;
                             let n1 = self.get_thm_id(&th1)?;
-                            writeln!(self.out, "{} ABS {} {} {}", id, v.name.name(), ty, n1)?;
+                            writeln!(self.out, "ABS {} {} {} {}", id, v.name.name(), ty, n1)?;
                         }
                         ProofView::Axiom(e) => {
                             let eid = self.get_term_id(e)?;
-                            writeln!(self.out, "{} AX {}", id, eid)?;
+                            writeln!(self.out, "AX {} {}", id, eid)?;
                         }
                         ProofView::Cut(th1, th2) => {
                             let n1 = self.get_thm_id(&th1)?;
                             let n2 = self.get_thm_id(&th2)?;
-                            writeln!(self.out, "{} CUT {} {}", id, n1, n2)?;
+                            writeln!(self.out, "CUT {} {} {}", id, n1, n2)?;
                         }
                         ProofView::BoolEq(th1, th2) => {
                             let n1 = self.get_thm_id(&th1)?;
                             let n2 = self.get_thm_id(&th2)?;
-                            writeln!(self.out, "{} BEQ {} {}", id, n1, n2)?;
+                            writeln!(self.out, "BEQ {} {} {}", id, n1, n2)?;
                         }
                         ProofView::BoolEqIntro(th1, th2) => {
                             let n1 = self.get_thm_id(&th1)?;
                             let n2 = self.get_thm_id(&th2)?;
-                            writeln!(self.out, "{} BEQI {} {}", id, n1, n2)?;
+                            writeln!(self.out, "BEQI {} {} {}", id, n1, n2)?;
                         }
                         ProofView::BetaConv(e) => {
                             let eid = self.get_term_id(e)?;
-                            writeln!(self.out, "{} BETA {}", id, eid)?;
+                            writeln!(self.out, "BETA {} {}", id, eid)?;
                         }
                         ProofView::NewDef(e) => {
                             let eid = self.get_term_id(e)?;
-                            writeln!(self.out, "{} DEF {}", id, eid)?;
+                            writeln!(self.out, "DEF {} {}", id, eid)?;
                         }
                         ProofView::NewTyDef(e, th) => {
                             let ide = self.get_term_id(e)?;
                             let idth = self.get_thm_id(th)?;
-                            writeln!(self.out, "{} TYDEF {} {}", id, ide, idth)?;
+                            writeln!(self.out, "TYDEF {} {} {}", id, ide, idth)?;
                         }
                         ProofView::GetThm(r) => {
-                            writeln!(self.out, "{} GET {}", id, r)?;
+                            writeln!(self.out, "GET {} {}", id, r)?;
                         }
                         ProofView::CallRule1(r, th1) => {
                             let id1 = self.get_thm_id(th1)?;
-                            writeln!(self.out, "{} CALL {} {}", id, r, id1)?;
+                            writeln!(self.out, "CALL {} {} {}", id, r, id1)?;
                         }
                         ProofView::CallRule2(r, th1, th2) => {
                             let id1 = self.get_thm_id(th1)?;
                             let id2 = self.get_thm_id(th2)?;
-                            writeln!(self.out, "{} CALL {} {} {}", id, r, id1, id2)?;
+                            writeln!(self.out, "CALL {} {} {} {}", id, r, id1, id2)?;
                         }
                         ProofView::CallRuleN(r, a) => {
-                            write!(self.out, "{} CALL {}", id, r)?;
+                            write!(self.out, "CALL {} {}", id, r)?;
                             for th in &a[..] {
                                 let id = self.get_thm_id(th)?;
                                 write!(self.out, " {}", id)?;

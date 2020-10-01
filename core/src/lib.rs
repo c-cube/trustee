@@ -20,6 +20,7 @@ pub mod kernel;
 pub mod llproof;
 pub mod meta;
 pub mod position;
+pub mod proof;
 pub mod rptr;
 pub mod rstr;
 pub mod syntax;

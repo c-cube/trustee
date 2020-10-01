@@ -7,7 +7,6 @@ pub use crate::error::{Error, Result};
 
 pub mod ctx;
 pub mod expr;
-pub mod print_proof;
 pub mod proof;
 pub mod subst;
 pub mod symbol;
