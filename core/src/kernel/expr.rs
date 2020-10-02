@@ -1,6 +1,6 @@
 //! # Expressions, types, variables
 
-use super::{symbol::Symbol, Ref, WeakRef};
+use super::{symbol::Symbol, Proof, Ref, WeakRef};
 use crate::{error::Result, fnv, rstr::RStr};
 use std::{fmt, ops::Deref};
 
@@ -70,6 +70,7 @@ pub struct ConstContent {
     /// Generation of this constant, incremented to handle shadowing.
     pub(super) gen: u32,
     pub(super) fix: std::cell::Cell<Fixity>, // TODO: remvoe and store in ctx?
+    pub(super) proof: Option<Proof>,
 }
 
 /// Tag for special constants.
@@ -77,6 +78,7 @@ pub struct ConstContent {
 #[repr(u8)]
 pub(super) enum ConstTag {
     None,
+    Bool,
     Eq,
 }
 
@@ -183,6 +185,7 @@ impl ExprView {
                 gen: c.gen,
                 tag: c.tag,
                 fix: c.fix.clone(),
+                proof: c.proof.clone(),
             })),
             EVar(v) => EVar(Var {
                 ty: f(&v.ty, k)?,
@@ -340,6 +343,14 @@ impl Expr {
     pub fn is_eq(&self) -> bool {
         match &self.0.view {
             EConst(c) => c.tag == ConstTag::Eq,
+            _ => false,
+        }
+    }
+
+    /// Is this the representation of `bool`?
+    pub fn is_bool(&self) -> bool {
+        match &self.0.view {
+            EConst(c) => c.tag == ConstTag::Bool,
             _ => false,
         }
     }

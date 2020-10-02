@@ -5,6 +5,7 @@
 use {
     super::*,
     crate::{rptr::RPtr, rstr::RStr},
+    std::fmt,
 };
 
 /// The proof step for a theorem, if proof recording is enabled.
@@ -122,6 +123,12 @@ mod impls {
         #[inline]
         pub fn new(v: ProofView) -> Self {
             Proof(RPtr::new(v))
+        }
+    }
+
+    impl fmt::Debug for Proof {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            self.0.fmt(f)
         }
     }
 }

@@ -117,8 +117,9 @@ impl Ctx {
                     name,
                     ty: ty.clone(),
                     gen: 0,
-                    tag: ConstTag::None,
+                    tag: ConstTag::Bool,
                     fix: std::cell::Cell::new(Fixity::Nullary),
+                    proof: None,
                 })),
                 Some(ty.clone()),
             )
@@ -136,7 +137,8 @@ impl Ctx {
             let arr = ctx.mk_arrow(db0.clone(), arr).unwrap();
             let ty_eq = ctx.mk_pi_(ty.clone(), arr).unwrap();
             let fix = super::FIXITY_EQ;
-            ctx.mk_const_with_(name, ty_eq, ConstTag::Eq, fix).unwrap()
+            ctx.mk_const_with_(name, ty_eq, ConstTag::Eq, fix, None)
+                .unwrap()
         };
         ctx.eq = Some(eq);
 
@@ -211,7 +213,14 @@ impl Ctx {
         e
     }
 
-    fn mk_const_with_(&mut self, s: Symbol, ty: Type, tag: ConstTag, f: Fixity) -> Result<Expr> {
+    fn mk_const_with_(
+        &mut self,
+        s: Symbol,
+        ty: Type,
+        tag: ConstTag,
+        f: Fixity,
+        pr: Option<Proof>,
+    ) -> Result<Expr> {
         self.check_uid_(&ty);
         if !ty.is_closed() || ty.free_vars().next().is_some() {
             return Err(Error::new("cannot create constant with non-closed type"));
@@ -228,6 +237,7 @@ impl Ctx {
             gen,
             tag,
             fix: std::cell::Cell::new(f),
+            proof: pr,
         })))?;
         self.add_const_(c.clone());
         Ok(c)
@@ -570,6 +580,13 @@ impl Ctx {
         self.mk_lambda_(v_ty, body)
     }
 
+    /// Make a lambda term, where `body` already contains the DB index 0.
+    pub fn mk_lambda_db(&mut self, ty_v: Expr, body: Expr) -> Result<Expr> {
+        self.check_uid_(&ty_v);
+        self.check_uid_(&body);
+        self.mk_lambda_(ty_v, body)
+    }
+
     /// Bind several variables at once.
     pub fn mk_lambda_l(&mut self, vars: &[Var], body: Expr) -> Result<Expr> {
         let mut e = body;
@@ -581,7 +598,7 @@ impl Ctx {
         Ok(e)
     }
 
-    /// Make a pi term by absracting on `v`.
+    /// Make a pi term by abstracting on `v`.
     pub fn mk_pi(&mut self, v: Var, body: Expr) -> Result<Expr> {
         self.check_uid_(&v.ty);
         self.check_uid_(&body);
@@ -601,6 +618,13 @@ impl Ctx {
         Ok(e)
     }
 
+    /// Make a pi term, where `body` is a type already containing DB 0.
+    pub fn mk_pi_db(&mut self, ty_v: Expr, body: Expr) -> Result<Expr> {
+        self.check_uid_(&ty_v);
+        self.check_uid_(&body);
+        self.mk_pi_(ty_v, body)
+    }
+
     /// Make an arrow `a -> b` term.
     ///
     /// This builds `Π_:a. b`.
@@ -612,13 +636,17 @@ impl Ctx {
         self.mk_pi_(ty1, ty2)
     }
 
+    fn mk_new_const_(&mut self, s: impl Into<Symbol>, ty: Type, pr: Option<Proof>) -> Result<Expr> {
+        self.mk_const_with_(s.into(), ty, ConstTag::None, Fixity::Nullary, pr)
+    }
+
     /// Declare a new constant with given name and type.
     ///
     /// Fails if some constant with the same name exists, or if
     /// the type is not closed.
     /// This constant has no axiom associated to it, it is entirely opaque.
     pub fn mk_new_const(&mut self, s: impl Into<Symbol>, ty: Type) -> Result<Expr> {
-        self.mk_const_with_(s.into(), ty, ConstTag::None, Fixity::Nullary)
+        self.mk_const_with_(s.into(), ty, ConstTag::None, Fixity::Nullary, None)
     }
 
     // TODO: return a result, and only allow infix/binder if type is inferrable
@@ -1094,7 +1122,7 @@ impl Ctx {
             None
         };
 
-        let c = self.mk_new_const(x.name.clone(), x.ty.clone())?;
+        let c = self.mk_new_const_(x.name.clone(), x.ty.clone(), pr.clone())?;
         let eqn = self.mk_eq_app(c.clone(), rhs.clone())?;
         let thm = Thm::make_(eqn, self.uid, vec![], pr);
         Ok((thm, c))
@@ -1190,7 +1218,7 @@ impl Ctx {
         let tau = {
             let ttype = self.mk_ty();
             let ty_tau = self.mk_pi_l(&fvars, ttype)?;
-            self.mk_new_const(name_tau, ty_tau)?
+            self.mk_new_const_(name_tau, ty_tau, pr.clone())?
         };
 
         // `tau` applied to `fvars`
@@ -1199,12 +1227,12 @@ impl Ctx {
         let c_abs = {
             let ty = self.mk_arrow(ty.clone(), tau_vars.clone())?;
             let ty = self.mk_pi_l(&fvars, ty)?;
-            self.mk_new_const(abs, ty)?
+            self.mk_new_const_(abs, ty, pr.clone())?
         };
         let c_repr = {
             let ty = self.mk_arrow(tau_vars.clone(), ty.clone())?;
             let ty = self.mk_pi_l(&fvars, ty)?;
-            self.mk_new_const(repr, ty)?
+            self.mk_new_const_(repr, ty, pr.clone())?
         };
 
         let abs_x = self.mk_var_str("x", tau_vars.clone());

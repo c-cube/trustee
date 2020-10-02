@@ -196,7 +196,11 @@ impl<'a> Printer<'a> {
                             writeln!(self.out, "ty {}", id)?;
                         }
                         EKind => return Err(Error::new("cannot print kind")),
+                        EConst(_) if e.is_bool() => {
+                            writeln!(self.out, "bool {}", id)?;
+                        }
                         EConst(c) => {
+                            // FIXME: see if `c` has a proof, in which case use a get
                             let tyid = self.get_term_id(&c.ty)?;
                             writeln!(self.out, "c {} {} {}", id, c.name.name(), tyid)?;
                         }
