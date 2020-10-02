@@ -1,6 +1,6 @@
 use gumdrop::Options;
-use std::{collections::HashMap, fs::File, io::BufReader};
-use trustee::{kernel::print_proof, *};
+use std::{fs::File, io::BufReader};
+use trustee::{proof::print_proof, *};
 use trustee_opentheory as open_theory;
 
 /// Logger.
