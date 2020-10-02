@@ -134,7 +134,7 @@ fn main() -> anyhow::Result<()> {
                     Ok(meta::Value::Thm(th)) => {
                         println!("  {}", th);
                         if opts.proofs {
-                            if let Some(spr) = trustee::kernel::print_proof::proof_to_string(&th) {
+                            if let Some(spr) = trustee::proof::print_proof::proof_to_string(&th) {
                                 println!("proof:\n{}", spr);
                             }
                         }
