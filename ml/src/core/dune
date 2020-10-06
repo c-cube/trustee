@@ -1,0 +1,5 @@
+(library
+  (name trustee_core)
+  (public_name trustee.core)
+  (libraries containers)
+  (flags :standard -warn-error -a+8))
