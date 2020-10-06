@@ -21,17 +21,6 @@ pub fn parse_expr_with_args(ctx: &mut Ctx, s: &str, qargs: &[k::Expr]) -> Result
     p.parse_expr()
 }
 
-/// Result of parsing a statement.
-#[derive(Debug, Clone)]
-pub enum ParseOutput {
-    Expr(k::Expr),
-    Thm(k::Thm),
-    Def((k::Expr, k::Thm)),
-    DefTy(k::NewTypeDef),
-    SideEffect(&'static str),
-    Include(Vec<ParseOutput>),
-}
-
 /// Parser for expressions.
 ///
 /// It uses a fixity function, and a lexer that yields the stream of tokens
