@@ -59,18 +59,18 @@ type fixity =
   | F_prefix of int
   | F_postfix of int
 
-type 'a expr_view =
+type expr_view =
   | E_kind
   | E_type
   | E_var of var
   | E_bound_var of bvar
   | E_const of const
-  | E_app of 'a * 'a
-  | E_lam of 'a * 'a
-  | E_pi of 'a * 'a
+  | E_app of expr * expr
+  | E_lam of expr * expr
+  | E_pi of expr * expr
 
 and expr = {
-  e_view: expr expr_view;
+  e_view: expr_view;
   e_ty: expr option lazy_t;
   mutable e_id: int;
   mutable e_flags: int; (* ̵contains: [higher DB var | ctx uid] *)
@@ -201,10 +201,27 @@ type ctx = {
   mutable ctx_axioms: thm list;
   mutable ctx_axioms_allowed: bool;
 }
-(* TODO: derived rules *)
+(* TODO: derived rules and named rules/theorems *)
 
 let[@inline] ctx_check_e_uid ctx (e:expr) = assert (ctx.ctx_uid == expr_ctx_uid e)
 let[@inline] ctx_check_th_uid ctx (th:thm) = assert (ctx.ctx_uid == thm_ctx_uid th)
+
+module Fixity = struct
+  type t = fixity
+  let pp out = function
+    | F_normal -> Fmt.string out "normal"
+    | F_left_assoc i -> Fmt.fprintf out "lassoc %d" i
+    | F_right_assoc i -> Fmt.fprintf out "rassoc %d" i
+    | F_postfix i -> Fmt.fprintf out "postfix %d" i
+    | F_prefix i -> Fmt.fprintf out "prefix %d" i
+  let to_string = Fmt.to_string pp
+
+  let normal = F_normal
+  let prefix i = F_prefix i
+  let postfix i = F_postfix i
+  let lassoc i = F_left_assoc i
+  let rassoc i = F_right_assoc i
+end
 
 module Var = struct
   type t = var
@@ -239,15 +256,15 @@ let id_eq = ID.make "="
 module Expr = struct
   type t = expr
 
-  type 'a view = 'a expr_view =
+  type view = expr_view =
     | E_kind
     | E_type
     | E_var of var
     | E_bound_var of bvar
     | E_const of const
-    | E_app of 'a * 'a
-    | E_lam of 'a * 'a
-    | E_pi of 'a * 'a
+    | E_app of t * t
+    | E_lam of t * t
+    | E_pi of t * t
 
   let equal = expr_eq
   let hash = expr_hash

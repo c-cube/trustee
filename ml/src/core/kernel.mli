@@ -3,6 +3,10 @@
 
 open Sigs
 
+(** {2 Generative Identifiers}
+
+    This is a representation of a name that is unambiguous even in the presence
+    of scoping *)
 module ID : sig
   type t
 
@@ -46,6 +50,20 @@ type bvar = {
   bv_ty: ty;
 }
 
+(** {2 Fixity} *)
+module Fixity : sig
+  type t = fixity
+  val pp : t Fmt.printer
+  val to_string : t -> string
+
+  val normal : t
+  val lassoc : int -> t
+  val rassoc : int -> t
+  val prefix : int -> t
+  val postfix : int -> t
+end
+
+(** {2 Free Variables} *)
 module Var : sig
   type t = var
 
@@ -63,25 +81,26 @@ module Var : sig
   module Tbl : CCHashtbl.S with type key = t
 end
 
+(** {2 Expressions and Types} *)
 module Expr : sig
   type t = expr
 
-  type 'a view =
+  type view =
     | E_kind
     | E_type
     | E_var of var
     | E_bound_var of bvar
     | E_const of const
-    | E_app of 'a * 'a
-    | E_lam of 'a * 'a
-    | E_pi of 'a * 'a
+    | E_app of t * t
+    | E_lam of t * t
+    | E_pi of t * t
 
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
   include Sigs.COMPARE with type t := t
   include Sigs.PP with type t := t
 
-  val view : t -> t view
+  val view : t -> view
   val ty : t -> ty option
   val ty_exn : t -> ty
   val is_closed : t -> bool
@@ -144,6 +163,7 @@ module New_ty_def : sig
   }
 end
 
+(** {2 Theorems and Deduction Rules} *)
 module Thm : sig
   type t = thm
 
