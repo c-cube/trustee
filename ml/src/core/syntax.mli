@@ -3,6 +3,8 @@
 
 open Sigs
 
+module K = Kernel
+
 type token =
   | LPAREN
   | RPAREN
@@ -25,6 +27,12 @@ type position = {
   col: int;
 }
 
+module Token : sig
+  type t = token
+  val pp : t Fmt.printer
+  val equal : t -> t -> bool
+end
+
 (** {2 Lexer} *)
 module Lexer : sig
   type t
@@ -36,8 +44,9 @@ module Lexer : sig
   val pos : t -> position
 end
 
-module Token : sig
-  type t = token
-  val pp : t Fmt.printer
-  val equal : t -> t -> bool
-end
+(** {2 Parser} *)
+val parse :
+  ?q_args:K.Expr.t list ->
+  ctx:K.Ctx.t ->
+  Lexer.t ->
+  K.expr

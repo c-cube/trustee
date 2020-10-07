@@ -3,6 +3,9 @@
 
 open Sigs
 
+module K = Kernel
+module Expr = Kernel.Expr
+
 type token =
   | LPAREN
   | RPAREN
@@ -227,3 +230,164 @@ module Lexer = struct
       t
     | Has_cur -> self.cur
 end
+
+module Ast = struct
+  type t = {
+    loc: position;
+    view: view;
+    mutable as_e: Expr.t option;
+  }
+
+  and var = {
+    name: string;
+    ty: t;
+  }
+
+  and binding = string * t
+
+  and view =
+    | Expr of Expr.t
+    | Var of var
+    | Meta of {
+        name: string;
+        ty: t;
+      }
+    | App of t * t list
+    | Lambda of var list * t
+    | Pi of string list * t
+    | With of var list * t
+    | Arrow of t list * t
+    | Eq of t * t
+    | Let of binding list * t
+
+  type st = {
+    ctx: K.ctx;
+    mutable to_generalize: (string * t) list;
+  }
+
+  let nopos = {line=0; col=0}
+
+  let mk_expr ?(loc=nopos) (_self:st) (e:K.expr) : t =
+    {loc; view=Expr e; as_e=Some e}
+
+  let mk_var ?(loc=nopos) (_self:st) (v:string) (ty:t) : t =
+    {loc; view=Var {name=v; ty}; as_e=None}
+
+  let mk_meta ?(loc=nopos) (self:st) (v:string) (ty:t) : t =
+    let m = {loc; view=Meta {name=v; ty}; as_e=None} in
+    self.to_generalize <- (v,m) :: self.to_generalize;
+    m
+
+  let mk_ty_meta ?(loc=nopos) self name : t =
+    let ty = mk_expr ~loc self (Expr.type_ self.ctx) in
+    mk_meta ~loc self name ty
+
+  let mk_app ?(loc=nopos) self (f:t) (l:t list) : t =
+    assert false (* TODO *)
+
+  (* infer types in [e] *)
+  let infer_ (self:st) (e:t) : unit =
+    (* TODO
+    let rec inf_ty (e:t) : Expr.t =
+      match e.as_e with
+      | Some e -> e
+      | None ->
+        begin match e with
+          | Expr e -> e.as_e <- Some e; e
+          | Var v -> inf_ty v.ty;
+          | Meta {name} ->
+            assert false (* TODO *)
+
+        end
+    in
+    aux e
+    *)
+    ()
+
+  let gen_all_ (self:st) : unit =
+    Log.debugf 5
+      (fun k->k"gen-all@ on %d variables" (List.length self.to_generalize));
+    (* generalize everything *)
+    List.iter
+      (fun (name,e) ->
+         if CCOpt.is_none e.as_e then (
+           let v = Expr.var_name self.ctx name (Expr.type_ self.ctx) in
+           Log.debugf 10 (fun k->k"generalize %s into %a" name Expr.pp v);
+           e.as_e <- Some v;
+         ))
+      self.to_generalize;
+    ()
+
+  (* convert a fully inferred AST expr into an expression *)
+  let conv_ (self:st) (e:t) : Expr.t =
+    let rec aux e =
+      match e.as_e with
+      | Some e -> e
+      | None ->
+        begin match e.view with
+          | Expr e -> e
+          | Var v -> Expr.var self.ctx (aux_var v)
+          | App (f, l) ->
+            let f = aux f in
+            let l = List.map aux l in
+            Expr.app_l self.ctx f l
+          | Lambda (vs,bod) ->
+            let vs = List.map aux_var vs in
+            let bod = aux bod in
+            Expr.lambda_l self.ctx vs bod
+          | Pi (vs, bod) ->
+            let type_ = Expr.type_ self.ctx in
+            let vs = List.map (fun s -> K.Var.make s type_) vs in
+            let bod = aux bod in
+            Expr.pi_l self.ctx vs bod
+          | Arrow (args,ret) ->
+            Expr.arrow_l self.ctx (List.map aux args) (aux ret)
+          | Meta {name} ->
+            errorf (fun k->k"meta-variable `%s` should have been generalized" name)
+          | Eq (a,b) ->
+            Expr.app_eq self.ctx (aux a) (aux b)
+          | With (_, t) -> aux t
+          | Let (_,t) -> aux t
+        end
+    and aux_var v =
+      let ty = aux v.ty in
+      K.Var.make v.name ty
+    in
+    aux e
+
+  let ty_infer (ctx:K.ctx) (e:t) : Expr.t =
+    let st = {ctx; to_generalize=[] } in
+    infer_ st e;
+    gen_all_ st;
+    conv_ st e
+end
+
+module Parser = struct
+  type t = {
+    lex: Lexer.t;
+    locals: (string, Ast.var) Hashtbl.t;
+    lets: (string, Ast.t) Hashtbl.t;
+    mutable q_args: Expr.t list; (* interpolation parameters *)
+  }
+
+  let create ?(q_args=[]) (src: Lexer.t) : t =
+    { lex=src;
+      locals=Hashtbl.create 16;
+      lets=Hashtbl.create 16;
+      q_args;
+    }
+
+  let rec p_expr (self:t) (p:int) : Expr.t =
+    assert false
+
+  let expr (self:t) : Expr.t = p_expr self 1024
+end
+
+let parse ?q_args ~ctx lex : Expr.t =
+  let p = Parser.create ?q_args lex in
+  let e =
+    try Parser.expr p
+    with e ->
+      errorf ~src:e (fun k->k"parse error at %a" pp_position (Lexer.pos lex))
+  in
+  e
