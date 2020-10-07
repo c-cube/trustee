@@ -1,6 +1,8 @@
 
 (** {1 Expression parser} *)
 
+open Sigs
+
 type token =
   | LPAREN
   | RPAREN
@@ -32,4 +34,10 @@ module Lexer : sig
   val cur : t -> token
 
   val pos : t -> position
+end
+
+module Token : sig
+  type t = token
+  val pp : t Fmt.printer
+  val equal : t -> t -> bool
 end

@@ -33,6 +33,20 @@ let errorf ?src k : 'a =
   in
   raise (Error (pp, src))
 
+let () =
+  let rec pp_err k src out () =
+    k out();
+    (match src with
+    | None -> ()
+    | Some (Error (k,ctx)) -> pp_err k ctx out ()
+    | Some e -> Fmt.fprintf out "@,%s" (Printexc.to_string e));
+  in
+  Printexc.register_printer
+    (function
+      | Error (k, ctx) ->
+        Some (Fmt.asprintf "@[<v>%a@]" (pp_err k ctx) ())
+      | _ -> None)
+
 let pp_list ?(sep=" ") ppx out l =
   Fmt.list ~sep:(fun out () -> Fmt.fprintf out "@;%s" sep) ppx out l
 
