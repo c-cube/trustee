@@ -9,18 +9,6 @@ let spf = Printf.sprintf
 
 type position = Position.t
 type offset = int
-type state = {
-  src: string; (* the input *)
-  i: offset; (* offset in [str] *)
-  lnum : int; (* line number *)
-  cnum : int; (* Column number *)
-}
-
-module State = struct
-  type t = state
-  let create src : t = {src; i=0; lnum=1; cnum=1; }
-  let pos self : position = {Position.line=self.lnum; col=self.cnum}
-end
 
 type error = {
   offset: offset;
@@ -28,8 +16,23 @@ type error = {
   msg: string;
   parsing: string list;
 }
+type state = {
+  src: string; (* the input *)
+  i: offset; (* offset in [str] *)
+  lnum : int; (* line number *)
+  cnum : int; (* Column number *)
+  saved_errors: error list ref;
+}
+
+type 'a or_error = ('a, error) result
 
 exception Parse_error of error
+
+module State = struct
+  type t = state
+  let create src : t = {src; i=0; lnum=1; cnum=1; saved_errors=ref [] }
+  let pos self : position = {Position.line=self.lnum; col=self.cnum}
+end
 
 module Err = struct
   type t = error
@@ -133,8 +136,21 @@ let eoi =
       then ok st ()
       else err (mk_error_ st "expected end of input")}
 
+let try_bind x ~ok:tr_ok ~err:tr_err =
+  {p=fun st ~ok ~err ->
+      x.p st
+        ~ok:(fun st x -> (tr_ok x).p st ~ok ~err)
+        ~err:(fun e -> (tr_err e).p st ~ok ~err)
+  }
+
 let fail msg = {p=fun st ~ok:_ ~err -> err (mk_error_ st msg)}
 let failf msg = Format.kasprintf fail msg
+
+let save_error e =
+  {p=fun st ~ok ~err:_ ->
+      st.saved_errors := e :: !(st.saved_errors);
+      ok st ()
+  }
 
 let parsing s x =
   {p=fun st ~ok ~err ->
@@ -416,21 +432,21 @@ let list ?(start="[") ?(stop="]") ?sep:(sep_=";") p =
     ) <* (skip_white *> string_exact stop)
   )
 
-type 'a or_error = ('a, error) result
-
-let parse_exn (p:_ t) st =
-  p.p st
+let parse_exn (p:_ t) s =
+  p.p (State.create s)
     ~ok:(fun _st x -> x)
     ~err:(fun e -> raise (Parse_error e))
 
-let parse (p:_ t) st =
-  p.p st
+let parse (p:_ t) s =
+  p.p (State.create s)
     ~ok:(fun _st x -> Ok x)
     ~err:(fun e -> Error e)
 
-let parse_string_exn p s = parse_exn p (State.create s)
-
-let parse_string p s = parse p (State.create s)
+let parse_with_errors (p:_ t) s =
+  let st = State.create s in
+  p.p st
+    ~ok:(fun _st x -> Ok x, !(st.saved_errors))
+    ~err:(fun e -> Error e, !(st.saved_errors))
 
 module Infix = struct
   let (>|=) = (>|=)
@@ -477,11 +493,11 @@ end
 
 (*$= & ~printer:errpptree
   (Ok (N (L 1, N (L 2, L 3)))) \
-    (parse_string ptree "(1 (2 3))" )
+    (parse ptree "(1 (2 3))" )
   (Ok (N (N (L 1, L 2), N (L 3, N (L 4, L 5))))) \
-    (parse_string ptree "((1 2) (3 (4 5)))" )
+    (parse ptree "((1 2) (3 (4 5)))" )
   (Ok (N (N (L 1, L 2), N (L 3, N (L 4, N (N (L 3, L 2), N (L 21, N (L 2, L 5)))))))) \
-    (parse_string ptree' "((1 2) (3 (4 ( ( 3 2) (21 (2 5))))))")
+    (parse ptree' "((1 2) (3 (4 ( ( 3 2) (21 (2 5))))))")
 *)
 
 (*$R
@@ -489,9 +505,9 @@ end
     skip_white *> char_exact '(' *> skip_white *> int
     <* skip_white *> char_exact ')'
   in
-  assert_equal (Ok 123) (parse_string p "(123 )");
-  assert_equal (Ok 123) (parse_string p "   ( 123  )  ");
-  assert_equal (Ok 123) (parse_string p "(123 )");
+  assert_equal (Ok 123) (parse p "(123 )");
+  assert_equal (Ok 123) (parse p "   ( 123  )  ");
+  assert_equal (Ok 123) (parse p "(123 )");
 *)
 
 (*$R
@@ -502,7 +518,7 @@ end
   in
   assert_equal ~printer
     (Ok ["abc"; "de"; "hello"; "world"])
-    (parse_string p "[abc , de, hello ,world  ]");
+    (parse p "[abc , de, hello ,world  ]");
 *)
 
 (*$inject
@@ -512,7 +528,7 @@ end
     let l_printed =
       CCFormat.(to_string @@ within "[" "]" @@ hovbox @@
                 list ~sep:(return ",@,") int) l in
-    let l' = parse_string_exn p l_printed in
+    let l' = parse_exn p l_printed in
 
     assert_equal ~printer:Q.Print.(list int) l l'
 *)
@@ -546,8 +562,8 @@ end
     let term = chainl1 factor (mul <|> div) in
     chainl1 term (add <|> sub)) in
 
-  assert_equal (Ok 6) (parse_string expr "4*1+2");
-  assert_equal (Ok 12) (parse_string expr "4*(1+2)");
+  assert_equal (Ok 6) (parse expr "4*1+2");
+  assert_equal (Ok 12) (parse expr "4*(1+2)");
   ()
 *)
 
@@ -559,11 +575,11 @@ end
       map (CCResult.map_err Err.to_string) @@
       (Dump.result @@ Dump.list int)) in
   assert_equal ~printer
-    (Ok [1;2;3]) (parse_string p "(1 2 3)");
+    (Ok [1;2;3]) (parse p "(1 2 3)");
   assert_equal ~printer
-    (Ok [1;2; -30; 4]) (parse_string p "( 1 2    -30 4 )")
+    (Ok [1;2; -30; 4]) (parse p "( 1 2    -30 4 )")
   *)
 
 (*$=
-  (parse_string_exn (list ~sep:"," int) "[1,2,3]") [1;2;3]
+  (parse_exn (list ~sep:"," int) "[1,2,3]") [1;2;3]
 *)

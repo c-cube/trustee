@@ -10,23 +10,20 @@ open Sigs
 (** {2 Input} *)
 
 type position = Position.t
-type state
-
-module State : sig
-  type t = state
-  val create : string -> t
-end
 
 (** {2 Combinators} *)
 
 type offset
 
+(** The main type for parse errors *)
 type error = {
   offset: offset;
   pos: position;
   msg: string;
   parsing: string list;
 }
+
+type 'a or_error = ('a, error) result
 
 exception Parse_error of error
 
@@ -70,6 +67,26 @@ val product : 'a t -> 'b t -> ('a * 'b) t
 val ( *>) : _ t -> 'a t -> 'a t
 (** [a *> b] parses [a], then parses [b] into [x], and returns [x]. The
     results of [a] is ignored. *)
+
+val try_bind :
+  'a t ->
+  ok:('a -> 'b t) ->
+  err:(error -> 'b t) ->
+  'b t
+(** Attempt a parse, and call one of the two callbacks.
+    Given [try_bind p ~ok ~err], two cases:
+    - if [p] succeeds with value [x], then [ok x] is used to parse
+      the rest of the string.
+    - if [p] fails with error [e], no input is consumed and
+      [err e] is called to fail or attempt recovery.
+
+    For example, [err] can use {!save_error} to emit errors at the end,
+    and then try to recover by skipping input until a clear break
+    such as ";;" or "\n\n" is met.
+*)
+
+val save_error : error -> unit t
+(** Save error in the state. Errors will be available in {!parse_with_errors}. *)
 
 val fail : string -> 'a t
 (** [fail msg] fails with the given message. It can trigger a backtrack. *)
@@ -204,21 +221,17 @@ val list : ?start:string -> ?stop:string -> ?sep:string -> 'a t -> 'a list t
     Those functions have a label [~p] on the parser, since 0.14.
 *)
 
-type 'a or_error = ('a, error) result
-
-val parse : 'a t -> state -> 'a or_error
-(** [parse p st] applies [p] on the input, and returns [Ok x] if
+val parse : 'a t -> string -> 'a or_error
+(** [parse p s] applies [p] on the input, and returns [Ok x] if
     [p] succeeds with [x], or [Error s] otherwise. *)
 
-val parse_exn : 'a t -> state -> 'a
+val parse_with_errors : 'a t -> string -> ('a or_error * error list)
+(** Same as {!parse}, except all errors called with {!save_error}
+    are also returned on the side. *)
+
+val parse_exn : 'a t -> string -> 'a
 (** Unsafe version of {!parse}.
     @raise Parse_error if it fails. *)
-
-val parse_string : 'a t -> string -> 'a or_error
-(** Specialization of {!parse} for string inputs. *)
-
-val parse_string_exn : 'a t -> string -> 'a
-(** @raise Parse_error if it fails. *)
 
 (** {2 Infix} *)
 
