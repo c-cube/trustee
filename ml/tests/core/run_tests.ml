@@ -1,7 +1,4 @@
 
-let suite =
-  [ Test_syntax.suite;
-  ]
-
 let () =
-  Alcotest.run "trustee.core" suite
+  Test_syntax.init();
+  Alcotest.run "trustee.core" (Test_help.suite())

@@ -14,7 +14,7 @@ let to_list lex =
   in
   aux []
 
-let t1 : _ A.test_case = "t1", `Quick, fun () ->
+let t1 = "t1", `Quick, fun () ->
   let lex = Lexer.create {test| foo + _ bar13(hello! " co co" world) |test} in
   A.check t_tok_l "same tokens t1"
     [ SYM("foo");
@@ -68,4 +68,6 @@ let t_empty = "t_empty", `Quick, fun () ->
   let lex = Lexer.create "  " in
   A.check t_tok_l "no tokens but EOF" [ EOF; ] (to_list lex)
 
-let suite = "syntax", [t1; t2; t_empty]
+let init () =
+  Test_help.add "syntax" [t1;t2;t_empty]
+
