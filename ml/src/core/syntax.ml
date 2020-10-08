@@ -23,13 +23,7 @@ type token =
   | ERROR of char
   | EOF
 
-type position = {
-  line: int;
-  col: int;
-}
-
-let pp_position out (p:position) : unit =
-  Fmt.fprintf out "%d:%d" p.line p.col
+type position = Position.t
 
 module Token = struct
   type t = token
@@ -65,7 +59,7 @@ module Lexer = struct
     mutable cur: token;
   }
 
-  let[@inline] pos self = {line=self.line; col=self.col}
+  let[@inline] pos self : position = {Position.line=self.line; col=self.col}
 
   let create src : t =
     { src; i=0; line=1; col=1; st=Read_next; cur=EOF }
@@ -216,7 +210,7 @@ module Lexer = struct
     let t =
       try next_ self
       with e ->
-        errorf ~src:e (fun k->k "at %a" pp_position (pos self))
+        errorf ~src:e (fun k->k "at %a" Position.pp (pos self))
     in
     self.cur <- t;
     t
@@ -233,7 +227,7 @@ end
 
 module Ast = struct
   type t = {
-    loc: position;
+    pos: position;
     view: view;
     mutable as_e: Expr.t option;
   }
@@ -265,24 +259,24 @@ module Ast = struct
     mutable to_generalize: (string * t) list;
   }
 
-  let nopos = {line=0; col=0}
+  let nopos = Position.none
 
-  let mk_expr ?(loc=nopos) (_self:st) (e:K.expr) : t =
-    {loc; view=Expr e; as_e=Some e}
+  let mk_expr ?(pos=nopos) (_self:st) (e:K.expr) : t =
+    {pos; view=Expr e; as_e=Some e}
 
-  let mk_var ?(loc=nopos) (_self:st) (v:string) (ty:t) : t =
-    {loc; view=Var {name=v; ty}; as_e=None}
+  let mk_var ?(pos=nopos) (_self:st) (v:string) (ty:t) : t =
+    {pos; view=Var {name=v; ty}; as_e=None}
 
-  let mk_meta ?(loc=nopos) (self:st) (v:string) (ty:t) : t =
-    let m = {loc; view=Meta {name=v; ty}; as_e=None} in
+  let mk_meta ?(pos=nopos) (self:st) (v:string) (ty:t) : t =
+    let m = {pos; view=Meta {name=v; ty}; as_e=None} in
     self.to_generalize <- (v,m) :: self.to_generalize;
     m
 
-  let mk_ty_meta ?(loc=nopos) self name : t =
-    let ty = mk_expr ~loc self (Expr.type_ self.ctx) in
-    mk_meta ~loc self name ty
+  let mk_ty_meta ?(pos=nopos) self name : t =
+    let ty = mk_expr ~pos self (Expr.type_ self.ctx) in
+    mk_meta ~pos self name ty
 
-  let mk_app ?(loc=nopos) self (f:t) (l:t list) : t =
+  let mk_app ?(pos=nopos) self (f:t) (l:t list) : t =
     assert false (* TODO *)
 
   (* infer types in [e] *)
@@ -388,6 +382,6 @@ let parse ?q_args ~ctx lex : Expr.t =
   let e =
     try Parser.expr p
     with e ->
-      errorf ~src:e (fun k->k"parse error at %a" pp_position (Lexer.pos lex))
+      errorf ~src:e (fun k->k"parse error at %a" Position.pp (Lexer.pos lex))
   in
   e

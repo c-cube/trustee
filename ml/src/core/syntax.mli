@@ -22,10 +22,7 @@ type token =
   | ERROR of char
   | EOF
 
-type position = {
-  line: int;
-  col: int;
-}
+type position = Position.t
 
 module Token : sig
   type t = token

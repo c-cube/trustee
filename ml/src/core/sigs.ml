@@ -24,26 +24,26 @@ module type PP = sig
   val to_string : t -> string
 end
 
-exception Error of unit Fmt.printer * exn option
+exception Trustee_error of unit Fmt.printer * exn option
 
-let error ?src msg = raise (Error ((fun out () -> Fmt.string out msg), src))
+let error ?src msg = raise (Trustee_error ((fun out () -> Fmt.string out msg), src))
 let errorf ?src k : 'a =
   let pp out () = k (fun fmt ->
       Fmt.kfprintf (fun _o -> ()) out fmt)
   in
-  raise (Error (pp, src))
+  raise (Trustee_error (pp, src))
 
 let () =
   let rec pp_err k src out () =
     k out();
     (match src with
     | None -> ()
-    | Some (Error (k,ctx)) -> pp_err k ctx out ()
+    | Some (Trustee_error (k,ctx)) -> pp_err k ctx out ()
     | Some e -> Fmt.fprintf out "@,%s" (Printexc.to_string e));
   in
   Printexc.register_printer
     (function
-      | Error (k, ctx) ->
+      | Trustee_error (k, ctx) ->
         Some (Fmt.asprintf "@[<v>%a@]" (pp_err k ctx) ())
       | _ -> None)
 
