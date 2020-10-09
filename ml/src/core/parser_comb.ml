@@ -12,15 +12,13 @@ type offset = int
 
 type error = {
   offset: offset;
-  pos: position;
-  msg: string;
+  pos: position lazy_t;
+  msg: unit -> string;
   parsing: string list;
 }
 type state = {
   src: string; (* the input *)
   i: offset; (* offset in [str] *)
-  lnum : int; (* line number *)
-  cnum : int; (* Column number *)
   saved_errors: error list ref;
 }
 
@@ -30,8 +28,25 @@ exception Parse_error of error
 
 module State = struct
   type t = state
-  let create src : t = {src; i=0; lnum=1; cnum=1; saved_errors=ref [] }
-  let pos self : position = {Position.line=self.lnum; col=self.cnum}
+  let create src : t = {src; i=0; saved_errors=ref [] }
+
+  let pos_of_offset (s:string) (i:offset) : Position.t =
+    let col = ref 1 in
+    let line = ref 1 in
+    let j = ref 0 in
+    while !j < i do
+      let c = String.get s !j in
+      incr j;
+      if c = '\n' then (
+        incr line;
+        col := 1;
+      ) else (
+        col := 1 + !col;
+      );
+    done;
+    {Position.line= !line; col= !col}
+
+  let pos self : position = pos_of_offset self.src self.i
 end
 
 module Err = struct
@@ -45,7 +60,7 @@ module Err = struct
           (pp_list ~sep:" in " Fmt.string) l
     in
     Format.fprintf out "@[%s@ at %a%a@]"
-      self.msg Position.pp self.pos pp_parsing self.parsing
+      (self.msg()) Position.pp (Lazy.force self.pos) pp_parsing self.parsing
 
   let to_string = Fmt.to_string pp
 end
@@ -70,25 +85,18 @@ type 'a t = {
     - [err] to call when the parser met an error
     *)
 
+let[@inline] const_ x = fun()->x
+
 let mk_error_ (self:state) msg : error =
-  { offset=self.i; pos=State.pos self; msg; parsing=[]; }
+  { offset=self.i; pos=lazy (State.pos self); msg; parsing=[]; }
 
 let mk_error_eof_ self : error =
-  mk_error_ self "unexpected end of input"
+  mk_error_ self (const_ "unexpected end of input")
 
-let next (self:state) : state * char =
+let[@inline] next (self:state) : state * char =
   assert (not (is_done self));
   let c = cur self in
-  let state =
-    if char_equal c '\n' then (
-      {self with
-       i=self.i + 1;
-       lnum=self.lnum +1;
-       cnum=1;
-      }
-    ) else (
-      {self with cnum=self.cnum+1; i=self.i+1;}
-    ) in
+  let state = {self with i=self.i+1} in
   state, c
 
 let[@inline] return (x:'a) : 'a t = {p=fun _st ~ok ~err:_ -> ok _st x}
@@ -134,7 +142,7 @@ let eoi =
   {p=fun st ~ok ~err ->
       if is_done st
       then ok st ()
-      else err (mk_error_ st "expected end of input")}
+      else err (mk_error_ st (const_ "expected end of input"))}
 
 let try_bind x ~ok:tr_ok ~err:tr_err =
   {p=fun st ~ok ~err ->
@@ -143,7 +151,7 @@ let try_bind x ~ok:tr_ok ~err:tr_err =
         ~err:(fun e -> (tr_err e).p st ~ok ~err)
   }
 
-let fail msg = {p=fun st ~ok:_ ~err -> err (mk_error_ st msg)}
+let fail msg = {p=fun st ~ok:_ ~err -> err (mk_error_ st (const_ msg))}
 let failf msg = Format.kasprintf fail msg
 
 let save_error e =
@@ -175,7 +183,7 @@ let char_exact c =
       else (
         let st, c' = next st in
         if char_equal c c' then ok st c
-        else err (mk_error_ st (spf "expected '%c'" c))
+        else err (mk_error_ st (fun() -> spf "expected '%c'" c))
       )
   }
 
@@ -187,8 +195,8 @@ let char_if ?msg p =
         if p c then ok st c
         else
           let msg = match msg with
-            | Some m -> m
-            | None -> spf "invalid char '%c'" c
+            | Some m -> const_ m
+            | None -> fun() -> spf "invalid char '%c'" c
           in
           err (mk_error_ st msg)
       )
@@ -199,8 +207,8 @@ let chars_if_len ?msg (len:int) p =
       let i = st.i in
       if i+len > String.length st.src then (
         let msg = match msg with
-          | Some m -> m
-          | None -> spf "expected %d chars" len
+          | Some m -> const_ m
+          | None -> fun() -> spf "expected %d chars" len
         in
         err (mk_error_ st msg)
       ) else (
@@ -208,12 +216,12 @@ let chars_if_len ?msg (len:int) p =
           for j=0 to len-1 do
             if not (p (String.get st.src (i+j))) then raise_notrace Exit
           done;
-          let st = {st with i=st.i + len; cnum=st.cnum+len} in
+          let st = {st with i=st.i + len} in
           ok st (String.sub st.src i len)
         with Exit ->
           let msg = match msg with
-            | Some m -> m
-            | None -> spf "string of length %d is invalid" len
+            | Some m -> const_ m
+            | None -> fun() -> spf "string of length %d is invalid" len
           in
           err (mk_error_ st msg)
       )
@@ -226,7 +234,7 @@ let chars_if p =
     while i + !len < String.length st.src && p (String.get st.src (i+ !len)) do
       incr len;
     done;
-    let st = {st with i=i + !len; cnum=st.cnum + !len} in
+    let st = {st with i=i + !len} in
     ok st (String.sub st.src i !len)
   }
 
@@ -237,8 +245,8 @@ let chars1_if ?msg p =
       ~ok:(fun st s ->
         if string_equal s "" then (
           let msg = match msg with
-            | Some m -> m
-            | None -> "needed non-empty sequence of chars"
+            | Some m -> const_ m
+            | None -> const_ "needed non-empty sequence of chars"
           in
           err (mk_error_ st msg)
         ) else ok st s)
@@ -252,7 +260,7 @@ let skip_chars p =
       while i + !len < String.length st.src && p (String.get st.src (i+ !len)) do
         incr len
       done;
-      let st = {st with i=i + !len; cnum=st.cnum + !len} in
+      let st = {st with i=i + !len} in
       ok st ()
   }
 
@@ -311,8 +319,8 @@ let (<?>) (x:'a t) (msg:string) : 'a t =
         ~err:(fun e ->
           let e = {
             e with
-            pos={Position.line=st.lnum; col=st.cnum};
-            msg;
+            pos=lazy (State.pos st);
+            msg=const_ msg;
           } in
           err e
         )
@@ -323,17 +331,17 @@ let string_exact s : unit t =
       let len = String.length s in
       let i = st.i in
       if i + len > String.length st.src then (
-        err (mk_error_ st (spf "expected '%s'" s))
+        err (mk_error_ st (fun() -> spf "expected '%s'" s))
       ) else (
         let is_eq = ref true in
         for j = 0 to len-1 do
           is_eq := !is_eq && String.get st.src (i+j) = String.get s j
         done;
         if !is_eq then (
-          let st = {st with i=st.i + len; cnum=st.cnum+len} in
+          let st = {st with i=st.i + len} in
           ok st ()
         ) else (
-          err (mk_error_ st (spf "expected '%s'" s))
+          err (mk_error_ st (fun () -> spf "expected '%s'" s))
         )
       )
   }
@@ -356,8 +364,8 @@ let many1 ?msg (x:'a t) : 'a list t =
               match acc with
               | [] ->
                 let msg = match msg with
-                  | Some m -> m
-                  | None -> "expected non-empty list"
+                  | Some m -> const_ m
+                  | None -> const_ "expected non-empty list"
                 in
                 err (mk_error_ st msg)
               | _ -> ok st (List.rev acc))
@@ -411,7 +419,8 @@ let cur_pos = {
 }
 
 let int =
-  chars1_if ~msg:"expected int" (fun c -> is_num c || char_equal c '-')
+  chars1_if ~msg:"expected int"
+    (fun c -> is_num c || char_equal c '-')
   >>= fun s ->
   try return (int_of_string s)
   with Failure _ -> fail "expected an int"

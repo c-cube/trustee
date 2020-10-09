@@ -18,8 +18,8 @@ type offset
 (** The main type for parse errors *)
 type error = {
   offset: offset;
-  pos: position;
-  msg: string;
+  pos: position lazy_t;
+  msg: unit -> string;
   parsing: string list;
 }
 
