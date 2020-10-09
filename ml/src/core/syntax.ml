@@ -226,55 +226,57 @@ module Lexer = struct
 end
 
 module Ast = struct
+  type ty = {
+    pos: position;
+    view: ty_view;
+    mutable as_e: Expr.t option;
+  }
+
+  and ty_view =
+    | Ty_arrow of ty * ty
+    | Ty_var of string
+    | Ty_meta of K.ID.t
+
   type t = {
     pos: position;
     view: view;
+    mutable ty: ty option;
     mutable as_e: Expr.t option;
   }
 
   and var = {
-    name: string;
-    ty: t;
+    v_name: string;
+    v_ty: ty;
   }
 
   and binding = string * t
 
   and view =
-    | Expr of Expr.t
+    | App_const of K.const * ty list
     | Var of var
-    | Meta of {
-        name: string;
-        ty: t;
-      }
     | App of t * t list
     | Lambda of var list * t
-    | Pi of string list * t
     | With of var list * t
-    | Arrow of t list * t
     | Eq of t * t
     | Let of binding list * t
 
   type st = {
     ctx: K.ctx;
-    mutable to_generalize: (string * t) list;
+    mutable to_generalize: (string * ty) list;
   }
 
   let nopos = Position.none
 
-  let mk_expr ?(pos=nopos) (_self:st) (e:K.expr) : t =
-    {pos; view=Expr e; as_e=Some e}
+  let mk_expr_app ?(pos=nopos) (_self:st) (c:K.const) (tys:ty list) : t =
+    {pos; view=App_const (c,tys); as_e=None; ty=None; }
 
-  let mk_var ?(pos=nopos) (_self:st) (v:string) (ty:t) : t =
-    {pos; view=Var {name=v; ty}; as_e=None}
+  let mk_var ?(pos=nopos) (_self:st) (v:string) (ty:ty) : t =
+    {pos; view=Var {v_name=v; v_ty=ty}; as_e=None; ty=Some ty}
 
-  let mk_meta ?(pos=nopos) (self:st) (v:string) (ty:t) : t =
-    let m = {pos; view=Meta {name=v; ty}; as_e=None} in
-    self.to_generalize <- (v,m) :: self.to_generalize;
-    m
-
-  let mk_ty_meta ?(pos=nopos) self name : t =
-    let ty = mk_expr ~pos self (Expr.type_ self.ctx) in
-    mk_meta ~pos self name ty
+  let mk_ty_meta ?(pos=nopos) (self:st) (v:string) : ty =
+    let ty: ty = {view=Ty_meta (K.ID.make v); pos; as_e=None} in
+    self.to_generalize <- (v,ty) :: self.to_generalize;
+    ty
 
   let mk_app ?(pos=nopos) self (f:t) (l:t list) : t =
     assert false (* TODO *)
@@ -303,7 +305,7 @@ module Ast = struct
       (fun k->k"gen-all@ on %d variables" (List.length self.to_generalize));
     (* generalize everything *)
     List.iter
-      (fun (name,e) ->
+      (fun (name,(e:ty)) ->
          if CCOpt.is_none e.as_e then (
            let v = Expr.var_name self.ctx name (Expr.type_ self.ctx) in
            Log.debugf 10 (fun k->k"generalize %s into %a" name Expr.pp v);
@@ -314,6 +316,8 @@ module Ast = struct
 
   (* convert a fully inferred AST expr into an expression *)
   let conv_ (self:st) (e:t) : Expr.t =
+    assert false
+      (* TODO
     let rec aux e =
       match e.as_e with
       | Some e -> e
@@ -348,6 +352,7 @@ module Ast = struct
       K.Var.make v.name ty
     in
     aux e
+         *)
 
   let ty_infer (ctx:K.ctx) (e:t) : Expr.t =
     let st = {ctx; to_generalize=[] } in
