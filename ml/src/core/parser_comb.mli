@@ -64,6 +64,9 @@ val (<* ) : 'a t -> _ t -> 'a t
 val product : 'a t -> 'b t -> ('a * 'b) t
 (** Parse a pair *)
 
+val (<**>) : 'a t -> 'b t -> ('a * 'b) t
+(** Product  *)
+
 val ( *>) : _ t -> 'a t -> 'a t
 (** [a *> b] parses [a], then parses [b] into [x], and returns [x]. The
     results of [a] is ignored. *)
@@ -101,11 +104,21 @@ val parsing : string -> 'a t -> 'a t
 val eoi : unit t
 (** Expect the end of input, fails otherwise. *)
 
+val lookahead : 'a t -> 'a t
+(** [lookahead p] behaves like [p], but does not consume any input *)
+
 val nop : unit t
 (** Succeed with [()]. *)
 
+val guard : ?msg:string -> ('a -> bool) -> 'a t -> 'a t
+(** [guard f p] parses the same as [p], but after parsing [x]
+    it fails if [f x] is false *)
+
 val char_exact : char -> char t
 (** [char c] parses the character [c] and nothing else. *)
+
+val char_skip : unit t
+(** Skip one char. Fails on EOF. *)
 
 val char : char t
 (** Return current char. Fails on EOF *)
@@ -163,10 +176,14 @@ val if_ : 'a t -> ('a -> 'b t) -> 'b t -> 'b t
     If [c] succeeds, it calls [ptrue] without any backtracking point,
     otherwise it becomes [pfalse] *)
 
+val (<||>) : ('a t * ('a -> 'b t)) -> 'b t -> 'b t
+(** Infix synonym to {!if_} *)
+
 val cond : (_ t * 'a t) list -> 'a t -> 'a t
 (** [cond l else_] tries each pair [cond_i, br_i]
-    in the list [l]. If [cond_i] succeeds, it becomes [br_i]
-    without backtracking.
+    in the list [l]. If [cond_i] succeeds, the whole parser becomes [br_i]
+    without backtracking. {!lookahead} can be used to avoid consuming input
+    on the condition.
     If all fail, [else_] is called. *)
 
 val (<?>) : 'a t -> string -> 'a t
@@ -175,12 +192,19 @@ val (<?>) : 'a t -> string -> 'a t
     Useful as the last choice in a series of [<|>]:
     [a <|> b <|> c <?> "expected a|b|c"]. *)
 
+val ignore : 'a t -> unit t
+(** Ignore the output *)
+
 val suspend : (unit -> 'a t) -> 'a t
 (** [suspend f] is  the same as [f ()], but evaluates [f ()] only
     when needed. *)
 
 val string_exact : string -> unit t
 (** [string s] parses exactly the string [s], and nothing else. *)
+
+val keyword : string -> unit t
+(** [keyword s] parses exactly [s] followed by one whitespace that
+    is then discarded. *)
 
 val many : 'a t -> 'a list t
 (** [many p] parses a list of [p], eagerly (as long as possible). *)
@@ -200,7 +224,7 @@ val sep1 : by:_ t -> 'a t -> 'a list t
 val fix : ('a t -> 'a t) -> 'a t
 (** Fixpoint combinator. *)
 
-val cur_pos : Position.t t
+val cur_pos : Position.t lazy_t t
 (** Reflect the current position. *)
 
 val int : int t
@@ -239,8 +263,10 @@ module Infix : sig
   val (>|=) : 'a t -> ('a -> 'b) -> 'b t
   val (>>=) : 'a t -> ('a -> 'b t) -> 'b t
   val (<*>) : ('a -> 'b) t -> 'a t -> 'b t
+  val (<**>) : 'a t -> 'b t -> ('a * 'b) t
   val (<* ) : 'a t -> _ t -> 'a t
   val ( *>) : _ t -> 'a t -> 'a t
   val (<|>) : 'a t -> 'a t -> 'a t
+  val (<||>) : ('a t * ('a -> 'b t)) -> 'b t -> 'b t
   val (<?>) : 'a t -> string -> 'a t
 end

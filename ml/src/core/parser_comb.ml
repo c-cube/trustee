@@ -120,6 +120,8 @@ let[@inline] product (x:'a t)(y:'b t) : _ t =
             y.p st ~err ~ok:(fun st y -> ok st (x,y)))
   }
 
+let (<**>) = product
+
 let[@inline] map f x =
   {p=fun st ~ok ~err ->
       x.p st ~err ~ok:(fun st x ->
@@ -143,6 +145,12 @@ let eoi =
       if is_done st
       then ok st ()
       else err (mk_error_ st (const_ "expected end of input"))}
+
+let lookahead p =
+  {p=fun st ~ok ~err ->
+      p.p st ~err
+        ~ok:(fun _st x -> ok st x)
+  }
 
 let try_bind x ~ok:tr_ok ~err:tr_err =
   {p=fun st ~ok ~err ->
@@ -168,6 +176,19 @@ let parsing s x =
 
 let nop = {p=fun st ~ok ~err:_ -> ok st ()}
 
+let guard ?msg f p : _ t =
+  {p=fun st ~ok ~err ->
+      p.p st ~err ~ok:(fun st x ->
+          if f x then ok st x
+          else (
+            let msg = match msg with
+              | Some m -> const_ m
+              | None -> const_ "guard failed"
+            in
+            err (mk_error_ st msg)
+          ))
+  }
+
 let char =
   {p=fun st ~ok ~err ->
       if is_done st then err (mk_error_eof_ st)
@@ -175,6 +196,12 @@ let char =
         let st, c = next st in
         ok st c
       )
+  }
+
+let char_skip =
+  {p=fun st ~ok ~err ->
+      if is_done st then err(mk_error_eof_ st)
+      else ok {st with i=st.i+1} ()
   }
 
 let char_exact c =
@@ -297,6 +324,8 @@ let if_
         ~err:(fun _ -> pfalse.p st ~ok ~err)
   }
 
+let[@inline] (<||>) (c,a) b = if_ c a b
+
 let cond l else_ : _ t =
   {p=fun st ~ok ~err ->
       let rec aux l = match l with
@@ -308,6 +337,8 @@ let cond l else_ : _ t =
       in
       aux l
   }
+
+let[@inline] ignore p = p >|= ignore
 
 let suspend f =
   let p' = lazy (f ()) in
@@ -345,6 +376,8 @@ let string_exact s : unit t =
         )
       )
   }
+
+let keyword s : unit t = string_exact s *> ignore white
 
 let many (x:'a t) : 'a list t =
   {p=fun st ~ok ~err:_ ->
@@ -415,7 +448,7 @@ let fix f : _ t =
   pr
 
 let cur_pos = {
-  p=fun st ~ok ~err:_ -> ok st (State.pos st)
+  p=fun st ~ok ~err:_ -> ok st (lazy (State.pos st))
 }
 
 let int =
@@ -461,9 +494,11 @@ module Infix = struct
   let (>|=) = (>|=)
   let (>>=) = (>>=)
   let (<*>) = (<*>)
+  let (<**>) = (<**>)
   let (<* ) = (<* )
   let ( *>) = ( *>)
   let (<|>) = (<|>)
+  let (<||>) = (<||>)
   let (<?>) = (<?>)
 end
 
