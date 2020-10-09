@@ -9,3 +9,4 @@ module Position = Position
 module Location = Location
 module Hashcons = Hashcons
 module Parser_comb = Parser_comb
+module Parse_expr = Parse_expr
