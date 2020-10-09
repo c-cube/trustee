@@ -61,6 +61,15 @@ module Fixity : sig
   val rassoc : int -> t
   val prefix : int -> t
   val postfix : int -> t
+
+  val get_prec : t -> int
+end
+
+module Const : sig
+  type t = const
+  val fixity : t -> fixity
+  val set_fixity : t -> fixity -> unit
+  val pp : t Fmt.printer
 end
 
 (** {2 Free Variables} *)
@@ -259,5 +268,7 @@ module Ctx : sig
       is frozen. *)
 
   val axioms : t -> thm iter
+
+  val find_const_by_name : t -> string -> const option
 end
 

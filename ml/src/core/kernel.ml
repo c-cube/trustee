@@ -194,6 +194,7 @@ type ctx = {
   ctx_uid: int;
   ctx_exprs: Expr_hashcons.t;
   ctx_named_thm: thm Str_tbl.t;
+  ctx_named_const: const Str_tbl.t;
   ctx_kind: expr lazy_t;
   ctx_type: expr lazy_t;
   ctx_bool: expr lazy_t;
@@ -221,6 +222,17 @@ module Fixity = struct
   let postfix i = F_postfix i
   let lassoc i = F_left_assoc i
   let rassoc i = F_right_assoc i
+
+  let get_prec = function
+    | F_normal -> 1024
+    | F_prefix i | F_postfix i | F_left_assoc i | F_right_assoc i -> i
+end
+
+module Const = struct
+  type t = const
+  let pp out c = ID.pp out c.c_name
+  let[@inline] fixity c = c.c_fixity
+  let[@inline] set_fixity c f = c.c_fixity <- f
 end
 
 module Var = struct
@@ -559,6 +571,7 @@ module Ctx = struct
       ctx_uid;
       ctx_exprs=Expr_hashcons.create ~size:2_048 ();
       ctx_named_thm=Str_tbl.create 32;
+      ctx_named_const=Str_tbl.create 32;
       ctx_axioms=[];
       ctx_axioms_allowed=true;
       ctx_kind=lazy (Expr.make_ ctx E_kind (Lazy.from_val None));
@@ -590,6 +603,9 @@ module Ctx = struct
     )
 
   let axioms self k = List.iter k self.ctx_axioms
+
+  let[@inline] find_const_by_name self s =
+    Str_tbl.get self.ctx_named_const s
 end
 
 module New_ty_def = struct
