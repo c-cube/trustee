@@ -236,6 +236,10 @@ module Lexer = struct
     t
 end
 
+(* We follow a mix of:
+   - https://en.wikipedia.org/wiki/Operator-precedence_parser
+   - https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
+*)
 module Parser = struct
   type precedence = int
   type local =
@@ -283,7 +287,7 @@ module Parser = struct
     let n = ref 0 in
     fun () -> Printf.sprintf "_a_%d" (incr n; !n)
 
-  let expr_of_str (self:t) (s:string) : A.t =
+  let expr_of_string_ (self:t) (s:string) : A.t =
     match s with
     | "bool" -> A.const (K.Expr.bool self.ctx)
     | "=" -> A.const (K.Expr.eq self.ctx)
@@ -299,7 +303,7 @@ module Parser = struct
   let rec p_bindings_ self : (A.var * A.t) list =
     let v = A.Var.make (p_ident self) None in
     eat_ self (SYM "=");
-    let e = p_expr_ self 0 in
+    let e = p_expr_ ~ty_expect:None self 0 in
     if Lexer.cur self.lex = IN then (
       [v, e]
     ) else (
@@ -309,39 +313,49 @@ module Parser = struct
     )
 
   and p_nullary_ (self:t) (s:string) : A.t =
-    assert false (* TODO *)
+    match Lexer.cur self.lex with
+    | COLON ->
+      Lexer.junk self.lex;
+      let ty = p_expr_ ~ty_expect:(Some A.type_) self 1024 in
+      A.var (A.Var.make s (Some ty))
+    | _ -> expr_of_string_ self s
 
-  and p_expr_atomic_ (self:t) (p:precedence) : A.t =
+  and p_expr_atomic_ ~ty_expect (self:t) (p:precedence) : A.t =
     let t = Lexer.consume_cur self.lex in
-    let pos = pos_ self in
+    let ppos = pos_ self in
+    let pos = Lazy.from_val ppos in
     match t with
     | ERROR c ->
-      errorf (fun k->k"invalid char '%c' at %a" c Position.pp pos)
+      errorf (fun k->k"invalid char '%c' at %a" c Position.pp ppos)
     | LET ->
       (* parse `let x = e in e2` *)
       let bs = p_bindings_ self in
       eat_ self IN;
-      let bod = p_expr_ self p in
-      A.let_ ~pos:(Lazy.from_val pos) bs bod
+      let bod = p_expr_ ~ty_expect self p in
+      A.let_ ~pos bs bod
     | SYM s ->
       begin match fixity_ self s with
         | F_normal -> p_nullary_ self s
-        | F_prefix _ -> assert false (* TODO *)
+        | F_prefix i ->
+          let arg = p_expr_ ~ty_expect:None self i in
+          let lhs = expr_of_string_ self s in
+          A.app ~pos lhs [arg]
         | F_binder _ -> assert false (* TODO *)
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _) ->
           errorf (fun k->k"unexpected infix operator `%s` at %a"
-                     s Position.pp pos)
+                     s Position.pp ppos)
       end
     | _ ->
     assert false
 
-  and p_expr_ (self:t) (p:precedence) : A.t =
-    let lhs = p_expr_atomic_ self p in
+  and p_expr_ ~ty_expect (self:t) (p:precedence) : A.t =
+    let lhs = ref (p_expr_atomic_ ~ty_expect self p) in
+    (* TODO: parse infix operators *)
     assert false
 
   (* main entry point for expressions *)
   let expr (self:t) : A.t =
-    let e = p_expr_ self 0 in
+    let e = p_expr_ ~ty_expect:None self 0 in
     let last_tok = Lexer.cur self.lex in
     if last_tok <> EOF then (
       errorf (fun k->k"expected end of input after parsing expression, but got %a"
