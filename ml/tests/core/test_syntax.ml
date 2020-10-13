@@ -1,7 +1,6 @@
 
-module A = Alcotest
-
 open Trustee_core.Syntax
+module A = Alcotest
 
 let t_tok = (module Token : A.TESTABLE with type t = token)
 let t_tok_l = Alcotest.list t_tok

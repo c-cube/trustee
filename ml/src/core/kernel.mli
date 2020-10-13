@@ -39,6 +39,7 @@ type fixity =
   | F_right_assoc of int
   | F_prefix of int
   | F_postfix of int
+  | F_binder of int
 
 type var = {
   v_name: string;

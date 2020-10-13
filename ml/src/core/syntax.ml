@@ -5,6 +5,7 @@ open Sigs
 
 module K = Kernel
 module Expr = Kernel.Expr
+module A = Parse_ast
 
 type token =
   | LPAREN
@@ -18,12 +19,13 @@ type token =
   | QUOTED_STR of string
   | LET
   | IN
+  | AND
   | AT_SYM of string
   | NUM of string
   | ERROR of char
   | EOF
 
-type position = Position.t
+type position = A.position
 
 module Token = struct
   type t = token
@@ -33,6 +35,7 @@ module Token = struct
     | COLON -> Fmt.string out "COLON"
     | DOT -> Fmt.string out "DOT"
     | LET -> Fmt.string out "LET"
+    | AND -> Fmt.string out "AND"
     | IN -> Fmt.string out "IN"
     | WILDCARD -> Fmt.string out "WILDCARD"
     | QUESTION_MARK -> Fmt.string out "QUESTION_MARK"
@@ -59,7 +62,7 @@ module Lexer = struct
     mutable cur: token;
   }
 
-  let[@inline] pos self : position = {Position.line=self.line; col=self.col}
+  let[@inline] pos self : Position.t = {Position.line=self.line; col=self.col}
 
   let create src : t =
     { src; i=0; line=1; col=1; st=Read_next; cur=EOF }
@@ -184,6 +187,7 @@ module Lexer = struct
         let s = String.sub self.src i0 (j-i0) in
         begin match s with
           | "let" -> LET
+          | "and" -> AND
           | "in" -> IN
           | _ -> SYM s
         end
@@ -223,170 +227,138 @@ module Lexer = struct
       self.cur <- t;
       t
     | Has_cur -> self.cur
-end
 
-module Ast = struct
-  type ty = {
-    pos: position;
-    view: ty_view;
-    mutable as_e: Expr.t option;
-  }
+  let[@inline] junk self = ignore (next self : token)
 
-  and ty_view =
-    | Ty_arrow of ty * ty
-    | Ty_var of string
-    | Ty_meta of K.ID.t
-
-  type t = {
-    pos: position;
-    view: view;
-    mutable ty: ty option;
-    mutable as_e: Expr.t option;
-  }
-
-  and var = {
-    v_name: string;
-    v_ty: ty;
-  }
-
-  and binding = string * t
-
-  and view =
-    | App_const of K.const * ty list
-    | Var of var
-    | App of t * t list
-    | Lambda of var list * t
-    | With of var list * t
-    | Eq of t * t
-    | Let of binding list * t
-
-  type st = {
-    ctx: K.ctx;
-    mutable to_generalize: (string * ty) list;
-  }
-
-  let nopos = Position.none
-
-  let mk_expr_app ?(pos=nopos) (_self:st) (c:K.const) (tys:ty list) : t =
-    {pos; view=App_const (c,tys); as_e=None; ty=None; }
-
-  let mk_var ?(pos=nopos) (_self:st) (v:string) (ty:ty) : t =
-    {pos; view=Var {v_name=v; v_ty=ty}; as_e=None; ty=Some ty}
-
-  let mk_ty_meta ?(pos=nopos) (self:st) (v:string) : ty =
-    let ty: ty = {view=Ty_meta (K.ID.make v); pos; as_e=None} in
-    self.to_generalize <- (v,ty) :: self.to_generalize;
-    ty
-
-  let mk_app ?(pos=nopos) self (f:t) (l:t list) : t =
-    assert false (* TODO *)
-
-  (* infer types in [e] *)
-  let infer_ (self:st) (e:t) : unit =
-    (* TODO
-    let rec inf_ty (e:t) : Expr.t =
-      match e.as_e with
-      | Some e -> e
-      | None ->
-        begin match e with
-          | Expr e -> e.as_e <- Some e; e
-          | Var v -> inf_ty v.ty;
-          | Meta {name} ->
-            assert false (* TODO *)
-
-        end
-    in
-    aux e
-    *)
-    ()
-
-  let gen_all_ (self:st) : unit =
-    Log.debugf 5
-      (fun k->k"gen-all@ on %d variables" (List.length self.to_generalize));
-    (* generalize everything *)
-    List.iter
-      (fun (name,(e:ty)) ->
-         if CCOpt.is_none e.as_e then (
-           let v = Expr.var_name self.ctx name (Expr.type_ self.ctx) in
-           Log.debugf 10 (fun k->k"generalize %s into %a" name Expr.pp v);
-           e.as_e <- Some v;
-         ))
-      self.to_generalize;
-    ()
-
-  (* convert a fully inferred AST expr into an expression *)
-  let conv_ (self:st) (e:t) : Expr.t =
-    assert false
-      (* TODO
-    let rec aux e =
-      match e.as_e with
-      | Some e -> e
-      | None ->
-        begin match e.view with
-          | Expr e -> e
-          | Var v -> Expr.var self.ctx (aux_var v)
-          | App (f, l) ->
-            let f = aux f in
-            let l = List.map aux l in
-            Expr.app_l self.ctx f l
-          | Lambda (vs,bod) ->
-            let vs = List.map aux_var vs in
-            let bod = aux bod in
-            Expr.lambda_l self.ctx vs bod
-          | Pi (vs, bod) ->
-            let type_ = Expr.type_ self.ctx in
-            let vs = List.map (fun s -> K.Var.make s type_) vs in
-            let bod = aux bod in
-            Expr.pi_l self.ctx vs bod
-          | Arrow (args,ret) ->
-            Expr.arrow_l self.ctx (List.map aux args) (aux ret)
-          | Meta {name} ->
-            errorf (fun k->k"meta-variable `%s` should have been generalized" name)
-          | Eq (a,b) ->
-            Expr.app_eq self.ctx (aux a) (aux b)
-          | With (_, t) -> aux t
-          | Let (_,t) -> aux t
-        end
-    and aux_var v =
-      let ty = aux v.ty in
-      K.Var.make v.name ty
-    in
-    aux e
-         *)
-
-  let ty_infer (ctx:K.ctx) (e:t) : Expr.t =
-    let st = {ctx; to_generalize=[] } in
-    infer_ st e;
-    gen_all_ st;
-    conv_ st e
+  let[@inline] consume_cur self : token =
+    let t = cur self in
+    junk self;
+    t
 end
 
 module Parser = struct
+  type precedence = int
+  type local =
+    | L_local of A.var
+    | L_let of A.t
   type t = {
+    ctx: K.Ctx.t;
     lex: Lexer.t;
-    locals: (string, Ast.var) Hashtbl.t;
-    lets: (string, Ast.t) Hashtbl.t;
+    bindings: local Str_tbl.t;
     mutable q_args: Expr.t list; (* interpolation parameters *)
   }
 
-  let create ?(q_args=[]) (src: Lexer.t) : t =
+  let create ?(q_args=[]) ~ctx (src: Lexer.t) : t =
     { lex=src;
-      locals=Hashtbl.create 16;
-      lets=Hashtbl.create 16;
+      ctx;
+      bindings=Str_tbl.create 16;
       q_args;
     }
 
-  let rec p_expr (self:t) (p:int) : Expr.t =
+  let[@inline] pos_ self = Lexer.pos self.lex
+
+  let fixity_ (self:t) (s:string) : K.fixity =
+    match K.Ctx.find_const_by_name self.ctx s with
+    | None -> K.F_normal
+    | Some c -> K.Const.fixity c
+
+  let eat_ self (t:token) : unit =
+    let pos = Lexer.pos self.lex in
+    let t2 = Lexer.cur self.lex in
+    if t = t2 then (
+      Lexer.junk self.lex;
+    ) else (
+      errorf (fun k->k "expected %a at %a" Token.pp t Position.pp pos)
+    )
+
+  (* parse an identifier *)
+  let p_ident self : string =
+    match Lexer.cur self.lex with
+    | SYM s -> s
+    | _ ->
+      let pos = pos_ self in
+      errorf (fun k->k"expected identifier at %a" Position.pp pos)
+
+  let fresh_ =
+    let n = ref 0 in
+    fun () -> Printf.sprintf "_a_%d" (incr n; !n)
+
+  let expr_of_str (self:t) (s:string) : A.t =
+    match s with
+    | "bool" -> A.const (K.Expr.bool self.ctx)
+    | "=" -> A.const (K.Expr.eq self.ctx)
+    | _ ->
+      match Str_tbl.find self.bindings s with
+      | L_let u -> u
+      | L_local u -> A.var u
+      | exception Not_found ->
+        let pos = Lazy.from_val (pos_ self) in
+        let ty = A.ty_meta ~pos (fresh_ ()) in
+        A.var ~pos (A.Var.make s (Some ty))
+
+  let rec p_bindings_ self : (A.var * A.t) list =
+    let v = A.Var.make (p_ident self) None in
+    eat_ self (SYM "=");
+    let e = p_expr_ self 0 in
+    if Lexer.cur self.lex = IN then (
+      [v, e]
+    ) else (
+      eat_ self AND;
+      let vs = p_bindings_ self in
+      (v,e) :: vs
+    )
+
+  and p_nullary_ (self:t) (s:string) : A.t =
+    assert false (* TODO *)
+
+  and p_expr_atomic_ (self:t) (p:precedence) : A.t =
+    let t = Lexer.consume_cur self.lex in
+    let pos = pos_ self in
+    match t with
+    | ERROR c ->
+      errorf (fun k->k"invalid char '%c' at %a" c Position.pp pos)
+    | LET ->
+      (* parse `let x = e in e2` *)
+      let bs = p_bindings_ self in
+      eat_ self IN;
+      let bod = p_expr_ self p in
+      A.let_ ~pos:(Lazy.from_val pos) bs bod
+    | SYM s ->
+      begin match fixity_ self s with
+        | F_normal -> p_nullary_ self s
+        | F_prefix _ -> assert false (* TODO *)
+        | F_binder _ -> assert false (* TODO *)
+        | (F_left_assoc _ | F_right_assoc _ | F_postfix _) ->
+          errorf (fun k->k"unexpected infix operator `%s` at %a"
+                     s Position.pp pos)
+      end
+    | _ ->
     assert false
 
-  let expr (self:t) : Expr.t = p_expr self 1024
+  and p_expr_ (self:t) (p:precedence) : A.t =
+    let lhs = p_expr_atomic_ self p in
+    assert false
+
+  (* main entry point for expressions *)
+  let expr (self:t) : A.t =
+    let e = p_expr_ self 0 in
+    let last_tok = Lexer.cur self.lex in
+    if last_tok <> EOF then (
+      errorf (fun k->k"expected end of input after parsing expression, but got %a"
+                 Token.pp last_tok);
+    );
+    e
 end
 
-let parse ?q_args ~ctx lex : Expr.t =
-  let p = Parser.create ?q_args lex in
+let parse_ast ?q_args ~ctx lex : A.t =
+  let p = Parser.create ?q_args ~ctx lex in
   let e =
     try Parser.expr p
     with e ->
       errorf ~src:e (fun k->k"parse error at %a" Position.pp (Lexer.pos lex))
   in
   e
+
+let parse ?q_args ~ctx lex : Expr.t =
+  let e = parse_ast ?q_args ~ctx lex in
+  A.ty_infer ctx e

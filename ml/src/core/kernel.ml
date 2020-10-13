@@ -58,6 +58,7 @@ type fixity =
   | F_right_assoc of int
   | F_prefix of int
   | F_postfix of int
+  | F_binder of int
 
 type expr_view =
   | E_kind
@@ -215,6 +216,7 @@ module Fixity = struct
     | F_right_assoc i -> Fmt.fprintf out "rassoc %d" i
     | F_postfix i -> Fmt.fprintf out "postfix %d" i
     | F_prefix i -> Fmt.fprintf out "prefix %d" i
+    | F_binder i -> Fmt.fprintf out "binder %d" i
   let to_string = Fmt.to_string pp
 
   let normal = F_normal
@@ -225,7 +227,8 @@ module Fixity = struct
 
   let get_prec = function
     | F_normal -> 1024
-    | F_prefix i | F_postfix i | F_left_assoc i | F_right_assoc i -> i
+    | F_prefix i | F_postfix i | F_left_assoc i
+    | F_right_assoc i | F_binder i -> i
 end
 
 module Const = struct

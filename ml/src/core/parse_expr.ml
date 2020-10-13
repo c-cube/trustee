@@ -4,87 +4,9 @@ open Sigs
 module K = Kernel
 module P = Parser_comb
 
-
 open P.Infix
 
-type position = Position.t lazy_t
-module Ast = struct
-  type ty = {
-    ty_pos: position;
-    ty_view: ty_view;
-  }
-
-  and ty_view =
-    | Ty_arrow of ty * ty
-    | Ty_var of string
-
-  type t = {
-    pos: position;
-    view: view;
-  }
-
-  and var = {
-    v_name: string;
-    v_ty: ty option;
-    v_kind: var_kind
-  }
-
-  and var_kind =
-    | V_normal
-    | V_at
-    | V_question_mark
-
-  and binding = var * t
-
-  and view =
-    | Var of var
-    | Const of K.const
-    | App of t * t list
-    | Lambda of var list * t
-    | Pi of string list * t
-    | With of var list * t
-    | Eq of t * t
-    | Let of binding list * t
-
-  let nopos: position = lazy Position.none
-  let ty_pos ty = Lazy.force ty.ty_pos
-  let pos e = Lazy.force e.pos
-
-  let mk_var ?kind:(v_kind=V_normal) v_name v_ty : var = {v_name; v_ty; v_kind}
-
-  let mk_ty_ ?(pos=nopos) ty_view : ty = { ty_view; ty_pos=pos; }
-  let ty_var ?pos (s:string) : ty = mk_ty_ ?pos (Ty_var s)
-  let ty_arrow ?pos a b : ty = mk_ty_ ?pos (Ty_arrow (a,b))
-
-  let mk_ ?(pos=nopos) view : t = {view; pos}
-  let var ?pos (v:var) : t = mk_ ?pos (Var v)
-  let const ?pos c : t = mk_ ?pos (Const c)
-  let app ?pos (f:t) (l:t list) : t = mk_ ?pos (App (f,l))
-  let let_ ?pos bs bod : t = mk_ ?pos (Let (bs, bod))
-  let with_ ?pos vs bod : t = mk_ ?pos (With (vs, bod))
-
-  let pp_ty out ty : unit =
-    let rec aux in_arrow out ty =
-      match ty.ty_view with
-      | Ty_var v -> Fmt.string out v
-      | Ty_arrow (a,b) ->
-        if in_arrow then Fmt.fprintf out "(@[";
-        Fmt.fprintf out "%a@ -> %a" (aux true) a (aux in_arrow) b;
-        if in_arrow then Fmt.fprintf out "@])";
-    in
-    aux false out ty
-
-  let rec pp out (e:t) : unit =
-    match e.view with
-    | Var v -> Fmt.string out v.v_name
-    | Const c -> K.Const.pp out c
-    | App (f,l) -> Fmt.fprintf out "(@[%a@ %a@])" pp f (pp_list pp) l
-    | Lambda _ -> assert false (* TODO *)
-    | Pi _ -> assert false (* TODO *)
-    | With _ -> assert false (* TODO *)
-    | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp a pp b
-    | Let _ -> assert false (* TODO *)
-end
+module Ast = Parse_ast
 
 type expr = Ast.t
 type prec = int
@@ -106,10 +28,17 @@ let ty : Ast.ty P.t =
         Ast.ty_var a ~pos
       end
   in
-  (atomic_ty <* skip_w) >>= fun lhs ->
-  P.if_ (keyword "->")
-    (fun _ -> self >|= fun rhs -> Ast.ty_arrow lhs rhs)
-    (P.return lhs)
+  (* TODO
+  P.if_ (keyword "pi")
+    (fun _ ->
+    )
+     *)
+    begin
+      (atomic_ty <* skip_w) >>= fun lhs ->
+      P.if_ (keyword "->")
+        (fun _ -> self >|= fun rhs -> Ast.ty_arrow lhs rhs)
+        (P.return lhs)
+    end
 
 let p_var_ : Ast.var P.t =
   skip_w *>
@@ -117,8 +46,8 @@ let p_var_ : Ast.var P.t =
   skip_w *>
   begin
     P.if_ (P.char_exact ':')
-      (fun _ -> skip_w *> ty >|= fun ty -> Ast.mk_var name (Some ty))
-      (P.return (Ast.mk_var name None))
+      (fun _ -> skip_w *> ty >|= fun ty -> Ast.Var.make name (Some ty))
+      (P.return (Ast.Var.make name None))
   end
 
 let p_var_binding_ pexpr : Ast.binding P.t =
@@ -129,6 +58,9 @@ let p_var_binding_ pexpr : Ast.binding P.t =
   skip_w *>
   pexpr >|= fun e ->
   v,e
+
+(* right assoc *)
+let (@||) = P.(<||>)
 
 let rec p_expr_ ctx (p:prec) : expr P.t =
   let op =
@@ -149,19 +81,20 @@ let rec p_expr_ ctx (p:prec) : expr P.t =
         (* maximum precedence *)
         P.ignore (P.char_exact '('),
         begin
-          p_expr_ ctx max_prec <* skip_w <* P.char_exact ')'
+          p_expr_ ctx 0 <* skip_w <* P.char_exact ')'
         end
       end;
       begin
         P.ignore (P.char_exact '@'),
         begin
-          ident >|= fun id -> Ast.var (Ast.mk_var ~kind:Ast.V_at id None)
+          ident >|= fun id -> Ast.var (Ast.Var.make ~kind:Ast.V_at id None)
         end
       end;
       begin
         P.ignore (P.char_exact '?'),
         begin
-          ident >|= fun id -> Ast.var (Ast.mk_var ~kind:Ast.V_question_mark id None)
+          ident >|= fun id -> Ast.var
+            (Ast.Var.make ~kind:Ast.V_question_mark id None)
         end
       end;
       begin
@@ -191,20 +124,34 @@ let rec p_expr_ ctx (p:prec) : expr P.t =
       (* left-assoc *)
       begin
         let lassoc = function
-          | (_, K.F_left_assoc p2, _) -> p2 >= p
+          | (_, K.F_left_assoc p2, _) when p2 >= p -> true
           | _ -> false
         in
         P.guard lassoc op
       end,
       fun (op, _, p2) ->
-        p_expr_ ctx p2 >|= fun rhs ->
-        Ast.app ~pos (Ast.const op) [lhs; rhs]
+        p_expr_ ctx (p2+1) >|= fun rhs ->
+        Ast.app ~pos (Ast.const (K.Expr.const ctx op)) [lhs; rhs]
     end
-    <||>
+    @||
+    begin
+      (* left-assoc *)
+      begin
+        let rassoc = function
+          | (_, K.F_right_assoc p2, _) when p2 >= p -> true
+          | _ -> false
+        in
+        P.guard rassoc op
+      end,
+      fun (op, _, p2) ->
+        p_expr_ ctx p2 >|= fun rhs ->
+        Ast.app ~pos (Ast.const (K.Expr.const ctx op)) [lhs; rhs]
+    end
+    @||
     (P.return lhs)
   end
 
-let expr (ctx:K.Ctx.t) : _ P.t = p_expr_ ctx max_prec
+let expr (ctx:K.Ctx.t) : _ P.t = p_expr_ ctx 0
 
 let ty_eof = ty <* skip_w <* P.eoi
 let expr_eof ctx = expr ctx <* skip_w <* P.eoi
@@ -215,7 +162,7 @@ let expr_eof ctx = expr ctx <* skip_w <* P.eoi
 
   let parse_print_ty s1 s2 =
     let x = P.parse_exn ty_eof s1 in
-    let s1' = Fmt.asprintf "@[<h>%a@]" Ast.pp_ty x in
+    let s1' = Fmt.asprintf "@[<h>%a@]" Ast.pp x in
     (if s1' <> s2 then Printf.printf "s1=%S, s2=%S\n%!" s1' s2);
     s1' = s2
 
@@ -230,5 +177,9 @@ let expr_eof ctx = expr ctx <* skip_w <* P.eoi
   parse_print_ty "a -> (b -> c)" "a -> b -> c"
   parse_print_ty "a -> b -> c" "a -> b -> c"
   parse_print_ty "(a -> b) -> c" "(a -> b) -> c"
-  let ty = P.parse_exn ty_eof "  a" in (Ast.ty_pos ty).col = 3
+  let ty = P.parse_exn ty_eof "  a" in (Ast.pos ty).col = 3
 *)
+
+(* TODO
+  parse_print_ty "pi a b. a -> b -> c" "pi a b. a -> b -> c"
+ *)

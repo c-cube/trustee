@@ -4,6 +4,7 @@
 open Sigs
 
 module K = Kernel
+module A = Parse_ast
 
 type token =
   | LPAREN
@@ -17,12 +18,13 @@ type token =
   | QUOTED_STR of string
   | LET
   | IN
+  | AND
   | AT_SYM of string
   | NUM of string
   | ERROR of char
   | EOF
 
-type position = Position.t
+type position = A.position
 
 module Token : sig
   type t = token
@@ -38,10 +40,17 @@ module Lexer : sig
   val next : t -> token
   val cur : t -> token
 
-  val pos : t -> position
+  val pos : t -> Position.t
 end
 
 (** {2 Parser} *)
+
+val parse_ast :
+  ?q_args:K.Expr.t list ->
+  ctx:K.Ctx.t ->
+  Lexer.t ->
+  A.t
+
 val parse :
   ?q_args:K.Expr.t list ->
   ctx:K.Ctx.t ->
