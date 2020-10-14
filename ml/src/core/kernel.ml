@@ -349,6 +349,9 @@ module Expr = struct
     let id = ID.make name in
     const ctx {c_name=id; c_ty=ty; c_fixity=F_normal; }
 
+  let new_ty_const ctx name : ty =
+    new_const ctx name (type_ ctx)
+
   let bvar ctx i ty : t =
     assert (i>=0);
     ctx_check_e_uid ctx ty;

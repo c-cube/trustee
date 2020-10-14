@@ -128,6 +128,7 @@ module Expr : sig
   val var : ctx -> var -> t
   val const : ctx -> const -> t
   val new_const : ctx -> string -> ty -> t
+  val new_ty_const : ctx -> string -> t
   val var_name : ctx -> string -> ty -> t
   val bvar : ctx -> int -> ty -> t
   val app : ctx -> t -> t -> t
