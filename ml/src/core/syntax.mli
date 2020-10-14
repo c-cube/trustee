@@ -28,7 +28,7 @@ type position = A.position
 
 module Token : sig
   type t = token
-  val pp : t Fmt.printer
+  include PP with type t := t
   val equal : t -> t -> bool
 end
 
@@ -39,6 +39,8 @@ module Lexer : sig
   val create : string -> t
   val next : t -> token
   val cur : t -> token
+
+  val to_list : t -> token list
 
   val pos : t -> Position.t
 end
