@@ -150,6 +150,8 @@ module Expr : sig
 
   val unfold_app : t -> t * t list
   val unfold_eq : t -> (t * t) option
+  val as_const : t -> Const.t option
+  val as_const_exn : t -> Const.t
 
   module Set : CCSet.S with type elt = t
   module Map : CCMap.S with type key = t

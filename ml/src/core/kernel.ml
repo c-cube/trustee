@@ -347,7 +347,9 @@ module Expr = struct
 
   let new_const ctx name ty : t =
     let id = ID.make name in
-    const ctx {c_name=id; c_ty=ty; c_fixity=F_normal; }
+    let c = {c_name=id; c_ty=ty; c_fixity=F_normal; } in
+    Str_tbl.replace ctx.ctx_named_const name c;
+    const ctx c
 
   let new_ty_const ctx name : ty =
     new_const ctx name (type_ ctx)
@@ -547,6 +549,14 @@ module Expr = struct
     match view f, l with
     | E_const {c_name;_}, [_;a;b] when ID.equal c_name id_eq -> Some(a,b)
     | _ -> None
+
+  let[@inline] as_const e = match e.e_view with
+    | E_const c -> Some c
+    | _ -> None
+
+  let[@inline] as_const_exn e = match e.e_view with
+    | E_const c -> c
+    | _ -> errorf (fun k->k"%a is not a constant" pp e)
 
   module AsKey = struct
     type nonrec t = t
