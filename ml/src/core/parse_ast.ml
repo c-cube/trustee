@@ -72,7 +72,7 @@ let rec pp out (e:t) : unit =
   | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp a pp b
   | Let (bs,bod) ->
     let pp_b out (v,e) : unit = Fmt.fprintf out "@[%s@ = %a@]" v.v_name pp e in
-    Fmt.fprintf out "(@[let %a in@ %a@])" (pp_list pp_b) bs pp bod
+    Fmt.fprintf out "(@[let %a in@ %a@])" (pp_list ~sep:" and " pp_b) bs pp bod
 and pp_atom_ out e =
   match e.view with
   | Type | Var _ | Meta _ | Const _ -> pp out e
@@ -106,7 +106,10 @@ let ty_pi ?pos vars bod : ty = match vars with
 let var ?pos (v:var) : t = mk_ ?pos (Var v)
 let const ?pos ?(at=false) c : t = mk_ ?pos (Const {c; at})
 let meta ?pos (s:string) ty : t = mk_ ?pos (Meta {deref=None; ty; name=s})
-let app ?pos (f:t) (l:t list) : t = mk_ ?pos (App (f,l))
+let app ?pos (f:t) (l:t list) : t =
+  match f.view with
+  | App (f1,l1) -> mk_ ?pos (App (f1,l1@l))
+  | _ -> mk_ ?pos (App (f,l))
 let let_ ?pos bs bod : t = mk_ ?pos (Let (bs, bod))
 let with_ ?pos vs bod : t = mk_ ?pos (With (vs, bod))
 let lambda ?pos vs bod : t = mk_ ?pos (Lambda (vs, bod))

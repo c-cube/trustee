@@ -54,6 +54,7 @@ let ctx_id_mask = (1 lsl ctx_id_bits) - 1
 
 type fixity =
   | F_normal
+  | F_infix of int
   | F_left_assoc of int
   | F_right_assoc of int
   | F_prefix of int
@@ -212,6 +213,7 @@ module Fixity = struct
   type t = fixity
   let pp out = function
     | F_normal -> Fmt.string out "normal"
+    | F_infix i -> Fmt.fprintf out "infix %d" i
     | F_left_assoc i -> Fmt.fprintf out "lassoc %d" i
     | F_right_assoc i -> Fmt.fprintf out "rassoc %d" i
     | F_postfix i -> Fmt.fprintf out "postfix %d" i
@@ -227,7 +229,7 @@ module Fixity = struct
 
   let get_prec = function
     | F_normal -> 1024
-    | F_prefix i | F_postfix i | F_left_assoc i
+    | F_prefix i | F_postfix i | F_left_assoc i | F_infix i
     | F_right_assoc i | F_binder i -> i
 end
 

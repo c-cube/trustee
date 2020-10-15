@@ -35,6 +35,7 @@ type thm
 
 type fixity =
   | F_normal
+  | F_infix of int
   | F_left_assoc of int
   | F_right_assoc of int
   | F_prefix of int

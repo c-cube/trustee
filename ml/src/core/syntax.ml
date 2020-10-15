@@ -287,7 +287,7 @@ module Parser = struct
   let eat_ ~msg self (t:token) : unit =
     let pos = Lexer.pos self.lex in
     let t2 = Lexer.cur self.lex in
-    if t = t2 then (
+    if Token.equal t t2 then (
       Lexer.junk self.lex;
     ) else (
       errorf (fun k->k "expected %a while parsing %s at %a"
@@ -297,7 +297,9 @@ module Parser = struct
   (* parse an identifier *)
   let p_ident self : string =
     match Lexer.cur self.lex with
-    | SYM s -> s
+    | SYM s ->
+      Lexer.junk self.lex;
+      s
     | _ ->
       let pos = pos_ self in
       errorf (fun k->k"expected identifier at %a" Position.pp pos)
@@ -329,10 +331,10 @@ module Parser = struct
     let v = A.Var.make (p_ident self) None in
     eat_ self ~msg:"let binding" (SYM "=");
     let e = p_expr_ ~ty_expect:None self 0 in
-    if Lexer.cur self.lex = IN then (
+    if Token.equal (Lexer.cur self.lex) IN then (
       [v, e]
     ) else (
-      eat_ self ~msg:"let binding" AND;
+      eat_ self ~msg:"let bindings" AND;
       let vs = p_bindings_ self in
       (v,e) :: vs
     )
@@ -380,7 +382,7 @@ module Parser = struct
       A.var (A.Var.make s (Some ty))
     | _ -> expr_of_string_ ~at self s
 
-  and p_expr_atomic_ ~ty_expect (self:t) (p:precedence) : A.t =
+  and p_expr_atomic_ ~ty_expect (self:t) : A.t =
     let t = Lexer.cur self.lex in
     let ppos = pos_ self in
     let pos = Lazy.from_val ppos in
@@ -397,25 +399,25 @@ module Parser = struct
       (* parse `let x = e in e2` *)
       let bs = p_bindings_ self in
       eat_ self ~msg:"let binding body" IN;
-      let bod = p_expr_ ~ty_expect self p in
+      let bod = p_expr_ ~ty_expect self 0 in
       A.let_ ~pos bs bod
     | SYM s ->
       Lexer.junk self.lex;
       begin match fixity_ self s with
         | F_normal -> p_nullary_ self s
         | F_prefix i ->
-          let arg = p_expr_ ~ty_expect:None self (max i p) in
+          let arg = p_expr_ ~ty_expect:None self i in
           let lhs = expr_of_string_ self s in
           A.app ~pos lhs [arg]
         | F_binder i ->
           let vars = p_tyvars_and_dot self [] |> List.rev in
-          let body = p_expr_ ~ty_expect self (max i p) in
+          let body = p_expr_ ~ty_expect self i in
           let c = match K.Ctx.find_const_by_name self.ctx s with
             | None -> assert false
             | Some c -> K.Expr.const self.ctx c
           in
           A.bind ~pos c vars body
-        | (F_left_assoc _ | F_right_assoc _ | F_postfix _) ->
+        | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
           errorf (fun k->k"unexpected infix operator `%s` at %a"
                      s Position.pp ppos)
       end
@@ -440,7 +442,7 @@ module Parser = struct
       "x : ty" or "x" or "(x y z : ty)" *)
 
   and p_expr_ ~ty_expect (self:t) (p:precedence) : A.t =
-    let lhs = ref (p_expr_atomic_ ~ty_expect self p) in
+    let lhs = ref (p_expr_atomic_ ~ty_expect self) in
     let p = ref p in
     let continue = ref true in
     while !continue do
@@ -456,27 +458,40 @@ module Parser = struct
       | RPAREN | WILDCARD | COLON | DOT | IN
       | LET | AND -> continue := false
       | AT_SYM _ | QUESTION_MARK | QUOTED_STR _ | QUESTION_MARK_STR _ | NUM _ ->
-        let e = p_expr_atomic_ ~ty_expect:None self 1024 in
+        let e = p_expr_atomic_ ~ty_expect:None self in
         lhs := A.app ~pos !lhs [e];
       | SYM s ->
         Lexer.junk self.lex;
         let f = fixity_ self s in
         begin match f with
-          | F_left_assoc p' when p' >= !p ->
+          | (F_left_assoc p' | F_right_assoc p' | F_infix p') when p' >= !p ->
             let op = expr_of_string_ self s in
-            let rhs = p_expr_ ~ty_expect:None self p' in
-            lhs := A.app ~pos op [!lhs; rhs];
-          | F_right_assoc p' when p' > !p ->
-            let op = expr_of_string_ self s in
-            let rhs = p_expr_ ~ty_expect:None self p' in
-            lhs := A.app ~pos op [!lhs; rhs];
+            let rhs = ref (p_expr_atomic_ ~ty_expect:None self) in
+            let continue2 = ref true in
+            (* parse right-assoc series *)
+            while !continue2 do
+              match Lexer.cur self.lex with
+              | SYM s2 ->
+                begin match fixity_ self s2 with
+                  | F_right_assoc p2 when p2 = p' ->
+                    let ppos = Lexer.pos self.lex in
+                    let pos = Lazy.from_val ppos in
+                    Lexer.junk self.lex;
+                    let e = p_expr_ self ~ty_expect:None p2 in
+                    let op2 = expr_of_string_ self s2 in
+                    rhs := A.app ~pos op2 [!rhs; e]
+                  | _ -> continue2 := false
+                end
+              | _ -> continue2 := false
+            done;
+            lhs := A.app ~pos op [!lhs; !rhs];
           | F_normal ->
             let arg = p_nullary_ self s in
             lhs := A.app ~pos !lhs [arg]
           | F_prefix _ | F_postfix _ | F_binder _ ->
             (* TODO: in case of prefix, we could just parse an appliation *)
             errorf (fun k->k"expected infix operator at %a" Position.pp ppos);
-          | F_left_assoc _ | F_right_assoc _ ->
+          | F_left_assoc _ | F_right_assoc _ | F_infix _ ->
             (* lower precedence *)
             continue := false
         end
@@ -537,6 +552,8 @@ let parse ?q_args ~ctx lex : Expr.t =
     let r2 = K.Expr.new_const ctx "r2" (tau @-> tau @-> bool)
     let forall = K.Expr.new_const ctx "!" ((tau @-> bool) @-> bool)
     let () = K.Const.set_fixity (K.Expr.as_const_exn forall) (F_binder 10)
+    let plus = K.Expr.new_const ctx "+" (tau @-> tau @-> tau)
+    let () = K.Const.set_fixity (K.Expr.as_const_exn plus) (F_right_assoc 20)
 
     let of_str s = Syntax.parse ~ctx (Lexer.create s)
   end
@@ -545,6 +562,7 @@ let parse ?q_args ~ctx lex : Expr.t =
   module A = struct
     include A
     let v (s:string) : t = var (A.Var.make s None)
+    let vv s : A.var = A.Var.make s None
     let of_str s : A.t = Syntax.parse_ast ~ctx:M.ctx (Lexer.create s)
     let b_forall vars bod : A.t =
       A.bind M.forall (List.map (fun (x,ty)-> A.Var.make x ty) vars) bod
@@ -565,6 +583,11 @@ let parse ?q_args ~ctx lex : Expr.t =
     (A.of_str "!x y:A. p1 (f1 x)")
   A.(b_forall ["x", Some (v "A"); "y", Some (v "B")] (c M.p1 @ [c M.f1 @ [v "x"]])) \
     (A.of_str "!(x:A) (y:B). p1 (f1 x)")
+  A.(c M.plus @ [v "x"; v "y"]) (A.of_str "x + y")
+  A.(c M.plus @ [v "x"; c M.plus @ [v "y"; v "z"]]) (A.of_str "x + y + z")
+  A.(let_ [vv"x", c M.a] (c M.p1 @ [v "x"])) (A.of_str "let x=a in p1 x")
+  A.(let_ [vv"x", c M.a; vv"y", c M.b] (c M.p2 @ [v "x"; v"y"])) \
+    (A.of_str "let x=a and y=b in p2 x y")
 *)
 
 (* TODO: test type inference *)
