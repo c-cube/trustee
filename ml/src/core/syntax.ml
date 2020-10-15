@@ -262,6 +262,7 @@ module Parser = struct
   type local =
     | L_local of A.var
     | L_let of A.t
+
   type t = {
     ctx: K.Ctx.t;
     lex: Lexer.t;
@@ -303,21 +304,27 @@ module Parser = struct
 
   let fresh_ =
     let n = ref 0 in
-    fun () -> Printf.sprintf "_a_%d" (incr n; !n)
+    fun ?(pre="a") () -> Printf.sprintf "_%s_%d" pre (incr n; !n)
 
-  let expr_of_string_ (self:t) (s:string) : A.t =
-    match s with
-    | "bool" -> A.const (K.Expr.bool self.ctx)
-    | "=" -> A.const (K.Expr.eq self.ctx)
-    | _ ->
-      match Str_tbl.find self.bindings s with
-      | L_let u -> u
-      | L_local u -> A.var u
-      | exception Not_found ->
-        let pos = Lazy.from_val (pos_ self) in
-        let ty = A.ty_meta ~pos (fresh_ ()) in
-        A.var ~pos (A.Var.make s (Some ty))
+  let expr_of_string_ (self:t) ?(at=false) (s:string) : A.t =
+    begin match s with
+      | "bool" -> A.const ~at (K.Expr.bool self.ctx)
+      | "=" -> A.const ~at (K.Expr.eq self.ctx)
+      | _ ->
+        match Str_tbl.find self.bindings s with
+        | L_let u -> u
+        | L_local u -> A.var u
+        | exception Not_found ->
+          let pos = Lazy.from_val (pos_ self) in
+          begin match K.Ctx.find_const_by_name self.ctx s with
+            | Some c -> A.const ~pos ~at (K.Expr.const self.ctx c)
+            | None ->
+              let ty = A.ty_meta ~pos (fresh_ ()) in
+              A.var ~pos (A.Var.make s (Some ty))
+          end
+    end
 
+  (* parse let bindings *)
   let rec p_bindings_ self : (A.var * A.t) list =
     let v = A.Var.make (p_ident self) None in
     eat_ self ~msg:"let binding" (SYM "=");
@@ -330,13 +337,48 @@ module Parser = struct
       (v,e) :: vs
     )
 
-  and p_nullary_ (self:t) (s:string) : A.t =
+  and p_tyvar_grp_ self : A.var list =
+    let ppos = pos_ self in
+    let rec loop names =
+      match Lexer.cur self.lex with
+      | SYM s -> Lexer.junk self.lex; loop (s::names)
+      | COLON ->
+        Lexer.junk self.lex;
+        let ty = p_expr_ ~ty_expect:(Some A.type_) self 0 in
+        List.rev_map (fun v -> A.Var.make v (Some ty)) names
+      | RPAREN | DOT ->
+        List.rev_map (fun v -> A.Var.make v None) names
+      | _ ->
+        errorf (fun k->k"expected group of typed variables at %a" Position.pp ppos)
+    in
+    loop []
+
+  and p_tyvars_and_dot self acc : A.var list =
+    match Lexer.cur self.lex with
+    | DOT ->
+      Lexer.junk self.lex;
+      acc
+    | LPAREN ->
+      Lexer.junk self.lex;
+      let l = p_tyvar_grp_ self in
+      eat_ self ~msg:"group of typed variables" RPAREN;
+      p_tyvars_and_dot self (List.rev_append l acc)
+    | SYM _ ->
+      let l = p_tyvar_grp_ self in
+      eat_ ~msg:"bound variables" self DOT;
+      List.rev_append l acc
+    | _ ->
+      let pos = Lexer.pos self.lex in
+      errorf (fun k->k "expected list of (typed) variables at %a"
+                 Position.pp pos)
+
+  and p_nullary_ (self:t) ?(at=false) (s:string) : A.t =
     match Lexer.cur self.lex with
     | COLON ->
       Lexer.junk self.lex;
       let ty = p_expr_ ~ty_expect:(Some A.type_) self 1024 in
       A.var (A.Var.make s (Some ty))
-    | _ -> expr_of_string_ self s
+    | _ -> expr_of_string_ ~at self s
 
   and p_expr_atomic_ ~ty_expect (self:t) (p:precedence) : A.t =
     let t = Lexer.cur self.lex in
@@ -362,15 +404,36 @@ module Parser = struct
       begin match fixity_ self s with
         | F_normal -> p_nullary_ self s
         | F_prefix i ->
-          let arg = p_expr_ ~ty_expect:None self i in
+          let arg = p_expr_ ~ty_expect:None self (max i p) in
           let lhs = expr_of_string_ self s in
           A.app ~pos lhs [arg]
-        | F_binder _ -> assert false (* TODO *)
+        | F_binder i ->
+          let vars = p_tyvars_and_dot self [] |> List.rev in
+          let body = p_expr_ ~ty_expect self (max i p) in
+          let c = match K.Ctx.find_const_by_name self.ctx s with
+            | None -> assert false
+            | Some c -> K.Expr.const self.ctx c
+          in
+          A.bind ~pos c vars body
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _) ->
           errorf (fun k->k"unexpected infix operator `%s` at %a"
                      s Position.pp ppos)
       end
-    | _ ->
+    | AT_SYM s -> p_nullary_ ~at:true self s
+    | WILDCARD ->
+      let ty = A.ty_meta (fresh_ ~pre:"a" ()) in
+      A.meta ~pos (fresh_ ~pre:"_" ()) ty
+    | QUESTION_MARK_STR s ->
+      let ty = A.ty_meta (fresh_ ~pre:"a" ()) in
+      A.meta ~pos s ty
+    | QUESTION_MARK ->
+      begin match self.q_args with
+        | [] -> errorf (fun k->k"no interpolation arg at %a" Position.pp ppos)
+        | t :: tl -> self.q_args <- tl; A.const ~pos t
+      end
+    | NUM _ ->
+      errorf (fun k->k"TODO: parse numbers") (* TODO *)
+    | RPAREN | COLON | DOT | IN | AND | EOF | QUOTED_STR _ ->
       errorf (fun k->k"expected expression at %a" Position.pp ppos)
 
   (* TODO: parse bound variables as a list of:
@@ -453,7 +516,6 @@ let parse ?q_args ~ctx lex : Expr.t =
     let bool = K.Expr.bool ctx
     let tau = K.Expr.new_ty_const ctx "tau"
     let v s ty = K.Expr.var ctx (K.Var.make s ty)
-    let (@) a b = K.Expr.app ctx a b
     let (@->) a b = K.Expr.arrow ctx a b
     let a = K.Expr.new_const ctx "a" tau
     let b = K.Expr.new_const ctx "b" tau
@@ -473,6 +535,8 @@ let parse ?q_args ~ctx lex : Expr.t =
     let p2 = K.Expr.new_const ctx "p2" (tau @-> tau @-> bool)
     let q2 = K.Expr.new_const ctx "q2" (tau @-> tau @-> bool)
     let r2 = K.Expr.new_const ctx "r2" (tau @-> tau @-> bool)
+    let forall = K.Expr.new_const ctx "!" ((tau @-> bool) @-> bool)
+    let () = K.Const.set_fixity (K.Expr.as_const_exn forall) (F_binder 10)
 
     let of_str s = Syntax.parse ~ctx (Lexer.create s)
   end
@@ -482,12 +546,25 @@ let parse ?q_args ~ctx lex : Expr.t =
     include A
     let v (s:string) : t = var (A.Var.make s None)
     let of_str s : A.t = Syntax.parse_ast ~ctx:M.ctx (Lexer.create s)
+    let b_forall vars bod : A.t =
+      A.bind M.forall (List.map (fun (x,ty)-> A.Var.make x ty) vars) bod
+    let c x : t = A.const x
+    let (@) a b = A.app a b
   end
+  open A
 *)
 
 (*$= & ~printer:A.to_string ~cmp:(fun x y->A.to_string x=A.to_string y)
-  A.(app (v "f") [v "x"]) (A.of_str "(f x)")
-  A.(app (v "f") [v "x"]) (A.of_str "f x")
+  A.(v "f" @ [v "x"]) (A.of_str "(f x)")
+  A.(v "f" @ [v "x"]) (A.of_str "f x")
+  A.(b_forall ["x", None; "y", None] (c M.p1 @ [v "x"])) \
+    (A.of_str "!x y. p1 x")
+  A.(b_forall ["x", Some (v "A")] (c M.p1 @ [c M.f1 @ [v "x"]])) \
+    (A.of_str "!x:A. p1 (f1 x)")
+  A.(b_forall ["x", Some (v "A"); "y", Some (v "A")] (c M.p1 @ [c M.f1 @ [v "x"]])) \
+    (A.of_str "!x y:A. p1 (f1 x)")
+  A.(b_forall ["x", Some (v "A"); "y", Some (v "B")] (c M.p1 @ [c M.f1 @ [v "x"]])) \
+    (A.of_str "!(x:A) (y:B). p1 (f1 x)")
 *)
 
 (* TODO: test type inference *)

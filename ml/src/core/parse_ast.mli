@@ -29,15 +29,20 @@ and binding = var * t
 and view =
   | Type
   | Ty_arrow of ty * ty
-  | Ty_meta of {
-      name: string;
-      mutable v: ty option;
-    }
   | Ty_pi of string list * ty
   | Var of var
-  | Const of K.Expr.t
+  | Meta of {
+      name: string;
+      ty: ty;
+      mutable deref: t option;
+    }
+  | Const of {
+      c: K.Expr.t;
+      at: bool; (* explicit types? *)
+    }
   | App of t * t list
   | Lambda of var list * t
+  | Bind of K.Expr.t * var list * t
   | With of var list * t
   | Eq of t * t
   | Let of binding list * t
@@ -60,10 +65,12 @@ val ty_arrow : ?pos:position -> t -> t -> t
 val ty_pi : ?pos:position -> string list -> t -> t
 
 val var : ?pos:position -> var -> t
-val const : ?pos:position -> K.Expr.t -> t
+val const : ?pos:position -> ?at:bool -> K.Expr.t -> t
+val meta : ?pos:position -> string -> ty -> t
 val app : ?pos:position -> t -> t list -> t
 val let_ : ?pos:position -> (var * t) list -> t -> t
 val with_ : ?pos:position -> var list -> t -> t
 val lambda : ?pos:position -> var list -> t -> t
+val bind : ?pos:position -> K.Expr.t -> var list -> t -> t
 
 val ty_infer : K.ctx -> t -> K.Expr.t
