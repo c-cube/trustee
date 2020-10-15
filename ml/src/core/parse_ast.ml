@@ -92,6 +92,7 @@ end
 
 let mk_ ?(pos=nopos) view : t = {view; pos=pos}
 
+let[@inline] view e = e.view
 let[@inline] pos e = Lazy.force e.pos
 let pp = pp
 

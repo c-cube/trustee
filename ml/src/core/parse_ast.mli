@@ -57,6 +57,7 @@ end
 include PP with type t := t
 
 val pos : t -> Position.t
+val view : t -> view
 
 val type_ : t
 val ty_var : ?pos:position -> string -> t
