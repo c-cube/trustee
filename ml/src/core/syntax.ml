@@ -384,7 +384,7 @@ module Parser = struct
     match Lexer.cur self.lex with
     | COLON ->
       Lexer.junk self.lex;
-      let ty = p_expr_ ~ty_expect:(Some A.type_) self 1024 in
+      let ty = p_expr_ ~ty_expect:(Some A.type_) self 0 in
       A.var (A.Var.make s (Some ty))
     | _ -> expr_of_string_ ~at self s
 
