@@ -29,7 +29,7 @@ and binding = var * t
 and view =
   | Type
   | Ty_arrow of ty * ty
-  | Ty_pi of string list * ty
+  | Ty_pi of var list * ty
   | Var of var
   | Meta of {
       name: string;
@@ -63,7 +63,7 @@ val type_ : t
 val ty_var : ?pos:position -> string -> t
 val ty_meta : ?pos:position -> string -> t
 val ty_arrow : ?pos:position -> t -> t -> t
-val ty_pi : ?pos:position -> string list -> t -> t
+val ty_pi : ?pos:position -> var list -> t -> t
 
 val var : ?pos:position -> var -> t
 val const : ?pos:position -> ?at:bool -> K.Expr.t -> t
@@ -73,5 +73,6 @@ val let_ : ?pos:position -> (var * t) list -> t -> t
 val with_ : ?pos:position -> var list -> t -> t
 val lambda : ?pos:position -> var list -> t -> t
 val bind : ?pos:position -> K.Expr.t -> var list -> t -> t
+val eq : ?pos:position -> t -> t -> t
 
 val ty_infer : K.ctx -> t -> K.Expr.t

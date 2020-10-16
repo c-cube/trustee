@@ -28,7 +28,7 @@ and binding = var * t
 and view =
   | Type
   | Ty_arrow of ty * ty
-  | Ty_pi of string list * ty
+  | Ty_pi of var list * ty
   | Var of var
   | Meta of {
       name: string;
@@ -56,7 +56,7 @@ let rec pp out (e:t) : unit =
     Fmt.fprintf out "%a@ -> %a" pp_atom_ a pp b;
   | Ty_pi (vars, bod) ->
     Fmt.fprintf out "(@[pi %a.@ %a@])"
-      (pp_list Fmt.string) vars pp bod
+      (pp_list pp_var) vars pp bod
   | Const {c;at} ->
     let s = if at then "@" else "" in
     Fmt.fprintf out "%s%a" s K.Expr.pp c
@@ -77,6 +77,7 @@ and pp_atom_ out e =
   match e.view with
   | Type | Var _ | Meta _ | Const _ -> pp out e
   | _ -> Fmt.fprintf out "(@[%a@])" pp e
+and pp_var out v = Fmt.string out v.v_name
 and pp_var_ty out (v:var) : unit =
   match v.v_ty with
   | None -> Fmt.string out v.v_name
@@ -115,8 +116,9 @@ let let_ ?pos bs bod : t = mk_ ?pos (Let (bs, bod))
 let with_ ?pos vs bod : t = mk_ ?pos (With (vs, bod))
 let lambda ?pos vs bod : t = mk_ ?pos (Lambda (vs, bod))
 let bind ?pos c vs bod : t = mk_ ?pos (Bind (c, vs, bod))
+let eq ?pos a b : t = mk_ ?pos (Eq (a,b))
 
-let to_string = Fmt.to_string pp
+let to_string = Fmt.to_string @@ Fmt.hvbox pp
 
 (* TODO *)
 let ty_infer _ctx _e : K.Expr.t =

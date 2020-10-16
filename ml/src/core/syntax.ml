@@ -280,9 +280,15 @@ module Parser = struct
   let[@inline] pos_ self = Lexer.pos self.lex
 
   let fixity_ (self:t) (s:string) : K.fixity =
-    match K.Ctx.find_const_by_name self.ctx s with
-    | None -> K.F_normal
-    | Some c -> K.Const.fixity c
+    match s with
+    | "->" -> K.F_right_assoc 100
+    | "pi" -> K.F_right_assoc 70
+    | "\\" -> K.F_right_assoc 50
+    | "=" -> K.F_infix 150
+    | _ ->
+      match K.Ctx.find_const_by_name self.ctx s with
+      | None -> K.F_normal
+      | Some c -> K.Const.fixity c
 
   let eat_ ~msg self (t:token) : unit =
     let pos = Lexer.pos self.lex in
@@ -412,11 +418,16 @@ module Parser = struct
         | F_binder i ->
           let vars = p_tyvars_and_dot self [] |> List.rev in
           let body = p_expr_ ~ty_expect self i in
-          let c = match K.Ctx.find_const_by_name self.ctx s with
-            | None -> assert false
-            | Some c -> K.Expr.const self.ctx c
-          in
-          A.bind ~pos c vars body
+          begin match s with
+            | "\\" -> A.lambda ~pos vars body
+            | "pi" -> A.ty_pi ~pos vars body
+            | _ ->
+              match K.Ctx.find_const_by_name self.ctx s with
+              | None -> assert false
+              | Some c ->
+                let c = K.Expr.const self.ctx c in
+                A.bind ~pos c vars body
+          end
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
           errorf (fun k->k"unexpected infix operator `%s` at %a"
                      s Position.pp ppos)
@@ -465,7 +476,6 @@ module Parser = struct
         let f = fixity_ self s in
         begin match f with
           | (F_left_assoc p' | F_right_assoc p' | F_infix p') when p' >= !p ->
-            let op = expr_of_string_ self s in
             let rhs = ref (p_expr_atomic_ ~ty_expect:None self) in
             let continue2 = ref true in
             (* parse right-assoc series *)
@@ -478,13 +488,23 @@ module Parser = struct
                     let pos = Lazy.from_val ppos in
                     Lexer.junk self.lex;
                     let e = p_expr_ self ~ty_expect:None p2 in
-                    let op2 = expr_of_string_ self s2 in
-                    rhs := A.app ~pos op2 [!rhs; e]
+                    rhs :=
+                      if s2 = "->" then A.ty_arrow !rhs e
+                      else (
+                        let op2 = expr_of_string_ self s2 in
+                        A.app ~pos op2 [!rhs; e]
+                      )
                   | _ -> continue2 := false
                 end
               | _ -> continue2 := false
             done;
-            lhs := A.app ~pos op [!lhs; !rhs];
+            lhs :=
+              if s = "->" then A.ty_arrow ~pos !lhs !rhs
+              else if s = "=" then A.eq ~pos !lhs !rhs
+              else (
+                let op = expr_of_string_ self s in
+                A.app ~pos op [!lhs; !rhs];
+              )
           | F_normal ->
             let arg = p_nullary_ self s in
             lhs := A.app ~pos !lhs [arg]
@@ -572,6 +592,7 @@ let parse ?q_args ~ctx lex : Expr.t =
   open A
 *)
 
+(* test printer itself *)
 (*$= & ~printer:A.to_string ~cmp:(fun x y->A.to_string x=A.to_string y)
   A.(v "f" @ [v "x"]) (A.of_str "(f x)")
   A.(v "f" @ [v "x"]) (A.of_str "f x")
@@ -588,6 +609,8 @@ let parse ?q_args ~ctx lex : Expr.t =
   A.(let_ [vv"x", c M.a] (c M.p1 @ [v "x"])) (A.of_str "let x=a in p1 x")
   A.(let_ [vv"x", c M.a; vv"y", c M.b] (c M.p2 @ [v "x"; v"y"])) \
     (A.of_str "let x=a and y=b in p2 x y")
+  A.(ty_arrow (v"a")(v"b")) (A.of_str "a->b")
+  A.(eq (v"a")(v"b")) (A.of_str "a = b")
 *)
 
 (* TODO: test type inference *)
