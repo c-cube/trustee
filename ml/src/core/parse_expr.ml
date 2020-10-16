@@ -163,14 +163,16 @@ let expr_eof ctx = expr ctx <* skip_w <* P.eoi
   let parse_print_ty s1 s2 =
     let x = P.parse_exn ty_eof s1 in
     let s1' = Fmt.asprintf "@[<h>%a@]" Ast.pp x in
-    (if s1' <> s2 then Printf.printf "s1=%S, s2=%S\n%!" s1' s2);
-    s1' = s2
+    let s2' = "`" ^ s2 ^ "`" in
+    (if s1' <> s2' then Printf.printf "s1=%S, s2=%S\n%!" s1' s2');
+    s1' = s2'
 
   let parse_print_expr s1 s2 =
     let x = P.parse_exn (expr_eof ctx) s1 in
     let s1' = Fmt.asprintf "@[<h>%a@]" Ast.pp x in
-    (if s1' <> s2 then Printf.printf "s1=%S, s2=%S\n%!" s1' s2);
-    s1' = s2
+    let s2' = "`" ^ s2 ^ "`" in
+    (if s1' <> s2' then Printf.printf "s1=%S, s2=%S\n%!" s1' s2');
+    s1' = s2'
 *)
 
 (*$T

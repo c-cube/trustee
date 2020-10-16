@@ -259,14 +259,11 @@ end
 *)
 module Parser = struct
   type precedence = int
-  type local =
-    | L_local of A.var
-    | L_let of A.t
 
   type t = {
     ctx: K.Ctx.t;
     lex: Lexer.t;
-    bindings: local Str_tbl.t;
+    bindings: A.var Str_tbl.t;
     mutable q_args: Expr.t list; (* interpolation parameters *)
   }
 
@@ -282,8 +279,9 @@ module Parser = struct
   let fixity_ (self:t) (s:string) : K.fixity =
     match s with
     | "->" -> K.F_right_assoc 100
-    | "pi" -> K.F_right_assoc 70
-    | "\\" -> K.F_right_assoc 50
+    | "pi" -> K.F_binder 70
+    | "with" -> K.F_binder 1
+    | "\\" -> K.F_binder 50
     | "=" -> K.F_infix 150
     | _ ->
       match K.Ctx.find_const_by_name self.ctx s with
@@ -320,8 +318,7 @@ module Parser = struct
       | "=" -> A.const ~at (K.Expr.eq self.ctx)
       | _ ->
         match Str_tbl.find self.bindings s with
-        | L_let u -> u
-        | L_local u -> A.var u
+        | u -> A.var u
         | exception Not_found ->
           let pos = Lazy.from_val (pos_ self) in
           begin match K.Ctx.find_const_by_name self.ctx s with
@@ -405,7 +402,9 @@ module Parser = struct
       (* parse `let x = e in e2` *)
       let bs = p_bindings_ self in
       eat_ self ~msg:"let binding body" IN;
+      List.iter (fun (v,_) -> Str_tbl.add self.bindings v.A.v_name v) bs;
       let bod = p_expr_ ~ty_expect self 0 in
+      List.iter (fun (v,_) -> Str_tbl.remove self.bindings v.A.v_name) bs;
       A.let_ ~pos bs bod
     | SYM s ->
       Lexer.junk self.lex;
@@ -421,6 +420,7 @@ module Parser = struct
           begin match s with
             | "\\" -> A.lambda ~pos vars body
             | "pi" -> A.ty_pi ~pos vars body
+            | "with" -> A.with_ ~pos vars body
             | _ ->
               match K.Ctx.find_const_by_name self.ctx s with
               | None -> assert false
@@ -587,6 +587,7 @@ let parse ?q_args ~ctx lex : Expr.t =
     let b_forall vars bod : A.t =
       A.bind M.forall (List.map (fun (x,ty)-> A.Var.make x ty) vars) bod
     let c x : t = A.const x
+    let (@->) a b = A.ty_arrow a b
     let (@) a b = A.app a b
   end
   open A
@@ -611,6 +612,10 @@ let parse ?q_args ~ctx lex : Expr.t =
     (A.of_str "let x=a and y=b in p2 x y")
   A.(ty_arrow (v"a")(v"b")) (A.of_str "a->b")
   A.(eq (v"a")(v"b")) (A.of_str "a = b")
+  A.(b_forall ["x", Some (c M.a @-> c M.b @-> c M.c)] (A.eq (v"x")(v"x"))) \
+    (A.of_str "! (x:a->b->c). x=x")
+  A.(lambda [A.Var.make "x" @@ Some (c M.a @-> c M.b @-> c M.c)] (A.eq (v"x")(v"x"))) \
+    (A.of_str "\\ (x:a->b->c). x=x")
 *)
 
 (* TODO: test type inference *)
