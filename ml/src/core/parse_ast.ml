@@ -48,40 +48,42 @@ and view =
 
 let nopos: position = lazy Position.none
 
-let rec pp out (e:t) : unit =
+let rec pp_ out (e:t) : unit =
   match e.view with
   | Type -> Fmt.string out "type"
   | Var v -> Fmt.string out v.v_name
   | Ty_arrow (a,b) ->
-    Fmt.fprintf out "%a@ -> %a" pp_atom_ a pp b;
+    Fmt.fprintf out "%a@ -> %a" pp_atom_ a pp_ b;
   | Ty_pi (vars, bod) ->
     Fmt.fprintf out "(@[pi %a.@ %a@])"
-      (pp_list pp_var) vars pp bod
+      (pp_list pp_var) vars pp_ bod
   | Const {c;at} ->
     let s = if at then "@" else "" in
     Fmt.fprintf out "%s%a" s K.Expr.pp c
-  | App (f,l) -> Fmt.fprintf out "(@[%a@ %a@])" pp f (pp_list pp) l
+  | App (f,l) -> Fmt.fprintf out "(@[%a@ %a@])" pp_ f (pp_list pp_) l
   | Meta v -> Fmt.fprintf out "?%s" v.name
   | Lambda (vars,bod) ->
-    Fmt.fprintf out "(@[fn %a.@ %a@])" (pp_list pp_var_ty) vars pp bod
+    Fmt.fprintf out "(@[fn %a.@ %a@])" (pp_list pp_var_ty) vars pp_ bod
   | Bind (c, vars,bod) ->
     Fmt.fprintf out "(@[%a %a.@ %a@])"
-      K.Expr.pp c (pp_list pp_var_ty) vars pp bod
+      K.Expr.pp c (pp_list pp_var_ty) vars pp_ bod
   | With (vars,bod) ->
-    Fmt.fprintf out "(@[with %a.@ %a@])" (pp_list pp_var_ty) vars pp bod
-  | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp a pp b
+    Fmt.fprintf out "(@[with %a.@ %a@])" (pp_list pp_var_ty) vars pp_ bod
+  | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp_ a pp_ b
   | Let (bs,bod) ->
-    let pp_b out (v,e) : unit = Fmt.fprintf out "@[%s@ = %a@]" v.v_name pp e in
-    Fmt.fprintf out "(@[let %a in@ %a@])" (pp_list ~sep:" and " pp_b) bs pp bod
+    let pp_b out (v,e) : unit = Fmt.fprintf out "@[%s@ = %a@]" v.v_name pp_ e in
+    Fmt.fprintf out "(@[let %a in@ %a@])" (pp_list ~sep:" and " pp_b) bs pp_ bod
 and pp_atom_ out e =
   match e.view with
-  | Type | Var _ | Meta _ | Const _ -> pp out e
-  | _ -> Fmt.fprintf out "(@[%a@])" pp e
+  | Type | Var _ | Meta _ | Const _ -> pp_ out e
+  | _ -> Fmt.fprintf out "(@[%a@])" pp_ e
 and pp_var out v = Fmt.string out v.v_name
 and pp_var_ty out (v:var) : unit =
   match v.v_ty with
   | None -> Fmt.string out v.v_name
-  | Some ty -> Fmt.fprintf out "(@[%s@ : %a@])" v.v_name pp ty
+  | Some ty -> Fmt.fprintf out "(@[%s@ : %a@])" v.v_name pp_ ty
+
+let pp out e = Fmt.fprintf out "`@[%a@]`" pp_ e
 
 module Var = struct
   type t = var
