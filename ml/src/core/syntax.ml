@@ -312,6 +312,9 @@ module Parser = struct
     let n = ref 0 in
     fun ?(pre="a") () -> Printf.sprintf "_%s_%d" pre (incr n; !n)
 
+  let is_ascii = function
+    | 'a'..'z' | 'A'..'Z' | '_' -> true | _ -> false
+
   let expr_of_string_ (self:t) ?(at=false) (s:string) : A.t =
     begin match s with
       | "bool" -> A.const ~at (K.Expr.bool self.ctx)
@@ -383,7 +386,13 @@ module Parser = struct
       Lexer.junk self.lex;
       let ty = p_expr_ ~ty_expect:(Some A.type_) self 0 in
       A.var (A.Var.make s (Some ty))
-    | _ -> expr_of_string_ ~at self s
+    | _ ->
+      if s<>"" && is_ascii (String.get s 0) then (
+        expr_of_string_ ~at self s
+      ) else (
+        let pos = Lexer.pos self.lex in
+        errorf (fun k->k"unknown symbol `%s` at %a" s Position.pp pos)
+      )
 
   and p_expr_atomic_ ~ty_expect (self:t) : A.t =
     let t = Lexer.cur self.lex in
