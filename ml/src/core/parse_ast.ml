@@ -32,9 +32,9 @@ and view =
   | Var of var
   | Meta of {
       name: string;
-      ty: ty;
-      mutable deref: t option;
+      ty: ty option;
     }
+  | Wildcard
   | Const of {
       c: K.Expr.t;
       at: bool; (* explicit types? *)
@@ -63,13 +63,14 @@ let rec pp_ out (e:t) : unit =
   | App (f,l) -> Fmt.fprintf out "(@[%a@ %a@])" pp_ f (pp_list pp_) l
   | Meta v -> Fmt.fprintf out "?%s" v.name
   | Lambda (vars,bod) ->
-    Fmt.fprintf out "(@[fn %a.@ %a@])" (pp_list pp_var_ty) vars pp_ bod
+    Fmt.fprintf out "(@[\\%a.@ %a@])" (pp_list pp_var_ty) vars pp_ bod
   | Bind (c, vars,bod) ->
     Fmt.fprintf out "(@[%a %a.@ %a@])"
       K.Expr.pp c (pp_list pp_var_ty) vars pp_ bod
   | With (vars,bod) ->
     Fmt.fprintf out "(@[with %a.@ %a@])" (pp_list pp_var_ty) vars pp_ bod
   | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp_ a pp_ b
+  | Wildcard -> Fmt.string out "_"
   | Let (bs,bod) ->
     let pp_b out (v,e) : unit = Fmt.fprintf out "@[%s@ = %a@]" v.v_name pp_ e in
     Fmt.fprintf out "(@[let %a in@ %a@])" (pp_list ~sep:" and " pp_b) bs pp_ bod
@@ -101,7 +102,7 @@ let pp = pp
 
 let type_ : t = mk_ Type
 let ty_var ?pos s : t = mk_ ?pos (Var (Var.make s (Some type_)))
-let ty_meta ?pos (s:string) : ty = mk_ ?pos (Meta {deref=None; ty=type_; name=s})
+let ty_meta ?pos (s:string) : ty = mk_ ?pos (Meta {ty=Some type_; name=s})
 let ty_arrow ?pos a b : ty = mk_ ?pos (Ty_arrow (a,b))
 let ty_pi ?pos vars bod : ty = match vars with
   | [] -> bod
@@ -109,7 +110,7 @@ let ty_pi ?pos vars bod : ty = match vars with
 
 let var ?pos (v:var) : t = mk_ ?pos (Var v)
 let const ?pos ?(at=false) c : t = mk_ ?pos (Const {c; at})
-let meta ?pos (s:string) ty : t = mk_ ?pos (Meta {deref=None; ty; name=s})
+let meta ?pos (s:string) ty : t = mk_ ?pos (Meta {ty; name=s})
 let app ?pos (f:t) (l:t list) : t =
   match f.view with
   | App (f1,l1) -> mk_ ?pos (App (f1,l1@l))
@@ -119,10 +120,8 @@ let with_ ?pos vs bod : t = mk_ ?pos (With (vs, bod))
 let lambda ?pos vs bod : t = mk_ ?pos (Lambda (vs, bod))
 let bind ?pos c vs bod : t = mk_ ?pos (Bind (c, vs, bod))
 let eq ?pos a b : t = mk_ ?pos (Eq (a,b))
+let wildcard ?pos () : t = mk_ ?pos Wildcard
 
 let to_string = Fmt.to_string @@ Fmt.hvbox pp
 
-(* TODO *)
-let ty_infer _ctx _e : K.Expr.t =
-  assert false
-
+type expr = t

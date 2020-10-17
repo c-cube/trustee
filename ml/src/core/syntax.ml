@@ -443,11 +443,9 @@ module Parser = struct
       end
     | AT_SYM s -> p_nullary_ ~at:true self s
     | WILDCARD ->
-      let ty = A.ty_meta (fresh_ ~pre:"a" ()) in
-      A.meta ~pos (fresh_ ~pre:"_" ()) ty
+      A.wildcard ~pos ()
     | QUESTION_MARK_STR s ->
-      let ty = A.ty_meta (fresh_ ~pre:"a" ()) in
-      A.meta ~pos s ty
+      A.meta ~pos s None
     | QUESTION_MARK ->
       begin match self.q_args with
         | [] -> errorf (fun k->k"no interpolation arg at %a" Position.pp ppos)
@@ -551,7 +549,7 @@ let parse_ast ?q_args ~ctx lex : A.t =
 
 let parse ?q_args ~ctx lex : Expr.t =
   let e = parse_ast ?q_args ~ctx lex in
-  A.ty_infer ctx e
+  assert false (* TODO *)
 
 (*$inject
   module E = K.Expr

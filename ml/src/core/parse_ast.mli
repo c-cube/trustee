@@ -33,9 +33,9 @@ and view =
   | Var of var
   | Meta of {
       name: string;
-      ty: ty;
-      mutable deref: t option;
+      ty: ty option;
     }
+  | Wildcard
   | Const of {
       c: K.Expr.t;
       at: bool; (* explicit types? *)
@@ -67,12 +67,14 @@ val ty_pi : ?pos:position -> var list -> t -> t
 
 val var : ?pos:position -> var -> t
 val const : ?pos:position -> ?at:bool -> K.Expr.t -> t
-val meta : ?pos:position -> string -> ty -> t
+val meta : ?pos:position -> string -> ty option -> t
 val app : ?pos:position -> t -> t list -> t
 val let_ : ?pos:position -> (var * t) list -> t -> t
 val with_ : ?pos:position -> var list -> t -> t
 val lambda : ?pos:position -> var list -> t -> t
 val bind : ?pos:position -> K.Expr.t -> var list -> t -> t
 val eq : ?pos:position -> t -> t -> t
+val wildcard : ?pos:position -> unit -> t
 
-val ty_infer : K.ctx -> t -> K.Expr.t
+type expr = t
+
