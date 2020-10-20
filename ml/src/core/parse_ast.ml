@@ -3,7 +3,7 @@ open Sigs
 
 module K = Kernel
 
-type position = Position.t lazy_t
+type position = Position.t
 
 type t = {
   pos: position;
@@ -46,7 +46,7 @@ and view =
   | Eq of t * t
   | Let of binding list * t
 
-let nopos: position = lazy Position.none
+let nopos: position = Position.none
 
 let rec pp_ out (e:t) : unit =
   match e.view with
@@ -97,7 +97,7 @@ end
 let mk_ ?(pos=nopos) view : t = {view; pos=pos}
 
 let[@inline] view e = e.view
-let[@inline] pos e = Lazy.force e.pos
+let[@inline] pos e = e.pos
 let pp = pp
 
 let type_ : t = mk_ Type

@@ -323,7 +323,7 @@ module Parser = struct
         match Str_tbl.find self.bindings s with
         | u -> A.var u
         | exception Not_found ->
-          let pos = Lazy.from_val (pos_ self) in
+          let pos = pos_ self in
           begin match K.Ctx.find_const_by_name self.ctx s with
             | Some c -> A.const ~pos ~at (K.Expr.const self.ctx c)
             | None ->
@@ -396,11 +396,10 @@ module Parser = struct
 
   and p_expr_atomic_ ~ty_expect (self:t) : A.t =
     let t = Lexer.cur self.lex in
-    let ppos = pos_ self in
-    let pos = Lazy.from_val ppos in
+    let pos = pos_ self in
     match t with
     | ERROR c ->
-      errorf (fun k->k"invalid char '%c' at %a" c Position.pp ppos)
+      errorf (fun k->k"invalid char '%c' at %a" c Position.pp pos)
     | LPAREN ->
       Lexer.junk self.lex;
       let e = p_expr_ ~ty_expect self 0 in
@@ -439,7 +438,7 @@ module Parser = struct
           end
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
           errorf (fun k->k"unexpected infix operator `%s` at %a"
-                     s Position.pp ppos)
+                     s Position.pp pos)
       end
     | AT_SYM s -> p_nullary_ ~at:true self s
     | WILDCARD ->
@@ -448,13 +447,13 @@ module Parser = struct
       A.meta ~pos s None
     | QUESTION_MARK ->
       begin match self.q_args with
-        | [] -> errorf (fun k->k"no interpolation arg at %a" Position.pp ppos)
+        | [] -> errorf (fun k->k"no interpolation arg at %a" Position.pp pos)
         | t :: tl -> self.q_args <- tl; A.const ~pos t
       end
     | NUM _ ->
       errorf (fun k->k"TODO: parse numbers") (* TODO *)
     | RPAREN | COLON | DOT | IN | AND | EOF | QUOTED_STR _ ->
-      errorf (fun k->k"expected expression at %a" Position.pp ppos)
+      errorf (fun k->k"expected expression at %a" Position.pp pos)
 
   (* TODO: parse bound variables as a list of:
       "x : ty" or "x" or "(x y z : ty)" *)
@@ -464,8 +463,7 @@ module Parser = struct
     let p = ref p in
     let continue = ref true in
     while !continue do
-      let ppos = Lexer.pos self.lex in
-      let pos = Lazy.from_val ppos in
+      let pos = Lexer.pos self.lex in
       match Lexer.cur self.lex with
       | EOF -> continue := false
       | LPAREN ->
@@ -491,8 +489,7 @@ module Parser = struct
               | SYM s2 ->
                 begin match fixity_ self s2 with
                   | F_right_assoc p2 when p2 = p' ->
-                    let ppos = Lexer.pos self.lex in
-                    let pos = Lazy.from_val ppos in
+                    let pos = Lexer.pos self.lex in
                     Lexer.junk self.lex;
                     let e = p_expr_ self ~ty_expect:None p2 in
                     rhs :=
@@ -517,13 +514,13 @@ module Parser = struct
             lhs := A.app ~pos !lhs [arg]
           | F_prefix _ | F_postfix _ | F_binder _ ->
             (* TODO: in case of prefix, we could just parse an appliation *)
-            errorf (fun k->k"expected infix operator at %a" Position.pp ppos);
+            errorf (fun k->k"expected infix operator at %a" Position.pp pos);
           | F_left_assoc _ | F_right_assoc _ | F_infix _ ->
             (* lower precedence *)
             continue := false
         end
       | ERROR c ->
-        errorf (fun k->k "unexpected char '%c' at %a" c Position.pp ppos)
+        errorf (fun k->k "unexpected char '%c' at %a" c Position.pp pos)
     done;
     !lhs
 
@@ -549,7 +546,10 @@ let parse_ast ?q_args ~ctx lex : A.t =
 
 let parse ?q_args ~ctx lex : Expr.t =
   let e = parse_ast ?q_args ~ctx lex in
-  assert false (* TODO *)
+  let env = Type_ast.Env.create ctx in
+  let e = Type_ast.infer env e in
+  Type_ast.generalize env;
+  Type_ast.to_expr ctx e
 
 (*$inject
   module E = K.Expr

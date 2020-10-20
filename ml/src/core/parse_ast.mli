@@ -4,7 +4,7 @@ open Sigs
 
 module K = Kernel
 
-type position = Position.t lazy_t
+type position = Position.t
 
 type t = private {
   pos: position;
