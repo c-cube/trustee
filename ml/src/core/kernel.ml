@@ -300,13 +300,19 @@ module Expr = struct
 
   let const ctx c : t =
     ctx_check_e_uid ctx c.c_ty;
+    if not (is_closed c.c_ty) then (
+      errorf
+        (fun k->k"cannot declare constant %a@ with non-closed type %a"
+            ID.pp c.c_name pp c.c_ty);
+    );
     make_ ctx (E_const c) (Lazy.from_val (Some c.c_ty))
 
   let new_const ctx name ty : t =
     let id = ID.make name in
     let c = {c_name=id; c_ty=ty; c_fixity=F_normal; } in
+    let tc = const ctx c in
     Str_tbl.replace ctx.ctx_named_const name c;
-    const ctx c
+    tc
 
   let new_ty_const ctx name : ty =
     new_const ctx name (type_ ctx)
