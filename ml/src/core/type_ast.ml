@@ -170,6 +170,7 @@ let mk_ ~pos view ty : t = {view; pos; ty=Some ty}
 
 let[@inline] pos e = e.pos
 let[@inline] ty e = match e.ty with Some t -> t | None -> assert false
+let get_ty = ty
 let pp = pp
 
 (** {2 Satellite types} *)
@@ -443,9 +444,20 @@ let complete_ty_args_ ~pos (env:env) (e:t) : t =
   aux e
 
 let infer (env:env) (e0:A.t) : t =
+  let unif_exn_ ~pos e a b = match unif_ a b with
+    | Ok () -> ()
+    | Error st ->
+      errorf
+        (fun k->k
+            "@[<2>type error@ while inferring the type @[<2>of %a@ at %a@]:@ \
+             unification error in the following trace:@ %a"
+            A.pp e Position.pp pos
+            Fmt.Dump.(list @@ pair pp pp) st)
+  in
+
   (* type inference.
      @param bv the local variables, for scoping *)
-  let rec inf_rec_ (bv:bvar Str_map.t) (e:A.t) : t =
+  let rec inf_rec_ (bv:t Str_map.t) (e:A.t) : t =
     let pos = e.A.pos in
     let unif_exn_ a b = match unif_ a b with
       | Ok () -> ()
@@ -457,77 +469,113 @@ let infer (env:env) (e0:A.t) : t =
               A.pp e Position.pp pos
               Fmt.Dump.(list @@ pair pp pp) st)
     in
-    match A.view e with
-    | A.Type -> type_
-    | A.Ty_arrow (a, b) -> ty_arrow ~pos (inf_rec_ bv a) (inf_rec_ bv b)
-    | A.Ty_pi (vars, body) ->
-      let bv, vars =
-        CCList.fold_map
-          (fun bv v ->
-             let ty_v = match v.A.v_ty with
-               | None -> type_
-               | Some ty ->
-                 let ty = inf_rec_ bv ty in
-                 unif_exn_ ty type_;
-                 ty
-             in
-             let v' = BVar.make (ID.make v.A.v_name) ty_v in
-             Str_map.add v.A.v_name v' bv, v')
-          bv vars
-      in
-      ty_pi_l ~pos vars @@ inf_rec_ bv body
-    | A.Var v ->
-      let v =
-        match Str_map.find v.A.v_name env.fvars with
-        | v' ->
-          begin match v.A.v_ty with
-            | Some ty ->
-              (* unify expected type with actual type *)
-              let ty = inf_rec_ bv ty in
-              unif_exn_ ty v'.v_ty | None -> ()
-          end;
-          v'
-        | exception Not_found ->
-          let ty = match v.A.v_ty with
-            | Some ty -> inf_rec_ bv ty
-            | None ->
-              let ty, m = ty_meta ~pos (ID.make "_") in
-              env.to_gen <- m :: env.to_gen;
-              ty
-          in
-          let v = Var.make v.A.v_name ty in
-          env.fvars <- Str_map.add v.v_name v env.fvars;
-          v
-      in
-      var ~pos v
-    | A.Wildcard ->
-      let t, m = wildcard ~pos () in
-      env.to_gen <- m :: env.to_gen;
-      t
-    | A.Meta {name;ty} ->
-      let ty = match ty with
-        | None -> type_
-        | Some ty -> inf_rec_ bv ty
-      in
-      let t, m = meta ~pos (ID.make name) ty in
-      env.to_gen <- m :: env.to_gen;
-      t
-    | A.Eq (a,b) ->
-      let a = inf_rec_ bv a in
-      let b = inf_rec_ bv b in
-      unif_exn_ (ty a) (ty b);
-      eq ~pos a b
-    | A.Const c ->
-      let t = const ~pos c.c in
-      if c.at then t else complete_ty_args_ ~pos env t
-    | A.App (f,l) ->
-      let f = inf_rec_ bv f in
-      let l = List.map (inf_rec_ bv) l in
-      app_l ~pos env f l
-    | A.Lambda (_, _)|A.Bind (_, _, _)|A.With (_, _)
-    | A.Let (_, _) ->
-      assert false (* TODO *)
+    begin match A.view e with
+      | A.Type -> type_
+      | A.Ty_arrow (a, b) -> ty_arrow ~pos (inf_rec_ bv a) (inf_rec_ bv b)
+      | A.Ty_pi (vars, body) ->
+        let bv, vars =
+          CCList.fold_map
+            (fun bv v ->
+               let v' = infer_bvar_ ~pos bv v in
+               Str_map.add v.A.v_name (bvar ~pos v') bv, v')
+            bv vars
+        in
+        ty_pi_l ~pos vars @@ inf_rec_ bv body
+      | A.Var v ->
+        let v =
+          match Str_map.find v.A.v_name env.fvars with
+          | v' ->
+            begin match v.A.v_ty with
+              | Some ty ->
+                (* unify expected type with actual type *)
+                let ty = inf_rec_ bv ty in
+                unif_exn_ ty v'.v_ty | None -> ()
+            end;
+            v'
+          | exception Not_found ->
+            let ty = match v.A.v_ty with
+              | Some ty -> inf_rec_ bv ty
+              | None ->
+                let ty, m = ty_meta ~pos (ID.make "_") in
+                env.to_gen <- m :: env.to_gen;
+                ty
+            in
+            let v = Var.make v.A.v_name ty in
+            env.fvars <- Str_map.add v.v_name v env.fvars;
+            v
+        in
+        var ~pos v
+      | A.Wildcard ->
+        let t, m = wildcard ~pos () in
+        env.to_gen <- m :: env.to_gen;
+        t
+      | A.Meta {name;ty} ->
+        let ty = match ty with
+          | None -> type_
+          | Some ty -> inf_rec_ bv ty
+        in
+        let t, m = meta ~pos (ID.make name) ty in
+        env.to_gen <- m :: env.to_gen;
+        t
+      | A.Eq (a,b) ->
+        let a = inf_rec_ bv a in
+        let b = inf_rec_ bv b in
+        unif_exn_ (ty a) (ty b);
+        eq ~pos a b
+      | A.Const c ->
+        let t = const ~pos c.c in
+        if c.at then t else complete_ty_args_ ~pos env t
+      | A.App (f,l) ->
+        let f = inf_rec_ bv f in
+        let l = List.map (inf_rec_ bv) l in
+        app_l ~pos env f l
+      | A.With (vs, bod) ->
+        let bv =
+          List.fold_left
+            (fun bv v ->
+               let ty = infer_ty_opt_ ~pos bv v.A.v_ty in
+               let var = var ~pos (Var.make v.A.v_name ty) in
+               Str_map.add v.A.v_name var bv)
+            bv vs
+        in
+        inf_rec_ bv bod
+      | A.Lambda (vars, bod) ->
+        let bv, vars =
+          CCList.fold_map
+            (fun bv v ->
+               let v' = infer_bvar_ ~pos bv v in
+               Str_map.add v.A.v_name (bvar ~pos v') bv, v')
+            bv vars
+        in
+        lambda_l ~pos vars @@ inf_rec_ bv bod
+      | A.Bind (_, _, _) -> assert false (* TODO *)
+      | A.Let (bindings, body) ->
+        let bv', bindings =
+          CCList.fold_map
+            (fun bv' (v,t) ->
+               let v' = infer_bvar_ ~pos bv v in
+               let t = inf_rec_ bv t in
+               unif_exn_ v'.bv_ty (ty t);
+               let bv' = Str_map.add v.A.v_name (bvar ~pos v') bv' in
+               bv', (v', t))
+            bv bindings
+        in
+        let_ ~pos bindings @@ inf_rec_ bv' body
+      end
 
+   and infer_ty_opt_ ~pos bv ty : ty =
+     match ty with
+     | None -> type_
+     | Some ty0 ->
+       let ty = inf_rec_ bv ty0 in
+       if not @@ is_eq_to_type ty then (
+         unif_exn_ ~pos ty0 ty type_;
+       );
+       ty
+   and infer_bvar_ ~pos bv v : bvar =
+     let ty_v = infer_ty_opt_ ~pos bv v.A.v_ty in
+     let v' = BVar.make (ID.make v.A.v_name) ty_v in
+     v'
   in
   inf_rec_ Str_map.empty e0
 
