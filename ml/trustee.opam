@@ -13,7 +13,6 @@ depends: [
   "dune" { >= "1.0" }
   "containers" { >= "3.0" & < "4.0" }
   "ocaml" { >= "4.03" }
-  "alcotest" { with-test }
   "qtest" {with-test}
   "odoc" { with-doc }
 ]

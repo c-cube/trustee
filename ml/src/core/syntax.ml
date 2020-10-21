@@ -162,7 +162,8 @@ module Lexer = struct
         ) else (
           self.i <- j;
           self.col <- (j-i0) + self.col;
-          AT_SYM (String.sub self.src i0 (j-i0))
+          let s = String.sub self.src i0 (j-i0) in
+          AT_SYM s
         )
       | '"' ->
         self.i <- 1 + self.i;
@@ -230,11 +231,6 @@ module Lexer = struct
     | Has_cur -> self.cur
 
   let[@inline] junk self = ignore (next self : token)
-
-  let[@inline] consume_cur self : token =
-    let t = cur self in
-    junk self;
-    t
 
   let to_list self : _ list =
     let l = ref [] in
@@ -387,12 +383,15 @@ module Parser = struct
       let ty = p_expr_ ~ty_expect:(Some A.type_) self 0 in
       A.var (A.Var.make s (Some ty))
     | _ ->
-      if s<>"" && is_ascii (String.get s 0) then (
-        expr_of_string_ ~at self s
-      ) else (
-        let pos = Lexer.pos self.lex in
-        errorf (fun k->k"unknown symbol `%s` at %a" s Position.pp pos)
-      )
+      let pos = Lexer.pos self.lex in
+      match K.Ctx.find_const_by_name self.ctx s with
+      | Some c -> A.const ~pos ~at (K.Expr.const self.ctx c)
+      | None ->
+        if s<>"" && (at || is_ascii (String.get s 0)) then (
+          expr_of_string_ ~at self s
+        ) else (
+          errorf (fun k->k"unknown symbol `%s` at %a" s Position.pp pos)
+        )
 
   and p_expr_atomic_ ~ty_expect (self:t) : A.t =
     let t = Lexer.cur self.lex in
@@ -440,10 +439,14 @@ module Parser = struct
           errorf (fun k->k"unexpected infix operator `%s` at %a"
                      s Position.pp pos)
       end
-    | AT_SYM s -> p_nullary_ ~at:true self s
+    | AT_SYM s ->
+      Lexer.junk self.lex;
+      p_nullary_ ~at:true self s
     | WILDCARD ->
+      Lexer.junk self.lex;
       A.wildcard ~pos ()
     | QUESTION_MARK_STR s ->
+      Lexer.junk self.lex;
       A.meta ~pos s None
     | QUESTION_MARK ->
       begin match self.q_args with
@@ -580,6 +583,7 @@ let parse ?q_args ~ctx lex : Expr.t =
     let forall = K.Expr.new_const ctx "!" ((tau @-> bool) @-> bool)
     let () = K.Const.set_fixity (K.Expr.as_const_exn forall) (F_binder 10)
     let plus = K.Expr.new_const ctx "+" (tau @-> tau @-> tau)
+    let eq = K.Expr.eq ctx
     let () = K.Const.set_fixity (K.Expr.as_const_exn plus) (F_right_assoc 20)
 
     let of_str s = Syntax.parse ~ctx (Lexer.create s)
@@ -623,6 +627,7 @@ let parse ?q_args ~ctx lex : Expr.t =
     (A.of_str "! (x:a->b->c). x=x")
   A.(lambda [A.Var.make "x" @@ Some (c M.a @-> c M.b @-> c M.c)] (A.eq (v"x")(v"x"))) \
     (A.of_str "\\ (x:a->b->c). x=x")
+  A.(const ~at:true M.eq) (A.of_str "@=")
 *)
 
 (* TODO: test type inference *)
@@ -630,4 +635,63 @@ let parse ?q_args ~ctx lex : Expr.t =
 $= & ~cmp:E.equal ~printer:E.to_string
   M.(f1 @ var "a" tau) (Sy
 
+*)
+
+(* test lexer *)
+(*$inject
+  module Fmt = CCFormat
+  let lex_to_list s =
+    let lex = Lexer.create s in
+    let rec aux acc =
+      match Lexer.next lex with
+      | EOF as t -> List.rev (t::acc)
+      | t -> aux (t::acc)
+    in
+    aux []
+
+  let str_tok_to_l = Fmt.(to_string @@ Dump.list Token.pp)
+*)
+
+(*$= & ~printer:str_tok_to_l
+    [ SYM("foo"); \
+      SYM("+"); \
+      WILDCARD; \
+      SYM("bar13"); \
+      LPAREN; \
+      SYM("hello"); \
+      SYM("!"); \
+      QUOTED_STR(" co co"); \
+      SYM("world"); \
+      RPAREN; \
+      EOF; \
+    ] \
+    (lex_to_list {test| foo + _ bar13(hello! " co co" world) |test})
+    [ LPAREN; \
+      LPAREN; \
+      NUM("12"); \
+      SYM("+"); \
+      SYM("f"); \
+      LPAREN; \
+      SYM("x"); \
+      SYM(","); \
+      IN; \
+      QUESTION_MARK_STR("a"); \
+      QUESTION_MARK; \
+      QUESTION_MARK; \
+      SYM("b"); \
+      SYM("Y"); \
+      SYM("\\"); \
+      LPAREN; \
+      RPAREN; \
+      RPAREN; \
+      SYM("---"); \
+      LET; \
+      SYM("z"); \
+      RPAREN; \
+      SYM("wlet"); \
+      RPAREN; \
+      EOF; \
+    ] \
+    (lex_to_list {test|((12+ f(x, in ?a ? ? b Y \( ))---let z)wlet)|test})
+  [EOF] (lex_to_list "  ")
 *)

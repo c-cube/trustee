@@ -155,7 +155,9 @@ type ctx = {
   ctx_kind: expr lazy_t;
   ctx_type: expr lazy_t;
   ctx_bool: expr lazy_t;
+  ctx_bool_c: const lazy_t;
   ctx_eq: expr lazy_t;
+  ctx_eq_c: const lazy_t;
   mutable ctx_axioms: thm list;
   mutable ctx_axioms_allowed: bool;
 }
@@ -558,19 +560,23 @@ module Ctx = struct
         let kind = Expr.kind ctx in
         Expr.make_ ctx E_type (Lazy.from_val (Some kind))
       );
-      ctx_bool=lazy (
+      ctx_bool_c=lazy (
         let typ = Expr.type_ ctx in
-        let c = {c_name=id_bool; c_ty=typ; c_fixity=F_normal; } in
-        Expr.const ctx c
+        {c_name=id_bool; c_ty=typ; c_fixity=F_normal; }
       );
-      ctx_eq=lazy (
+      ctx_bool=lazy (
+        Expr.const ctx (Lazy.force ctx.ctx_bool_c)
+      );
+      ctx_eq_c=lazy (
         let typ = Expr.(
             let type_ = type_ ctx in
             let db0 = bvar ctx 0 type_ in
             pi_db ctx ~ty_v:type_ @@ arrow ctx db0 @@ arrow ctx db0 @@ bool ctx
           ) in
-        let c = {c_name=id_eq; c_ty=typ; c_fixity=F_normal; } in
-        Expr.const ctx c
+        {c_name=id_eq; c_ty=typ; c_fixity=F_normal; }
+      );
+      ctx_eq=lazy (
+        Expr.const ctx (Lazy.force ctx.ctx_eq_c)
       );
     } in
     ctx
@@ -583,7 +589,7 @@ module Ctx = struct
 
   let axioms self k = List.iter k self.ctx_axioms
 
-  let[@inline] find_const_by_name self s =
+  let find_const_by_name self s : const option =
     Str_tbl.get self.ctx_named_const s
 end
 

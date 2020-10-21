@@ -48,6 +48,8 @@ and view =
 
 and meta = {
   meta_name: ID.t;
+  meta_type: t;
+  meta_pos: position;
   mutable meta_deref: t option;
 }
 
@@ -61,7 +63,8 @@ type env = {
 
 module Meta = struct
   type t = meta
-  let make s : t = {meta_deref=None; meta_name=s;}
+  let make ~pos s ty : t =
+    {meta_deref=None; meta_name=s; meta_type=ty; meta_pos=pos;}
   let equal a b = ID.equal a.meta_name b.meta_name
   let pp out m = Fmt.fprintf out "?%a" ID.pp m.meta_name
 end
@@ -188,12 +191,12 @@ end
 let type_ : t = mk_ ~pos:nopos Type kind_
 let bool : t = mk_ ~pos:nopos Bool type_
 let meta ~pos s ty : t * meta =
-  let m = Meta.make s in
+  let m = Meta.make ~pos s ty in
   mk_ ~pos (Meta m) ty, m
 
 let ty_var ~pos s : t = mk_ ~pos (Var (Var.make s type_)) type_
 let ty_meta ~pos (s:ID.t) : ty * meta =
-  let m = Meta.make s in
+  let m = Meta.make ~pos s type_ in
   mk_ ~pos (Meta m) type_, m
 let ty_arrow ~pos a b : ty = mk_ ~pos (Ty_arrow (a,b)) type_
 let ty_pi ~pos v bod : ty = mk_ ~pos (Ty_pi (v,bod)) type_
@@ -201,6 +204,11 @@ let ty_pi_l ~pos vars bod : ty = List.fold_right (ty_pi ~pos) vars bod
 
 let var ~pos (v:var) : t = mk_ ~pos (Var v) v.v_ty
 let bvar ~pos (v:bvar) : t = mk_ ~pos (BVar v) v.bv_ty
+
+let is_eq_to_type (e:t) = match view e with
+  | Type -> true
+  | _ -> false
+let[@inline] is_a_type e = is_eq_to_type (ty e)
 
 (* convert a kernel expression back into a type *)
 let rec ty_of_expr ~pos e0 : ty =
@@ -371,8 +379,14 @@ let app_l ~pos env f l = List.fold_left (fun f x -> app ~pos env f x) f l
 let let_ ~pos bs bod : t = mk_ ~pos (Let (bs, bod)) (ty bod)
 
 let lambda ~pos v bod : t =
-  (* TODO: use a pi if [is_a_type v]? *)
-  let ty_lam = ty_arrow ~pos v.bv_ty (ty bod) in
+  let ty_lam =
+    let tyv = deref_ v.bv_ty in
+    if is_a_type tyv then (
+      ty_pi ~pos v (ty bod)
+    ) else (
+      ty_arrow ~pos v.bv_ty (ty bod)
+    )
+  in
   mk_ ~pos (Lambda (v, bod)) ty_lam
 
 let lambda_l ~pos vs bod : t =
@@ -413,6 +427,20 @@ module Env = struct
 end
 
 (** {2 type inference} *)
+
+(* add meta variables as type arguments *)
+let complete_ty_args_ ~pos (env:env) (e:t) : t =
+  let rec aux e =
+    let ty_e = ty e in
+    match view ty_e with
+    | Ty_pi _ ->
+      let tyv, m = ty_meta ~pos (ID.make "_") in
+      env.to_gen <- m :: env.to_gen;
+      let e = app ~pos env e tyv in
+      aux e
+    | _ -> e
+  in
+  aux e
 
 let infer (env:env) (e0:A.t) : t =
   (* type inference.
@@ -456,25 +484,68 @@ let infer (env:env) (e0:A.t) : t =
             | Some ty ->
               (* unify expected type with actual type *)
               let ty = inf_rec_ bv ty in
-              unif_exn_ ty v'.v_ty
-            | None -> ()
+              unif_exn_ ty v'.v_ty | None -> ()
           end;
           v'
         | exception Not_found ->
-          assert false  (* TODO *)
+          let ty = match v.A.v_ty with
+            | Some ty -> inf_rec_ bv ty
+            | None ->
+              let ty, m = ty_meta ~pos (ID.make "_") in
+              env.to_gen <- m :: env.to_gen;
+              ty
+          in
+          let v = Var.make v.A.v_name ty in
+          env.fvars <- Str_map.add v.v_name v env.fvars;
+          v
       in
       var ~pos v
-    | A.Meta _|A.Wildcard|A.Const _
-    |A.App (_, _)|A.Lambda (_, _)|A.Bind (_, _, _)|A.With (_, _)|A.Eq (_, _)
-    |A.Let (_, _) ->
+    | A.Wildcard ->
+      let t, m = wildcard ~pos () in
+      env.to_gen <- m :: env.to_gen;
+      t
+    | A.Meta {name;ty} ->
+      let ty = match ty with
+        | None -> type_
+        | Some ty -> inf_rec_ bv ty
+      in
+      let t, m = meta ~pos (ID.make name) ty in
+      env.to_gen <- m :: env.to_gen;
+      t
+    | A.Eq (a,b) ->
+      let a = inf_rec_ bv a in
+      let b = inf_rec_ bv b in
+      unif_exn_ (ty a) (ty b);
+      eq ~pos a b
+    | A.Const c ->
+      let t = const ~pos c.c in
+      if c.at then t else complete_ty_args_ ~pos env t
+    | A.App (f,l) ->
+      let f = inf_rec_ bv f in
+      let l = List.map (inf_rec_ bv) l in
+      app_l ~pos env f l
+    | A.Lambda (_, _)|A.Bind (_, _, _)|A.With (_, _)
+    | A.Let (_, _) ->
       assert false (* TODO *)
 
   in
   inf_rec_ Str_map.empty e0
 
 let generalize (env:env) : unit =
-  assert false (* TODO: all unbound metas become new vars. Warning if type metas
-               are not generalized *)
+  let i = ref 0 in
+  let metas = env.to_gen in
+  env.to_gen <- metas;
+  List.iter
+    (fun m ->
+       match m.meta_deref with
+       | Some _ -> ()
+       | None ->
+         (* TODO: emit warning if this is a type variable *)
+         let name = Printf.sprintf "'a_%d" (incr i; !i) in
+         let v = Var.make name m.meta_type in
+         m.meta_deref <- Some (var ~pos:nopos v))
+    metas;
+  ()
 
 let to_expr (ctx:K.Ctx.t) (e:t) : K.Expr.t =
   assert false

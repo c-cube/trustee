@@ -1,9 +1,0 @@
-
-(executable
-  (name run_tests)
-  (libraries alcotest trustee.core)
-  (flags :standard -warn-error -a+8))
-
-(alias
-  (name runtest)
-  (action (run ./run_tests.exe)))
