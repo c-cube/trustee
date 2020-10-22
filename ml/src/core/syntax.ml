@@ -562,6 +562,7 @@ let parse ?q_args ~ctx lex : Expr.t =
     let tau = K.Expr.new_ty_const ctx "tau"
     let v s ty = K.Expr.var ctx (K.Var.make s ty)
     let (@->) a b = K.Expr.arrow ctx a b
+    let (@@) a b = K.Expr.app ctx a b
     let a = K.Expr.new_const ctx "a" tau
     let b = K.Expr.new_const ctx "b" tau
     let c = K.Expr.new_const ctx "c" tau
@@ -602,6 +603,8 @@ let parse ?q_args ~ctx lex : Expr.t =
     let (@) a b = A.app a b
   end
   open A
+
+  let parse_e s : K.Expr.t = Syntax.parse ~ctx:M.ctx (Lexer.create s)
 *)
 
 (* test printer itself *)
@@ -630,11 +633,10 @@ let parse ?q_args ~ctx lex : Expr.t =
   A.(const ~at:true M.eq) (A.of_str "@=")
 *)
 
-(* TODO: test type inference *)
-(*
-$= & ~cmp:E.equal ~printer:E.to_string
-  M.(f1 @ var "a" tau) (Sy
-
+(* test type inference *)
+(*$= & ~cmp:E.equal ~printer:E.to_string
+  M.(tau @-> tau) (K.Expr.ty_exn M.f1)
+  M.(f1 @@ v "a" tau) (parse_e "f1 a")
 *)
 
 (* test lexer *)

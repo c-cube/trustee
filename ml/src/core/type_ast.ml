@@ -223,10 +223,10 @@ let rec ty_of_expr ~pos e0 : ty =
           errorf (fun k->k"unbound variable db%d@ in type of %a" v.bv_idx K.Expr.pp e)
         | t -> t
       end
-    | K.Expr.E_pi (_ty, bod) ->
-      assert (K.Expr.is_eq_to_type _ty);
-      let bv = BVar.make (ID.makef "_a_%d" (List.length env)) type_ in
-      aux (bvar ~pos bv::env) bod
+    | K.Expr.E_pi (ty_v, bod) ->
+      assert (K.Expr.is_eq_to_type ty_v || K.Expr.is_a_type ty_v);
+      let bv = BVar.make (ID.makef "_a_%d" (List.length env)) (aux env ty_v) in
+      ty_pi ~pos bv @@ aux (bvar ~pos bv::env) bod
     | _ ->
       errorf (fun k->k"cannot convert %a@ to a type" K.Expr.pp e)
   in
@@ -290,7 +290,7 @@ let rec ty_app_ env ~pos (f:t) (a:t) : ty =
       errorf
         (fun k->k
             "@[<2>type error@ in the application \
-             @[<2>of %a@ of type %a@]@ @[<2>to %a@ of type %a@]:@ \
+             @[<2>of %a@ of type %a@]@ @[<2>to term %a@ of type %a@]:@ \
              unification error in the following trace:@ %a"
             pp f pp ty_f pp a pp ty_a
             Fmt.Dump.(list @@ pair pp pp) st)
@@ -434,7 +434,9 @@ let complete_ty_args_ ~pos (env:env) (e:t) : t =
   let rec aux e =
     let ty_e = ty e in
     match view ty_e with
-    | Ty_pi _ ->
+    | Ty_pi (x, _) when is_eq_to_type x.bv_ty ->
+      (* [e] has type [pi a:type. …], so we assume [a] is implicit and
+         create a new meta [?x : a], and then complete [e ?x] *)
       let tyv, m = ty_meta ~pos (ID.make "_") in
       env.to_gen <- m :: env.to_gen;
       let e = app ~pos env e tyv in
@@ -580,7 +582,6 @@ let infer (env:env) (e0:A.t) : t =
   inf_rec_ Str_map.empty e0
 
 let generalize (env:env) : unit =
-  let i = ref 0 in
   let metas = env.to_gen in
   env.to_gen <- metas;
   List.iter
@@ -589,11 +590,61 @@ let generalize (env:env) : unit =
        | Some _ -> ()
        | None ->
          (* TODO: emit warning if this is a type variable *)
-         let name = Printf.sprintf "'a_%d" (incr i; !i) in
-         let v = Var.make name m.meta_type in
+         let v = Var.make m.meta_name m.meta_type in
          m.meta_deref <- Some (var ~pos:nopos v))
     metas;
   ()
 
 let to_expr (ctx:K.Ctx.t) (e:t) : K.Expr.t =
-  assert false
+  let rec aux bs k e : K.Expr.t =
+    let recurse = aux bs k in
+    let pos = pos e in
+    match view e with
+    | Meta {meta_deref=Some _; _} -> assert false
+    | Meta {meta_deref=None; _} ->
+      errorf (fun k->k"meta %a@ has not been generalized at %a"
+                 pp e Position.pp pos)
+    | Kind ->
+      errorf (fun k->k"cannot translate `kind`@ at %a" Position.pp pos)
+    | Type -> K.Expr.type_ ctx
+    | Bool -> K.Expr.bool ctx
+    | Var { v_name; v_ty } ->
+      let ty = recurse v_ty in
+      K.Expr.var ctx (K.Var.make v_name ty)
+    | Ty_arrow (a, b) ->
+      K.Expr.arrow ctx (recurse a) (recurse b)
+    | BVar v ->
+      begin match ID.Map.find v.bv_name bs with
+        | (e, k_e) -> K.Expr.db_shift ctx e (k - k_e)
+        | exception Not_found ->
+          errorf
+            (fun k->k"variable %a is not bound@ at %a"
+                pp e Position.pp pos)
+      end
+    | Const e -> e.c
+    | App (f, a) ->
+      K.Expr.app ctx (recurse f) (recurse a)
+    | Eq (a, b) ->
+      K.Expr.app_eq ctx (recurse a) (recurse b)
+    | Let (bindings, body) ->
+      let bs' =
+        List.fold_left
+          (fun bs' (v,t) ->
+             let t = recurse t in
+             (* let does not bind anything in the final term, no need to change k *)
+             ID.Map.add v.bv_name (t,k) bs')
+          bs bindings
+      in
+      aux bs' k body
+    | Ty_pi (v, bod) ->
+      let ty = recurse v.bv_ty in
+      let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx k ty, k) bs in
+      let bod = aux bs (k+1) bod in
+      K.Expr.pi_db ctx ~ty_v:ty bod
+    | Lambda (v, bod) ->
+      let ty = recurse v.bv_ty in
+      let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx k ty, k) bs in
+      let bod = aux bs (k+1) bod in
+      K.Expr.lambda_db ctx ~ty_v:ty bod
+  in
+  aux ID.Map.empty 0 e

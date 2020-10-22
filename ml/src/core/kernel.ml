@@ -79,7 +79,7 @@ let unfold_app (e:expr) : expr * expr list =
   let rec aux acc e =
     match e.e_view with
     | E_app (f, a) -> aux (a::acc) f
-    | _ -> e, []
+    | _ -> e, acc
   in
   aux [] e
 
@@ -222,6 +222,13 @@ module Var = struct
   module Map = CCMap.Make(AsKey)
   module Set = CCSet.Make(AsKey)
   module Tbl = CCHashtbl.Make(AsKey)
+end
+
+module BVar = struct
+  type t = bvar
+  let make i ty : t = {bv_idx=i; bv_ty=ty}
+  let pp out v = Fmt.fprintf out "db_%d" v.bv_idx
+  let to_string = Fmt.to_string pp
 end
 
 let id_bool = ID.make "Bool"
@@ -378,7 +385,7 @@ module Expr = struct
     aux e;
     !set
 
-  let shift_ ctx (e:t) (n:int) =
+  let db_shift ctx (e:t) (n:int) =
     ctx_check_e_uid ctx e;
     let rec aux e k : t =
       if is_closed e then e
@@ -400,7 +407,7 @@ module Expr = struct
       match view e with
       | E_var v ->
         begin match Var.Map.find v subst with
-          | u -> shift_ ctx u k
+          | u -> db_shift ctx u k
           | exception Not_found -> e
         end
       | _ ->
@@ -415,7 +422,7 @@ module Expr = struct
       errorf (fun k->k"cannot abstract on variable with non closed type %a" pp v.v_ty)
     );
     let db0 = bvar ctx 0 v.v_ty in
-    let body = shift_ ctx e 1 in
+    let body = db_shift ctx e 1 in
     subst ctx body (Var.Map.singleton v db0)
 
   (* replace DB0 in [e] with [u] *)
@@ -426,7 +433,7 @@ module Expr = struct
       match view e with
       | E_bound_var bv when bv.bv_idx = k ->
         (* replace here *)
-        shift_ ctx u k
+        db_shift ctx u k
       | _ ->
         map ctx e ~f:(fun inb u -> aux u (if inb then k+1 else k))
     in
@@ -482,7 +489,7 @@ module Expr = struct
     make_ ctx (E_pi (ty_v, bod)) ty
 
   let arrow ctx a b : t =
-    pi_db ctx ~ty_v:a (shift_ ctx b 1)
+    pi_db ctx ~ty_v:a (db_shift ctx b 1)
 
   let arrow_l ctx l ret : t = CCList.fold_right (arrow ctx) l ret
 

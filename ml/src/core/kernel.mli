@@ -68,6 +68,12 @@ module Var : sig
   module Tbl : CCHashtbl.S with type key = t
 end
 
+module BVar : sig
+  type t = bvar
+  val make : int -> ty -> t
+  include Sigs.PP with type t := t
+end
+
 (** {2 Expressions and Types} *)
 module Expr : sig
   type t = expr
@@ -124,6 +130,7 @@ module Expr : sig
   val iter : f:(bool -> t -> unit) -> t -> unit
   val contains : t -> sub:t -> bool
   val free_vars : t -> Var.Set.t
+  val db_shift: ctx -> t -> int -> t
 
   val unfold_app : t -> t * t list
   val unfold_eq : t -> (t * t) option
