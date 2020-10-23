@@ -23,6 +23,7 @@ type token =
   | AND
   | AT_SYM of string
   | NUM of string
+  | END
   | ERROR of char
   | EOF
 
@@ -45,6 +46,7 @@ module Token = struct
     | QUOTED_STR s -> Fmt.fprintf out "QUOTED_STR %S" s
     | AT_SYM s -> Fmt.fprintf out "AT_SYM %s" s
     | NUM s -> Fmt.fprintf out "NUM %S" s
+    | END -> Fmt.string out "END"
     | ERROR c -> Fmt.fprintf out "ERROR '%c'" c
     | EOF -> Fmt.string out "EOF"
   let to_string = Fmt.to_string pp
@@ -191,6 +193,7 @@ module Lexer = struct
           | "let" -> LET
           | "and" -> AND
           | "in" -> IN
+          | "end" -> END
           | _ -> SYM s
         end
       | c when is_digit c ->
@@ -456,7 +459,7 @@ module Parser = struct
       end
     | NUM _ ->
       errorf (fun k->k"TODO: parse numbers") (* TODO *)
-    | RPAREN | COLON | DOT | IN | AND | EOF | QUOTED_STR _ ->
+    | RPAREN | COLON | DOT | IN | AND | EOF | QUOTED_STR _ | END ->
       errorf (fun k->k"expected expression at %a" Position.pp pos)
 
   (* TODO: parse bound variables as a list of:
@@ -469,7 +472,7 @@ module Parser = struct
     while !continue do
       let pos = Lexer.pos self.lex in
       match Lexer.cur self.lex with
-      | EOF -> continue := false
+      | EOF | END -> continue := false
       | LPAREN ->
         Lexer.junk self.lex;
         let e = p_expr_ ~ty_expect:None self 0 in
@@ -667,15 +670,17 @@ let parse ?q_args ~ctx lex : Expr.t =
       SYM("hello"); \
       SYM("!"); \
       QUOTED_STR(" co co"); \
+      END; \
       SYM("world"); \
       RPAREN; \
       EOF; \
     ] \
-    (lex_to_list {test| foo + _ bar13(hello! " co co" world) |test})
+    (lex_to_list {test| foo + _ bar13(hello! " co co" end world) |test})
     [ LPAREN; \
       LPAREN; \
       NUM("12"); \
       SYM("+"); \
+      END; \
       SYM("f"); \
       LPAREN; \
       SYM("x"); \
@@ -698,6 +703,6 @@ let parse ?q_args ~ctx lex : Expr.t =
       RPAREN; \
       EOF; \
     ] \
-    (lex_to_list {test|((12+ f(x, in ?a ? ? b Y \( ))---let z)wlet)|test})
+    (lex_to_list {test|((12+end f(x, in ?a ? ? b Y \( ))---let z)wlet)|test})
   [EOF] (lex_to_list "  ")
 *)

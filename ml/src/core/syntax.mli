@@ -21,6 +21,7 @@ type token =
   | AND
   | AT_SYM of string
   | NUM of string
+  | END
   | ERROR of char
   | EOF
 
