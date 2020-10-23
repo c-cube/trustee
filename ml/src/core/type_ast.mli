@@ -10,10 +10,10 @@ open Sigs
 module K = Kernel
 module A = Parse_ast
 
-type t
+type expr
 type position = A.position
 
-type ty = t
+type ty = expr
 
 and var = {
   v_name: string;
@@ -25,7 +25,7 @@ and bvar = {
   bv_ty: ty;
 }
 
-and binding = bvar * t
+and binding = bvar * expr
 
 and view =
   | Kind
@@ -39,17 +39,20 @@ and view =
   | Const of {
       c: K.Expr.t;
     }
-  | App of t * t
-  | Lambda of bvar * t
-  | Eq of t * t
-  | Let of binding list * t
+  | App of expr * expr
+  | Lambda of bvar * expr
+  | Eq of expr * expr
+  | Let of binding list * expr
 
 and meta
 
 (** Typing environment *)
 type env
 
-include PP with type t := t
+module Expr : sig
+  type t = expr
+  include PP with type t := expr
+end
 
 (** {2 Typing Environment}
 
@@ -68,11 +71,11 @@ end
 
 (* {2 type inference} *)
 
-val infer : Env.t -> Parse_ast.t -> t
+val infer : Env.t -> Parse_ast.expr -> expr
 
 val generalize : Env.t -> unit
 (** Generalize remaining variables. This modifies terms previously
     obtained with this environment and {!infer}. *)
 
-val to_expr : K.Ctx.t -> t -> K.Expr.t
+val to_expr : K.Ctx.t -> expr -> K.Expr.t
 

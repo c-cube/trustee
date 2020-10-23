@@ -51,7 +51,7 @@ val parse_ast :
   ?q_args:K.Expr.t list ->
   ctx:K.Ctx.t ->
   Lexer.t ->
-  A.t
+  A.expr
 
 val parse :
   ?q_args:K.Expr.t list ->

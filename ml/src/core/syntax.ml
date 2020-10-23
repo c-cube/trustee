@@ -6,6 +6,7 @@ open Sigs
 module K = Kernel
 module Expr = Kernel.Expr
 module A = Parse_ast
+module AE = Parse_ast.Expr
 
 type token =
   | LPAREN
@@ -311,25 +312,25 @@ module Parser = struct
   let is_ascii = function
     | 'a'..'z' | 'A'..'Z' | '_' -> true | _ -> false
 
-  let expr_of_string_ (self:t) ?(at=false) (s:string) : A.t =
+  let expr_of_string_ (self:t) ?(at=false) (s:string) : A.expr =
     begin match s with
-      | "bool" -> A.const ~at (K.Expr.bool self.ctx)
-      | "=" -> A.const ~at (K.Expr.eq self.ctx)
+      | "bool" -> AE.const ~at (K.Expr.bool self.ctx)
+      | "=" -> AE.const ~at (K.Expr.eq self.ctx)
       | _ ->
         match Str_tbl.find self.bindings s with
-        | u -> A.var u
+        | u -> AE.var u
         | exception Not_found ->
           let pos = pos_ self in
           begin match K.Ctx.find_const_by_name self.ctx s with
-            | Some c -> A.const ~pos ~at (K.Expr.const self.ctx c)
+            | Some c -> AE.const ~pos ~at (K.Expr.const self.ctx c)
             | None ->
-              let ty = A.ty_meta ~pos (fresh_ ()) in
-              A.var ~pos (A.Var.make s (Some ty))
+              let ty = AE.ty_meta ~pos (fresh_ ()) in
+              AE.var ~pos (A.Var.make s (Some ty))
           end
     end
 
   (* parse let bindings *)
-  let rec p_bindings_ self : (A.var * A.t) list =
+  let rec p_bindings_ self : (A.var * AE.t) list =
     let v = A.Var.make (p_ident self) None in
     eat_ self ~msg:"let binding" (SYM "=");
     let e = p_expr_ ~ty_expect:None self 0 in
@@ -348,7 +349,7 @@ module Parser = struct
       | SYM s -> Lexer.junk self.lex; loop (s::names)
       | COLON ->
         Lexer.junk self.lex;
-        let ty = p_expr_ ~ty_expect:(Some A.type_) self 0 in
+        let ty = p_expr_ ~ty_expect:(Some AE.type_) self 0 in
         List.rev_map (fun v -> A.Var.make v (Some ty)) names
       | RPAREN | DOT ->
         List.rev_map (fun v -> A.Var.make v None) names
@@ -376,16 +377,16 @@ module Parser = struct
       errorf (fun k->k "expected list of (typed) variables at %a"
                  Position.pp pos)
 
-  and p_nullary_ (self:t) ?(at=false) (s:string) : A.t =
+  and p_nullary_ (self:t) ?(at=false) (s:string) : AE.t =
     match Lexer.cur self.lex with
     | COLON ->
       Lexer.junk self.lex;
-      let ty = p_expr_ ~ty_expect:(Some A.type_) self 0 in
-      A.var (A.Var.make s (Some ty))
+      let ty = p_expr_ ~ty_expect:(Some AE.type_) self 0 in
+      AE.var (A.Var.make s (Some ty))
     | _ ->
       let pos = Lexer.pos self.lex in
       match K.Ctx.find_const_by_name self.ctx s with
-      | Some c -> A.const ~pos ~at (K.Expr.const self.ctx c)
+      | Some c -> AE.const ~pos ~at (K.Expr.const self.ctx c)
       | None ->
         if s<>"" && (at || is_ascii (String.get s 0)) then (
           expr_of_string_ ~at self s
@@ -393,7 +394,7 @@ module Parser = struct
           errorf (fun k->k"unknown symbol `%s` at %a" s Position.pp pos)
         )
 
-  and p_expr_atomic_ ~ty_expect (self:t) : A.t =
+  and p_expr_atomic_ ~ty_expect (self:t) : AE.t =
     let t = Lexer.cur self.lex in
     let pos = pos_ self in
     match t with
@@ -412,7 +413,7 @@ module Parser = struct
       List.iter (fun (v,_) -> Str_tbl.add self.bindings v.A.v_name v) bs;
       let bod = p_expr_ ~ty_expect self 0 in
       List.iter (fun (v,_) -> Str_tbl.remove self.bindings v.A.v_name) bs;
-      A.let_ ~pos bs bod
+      AE.let_ ~pos bs bod
     | SYM s ->
       Lexer.junk self.lex;
       begin match fixity_ self s with
@@ -420,20 +421,20 @@ module Parser = struct
         | F_prefix i ->
           let arg = p_expr_ ~ty_expect:None self i in
           let lhs = expr_of_string_ self s in
-          A.app ~pos lhs [arg]
+          AE.app ~pos lhs [arg]
         | F_binder i ->
           let vars = p_tyvars_and_dot self [] |> List.rev in
           let body = p_expr_ ~ty_expect self i in
           begin match s with
-            | "\\" -> A.lambda ~pos vars body
-            | "pi" -> A.ty_pi ~pos vars body
-            | "with" -> A.with_ ~pos vars body
+            | "\\" -> AE.lambda ~pos vars body
+            | "pi" -> AE.ty_pi ~pos vars body
+            | "with" -> AE.with_ ~pos vars body
             | _ ->
               match K.Ctx.find_const_by_name self.ctx s with
               | None -> assert false
               | Some c ->
                 let c = K.Expr.const self.ctx c in
-                A.bind ~pos c vars body
+                AE.bind ~pos c vars body
           end
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
           errorf (fun k->k"unexpected infix operator `%s` at %a"
@@ -444,14 +445,14 @@ module Parser = struct
       p_nullary_ ~at:true self s
     | WILDCARD ->
       Lexer.junk self.lex;
-      A.wildcard ~pos ()
+      AE.wildcard ~pos ()
     | QUESTION_MARK_STR s ->
       Lexer.junk self.lex;
-      A.meta ~pos s None
+      AE.meta ~pos s None
     | QUESTION_MARK ->
       begin match self.q_args with
         | [] -> errorf (fun k->k"no interpolation arg at %a" Position.pp pos)
-        | t :: tl -> self.q_args <- tl; A.const ~pos t
+        | t :: tl -> self.q_args <- tl; AE.const ~pos t
       end
     | NUM _ ->
       errorf (fun k->k"TODO: parse numbers") (* TODO *)
@@ -461,7 +462,7 @@ module Parser = struct
   (* TODO: parse bound variables as a list of:
       "x : ty" or "x" or "(x y z : ty)" *)
 
-  and p_expr_ ~ty_expect (self:t) (p:precedence) : A.t =
+  and p_expr_ ~ty_expect (self:t) (p:precedence) : AE.t =
     let lhs = ref (p_expr_atomic_ ~ty_expect self) in
     let p = ref p in
     let continue = ref true in
@@ -473,12 +474,12 @@ module Parser = struct
         Lexer.junk self.lex;
         let e = p_expr_ ~ty_expect:None self 0 in
         eat_ self ~msg:"expression" RPAREN;
-        lhs := A.app ~pos !lhs [e]
+        lhs := AE.app ~pos !lhs [e]
       | RPAREN | WILDCARD | COLON | DOT | IN
       | LET | AND -> continue := false
       | AT_SYM _ | QUESTION_MARK | QUOTED_STR _ | QUESTION_MARK_STR _ | NUM _ ->
         let e = p_expr_atomic_ ~ty_expect:None self in
-        lhs := A.app ~pos !lhs [e];
+        lhs := AE.app ~pos !lhs [e];
       | SYM s ->
         Lexer.junk self.lex;
         let f = fixity_ self s in
@@ -496,25 +497,25 @@ module Parser = struct
                     Lexer.junk self.lex;
                     let e = p_expr_ self ~ty_expect:None p2 in
                     rhs :=
-                      if s2 = "->" then A.ty_arrow !rhs e
+                      if s2 = "->" then AE.ty_arrow !rhs e
                       else (
                         let op2 = expr_of_string_ self s2 in
-                        A.app ~pos op2 [!rhs; e]
+                        AE.app ~pos op2 [!rhs; e]
                       )
                   | _ -> continue2 := false
                 end
               | _ -> continue2 := false
             done;
             lhs :=
-              if s = "->" then A.ty_arrow ~pos !lhs !rhs
-              else if s = "=" then A.eq ~pos !lhs !rhs
+              if s = "->" then AE.ty_arrow ~pos !lhs !rhs
+              else if s = "=" then AE.eq ~pos !lhs !rhs
               else (
                 let op = expr_of_string_ self s in
-                A.app ~pos op [!lhs; !rhs];
+                AE.app ~pos op [!lhs; !rhs];
               )
           | F_normal ->
             let arg = p_nullary_ self s in
-            lhs := A.app ~pos !lhs [arg]
+            lhs := AE.app ~pos !lhs [arg]
           | F_prefix _ | F_postfix _ | F_binder _ ->
             (* TODO: in case of prefix, we could just parse an appliation *)
             errorf (fun k->k"expected infix operator at %a" Position.pp pos);
@@ -528,7 +529,7 @@ module Parser = struct
     !lhs
 
   (* main entry point for expressions *)
-  let expr (self:t) : A.t =
+  let expr (self:t) : AE.t =
     let e = p_expr_ ~ty_expect:None self 0 in
     let last_tok = Lexer.cur self.lex in
     if last_tok <> EOF then (
@@ -538,7 +539,7 @@ module Parser = struct
     e
 end
 
-let parse_ast ?q_args ~ctx lex : A.t =
+let parse_ast ?q_args ~ctx lex : AE.t =
   let p = Parser.create ?q_args ~ctx lex in
   let e =
     try Parser.expr p
@@ -563,9 +564,9 @@ let parse ?q_args ~ctx lex : Expr.t =
     let v s ty = K.Expr.var ctx (K.Var.make s ty)
     let (@->) a b = K.Expr.arrow ctx a b
     let (@@) a b = K.Expr.app ctx a b
-    let a = K.Expr.new_const ctx "a" tau
-    let b = K.Expr.new_const ctx "b" tau
-    let c = K.Expr.new_const ctx "c" tau
+    let a = K.Expr.new_const ctx "a0" tau
+    let b = K.Expr.new_const ctx "b0" tau
+    let c = K.Expr.new_const ctx "c0" tau
     let f1 = K.Expr.new_const ctx "f1" (tau @-> tau)
     let g1 = K.Expr.new_const ctx "g1" (tau @-> tau)
     let h1 = K.Expr.new_const ctx "h1" (tau @-> tau)
@@ -591,16 +592,18 @@ let parse ?q_args ~ctx lex : Expr.t =
   end
 
   module M = Make()
+  module AE = Parse_ast.Expr
   module A = struct
-    include A
+    include Parse_ast
+    include AE
     let v (s:string) : t = var (A.Var.make s None)
     let vv s : A.var = A.Var.make s None
-    let of_str s : A.t = Syntax.parse_ast ~ctx:M.ctx (Lexer.create s)
-    let b_forall vars bod : A.t =
-      A.bind M.forall (List.map (fun (x,ty)-> A.Var.make x ty) vars) bod
-    let c x : t = A.const x
-    let (@->) a b = A.ty_arrow a b
-    let (@) a b = A.app a b
+    let of_str s : AE.t = Syntax.parse_ast ~ctx:M.ctx (Lexer.create s)
+    let b_forall vars bod : AE.t =
+      AE.bind M.forall (List.map (fun (x,ty)-> A.Var.make x ty) vars) bod
+    let c x : t = AE.const x
+    let (@->) a b = AE.ty_arrow a b
+    let (@) a b = AE.app a b
   end
   open A
 
@@ -621,15 +624,16 @@ let parse ?q_args ~ctx lex : Expr.t =
     (A.of_str "!(x:A) (y:B). p1 (f1 x)")
   A.(c M.plus @ [v "x"; v "y"]) (A.of_str "x + y")
   A.(c M.plus @ [v "x"; c M.plus @ [v "y"; v "z"]]) (A.of_str "x + y + z")
-  A.(let_ [vv"x", c M.a] (c M.p1 @ [v "x"])) (A.of_str "let x=a in p1 x")
+  A.(let_ [vv"x", c M.a] (c M.p1 @ [v "x"])) (A.of_str "let x=a0 in p1 x")
   A.(let_ [vv"x", c M.a; vv"y", c M.b] (c M.p2 @ [v "x"; v"y"])) \
-    (A.of_str "let x=a and y=b in p2 x y")
+    (A.of_str "let x=a0 and y=b0 in p2 x y")
   A.(ty_arrow (v"a")(v"b")) (A.of_str "a->b")
   A.(eq (v"a")(v"b")) (A.of_str "a = b")
   A.(b_forall ["x", Some (c M.a @-> c M.b @-> c M.c)] (A.eq (v"x")(v"x"))) \
-    (A.of_str "! (x:a->b->c). x=x")
-  A.(lambda [A.Var.make "x" @@ Some (c M.a @-> c M.b @-> c M.c)] (A.eq (v"x")(v"x"))) \
-    (A.of_str "\\ (x:a->b->c). x=x")
+    (A.of_str "! (x:a0->b0->c0). x=x")
+    A.(lambda [A.Var.make "x" @@ Some (c M.a @-> c M.b @-> c M.c)] \
+         (A.eq (v"x")(v"x"))) \
+    (A.of_str "\\ (x:a0->b0->c0). x=x")
   A.(const ~at:true M.eq) (A.of_str "@=")
 *)
 

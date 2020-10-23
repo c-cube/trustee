@@ -5,12 +5,12 @@ module K = Kernel
 
 type position = Position.t
 
-type t = {
+type expr = {
   pos: position;
   view: view;
 }
 
-and ty = t
+and ty = expr
 
 and var = {
   v_name: string;
@@ -23,7 +23,7 @@ and var_kind =
   | V_at
   | V_question_mark
 
-and binding = var * t
+and binding = var * expr
 
 and view =
   | Type
@@ -39,16 +39,16 @@ and view =
       c: K.Expr.t;
       at: bool; (* explicit types? *)
     }
-  | App of t * t list
-  | Lambda of var list * t
-  | Bind of K.Expr.t * var list * t
-  | With of var list * t
-  | Eq of t * t
-  | Let of binding list * t
+  | App of expr * expr list
+  | Lambda of var list * expr
+  | Bind of K.Expr.t * var list * expr
+  | With of var list * expr
+  | Eq of expr * expr
+  | Let of binding list * expr
 
 let nopos: position = Position.none
 
-let rec pp_ out (e:t) : unit =
+let rec pp_ out (e:expr) : unit =
   match e.view with
   | Type -> Fmt.string out "type"
   | Var v -> Fmt.string out v.v_name
@@ -91,37 +91,39 @@ module Var = struct
   let make ?kind:(v_kind=V_normal) v_name v_ty : var = {v_name; v_ty; v_kind}
 
   let pp out v = Fmt.string out v.v_name
+  let to_string = Fmt.to_string pp
   let pp_with_ty = pp_var_ty
 end
 
-let mk_ ?(pos=nopos) view : t = {view; pos=pos}
+module Expr = struct
+  type t = expr
+  let mk_ ?(pos=nopos) view : t = {view; pos=pos}
 
-let[@inline] view e = e.view
-let[@inline] pos e = e.pos
-let pp = pp
+  let[@inline] view e = e.view
+  let[@inline] pos e = e.pos
+  let pp = pp
 
-let type_ : t = mk_ Type
-let ty_var ?pos s : t = mk_ ?pos (Var (Var.make s (Some type_)))
-let ty_meta ?pos (s:string) : ty = mk_ ?pos (Meta {ty=Some type_; name=s})
-let ty_arrow ?pos a b : ty = mk_ ?pos (Ty_arrow (a,b))
-let ty_pi ?pos vars bod : ty = match vars with
-  | [] -> bod
-  | _ -> mk_ ?pos (Ty_pi (vars, bod))
+  let type_ : t = mk_ Type
+  let ty_var ?pos s : t = mk_ ?pos (Var (Var.make s (Some type_)))
+  let ty_meta ?pos (s:string) : ty = mk_ ?pos (Meta {ty=Some type_; name=s})
+  let ty_arrow ?pos a b : ty = mk_ ?pos (Ty_arrow (a,b))
+  let ty_pi ?pos vars bod : ty = match vars with
+    | [] -> bod
+    | _ -> mk_ ?pos (Ty_pi (vars, bod))
 
-let var ?pos (v:var) : t = mk_ ?pos (Var v)
-let const ?pos ?(at=false) c : t = mk_ ?pos (Const {c; at})
-let meta ?pos (s:string) ty : t = mk_ ?pos (Meta {ty; name=s})
-let app ?pos (f:t) (l:t list) : t =
-  match f.view with
-  | App (f1,l1) -> mk_ ?pos (App (f1,l1@l))
-  | _ -> mk_ ?pos (App (f,l))
-let let_ ?pos bs bod : t = mk_ ?pos (Let (bs, bod))
-let with_ ?pos vs bod : t = mk_ ?pos (With (vs, bod))
-let lambda ?pos vs bod : t = mk_ ?pos (Lambda (vs, bod))
-let bind ?pos c vs bod : t = mk_ ?pos (Bind (c, vs, bod))
-let eq ?pos a b : t = mk_ ?pos (Eq (a,b))
-let wildcard ?pos () : t = mk_ ?pos Wildcard
+  let var ?pos (v:var) : t = mk_ ?pos (Var v)
+  let const ?pos ?(at=false) c : t = mk_ ?pos (Const {c; at})
+  let meta ?pos (s:string) ty : t = mk_ ?pos (Meta {ty; name=s})
+  let app ?pos (f:t) (l:t list) : t =
+    match f.view with
+    | App (f1,l1) -> mk_ ?pos (App (f1,l1@l))
+    | _ -> mk_ ?pos (App (f,l))
+  let let_ ?pos bs bod : t = mk_ ?pos (Let (bs, bod))
+  let with_ ?pos vs bod : t = mk_ ?pos (With (vs, bod))
+  let lambda ?pos vs bod : t = mk_ ?pos (Lambda (vs, bod))
+  let bind ?pos c vs bod : t = mk_ ?pos (Bind (c, vs, bod))
+  let eq ?pos a b : t = mk_ ?pos (Eq (a,b))
+  let wildcard ?pos () : t = mk_ ?pos Wildcard
 
-let to_string = Fmt.to_string @@ Fmt.hvbox pp
-
-type expr = t
+  let to_string = Fmt.to_string @@ Fmt.hvbox pp
+end
