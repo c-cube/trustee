@@ -74,6 +74,16 @@ module BVar : sig
   include Sigs.PP with type t := t
 end
 
+(** {2 Substitutions} *)
+module Subst : sig
+  type t = expr Var.Map.t
+  include Sigs.PP with type t := t
+  val empty : t
+  val is_empty : t -> bool
+  val bind : var -> expr -> t -> t
+  val size : t -> int
+end
+
 (** {2 Expressions and Types} *)
 module Expr : sig
   type t = expr
@@ -103,7 +113,7 @@ module Expr : sig
   val is_a_type : t -> bool
   (** Is the type of [e] equal to [Type]? *)
 
-  val subst : ctx -> t -> t Var.Map.t -> t
+  val subst : ctx -> t -> Subst.t -> t
 
   val type_ : ctx -> t
   val bool : ctx -> t
@@ -194,6 +204,9 @@ module Thm : sig
 
   val congr_ty : ctx -> t -> ty -> t
   (** `congr_ty (|- f=g) ty` is `|- (f ty) = (g ty)` where `ty` is a type *)
+
+  val subst : ctx -> t -> Subst.t -> t
+  (** `subst (A |- t) \sigma` is `A\sigma |- t\sigma` *)
 
   val sym : ctx -> t -> t
   (** `sym (|- t=u)` is `|- u=t` *)

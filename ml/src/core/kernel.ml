@@ -234,6 +234,28 @@ end
 let id_bool = ID.make "Bool"
 let id_eq = ID.make "="
 
+module Subst = struct
+  type t = expr Var.Map.t
+
+  let is_empty = Var.Map.is_empty
+
+  let pp out (s:t) : unit =
+    if is_empty s then Fmt.string out "{}"
+    else (
+      let pp_b out (v,t) =
+        Fmt.fprintf out "(@[%a := %a@])" Var.pp v expr_pp_ t
+      in
+      Fmt.fprintf out "@[<hv>{@,%a@,}@]"
+        (pp_iter ~sep:" " pp_b) (Var.Map.to_iter s)
+    )
+
+  let to_string = Fmt.to_string pp
+
+  let empty = Var.Map.empty
+  let[@inline] bind x t s : t = Var.Map.add x t s
+  let size = Var.Map.cardinal
+end
+
 module Expr = struct
   type t = expr
 
@@ -715,6 +737,22 @@ module Thm = struct
     | Some (t, u) ->
       let c = Expr.app_eq ctx (Expr.app ctx t ty) (Expr.app ctx u ty) in
       make_ ctx (hyps_ th) c
+
+  exception E_subst_non_closed of var * expr
+
+  let subst ctx th s : t =
+    begin try
+        Var.Map.iter (fun v t ->
+            if not (Expr.is_closed t) then raise_notrace (E_subst_non_closed (v,t)))
+          s
+      with
+      | E_subst_non_closed (v,t) ->
+        errorf(fun k->k"subst: variable %a@ is bound to non-closed term %a"
+                  Var.pp v Expr.pp t)
+    end;
+    let hyps = hyps_ th |> Expr.Set.map (fun e -> Expr.subst ctx e s) in
+    let concl = Expr.subst ctx (concl th) s in
+    make_ ctx hyps concl
 
   let sym ctx th : t =
     wrap_exn (fun k->k"@[<2>in sym@ `@[%a@]`@]" pp th) @@ fun () ->
