@@ -5,10 +5,12 @@ module K = Kernel
 
 type position = Position.t
 
-type expr = {
+type 'a with_pos = {
   pos: position;
-  view: view;
+  view: 'a;
 }
+
+type expr = view with_pos
 
 and ty = expr
 
@@ -126,4 +128,142 @@ module Expr = struct
   let wildcard ?pos () : t = mk_ ?pos Wildcard
 
   let to_string = Fmt.to_string @@ Fmt.hvbox pp
+end
+
+module Goal = struct
+  type t = {
+    hyps: Expr.t list;
+    concl: Expr.t;
+  }
+
+  let pp out (self:t) : unit =
+    if CCList.is_empty self.hyps then (
+      Fmt.fprintf out "@[<h>?- %a@]" Expr.pp self.concl
+    ) else (
+      Fmt.fprintf out "@[<v>%a@ ?-@ %a@]"
+        (pp_list Expr.pp) self.hyps Expr.pp self.concl
+    )
+  let to_string = Fmt.to_string pp
+end
+
+(** {3 Proofs} *)
+module Proof = struct
+  type t = top with_pos
+  and top =
+    | Proof_atom of step
+    | Proof_steps of {
+        lets: pr_let list;
+        (** intermediate steps *)
+        ret: step;
+        (** proof to return *)
+      }
+
+  and pr_let =
+    | Let_expr of string * expr
+    | Let_step of string * step
+
+  and step = step_view with_pos
+  and step_view =
+    | Pr_apply_rule of string * rule_arg list
+    | Pr_sub_proof of t
+    | Pr_error of string (* parse error *)
+
+  (** An argument to a rule *)
+  and rule_arg =
+    | Arg_var of string
+    | Arg_step of step
+
+  let rec pp out (self:t) : unit =
+    Fmt.fprintf out "@[<hv>@[<hv2>proof@ ";
+    begin match self.view with
+      | Proof_atom s -> pp_step ~top:true out s
+      | Proof_steps {lets; ret} ->
+        List.iter
+          (function
+            | Let_expr (s,e) ->
+              Fmt.fprintf out "@[<2>let expr %s =@ %a in@]@ " s Expr.pp e
+            | Let_step (s,p) ->
+              Fmt.fprintf out "@[<2>let step %s =@ %a in@]@ "
+                s (pp_step ~top:true) p)
+          lets;
+        pp_step ~top:true out ret
+    end;
+    Fmt.fprintf out "@]@,end@]"
+
+  and pp_step ~top out (s:step) : unit =
+    match s.view with
+    | Pr_apply_rule (r, []) when top -> Fmt.string out r
+    | Pr_apply_rule (r, args) ->
+      Fmt.fprintf out "(@[%s@ %a@])" r (pp_list pp_rule_arg) args
+    | Pr_sub_proof p -> pp out p
+    | Pr_error e -> Fmt.fprintf out "<error %s>" e
+
+  and pp_rule_arg out (a:rule_arg) : unit =
+    match a with
+    | Arg_var s -> Fmt.string out s
+    | Arg_step s -> pp_step ~top:false out s (* always in ( ) *)
+
+  let to_string = Fmt.to_string pp
+end
+
+module Meta_stmt = struct
+  type t = view with_pos
+  and view =
+    | Top_def of {
+        name: string;
+        vars: var list;
+        ret: ty;
+        body: expr;
+      }
+    | Top_decl of {
+        name: string;
+        ty: ty;
+      }
+    | Top_axiom of {
+        name: string;
+        thm: expr;
+      }
+    | Top_goal of {
+        goal: Goal.t;
+        proof: Proof.t;
+      }
+    | Top_theorem of {
+        name: string;
+        goal: Goal.t;
+        proof: Proof.t;
+      }
+    | Top_error of {
+        msg: string;
+      }
+
+  let pp out (self:t) : unit =
+    match self.view with
+    | Top_def { name; vars=[]; ret; body } ->
+      Fmt.fprintf out "@[<hv>@[<2>def %s : %a :=@ %a@]@ end@]"
+        name pp ret pp body
+    | Top_def { name; vars; ret; body } ->
+      Fmt.fprintf out "@[<hv>@[<2>def %s %a : %a :=@ %a@]@ end@]"
+        name (pp_list pp_var_ty) vars pp ret pp body
+    | Top_decl { name; ty } ->
+      Fmt.fprintf out "@[<hv>@[<2>decl %s :@ %a@]@ end@]"
+        name pp ty
+    | Top_axiom { name; thm } ->
+      Fmt.fprintf out "@[<hv>@[<2>axiom %s :=@ %a@]@ end@]"
+        name pp thm
+    | Top_goal { goal; proof } ->
+      Fmt.fprintf out "@[<hv>@[<2>goal %a@ by %a@]@ end@]"
+        Goal.pp goal Proof.pp proof
+    | Top_theorem { name; goal; proof } ->
+      Fmt.fprintf out "@[<hv>@[<2>theorem %s :=@ %a@ by %a@]@ end@]"
+        name Goal.pp goal Proof.pp proof
+    | Top_error {msg} -> Fmt.fprintf out "@[<hv><error %s>@]" msg
+
+  let to_string = Fmt.to_string pp
+
+  let make ~pos view : t = {pos; view}
+  let def ~pos name vars ret body : t = make ~pos (Top_def {name; ret; vars; body})
+  let decl ~pos name ty : t = make ~pos (Top_decl {name; ty})
+  let axiom ~pos name e : t = make ~pos (Top_axiom {name; thm=e})
+  let goal ~pos goal proof : t = make ~pos (Top_goal {goal; proof})
+  let theorem ~pos name g p : t = make ~pos (Top_theorem{name; goal=g; proof=p})
 end

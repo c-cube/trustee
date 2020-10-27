@@ -542,7 +542,7 @@ module Parser = struct
     e
 end
 
-let parse_ast ?q_args ~ctx lex : AE.t =
+let parse_expr ?q_args ~ctx lex : AE.t =
   let p = Parser.create ?q_args ~ctx lex in
   let e =
     try Parser.expr p
@@ -551,8 +551,8 @@ let parse_ast ?q_args ~ctx lex : AE.t =
   in
   e
 
-let parse ?q_args ~ctx lex : Expr.t =
-  let e = parse_ast ?q_args ~ctx lex in
+let parse_expr_infer ?q_args ~ctx lex : Expr.t =
+  let e = parse_expr ?q_args ~ctx lex in
   let env = Type_ast.Env.create ctx in
   let e = Type_ast.infer env e in
   Type_ast.generalize env;
@@ -591,7 +591,7 @@ let parse ?q_args ~ctx lex : Expr.t =
     let eq = K.Expr.eq ctx
     let () = K.Const.set_fixity (K.Expr.as_const_exn plus) (F_right_assoc 20)
 
-    let of_str s = Syntax.parse ~ctx (Lexer.create s)
+    let of_str s = Syntax.parse_expr_infer ~ctx (Lexer.create s)
   end
 
   module M = Make()
@@ -601,7 +601,7 @@ let parse ?q_args ~ctx lex : Expr.t =
     include AE
     let v (s:string) : t = var (A.Var.make s None)
     let vv s : A.var = A.Var.make s None
-    let of_str s : AE.t = Syntax.parse_ast ~ctx:M.ctx (Lexer.create s)
+    let of_str s : AE.t = Syntax.parse_expr ~ctx:M.ctx (Lexer.create s)
     let b_forall vars bod : AE.t =
       AE.bind M.forall (List.map (fun (x,ty)-> A.Var.make x ty) vars) bod
     let c x : t = AE.const x
@@ -610,7 +610,7 @@ let parse ?q_args ~ctx lex : Expr.t =
   end
   open A
 
-  let parse_e s : K.Expr.t = Syntax.parse ~ctx:M.ctx (Lexer.create s)
+  let parse_e s : K.Expr.t = Syntax.parse_expr_infer ~ctx:M.ctx (Lexer.create s)
 *)
 
 (* test printer itself *)

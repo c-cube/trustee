@@ -484,7 +484,7 @@ let infer (env:env) (e0:AE.t) : expr =
   (* type inference.
      @param bv the local variables, for scoping *)
   let rec inf_rec_ (bv:expr Str_map.t) (e:AE.t) : expr =
-    let pos = e.A.pos in
+    let pos = AE.pos e in
     let unif_exn_ a b = unif_exn_ ~pos e a b in
     begin match AE.view e with
       | A.Type -> Expr.type_

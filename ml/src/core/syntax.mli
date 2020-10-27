@@ -48,13 +48,13 @@ end
 
 (** {2 Parser} *)
 
-val parse_ast :
+val parse_expr :
   ?q_args:K.Expr.t list ->
   ctx:K.Ctx.t ->
   Lexer.t ->
   A.expr
 
-val parse :
+val parse_expr_infer :
   ?q_args:K.Expr.t list ->
   ctx:K.Ctx.t ->
   Lexer.t ->
