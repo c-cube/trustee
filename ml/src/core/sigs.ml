@@ -58,9 +58,9 @@ let () =
       | _ -> None)
 
 let pp_list ?(sep=" ") ppx out l =
-  Fmt.list ~sep:(fun out () -> Fmt.fprintf out "@,%s" sep) ppx out l
+  Fmt.list ~sep:(fun out () -> Fmt.fprintf out "%s@," sep) ppx out l
 let pp_iter ?(sep=" ") ppx out iter =
-  Fmt.iter ~sep:(fun out () -> Fmt.fprintf out "@,%s" sep) ppx out iter
+  Fmt.iter ~sep:(fun out () -> Fmt.fprintf out "%s@," sep) ppx out iter
 
 module Str_tbl = CCHashtbl.Make(CCString)
 module Str_map = CCMap.Make(CCString)

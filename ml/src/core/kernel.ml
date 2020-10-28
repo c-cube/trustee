@@ -200,7 +200,7 @@ module BVar = struct
   let to_string = Fmt.to_string pp
 end
 
-let id_bool = ID.make "Bool"
+let id_bool = ID.make "bool"
 let id_eq = ID.make "="
 
 module Subst = struct

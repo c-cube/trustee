@@ -1,6 +1,10 @@
 
-open Trustee_core
-open Sigs
+open Trustee_core.Sigs
+
+module Log = Trustee_core.Log
+module K = Trustee_core.Kernel
+module A = Trustee_core.Parse_ast
+module Syntax = Trustee_core.Syntax
 
 module Cat = struct
   let args = [
@@ -9,7 +13,20 @@ module Cat = struct
 
   let run args =
     Log.debugf 1 (fun k->k"cat files %a" (Fmt.Dump.(list string)) args);
-    () (* TODO: parse and print *)
+    let ctx = K.Ctx.create() in
+    let env = A.Env.create ctx in
+    List.iter
+      (fun file ->
+         match CCIO.File.read file with
+         | Ok s ->
+           let lex = Syntax.Lexer.create s in
+           let l = Syntax.parse_top_l_process ~file ~env lex in
+           Fmt.printf "# file %S@." file;
+           Fmt.printf "@[<v>%a@]@." (pp_list A.Top_stmt.pp) l
+         | Error e ->
+           errorf (fun k->k"cannot read '%s': %s" file e))
+      args;
+    ()
 
 end
 

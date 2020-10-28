@@ -189,10 +189,11 @@ end
 
 type top_statement = private top_statement_view with_pos
 and top_statement_view =
+  | Top_enter_file of string
   | Top_def of {
       name: string;
       vars: var list;
-      ret: ty;
+      ret: ty option;
       body: expr;
     }
   | Top_decl of {
@@ -218,8 +219,11 @@ and top_statement_view =
       proof: Proof.t;
       (* TODO: instead, Meta_expr.toplevel_proof; *)
     }
+  | Top_show of string
+  | Top_show_expr of expr
+  | Top_show_proof of Proof.t
   | Top_error of {
-      msg: string; (* parse error *)
+      msg: unit Fmt.printer; (* parse error *)
     }
   (* TODO  | Top_def_ty of string *)
   (* TODO: | Top_def_proof_rule *)
@@ -235,9 +239,17 @@ module Top_stmt : sig
   val view : t -> top_statement_view
   val make : pos:position -> top_statement_view -> t
 
-  val def : pos:position -> string -> var list -> ty -> expr -> t
+  val enter_file : pos:position -> string -> t
+  val def : pos:position -> string -> var list -> ty option -> expr -> t
   val decl : pos:position -> string -> ty -> t
   val fixity : pos:position -> string -> fixity -> t
+  val axiom : pos:position -> string -> expr -> t
+  val goal : pos:position -> Goal.t -> Proof.t -> t
+  val theorem : pos:position -> string -> Goal.t -> Proof.t -> t
+  val show : pos:position -> string -> t
+  val show_expr : pos:position -> expr -> t
+  val show_proof : pos:position -> Proof.t -> t
+  val error : pos:position -> unit Fmt.printer -> t
 end
 
 module Env : sig

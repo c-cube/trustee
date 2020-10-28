@@ -19,6 +19,7 @@ type token =
   | LET
   | IN
   | AND
+  | EQDEF
   | AT_SYM of string
   | NUM of string
   | END
@@ -56,6 +57,14 @@ val parse_top :
   env:A.Env.t ->
   Lexer.t ->
   A.top_statement option
+
+val parse_top_l_process :
+  ?file:string ->
+  env:A.Env.t ->
+  Lexer.t ->
+  A.top_statement list
+(** Parse statements, processing each one with {!Parse_ast.Env.process}
+    as soon as it is produced *)
 
 (** {2 Parse and perform type inference} *)
 

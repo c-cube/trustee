@@ -60,37 +60,43 @@ and view =
 
 let nopos: position = Position.none
 
-let rec pp_ out (e:expr) : unit =
+let rec pp_ (p:_) out (e:expr) : unit =
   match e.view with
   | Type -> Fmt.string out "type"
   | Var v -> Fmt.string out v.v_name
   | Ty_arrow (a,b) ->
-    Fmt.fprintf out "%a@ -> %a" pp_atom_ a pp_ b;
+    if p>1 then Fmt.char out '(';
+    Fmt.fprintf out "%a@ -> %a" pp_atom_ a (pp_ p) b;
+    if p>1 then Fmt.char out ')';
   | Ty_pi (vars, bod) ->
-    Fmt.fprintf out "(@[pi %a.@ %a@])"
-      (pp_list pp_var) vars pp_ bod
+    if p>0 then Fmt.char out '(';
+    Fmt.fprintf out "@[pi %a.@ %a@]"
+      (pp_list pp_var) vars (pp_ p) bod;
+    if p>0 then Fmt.char out ')';
   | Const {c;at} ->
     let s = if at then "@" else "" in
     Fmt.fprintf out "%s%a" s pp_const c
-  | App (f,l) -> Fmt.fprintf out "(@[%a@ %a@])" pp_ f (pp_list pp_) l
+  | App (f,l) ->
+    if p>0 then Fmt.char out '(';
+    Fmt.fprintf out "@[%a@ %a@]" pp_atom_ f (pp_list pp_atom_) l;
+    if p>0 then Fmt.char out ')';
   | Meta v -> Fmt.fprintf out "?%s" v.name
   | Lambda (vars,bod) ->
-    Fmt.fprintf out "(@[\\%a.@ %a@])" (pp_list pp_var_ty) vars pp_ bod
+    Fmt.fprintf out "@[\\%a.@ %a@]" (pp_list pp_var_ty) vars (pp_ p) bod
   | Bind {c; at; vars; body} ->
     let s = if at then "@" else "" in
-    Fmt.fprintf out "(@[%s%a %a.@ %a@])"
-      s pp_const c (pp_list pp_var_ty) vars pp_ body
+    Fmt.fprintf out "@[%s%a %a.@ %a@]"
+      s pp_const c (pp_list pp_var_ty) vars (pp_ p) body
   | With (vars,bod) ->
-    Fmt.fprintf out "(@[with %a.@ %a@])" (pp_list pp_var_ty) vars pp_ bod
-  | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp_ a pp_ b
+    Fmt.fprintf out "@[with %a.@ %a@]" (pp_list pp_var_ty) vars (pp_ p) bod
+  | Eq (a,b) -> Fmt.fprintf out "@[%a@ =@ %a@]" pp_atom_ a pp_atom_ b
   | Wildcard -> Fmt.string out "_"
   | Let (bs,bod) ->
-    let pp_b out (v,e) : unit = Fmt.fprintf out "@[%s@ = %a@]" v.v_name pp_ e in
-    Fmt.fprintf out "(@[let %a in@ %a@])" (pp_list ~sep:" and " pp_b) bs pp_ bod
-and pp_atom_ out e =
-  match e.view with
-  | Type | Var _ | Meta _ | Const _ -> pp_ out e
-  | _ -> Fmt.fprintf out "(@[%a@])" pp_ e
+    if p>0 then Fmt.char out '(';
+    let pp_b out (v,e) : unit = Fmt.fprintf out "@[%s@ = %a@]" v.v_name (pp_ 0) e in
+    Fmt.fprintf out "@[let %a in@ %a@]" (pp_list ~sep:" and " pp_b) bs (pp_ 0) bod;
+    if p>0 then Fmt.char out ')';
+and pp_atom_ out e = pp_ max_int out e
 and pp_var out v = Fmt.string out v.v_name
 and pp_const out c =
   match c with
@@ -99,9 +105,9 @@ and pp_const out c =
 and pp_var_ty out (v:var) : unit =
   match v.v_ty with
   | None -> Fmt.string out v.v_name
-  | Some ty -> Fmt.fprintf out "(@[%s@ : %a@])" v.v_name pp_ ty
+  | Some ty -> Fmt.fprintf out "(@[%s@ : %a@])" v.v_name (pp_ 0) ty
 
-let pp out e = Fmt.fprintf out "`@[%a@]`" pp_ e
+let pp out e = Fmt.fprintf out "@[%a@]" (pp_ 0) e
 
 module Var = struct
   type t = var
@@ -233,10 +239,11 @@ end
 
 type top_statement = top_statement_view with_pos
 and top_statement_view =
+  | Top_enter_file of string
   | Top_def of {
       name: string;
       vars: var list;
-      ret: ty;
+      ret: ty option;
       body: expr;
     }
   | Top_decl of {
@@ -262,8 +269,11 @@ and top_statement_view =
       proof: Proof.t;
       (* TODO: instead, Meta_expr.toplevel_proof; *)
     }
+  | Top_show of string
+  | Top_show_expr of expr
+  | Top_show_proof of Proof.t
   | Top_error of {
-      msg: string; (* parse error *)
+      msg: unit Fmt.printer; (* parse error *)
     }
   (* TODO  | Top_def_ty of string *)
   (* TODO: | Top_def_proof_rule *)
@@ -276,13 +286,19 @@ module Top_stmt = struct
   let[@inline] view st = st.view
   let[@inline] pos st = st.pos
   let pp out (self:t) : unit =
+    let pp_ty_opt out ty = match ty with
+      | None -> ()
+      | Some ty -> Fmt.fprintf out "@ : %a" Expr.pp ty
+    in
     match self.view with
+    | Top_enter_file f ->
+      Fmt.fprintf out "@[enter_file '%s' end@]" f
     | Top_def { name; vars=[]; ret; body } ->
-      Fmt.fprintf out "@[<hv>@[<2>def %s : %a :=@ %a@]@ end@]"
-        name pp ret pp body
+      Fmt.fprintf out "@[<hv>@[<2>def %s%a :=@ %a@]@ end@]"
+        name pp_ty_opt ret pp body
     | Top_def { name; vars; ret; body } ->
-      Fmt.fprintf out "@[<hv>@[<2>def %s %a : %a :=@ %a@]@ end@]"
-        name (pp_list pp_var_ty) vars pp ret pp body
+      Fmt.fprintf out "@[<hv>@[<2>def %s %a%a :=@ %a@]@ end@]"
+        name (pp_list pp_var_ty) vars pp_ty_opt ret pp body
     | Top_decl { name; ty } ->
       Fmt.fprintf out "@[<hv>@[<2>decl %s :@ %a@]@ end@]"
         name pp ty
@@ -298,17 +314,25 @@ module Top_stmt = struct
     | Top_theorem { name; goal; proof } ->
       Fmt.fprintf out "@[<hv>@[<2>theorem %s :=@ %a@ by %a@]@ end@]"
         name Goal.pp goal Proof.pp proof
-    | Top_error {msg} -> Fmt.fprintf out "@[<hv><error %s>@]" msg
+    | Top_show s -> Fmt.fprintf out "@[show %s end@]" s
+    | Top_show_expr e -> Fmt.fprintf out "@[@[<hv2>show expr@ %a@]@ end@]" Expr.pp e
+    | Top_show_proof p -> Fmt.fprintf out "@[show %a end@]" Proof.pp p
+    | Top_error {msg} -> Fmt.fprintf out "<@[<hov2>error:@ @[%a@]@]>" msg ()
 
   let to_string = Fmt.to_string pp
 
   let make ~pos view : t = {pos; view}
+  let enter_file ~pos f : t = make ~pos (Top_enter_file f)
   let def ~pos name vars ret body : t = make ~pos (Top_def {name; ret; vars; body})
   let decl ~pos name ty : t = make ~pos (Top_decl {name; ty})
   let fixity ~pos name f : t = make ~pos (Top_fixity {name; fixity=f})
   let axiom ~pos name e : t = make ~pos (Top_axiom {name; thm=e})
   let goal ~pos goal proof : t = make ~pos (Top_goal {goal; proof})
   let theorem ~pos name g p : t = make ~pos (Top_theorem{name; goal=g; proof=p})
+  let show ~pos s : t = make ~pos (Top_show s)
+  let show_expr ~pos e : t = make ~pos (Top_show_expr e)
+  let show_proof ~pos p : t = make ~pos (Top_show_proof p)
+  let error ~pos e : t = make ~pos (Top_error {msg=e})
 end
 
 module Env = struct
@@ -347,7 +371,9 @@ module Env = struct
     | Top_decl {name; _} -> declare' self name
     | Top_fixity {name; fixity} ->
       declare_fixity self name fixity
-    | Top_axiom _ | Top_goal _ | Top_theorem _ | Top_error _ -> ()
+    | Top_axiom _ | Top_goal _ | Top_theorem _ | Top_error _
+    | Top_enter_file _
+    | Top_show _ | Top_show_expr _ | Top_show_proof _ -> ()
 
   let bool self : const = C_k (K.Expr.bool self.ctx)
   let eq self : const = C_k (K.Expr.eq self.ctx)

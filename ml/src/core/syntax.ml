@@ -21,6 +21,7 @@ type token =
   | LET
   | IN
   | AND
+  | EQDEF
   | AT_SYM of string
   | NUM of string
   | END
@@ -39,6 +40,7 @@ module Token = struct
     | LET -> Fmt.string out "LET"
     | AND -> Fmt.string out "AND"
     | IN -> Fmt.string out "IN"
+    | EQDEF -> Fmt.string out "EQDEF"
     | WILDCARD -> Fmt.string out "WILDCARD"
     | QUESTION_MARK -> Fmt.string out "QUESTION_MARK"
     | QUESTION_MARK_STR s -> Fmt.fprintf out "QUESTION_MARK_STR %S" s
@@ -133,7 +135,14 @@ module Lexer = struct
       match c with
       | '(' -> self.i <- 1 + self.i; LPAREN
       | ')' -> self.i <- 1 + self.i; RPAREN
-      | ':' -> self.i <- 1 + self.i; COLON
+      | ':' ->
+        self.i <- 1 + self.i;
+        if self.i < String.length self.src && String.get self.src self.i = '=' then (
+          self.i <- 1 + self.i;
+          EQDEF
+        ) else (
+          COLON
+        )
       | '.' -> self.i <- 1 + self.i; DOT
       | '_' -> self.i <- 1 + self.i; WILDCARD
       | '?' ->
@@ -253,13 +262,7 @@ end
       (Lexer.create "f (x + @=)" |> Lexer.to_list)
 *)
 
-(* We follow a mix of:
-   - https://en.wikipedia.org/wiki/Operator-precedence_parser
-   - https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
-*)
-module Parser = struct
-  type precedence = int
-
+module P_state = struct
   type t = {
     env: A.Env.t;
     lex: Lexer.t;
@@ -273,7 +276,18 @@ module Parser = struct
       q_args;
       bindings=Str_tbl.create 16;
     }
+end
 
+(* We follow a mix of:
+   - https://en.wikipedia.org/wiki/Operator-precedence_parser
+   - https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
+*)
+module P_expr = struct
+  open P_state
+  type precedence = int
+  type t = P_state.t
+
+  let create = P_state.create
   let[@inline] pos_ self = Lexer.pos self.lex
 
   let fixity_ (self:t) (s:string) : K.fixity =
@@ -289,15 +303,25 @@ module Parser = struct
       | None -> F.normal
       | Some (_,f) -> f
 
-  let eat_ ~msg self (t:token) : unit =
+  let eat_p ~msg self ~f : token =
     let pos = Lexer.pos self.lex in
     let t2 = Lexer.cur self.lex in
-    if Token.equal t t2 then (
+    if f t2 then (
       Lexer.junk self.lex;
+      t2
     ) else (
-      errorf (fun k->k "expected %a while parsing %s at %a"
-                 Token.pp t msg Position.pp pos)
+      errorf (fun k->k "unexpected token %a while parsing %s at %a"
+                 Token.pp t2 msg Position.pp pos)
     )
+
+  let eat_p' ~msg self ~f : unit =
+    ignore (eat_p ~msg self ~f : token)
+
+  let eat_eq ~msg self (t:token) : unit =
+    eat_p' ~msg self ~f:(Token.equal t)
+
+  let eat_end ~msg self : unit =
+    eat_p' self ~msg ~f:(function END -> true | _ -> false)
 
   (* parse an identifier *)
   let p_ident self : string =
@@ -336,12 +360,12 @@ module Parser = struct
   (* parse let bindings *)
   let rec p_bindings_ self : (A.var * AE.t) list =
     let v = A.Var.make (p_ident self) None in
-    eat_ self ~msg:"let binding" (SYM "=");
+    eat_p' self ~msg:"`=` in let binding" ~f:(function SYM "=" -> true | _ -> false);
     let e = p_expr_ ~ty_expect:None self 0 in
     if Token.equal (Lexer.cur self.lex) IN then (
       [v, e]
     ) else (
-      eat_ self ~msg:"let bindings" AND;
+      eat_eq self ~msg:"`and` between let bindings" AND;
       let vs = p_bindings_ self in
       (v,e) :: vs
     )
@@ -362,24 +386,33 @@ module Parser = struct
     in
     loop []
 
+  and p_tyvars_until ~f self acc : token * A.var list =
+    let t = Lexer.cur self.lex in
+    if f t then (
+      Lexer.junk self.lex;
+      t, List.rev acc
+    ) else (
+      match Lexer.cur self.lex with
+      | LPAREN ->
+        Lexer.junk self.lex;
+        let l = p_tyvar_grp_ self in
+        eat_eq self ~msg:"group of typed variables" RPAREN;
+        p_tyvars_until ~f self (List.rev_append l acc)
+      | SYM _ ->
+        let l = p_tyvar_grp_ self in
+        let last = eat_p ~msg:"bound variables" self ~f in
+        last, List.rev @@ List.rev_append l acc
+      | _ ->
+        let pos = Lexer.pos self.lex in
+        errorf (fun k->k "expected list of (typed) variables at %a"
+                   Position.pp pos)
+    )
+
   and p_tyvars_and_dot self acc : A.var list =
-    match Lexer.cur self.lex with
-    | DOT ->
-      Lexer.junk self.lex;
-      acc
-    | LPAREN ->
-      Lexer.junk self.lex;
-      let l = p_tyvar_grp_ self in
-      eat_ self ~msg:"group of typed variables" RPAREN;
-      p_tyvars_and_dot self (List.rev_append l acc)
-    | SYM _ ->
-      let l = p_tyvar_grp_ self in
-      eat_ ~msg:"bound variables" self DOT;
-      List.rev_append l acc
-    | _ ->
-      let pos = Lexer.pos self.lex in
-      errorf (fun k->k "expected list of (typed) variables at %a"
-                 Position.pp pos)
+    let _d, l =
+      p_tyvars_until self acc ~f:(function DOT -> true | _ -> false)
+    in
+    l
 
   and p_nullary_ (self:t) ?(at=false) (s:string) : AE.t =
     match Lexer.cur self.lex with
@@ -407,13 +440,14 @@ module Parser = struct
     | LPAREN ->
       Lexer.junk self.lex;
       let e = p_expr_ ~ty_expect self 0 in
-      eat_ self ~msg:"atomic expression" RPAREN;
+      eat_eq self ~msg:"atomic expression" RPAREN;
       e
     | LET ->
       Lexer.junk self.lex;
       (* parse `let x = e in e2` *)
+      Log.debugf 5 (fun k->k"parsing let");
       let bs = p_bindings_ self in
-      eat_ self ~msg:"let binding body" IN;
+      eat_eq self ~msg:"let binding body" IN;
       List.iter (fun (v,_) -> Str_tbl.add self.bindings v.A.v_name v) bs;
       let bod = p_expr_ ~ty_expect self 0 in
       List.iter (fun (v,_) -> Str_tbl.remove self.bindings v.A.v_name) bs;
@@ -427,7 +461,7 @@ module Parser = struct
           let lhs = expr_of_string_ self s in
           AE.app ~pos lhs [arg]
         | F_binder i ->
-          let vars = p_tyvars_and_dot self [] |> List.rev in
+          let vars = p_tyvars_and_dot self [] in
           let body = p_expr_ ~ty_expect self i in
           begin match s with
             | "\\" -> AE.lambda ~pos vars body
@@ -440,7 +474,9 @@ module Parser = struct
                 AE.bind ~at:false ~pos c vars body
           end
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
-          errorf (fun k->k"unexpected infix operator `%s` at %a"
+          errorf (fun k->k
+                     "unexpected infix operator `%s`@ \
+                      while parsing atomic expression@ at %a"
                      s Position.pp pos)
       end
     | AT_SYM s ->
@@ -459,7 +495,7 @@ module Parser = struct
       end
     | NUM _ ->
       errorf (fun k->k"TODO: parse numbers") (* TODO *)
-    | RPAREN | COLON | DOT | IN | AND | EOF | QUOTED_STR _ | END ->
+    | RPAREN | COLON | DOT | IN | AND | EOF | QUOTED_STR _ | END | EQDEF ->
       errorf (fun k->k"expected expression at %a" Position.pp pos)
 
   (* TODO: parse bound variables as a list of:
@@ -472,11 +508,11 @@ module Parser = struct
     while !continue do
       let pos = Lexer.pos self.lex in
       match Lexer.cur self.lex with
-      | EOF | END -> continue := false
+      | EOF | END | EQDEF -> continue := false
       | LPAREN ->
         Lexer.junk self.lex;
         let e = p_expr_ ~ty_expect:None self 0 in
-        eat_ self ~msg:"expression" RPAREN;
+        eat_eq self ~msg:"expression" RPAREN;
         lhs := AE.app ~pos !lhs [e]
       | RPAREN | WILDCARD | COLON | DOT | IN
       | LET | AND -> continue := false
@@ -531,9 +567,15 @@ module Parser = struct
     done;
     !lhs
 
-  (* main entry point for expressions *)
+  let expr_atomic ?ty_expect self : AE.t =
+    p_expr_atomic_ ~ty_expect self
+
   let expr (self:t) : AE.t =
-    let e = p_expr_ ~ty_expect:None self 0 in
+    p_expr_ ~ty_expect:None self 0
+
+  (* main entry point for expressions *)
+  let expr_and_eof (self:t) : AE.t =
+    let e = expr self in
     let last_tok = Lexer.cur self.lex in
     if last_tok <> EOF then (
       errorf (fun k->k"expected end of input after parsing expression, but got %a"
@@ -542,20 +584,137 @@ module Parser = struct
     e
 end
 
+module P_top = struct
+  type t = P_state.t
+  open P_state
+
+  (* recover: skip to the next "end" *)
+  let try_recover_ self : unit =
+    while
+      match Lexer.cur self.lex with
+      | END -> Lexer.junk self.lex; false
+      | _ -> Lexer.junk self.lex; true
+    do () done
+
+  let p_def ~pos self : _ =
+    let name = P_expr.p_ident self in
+    let tok, vars =
+      P_expr.p_tyvars_until self []
+        ~f:(function COLON | EQDEF -> true |_ -> false)
+    in
+    Log.debugf 5 (fun k->k"got vars %a" (Fmt.Dump.list A.Var.pp_with_ty) vars);
+    let ret = match tok with
+      | COLON ->
+        Some (P_expr.expr_atomic ~ty_expect:AE.type_ self)
+      | _ -> None
+    in
+    P_expr.eat_p' self
+      ~msg:"expect `:=` in a definition after <vars> and optional return type"
+      ~f:(function EQDEF -> true | _ -> false);
+    Log.debugf 5 (fun k->k"def: return type %a, %d vars, cur tok %a"
+                     (Fmt.Dump.option AE.pp) ret (List.length vars)
+                     Token.pp (Lexer.cur self.lex));
+    let body = P_expr.expr self in
+    P_expr.eat_end self ~msg:"expect `end` after a definition";
+    A.Top_stmt.def ~pos name vars ret body
+
+  let p_show ~pos self : _ =
+    match Lexer.cur self.lex with
+    | SYM "expr" ->
+      Lexer.junk self.lex;
+      let e = P_expr.expr self in
+      P_expr.eat_end self ~msg:"expect `end` after `show expr`";
+      A.Top_stmt.show_expr ~pos e
+    | SYM "proof" ->
+      assert false (* TODO: parse proof *)
+    | SYM s ->
+      Lexer.junk self.lex;
+      P_expr.eat_end self ~msg:"expect `end` after `show`";
+      A.Top_stmt.show ~pos s
+    | _ ->
+      errorf (fun k->k{|expected a name, or "expr", or a proof|})
+
+  (* list of toplevel parsers *)
+  let parsers = [
+    "def", p_def;
+    "show", p_show;
+  ]
+
+  let top (self:t) : A.top_statement option =
+    let parsing = ref None in
+    let errm ~pos t out () =
+      Fmt.fprintf out
+        "expected toplevel statement, but got token %a@ at %a;@ \
+         expected one of: [%s]"
+        Token.pp t Position.pp pos
+        (String.concat "," @@ List.map (fun (s,_) -> String.escaped s) parsers)
+    in
+    try
+      match Lexer.cur self.lex with
+      | EOF -> None
+      | SYM s as t ->
+        let pos = Lexer.pos self.lex in
+        begin match List.assoc s parsers with
+          | exception Not_found ->
+            Log.debugf 5 (fun k->k"unknown toplevek tok %a" Token.pp t);
+            let err = errm ~pos t in
+            try_recover_ self;
+            Some (A.Top_stmt.error ~pos err)
+          | p ->
+            parsing := Some s;
+            Log.debugf 5 (fun k->k"parse toplevel %s" s);
+            Lexer.junk self.lex;
+            Some (p ~pos self)
+        end
+      | t ->
+        let pos = Lexer.pos self.lex in
+        let err = errm ~pos t in
+        try_recover_ self;
+        Some (A.Top_stmt.error ~pos err)
+    with
+    | Trustee_error.E e ->
+      let pos = Lexer.pos self.lex in
+      try_recover_ self;
+      let msg out () =
+        let parsing out () = match !parsing with
+          | None -> ()
+          | Some p -> Fmt.fprintf out "@ while parsing `%s`" p
+        in
+        Fmt.fprintf out
+          "expected a toplevel statement%a@ at %a@ @[<2>but got error@ %a@]"
+          parsing () Position.pp pos Trustee_error.pp e
+      in
+      Some (A.Top_stmt.error ~pos msg)
+end
+
 let parse_expr ?q_args ~env lex : AE.t =
-  let p = Parser.create ?q_args ~env lex in
+  let p = P_expr.create ?q_args ~env lex in
   let e =
-    try Parser.expr p
+    try P_expr.expr_and_eof p
     with e ->
       errorf ~src:e (fun k->k"parse error at %a" Position.pp (Lexer.pos lex))
   in
   e
 
 let parse_top ~env lex : A.top_statement option =
-  match Lexer.cur lex with
-  | EOF -> None
-  | _ ->
-    assert false (* TODO *)
+  let p = P_state.create ~env lex in
+  P_top.top p
+
+let parse_top_l_process ?file ~env lex : _ list =
+  let pos = Lexer.pos lex in
+  let rec aux acc =
+    match parse_top ~env lex with
+    | None -> List.rev acc
+    | Some st ->
+      A.Env.process env st;
+      aux (st::acc)
+  in
+  let l = aux [] in
+  let l = match file with
+    | None -> l
+    | Some f -> A.Top_stmt.enter_file ~pos f :: l
+  in
+  l
 
 let parse_expr_infer ?q_args ~env lex : Expr.t =
   let e = parse_expr ?q_args ~env lex in
@@ -636,7 +795,7 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     (A.of_str "!(x:A) (y:B). p1 (f1 x)")
   A.(c M.plus @ [v "x"; v "y"]) (A.of_str "x + y")
   A.(c M.plus @ [v "x"; c M.plus @ [v "y"; v "z"]]) (A.of_str "x + y + z")
-  A.(let_ [vv"x", c M.a] (c M.p1 @ [v "x"])) (A.of_str "let x=a0 in p1 x")
+  A.(let_ [vv"x", c M.a] (c M.p1 @ [v "x"])) (A.of_str "let x = a0 in p1 x")
   A.(let_ [vv"x", c M.a; vv"y", c M.b] (c M.p2 @ [v "x"; v"y"])) \
     (A.of_str "let x=a0 and y=b0 in p2 x y")
   A.(ty_arrow (v"a")(v"b")) (A.of_str "a->b")
@@ -647,6 +806,7 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
          (A.eq (v"x")(v"x"))) \
     (A.of_str "\\ (x:a0->b0->c0). x=x")
   A.(of_expr ~at:true M.eq) (A.of_str "@=")
+  A.(of_expr M.bool) (A.of_str "bool")
 *)
 
 (* test type inference *)
@@ -678,13 +838,14 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
       LPAREN; \
       SYM("hello"); \
       SYM("!"); \
+      EQDEF; \
       QUOTED_STR(" co co"); \
       END; \
       SYM("world"); \
       RPAREN; \
       EOF; \
     ] \
-    (lex_to_list {test| foo + _ bar13(hello! " co co" end world) |test})
+    (lex_to_list {test| foo + _ bar13(hello! := " co co" end world) |test})
     [ LPAREN; \
       LPAREN; \
       NUM("12"); \
@@ -694,6 +855,7 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
       LPAREN; \
       SYM("x"); \
       SYM(","); \
+      COLON; \
       IN; \
       QUESTION_MARK_STR("a"); \
       QUESTION_MARK; \
@@ -712,6 +874,6 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
       RPAREN; \
       EOF; \
     ] \
-    (lex_to_list {test|((12+end f(x, in ?a ? ? b Y \( ))---let z)wlet)|test})
+    (lex_to_list {test|((12+end f(x, : in ?a ? ? b Y \( ))---let z)wlet)|test})
   [EOF] (lex_to_list "  ")
 *)
