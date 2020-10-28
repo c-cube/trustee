@@ -5,6 +5,7 @@ open Sigs
 module K = Kernel
 
 type position = Position.t
+type fixity = Fixity.t
 
 type 'a with_pos = {
   pos: position;
@@ -28,6 +29,10 @@ and var = {
   v_kind: var_kind
 }
 
+and const = private
+  | C_local of string (* not resolved yet *)
+  | C_k of K.expr
+
 and view =
   | Type
   | Ty_arrow of ty * ty
@@ -39,12 +44,17 @@ and view =
     }
   | Wildcard
   | Const of {
-      c: K.Expr.t;
+      c: const;
       at: bool; (* explicit types? *)
     }
   | App of expr * expr list
   | Lambda of var list * expr
-  | Bind of K.Expr.t * var list * expr
+  | Bind of {
+      c: const;
+      at: bool; (* explicit types? *)
+      vars: var list;
+      body: expr;
+    }
   | With of var list * expr
   | Eq of expr * expr
   | Let of binding list * expr
@@ -54,6 +64,12 @@ module Var : sig
   val make : ?kind:var_kind -> string -> ty option -> var
   include PP with type t := t
   val pp_with_ty : t Fmt.printer
+end
+
+module Const : sig
+  type t = const
+  include PP with type t := t
+  val of_expr : K.Expr.t -> t
 end
 
 (** {2 Logical expressions} *)
@@ -72,13 +88,14 @@ module Expr : sig
   val ty_pi : ?pos:position -> var list -> t -> t
 
   val var : ?pos:position -> var -> t
-  val const : ?pos:position -> ?at:bool -> K.Expr.t -> t
+  val const : ?pos:position -> ?at:bool -> const -> t
+  val of_expr : ?pos:position -> ?at:bool -> K.Expr.t -> t
   val meta : ?pos:position -> string -> ty option -> t
   val app : ?pos:position -> t -> t list -> t
   val let_ : ?pos:position -> (var * t) list -> t -> t
   val with_ : ?pos:position -> var list -> t -> t
   val lambda : ?pos:position -> var list -> t -> t
-  val bind : ?pos:position -> K.Expr.t -> var list -> t -> t
+  val bind : ?pos:position -> ?at:bool -> const -> var list -> t -> t
   val eq : ?pos:position -> t -> t -> t
   val wildcard : ?pos:position -> unit -> t
 end
@@ -96,7 +113,7 @@ module Goal : sig
   include PP with type t := t
 end
 
-(** {3 Proofs} *)
+(** {2 Proofs} *)
 module Proof : sig
   type t = top with_pos
   and top =
@@ -168,44 +185,77 @@ module Meta_expr : sig
 end
    *)
 
-module Meta_stmt : sig
-  type t = private view with_pos
-  and view =
-    | Top_def of {
-        name: string;
-        vars: var list;
-        ret: ty;
-        body: expr;
-      }
-    | Top_decl of {
-        name: string;
-        ty: ty;
-      }
-    | Top_axiom of {
-        name: string;
-        thm: expr;
-      }
-    | Top_goal of {
-        goal: Goal.t;
-        proof: Proof.t;
-        (* TODO: instead, Meta_expr.toplevel_proof; *)
-      }
-    | Top_theorem of {
-        name: string;
-        goal: Goal.t;
-        proof: Proof.t;
-        (* TODO: instead, Meta_expr.toplevel_proof; *)
-      }
-    | Top_error of {
-        msg: string; (* parse error *)
-      }
-    (* TODO  | Top_def_ty of string *)
-    (* TODO: | Top_def_proof_rule *)
-    (* TODO: | Top_def_rule *)
-    (* TODO: | Top_def_tactic *)
+(** {2 Statements} *)
+
+type top_statement = private top_statement_view with_pos
+and top_statement_view =
+  | Top_def of {
+      name: string;
+      vars: var list;
+      ret: ty;
+      body: expr;
+    }
+  | Top_decl of {
+      name: string;
+      ty: ty;
+    }
+  | Top_fixity of {
+      name: string;
+      fixity: fixity;
+    }
+  | Top_axiom of {
+      name: string;
+      thm: expr;
+    }
+  | Top_goal of {
+      goal: Goal.t;
+      proof: Proof.t;
+      (* TODO: instead, Meta_expr.toplevel_proof; *)
+    }
+  | Top_theorem of {
+      name: string;
+      goal: Goal.t;
+      proof: Proof.t;
+      (* TODO: instead, Meta_expr.toplevel_proof; *)
+    }
+  | Top_error of {
+      msg: string; (* parse error *)
+    }
+  (* TODO  | Top_def_ty of string *)
+  (* TODO: | Top_def_proof_rule *)
+  (* TODO: | Top_def_rule *)
+  (* TODO: | Top_def_tactic *)
+
+module Top_stmt : sig
+  type t = top_statement
 
   include Sigs.PP with type t := t
 
-  val make : pos:position -> view -> t
+  val pos : t -> position
+  val view : t -> top_statement_view
+  val make : pos:position -> top_statement_view -> t
+
+  val def : pos:position -> string -> var list -> ty -> expr -> t
+  val decl : pos:position -> string -> ty -> t
+  val fixity : pos:position -> string -> fixity -> t
 end
 
+module Env : sig
+  type t
+
+  val create : K.Ctx.t -> t
+  val copy : t -> t
+  val ctx : t -> K.Ctx.t
+
+  val declare : t -> string -> const
+  val declare' : t -> string -> unit
+  val declare_fixity : t -> string -> fixity -> unit
+
+  val find : t -> string -> (const * fixity) option
+
+  val process : t -> Top_stmt.t -> unit
+  (** Process declaration/definition from the statement *)
+
+  val bool : t -> const
+  val eq : t -> const
+end

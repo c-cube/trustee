@@ -1,0 +1,6 @@
+(executable
+  (name trustee_tk)
+  (public_name trustee_tk)
+  (package trustee)
+  (libraries containers trustee.core)
+  (flags :standard -warn-error -a+8))

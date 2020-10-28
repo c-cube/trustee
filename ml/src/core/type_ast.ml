@@ -539,9 +539,22 @@ let infer (env:env) (e0:AE.t) : expr =
         let b = inf_rec_ bv b in
         unif_exn_ (Expr.ty a) (Expr.ty b);
         Expr.eq ~pos a b
-      | A.Const c ->
-        let t = Expr.const ~pos c.c in
-        if c.at then t else complete_ty_args_ ~pos env t
+      | A.Const {c;at} ->
+        (* convert directly into a proper kernel constant *)
+        let t =
+          let c = match c with
+            | A.C_k c -> c
+            | A.C_local name ->
+              match K.Ctx.find_const_by_name env.ctx name with
+              | None ->
+                errorf
+                  (fun k->k"cannot find constant %a@ at %a"
+                       A.Const.pp c Position.pp pos)
+              | Some c -> K.Expr.const env.ctx c
+          in
+          Expr.const ~pos c
+        in
+        if at then t else complete_ty_args_ ~pos env t
       | A.App (f,l) ->
         let f = inf_rec_ bv f in
         let l = List.map (inf_rec_ bv) l in
@@ -565,7 +578,7 @@ let infer (env:env) (e0:AE.t) : expr =
             bv vars
         in
         Expr.lambda_l ~pos vars @@ inf_rec_ bv bod
-      | A.Bind (_, _, _) -> assert false (* TODO *)
+      | A.Bind _ -> assert false (* TODO *)
       | A.Let (bindings, body) ->
         let bv', bindings =
           CCList.fold_map

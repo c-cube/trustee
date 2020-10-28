@@ -50,12 +50,17 @@ end
 
 val parse_expr :
   ?q_args:K.Expr.t list ->
-  ctx:K.Ctx.t ->
+  env:A.Env.t -> Lexer.t -> A.expr
+
+val parse_top :
+  env:A.Env.t ->
   Lexer.t ->
-  A.expr
+  A.top_statement option
+
+(** {2 Parse and perform type inference} *)
 
 val parse_expr_infer :
   ?q_args:K.Expr.t list ->
-  ctx:K.Ctx.t ->
+  env:A.Env.t ->
   Lexer.t ->
   K.expr

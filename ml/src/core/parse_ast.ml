@@ -4,6 +4,7 @@ open Sigs
 module K = Kernel
 
 type position = Position.t
+type fixity = Fixity.t
 
 type 'a with_pos = {
   pos: position;
@@ -27,6 +28,10 @@ and var_kind =
 
 and binding = var * expr
 
+and const =
+  | C_local of string (* not resolved yet *)
+  | C_k of K.expr
+
 and view =
   | Type
   | Ty_arrow of ty * ty
@@ -38,12 +43,17 @@ and view =
     }
   | Wildcard
   | Const of {
-      c: K.Expr.t;
+      c: const;
       at: bool; (* explicit types? *)
     }
   | App of expr * expr list
   | Lambda of var list * expr
-  | Bind of K.Expr.t * var list * expr
+  | Bind of {
+      c: const;
+      at: bool; (* explicit types? *)
+      vars: var list;
+      body: expr;
+    }
   | With of var list * expr
   | Eq of expr * expr
   | Let of binding list * expr
@@ -61,14 +71,15 @@ let rec pp_ out (e:expr) : unit =
       (pp_list pp_var) vars pp_ bod
   | Const {c;at} ->
     let s = if at then "@" else "" in
-    Fmt.fprintf out "%s%a" s K.Expr.pp c
+    Fmt.fprintf out "%s%a" s pp_const c
   | App (f,l) -> Fmt.fprintf out "(@[%a@ %a@])" pp_ f (pp_list pp_) l
   | Meta v -> Fmt.fprintf out "?%s" v.name
   | Lambda (vars,bod) ->
     Fmt.fprintf out "(@[\\%a.@ %a@])" (pp_list pp_var_ty) vars pp_ bod
-  | Bind (c, vars,bod) ->
-    Fmt.fprintf out "(@[%a %a.@ %a@])"
-      K.Expr.pp c (pp_list pp_var_ty) vars pp_ bod
+  | Bind {c; at; vars; body} ->
+    let s = if at then "@" else "" in
+    Fmt.fprintf out "(@[%s%a %a.@ %a@])"
+      s pp_const c (pp_list pp_var_ty) vars pp_ body
   | With (vars,bod) ->
     Fmt.fprintf out "(@[with %a.@ %a@])" (pp_list pp_var_ty) vars pp_ bod
   | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp_ a pp_ b
@@ -81,6 +92,10 @@ and pp_atom_ out e =
   | Type | Var _ | Meta _ | Const _ -> pp_ out e
   | _ -> Fmt.fprintf out "(@[%a@])" pp_ e
 and pp_var out v = Fmt.string out v.v_name
+and pp_const out c =
+  match c with
+  | C_local s -> Fmt.string out s
+  | C_k e -> K.Expr.pp out e
 and pp_var_ty out (v:var) : unit =
   match v.v_ty with
   | None -> Fmt.string out v.v_name
@@ -95,6 +110,13 @@ module Var = struct
   let pp out v = Fmt.string out v.v_name
   let to_string = Fmt.to_string pp
   let pp_with_ty = pp_var_ty
+end
+
+module Const = struct
+  type t = const
+  let pp = pp_const
+  let to_string = Fmt.to_string pp
+  let[@inline] of_expr e = C_k e
 end
 
 module Expr = struct
@@ -115,6 +137,7 @@ module Expr = struct
 
   let var ?pos (v:var) : t = mk_ ?pos (Var v)
   let const ?pos ?(at=false) c : t = mk_ ?pos (Const {c; at})
+  let of_expr ?pos ?at e : t = const ?pos ?at (Const.of_expr e)
   let meta ?pos (s:string) ty : t = mk_ ?pos (Meta {ty; name=s})
   let app ?pos (f:t) (l:t list) : t =
     match f.view with
@@ -123,7 +146,7 @@ module Expr = struct
   let let_ ?pos bs bod : t = mk_ ?pos (Let (bs, bod))
   let with_ ?pos vs bod : t = mk_ ?pos (With (vs, bod))
   let lambda ?pos vs bod : t = mk_ ?pos (Lambda (vs, bod))
-  let bind ?pos c vs bod : t = mk_ ?pos (Bind (c, vs, bod))
+  let bind ?pos ?(at=false) c vars body : t = mk_ ?pos (Bind {c; at; vars; body})
   let eq ?pos a b : t = mk_ ?pos (Eq (a,b))
   let wildcard ?pos () : t = mk_ ?pos Wildcard
 
@@ -146,7 +169,7 @@ module Goal = struct
   let to_string = Fmt.to_string pp
 end
 
-(** {3 Proofs} *)
+(** {2 Proofs} *)
 module Proof = struct
   type t = top with_pos
   and top =
@@ -206,36 +229,52 @@ module Proof = struct
   let to_string = Fmt.to_string pp
 end
 
-module Meta_stmt = struct
-  type t = view with_pos
-  and view =
-    | Top_def of {
-        name: string;
-        vars: var list;
-        ret: ty;
-        body: expr;
-      }
-    | Top_decl of {
-        name: string;
-        ty: ty;
-      }
-    | Top_axiom of {
-        name: string;
-        thm: expr;
-      }
-    | Top_goal of {
-        goal: Goal.t;
-        proof: Proof.t;
-      }
-    | Top_theorem of {
-        name: string;
-        goal: Goal.t;
-        proof: Proof.t;
-      }
-    | Top_error of {
-        msg: string;
-      }
+(** {2 Statements} *)
 
+type top_statement = top_statement_view with_pos
+and top_statement_view =
+  | Top_def of {
+      name: string;
+      vars: var list;
+      ret: ty;
+      body: expr;
+    }
+  | Top_decl of {
+      name: string;
+      ty: ty;
+    }
+  | Top_fixity of {
+      name: string;
+      fixity: fixity;
+    }
+  | Top_axiom of {
+      name: string;
+      thm: expr;
+    }
+  | Top_goal of {
+      goal: Goal.t;
+      proof: Proof.t;
+      (* TODO: instead, Meta_expr.toplevel_proof; *)
+    }
+  | Top_theorem of {
+      name: string;
+      goal: Goal.t;
+      proof: Proof.t;
+      (* TODO: instead, Meta_expr.toplevel_proof; *)
+    }
+  | Top_error of {
+      msg: string; (* parse error *)
+    }
+  (* TODO  | Top_def_ty of string *)
+  (* TODO: | Top_def_proof_rule *)
+  (* TODO: | Top_def_rule *)
+  (* TODO: | Top_def_tactic *)
+
+module Top_stmt = struct
+  type t = top_statement
+
+  let[@inline] view st = st.view
+  let[@inline] pos st = st.pos
   let pp out (self:t) : unit =
     match self.view with
     | Top_def { name; vars=[]; ret; body } ->
@@ -247,6 +286,9 @@ module Meta_stmt = struct
     | Top_decl { name; ty } ->
       Fmt.fprintf out "@[<hv>@[<2>decl %s :@ %a@]@ end@]"
         name pp ty
+    | Top_fixity {name; fixity} ->
+      Fmt.fprintf out "@[<hv>@[<2>fixity %s = %s@]@ end@]"
+        name (Fixity.to_string_syntax fixity)
     | Top_axiom { name; thm } ->
       Fmt.fprintf out "@[<hv>@[<2>axiom %s :=@ %a@]@ end@]"
         name pp thm
@@ -263,7 +305,50 @@ module Meta_stmt = struct
   let make ~pos view : t = {pos; view}
   let def ~pos name vars ret body : t = make ~pos (Top_def {name; ret; vars; body})
   let decl ~pos name ty : t = make ~pos (Top_decl {name; ty})
+  let fixity ~pos name f : t = make ~pos (Top_fixity {name; fixity=f})
   let axiom ~pos name e : t = make ~pos (Top_axiom {name; thm=e})
   let goal ~pos goal proof : t = make ~pos (Top_goal {goal; proof})
   let theorem ~pos name g p : t = make ~pos (Top_theorem{name; goal=g; proof=p})
+end
+
+module Env = struct
+  type t = {
+    ctx: K.Ctx.t;
+    mutable consts: fixity Str_map.t;
+  }
+
+  let create ctx : t =
+    { ctx; consts=Str_map.empty; }
+
+  let copy e : t = {e with consts=e.consts}
+  let ctx e = e.ctx
+
+  let declare self s : const =
+    let c = C_local s in
+    self.consts <- Str_map.add s Fixity.normal self.consts;
+    c
+
+  let declare' self s = ignore (declare self s : const)
+
+  let declare_fixity self s f =
+    self.consts <- Str_map.add s f self.consts
+
+  let find self s : _ option =
+    match Str_map.get s self.consts with
+    | Some f -> Some (C_local s, f)
+    | None ->
+      match K.Ctx.find_const_by_name self.ctx s with
+      | Some c -> Some (C_k (K.Expr.const self.ctx c), K.Const.fixity c)
+      | None -> None
+
+  let process (self:t) (st:top_statement) : unit =
+    match st.view with
+    | Top_def {name; _} -> declare' self name
+    | Top_decl {name; _} -> declare' self name
+    | Top_fixity {name; fixity} ->
+      declare_fixity self name fixity
+    | Top_axiom _ | Top_goal _ | Top_theorem _ | Top_error _ -> ()
+
+  let bool self : const = C_k (K.Expr.bool self.ctx)
+  let eq self : const = C_k (K.Expr.eq self.ctx)
 end

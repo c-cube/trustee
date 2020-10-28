@@ -9,14 +9,7 @@ type ty = expr
 type const
 type thm
 
-type fixity =
-  | F_normal
-  | F_infix of int
-  | F_left_assoc of int
-  | F_right_assoc of int
-  | F_prefix of int
-  | F_postfix of int
-  | F_binder of int
+type fixity = Fixity.t
 
 type var = {
   v_name: string;
@@ -27,21 +20,6 @@ type bvar = {
   bv_idx: int;
   bv_ty: ty;
 }
-
-(** {2 Fixity} *)
-module Fixity : sig
-  type t = fixity
-  val pp : t Fmt.printer
-  val to_string : t -> string
-
-  val normal : t
-  val lassoc : int -> t
-  val rassoc : int -> t
-  val prefix : int -> t
-  val postfix : int -> t
-
-  val get_prec : t -> int
-end
 
 module Const : sig
   type t = const

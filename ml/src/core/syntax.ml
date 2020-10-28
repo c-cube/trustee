@@ -261,32 +261,33 @@ module Parser = struct
   type precedence = int
 
   type t = {
-    ctx: K.Ctx.t;
+    env: A.Env.t;
     lex: Lexer.t;
     bindings: A.var Str_tbl.t;
     mutable q_args: Expr.t list; (* interpolation parameters *)
   }
 
-  let create ?(q_args=[]) ~ctx (src: Lexer.t) : t =
+  let create ?(q_args=[]) ~env (src: Lexer.t) : t =
     { lex=src;
-      ctx;
-      bindings=Str_tbl.create 16;
+      env;
       q_args;
+      bindings=Str_tbl.create 16;
     }
 
   let[@inline] pos_ self = Lexer.pos self.lex
 
   let fixity_ (self:t) (s:string) : K.fixity =
+    let module F = Fixity in
     match s with
-    | "->" -> K.F_right_assoc 100
-    | "pi" -> K.F_binder 70
-    | "with" -> K.F_binder 1
-    | "\\" -> K.F_binder 50
-    | "=" -> K.F_infix 150
+    | "->" -> F.rassoc 100
+    | "pi" -> F.binder 70
+    | "with" -> F.binder 1
+    | "\\" -> F.binder 50
+    | "=" -> F.infix 150
     | _ ->
-      match K.Ctx.find_const_by_name self.ctx s with
-      | None -> K.F_normal
-      | Some c -> K.Const.fixity c
+      match A.Env.find self.env s with
+      | None -> F.normal
+      | Some (_,f) -> f
 
   let eat_ ~msg self (t:token) : unit =
     let pos = Lexer.pos self.lex in
@@ -317,15 +318,15 @@ module Parser = struct
 
   let expr_of_string_ (self:t) ?(at=false) (s:string) : A.expr =
     begin match s with
-      | "bool" -> AE.const ~at (K.Expr.bool self.ctx)
-      | "=" -> AE.const ~at (K.Expr.eq self.ctx)
+      | "bool" -> AE.const ~at (A.Env.bool self.env)
+      | "=" -> AE.const ~at (A.Env.eq self.env)
       | _ ->
         match Str_tbl.find self.bindings s with
         | u -> AE.var u
         | exception Not_found ->
           let pos = pos_ self in
-          begin match K.Ctx.find_const_by_name self.ctx s with
-            | Some c -> AE.const ~pos ~at (K.Expr.const self.ctx c)
+          begin match A.Env.find self.env s with
+            | Some (c,_) -> AE.const ~pos ~at c
             | None ->
               let ty = AE.ty_meta ~pos (fresh_ ()) in
               AE.var ~pos (A.Var.make s (Some ty))
@@ -388,8 +389,8 @@ module Parser = struct
       AE.var (A.Var.make s (Some ty))
     | _ ->
       let pos = Lexer.pos self.lex in
-      match K.Ctx.find_const_by_name self.ctx s with
-      | Some c -> AE.const ~pos ~at (K.Expr.const self.ctx c)
+      match A.Env.find self.env s with
+      | Some (c,_) -> AE.const ~pos ~at c
       | None ->
         if s<>"" && (at || is_ascii (String.get s 0)) then (
           expr_of_string_ ~at self s
@@ -433,11 +434,10 @@ module Parser = struct
             | "pi" -> AE.ty_pi ~pos vars body
             | "with" -> AE.with_ ~pos vars body
             | _ ->
-              match K.Ctx.find_const_by_name self.ctx s with
+              match A.Env.find self.env s with
               | None -> assert false
-              | Some c ->
-                let c = K.Expr.const self.ctx c in
-                AE.bind ~pos c vars body
+              | Some (c,_) ->
+                AE.bind ~at:false ~pos c vars body
           end
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
           errorf (fun k->k"unexpected infix operator `%s` at %a"
@@ -455,7 +455,7 @@ module Parser = struct
     | QUESTION_MARK ->
       begin match self.q_args with
         | [] -> errorf (fun k->k"no interpolation arg at %a" Position.pp pos)
-        | t :: tl -> self.q_args <- tl; AE.const ~pos t
+        | t :: tl -> self.q_args <- tl; AE.const ~pos (A.Const.of_expr t)
       end
     | NUM _ ->
       errorf (fun k->k"TODO: parse numbers") (* TODO *)
@@ -542,8 +542,8 @@ module Parser = struct
     e
 end
 
-let parse_expr ?q_args ~ctx lex : AE.t =
-  let p = Parser.create ?q_args ~ctx lex in
+let parse_expr ?q_args ~env lex : AE.t =
+  let p = Parser.create ?q_args ~env lex in
   let e =
     try Parser.expr p
     with e ->
@@ -551,17 +551,25 @@ let parse_expr ?q_args ~ctx lex : AE.t =
   in
   e
 
-let parse_expr_infer ?q_args ~ctx lex : Expr.t =
-  let e = parse_expr ?q_args ~ctx lex in
-  let env = Type_ast.Env.create ctx in
-  let e = Type_ast.infer env e in
-  Type_ast.generalize env;
+let parse_top ~env lex : A.top_statement option =
+  match Lexer.cur lex with
+  | EOF -> None
+  | _ ->
+    assert false (* TODO *)
+
+let parse_expr_infer ?q_args ~env lex : Expr.t =
+  let e = parse_expr ?q_args ~env lex in
+  let ctx = A.Env.ctx env in
+  let ty_env = Type_ast.Env.create ctx in
+  let e = Type_ast.infer ty_env e in
+  Type_ast.generalize ty_env;
   Type_ast.to_expr ctx e
 
 (*$inject
   module E = K.Expr
   module Make() = struct
     let ctx = K.Ctx.create ()
+    let env = A.Env.create ctx
     let bool = K.Expr.bool ctx
     let tau = K.Expr.new_ty_const ctx "tau"
     let v s ty = K.Expr.var ctx (K.Var.make s ty)
@@ -591,7 +599,7 @@ let parse_expr_infer ?q_args ~ctx lex : Expr.t =
     let eq = K.Expr.eq ctx
     let () = K.Const.set_fixity (K.Expr.as_const_exn plus) (F_right_assoc 20)
 
-    let of_str s = Syntax.parse_expr_infer ~ctx (Lexer.create s)
+    let of_str s = Syntax.parse_expr_infer ~env (Lexer.create s)
   end
 
   module M = Make()
@@ -601,16 +609,17 @@ let parse_expr_infer ?q_args ~ctx lex : Expr.t =
     include AE
     let v (s:string) : t = var (A.Var.make s None)
     let vv s : A.var = A.Var.make s None
-    let of_str s : AE.t = Syntax.parse_expr ~ctx:M.ctx (Lexer.create s)
+    let of_str s : AE.t = Syntax.parse_expr ~env:M.env (Lexer.create s)
     let b_forall vars bod : AE.t =
-      AE.bind M.forall (List.map (fun (x,ty)-> A.Var.make x ty) vars) bod
-    let c x : t = AE.const x
+      AE.bind (A.Const.of_expr M.forall)
+        (List.map (fun (x,ty)-> A.Var.make x ty) vars) bod
+    let c x : t = AE.of_expr x
     let (@->) a b = AE.ty_arrow a b
     let (@) a b = AE.app a b
   end
   open A
 
-  let parse_e s : K.Expr.t = Syntax.parse_expr_infer ~ctx:M.ctx (Lexer.create s)
+  let parse_e s : K.Expr.t = Syntax.parse_expr_infer ~env:M.env (Lexer.create s)
 *)
 
 (* test printer itself *)
@@ -637,7 +646,7 @@ let parse_expr_infer ?q_args ~ctx lex : Expr.t =
     A.(lambda [A.Var.make "x" @@ Some (c M.a @-> c M.b @-> c M.c)] \
          (A.eq (v"x")(v"x"))) \
     (A.of_str "\\ (x:a0->b0->c0). x=x")
-  A.(const ~at:true M.eq) (A.of_str "@=")
+  A.(of_expr ~at:true M.eq) (A.of_str "@=")
 *)
 
 (* test type inference *)
