@@ -25,6 +25,7 @@ by
   end
 end
 
+# TODO: support attribute syntax `#[doc="theorem `(x=T)=x`"]`
 theorem EqTrueElim := (x = T) = x
 by
   proof
@@ -32,4 +33,23 @@ by
       (bool_eq TrueIsTrue (sym (assume (x=T))))
       (bool_eq_intro TrueIsTrue (assume (x:bool)))
   end
+end
+
+theorem EqTrueIntro := x = (x = T) by proof sym EqTruElim end end
+
+# TODO: REqTrueIntro
+# TODO: REqTrueElim
+
+def forall : (pi a. (a -> bool) -> bool) by DefForall
+  := \ (a:type) (f:a -> bool). f = (\x:a. T)
+end
+
+# TODO: parse this properly
+set_fixity forall (binder 12) end
+
+# TODO RForallSubst
+# TODO RForallIntro
+
+def /\ (a b : bool) : bool by DefAnd
+  := forall (\f. f a b = f T T)
 end
