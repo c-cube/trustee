@@ -1,0 +1,27 @@
+
+# A first example.
+
+# TODO: RAppLeft/RAppRight
+
+declare tau : type end
+
+def T : bool by DefTrue :=
+  let f := (\x: bool. x) in f = f
+end
+
+show expr
+  (T = T) = T
+end
+
+theorem TrueIsTrue := T
+by
+  proof # more verbose than strictly required
+    let expr e := \x: bool. x in
+    let th1 := refl e in
+    let th2 := sym DefTrue in
+    bool_eq th1 th2
+  end
+end
+
+show DefT end
+
