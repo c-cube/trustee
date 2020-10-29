@@ -245,7 +245,9 @@ module Proof = struct
     match s.view with
     | Pr_apply_rule (r, []) when top -> Fmt.string out r
     | Pr_apply_rule (r, args) ->
-      Fmt.fprintf out "(@[%s@ %a@])" r (pp_list pp_rule_arg) args
+      if not top then Fmt.char out '(';
+      Fmt.fprintf out "@[<hv2>%s@ %a@]" r (pp_list pp_rule_arg) args;
+      if not top then Fmt.char out ')';
     | Pr_sub_proof p -> pp out p
     | Pr_error e -> Fmt.fprintf out "<error %s>" e
 

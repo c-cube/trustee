@@ -13,6 +13,8 @@ show expr
   (T = T) = T
 end
 
+show DefTrue end
+
 theorem TrueIsTrue := T
 by
   proof # more verbose than strictly required
@@ -23,5 +25,11 @@ by
   end
 end
 
-show DefT end
-
+theorem EqTrueElim := (x = T) = x
+by
+  proof
+    bool_eq_intro
+      (bool_eq TrueIsTrue (sym (assume (x=T))))
+      (bool_eq_intro TrueIsTrue (assume (x:bool)))
+  end
+end
