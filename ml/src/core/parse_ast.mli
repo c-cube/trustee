@@ -59,6 +59,8 @@ and view =
   | Eq of expr * expr
   | Let of binding list * expr
 
+type subst = (string * expr) list
+
 module Var : sig
   type t = var
   val make : ?kind:var_kind -> string -> ty option -> var
@@ -100,22 +102,31 @@ module Expr : sig
   val wildcard : ?pos:position -> unit -> t
 end
 
+(** {2 Substitution} *)
+module Subst : sig
+  type t = subst
+  include PP with type t := t
+end
+
 (** {2 Goal}
 
     A goal is a conjecture that reflects what the final theorem should
     look like. *)
 module Goal : sig
-  type t = {
+  type t = private {
     hyps: Expr.t list;
     concl: Expr.t;
   }
+
+  val make : Expr.t list -> Expr.t -> t
+  val make_nohyps : Expr.t -> t
 
   include PP with type t := t
 end
 
 (** {2 Proofs} *)
 module Proof : sig
-  type t = top with_pos
+  type t = private top with_pos
   and top =
     | Proof_atom of step
     | Proof_steps of {
@@ -139,8 +150,28 @@ module Proof : sig
   and rule_arg =
     | Arg_var of string
     | Arg_step of step
+    | Arg_expr of expr
+    | Arg_subst of subst
+
+  type rule_signature = Rule.signature
 
   include PP with type t := t
+  val pp_pr_let : pr_let Fmt.printer
+  val pp_rule_arg : rule_arg Fmt.printer
+  val pp_rule_signature : rule_signature Fmt.printer
+
+  val make : pos:position -> pr_let list -> step -> t
+  val let_expr : string -> expr -> pr_let
+  val let_step : string -> step -> pr_let
+
+  val step_apply_rule : pos:position -> string -> rule_arg list -> step
+  val step_subproof : pos:position -> t -> step
+  val step_error : pos:position -> string -> step
+
+  val arg_var : string -> rule_arg
+  val arg_step : step -> rule_arg
+  val arg_expr : expr -> rule_arg
+  val arg_subst : subst -> rule_arg
 end
 
 (* TODO
@@ -192,6 +223,7 @@ and top_statement_view =
   | Top_enter_file of string
   | Top_def of {
       name: string;
+      th_name: string option;
       vars: var list;
       ret: ty option;
       body: expr;
@@ -240,7 +272,8 @@ module Top_stmt : sig
   val make : pos:position -> top_statement_view -> t
 
   val enter_file : pos:position -> string -> t
-  val def : pos:position -> string -> var list -> ty option -> expr -> t
+  val def : pos:position -> string ->
+    th_name: string option -> var list -> ty option -> expr -> t
   val decl : pos:position -> string -> ty -> t
   val fixity : pos:position -> string -> fixity -> t
   val axiom : pos:position -> string -> expr -> t
@@ -263,7 +296,10 @@ module Env : sig
   val declare' : t -> string -> unit
   val declare_fixity : t -> string -> fixity -> unit
 
-  val find : t -> string -> (const * fixity) option
+  val declare_rule : t -> string -> Proof.rule_signature -> unit
+
+  val find_const : t -> string -> (const * fixity) option
+  val find_rule: t -> string -> Proof.rule_signature option
 
   val process : t -> Top_stmt.t -> unit
   (** Process declaration/definition from the statement *)
@@ -271,3 +307,4 @@ module Env : sig
   val bool : t -> const
   val eq : t -> const
 end
+

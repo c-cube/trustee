@@ -7,6 +7,8 @@ type arg =
   | Arg_thm
   | Arg_subst
 
+type signature = arg list
+
 type t = {
   r_name: string;
   r_args: arg list;
@@ -36,25 +38,34 @@ let mk_ r_name r_view r_args : t =
 let assume : t = mk_ "assume" R_assume [Arg_expr]
 let axiom : t = mk_ "axiom" R_axiom [Arg_expr]
 let cut : t = mk_ "cut" R_cut [Arg_thm; Arg_thm]
-let refl : t = mk_ "refl" R_cut [Arg_expr]
-let congr : t = mk_ "congr" R_cut [Arg_thm; Arg_thm]
-let congr_ty : t = mk_ "congr_ty" R_cut [Arg_thm; Arg_thm]
-let subst : t = mk_ "subst " R_cut [Arg_subst; Arg_thm]
-let sym : t = mk_ "sym" R_cut [Arg_thm]
-let bool_eq : t = mk_ "bool_eq" R_cut [Arg_thm; Arg_thm]
-let bool_eq_intro : t = mk_ "bool_eq_intro" R_cut [Arg_thm; Arg_thm]
-let beta_conv : t = mk_ "beta_conv" R_cut [Arg_expr]
+let refl : t = mk_ "refl" R_refl [Arg_expr]
+let congr : t = mk_ "congr" R_congr [Arg_thm; Arg_thm]
+let congr_ty : t = mk_ "congr_ty" R_congr_ty [Arg_thm; Arg_thm]
+let subst : t = mk_ "subst " R_subst [Arg_subst; Arg_thm]
+let sym : t = mk_ "sym" R_sym [Arg_thm]
+let bool_eq : t = mk_ "bool_eq" R_bool_eq [Arg_thm; Arg_thm]
+let bool_eq_intro : t = mk_ "bool_eq_intro" R_bool_eq_intro [Arg_thm; Arg_thm]
+let beta_conv : t = mk_ "beta_conv" R_beta_conv [Arg_expr]
 
 let builtins : t list = [
   assume; axiom; cut; refl; congr; sym; congr_ty; subst;
   bool_eq; bool_eq_intro; beta_conv;
 ]
-let[@inline] builtin_of_string s =
+let find_builtin s =
   try Some (List.find (fun r -> String.equal r.r_name s) builtins)
   with Not_found -> None
 
+let signature r = r.r_args
+
 let pp out (r:t) : unit = Fmt.string out r.r_name
 let to_string = Fmt.to_string pp
+
+let string_of_arg = function
+  | Arg_thm -> "thm"
+  | Arg_subst -> "subst"
+  | Arg_expr -> "expr"
+let pp_arg out a = Fmt.string out (string_of_arg a)
+let pp_signature = Fmt.Dump.list pp_arg
 
 (* TODO
 val apply : K.Ctx.t -> t -> exprs:K.Expr.t list -> thm:K.Thm

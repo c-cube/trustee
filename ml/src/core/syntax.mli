@@ -22,6 +22,7 @@ type token =
   | EQDEF
   | AT_SYM of string
   | NUM of string
+  | BY
   | END
   | ERROR of char
   | EOF

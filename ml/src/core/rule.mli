@@ -7,6 +7,8 @@ type arg =
   | Arg_thm
   | Arg_subst
 
+type signature = arg list
+
 type t = private {
   r_name: string;
   r_args: arg list;
@@ -43,9 +45,13 @@ val bool_eq_intro : t
 val beta_conv : t
 
 include PP with type t := t
+val pp_arg : arg Fmt.printer
+val pp_signature : signature Fmt.printer
+
+val signature : t -> signature
 
 val builtins : t list
-val builtin_of_string : string -> t option
+val find_builtin : string -> t option
 
 (* TODO: bridge to context methods
 val apply : K.Ctx.t -> t -> exprs:K.Expr.t list -> thm:K.Thm

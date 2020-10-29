@@ -24,6 +24,7 @@ type token =
   | EQDEF
   | AT_SYM of string
   | NUM of string
+  | BY
   | END
   | ERROR of char
   | EOF
@@ -48,6 +49,7 @@ module Token = struct
     | QUOTED_STR s -> Fmt.fprintf out "QUOTED_STR %S" s
     | AT_SYM s -> Fmt.fprintf out "AT_SYM %s" s
     | NUM s -> Fmt.fprintf out "NUM %S" s
+    | BY -> Fmt.string out "BY"
     | END -> Fmt.string out "END"
     | ERROR c -> Fmt.fprintf out "ERROR '%c'" c
     | EOF -> Fmt.string out "EOF"
@@ -75,11 +77,11 @@ module Lexer = struct
   (* skip rest of line *)
   let rest_of_line self : unit =
     assert (self.st != Done);
-    while self.i < String.length self.src && String.get self.src self.i != 'b' do
+    while self.i < String.length self.src && String.get self.src self.i != '\n' do
       self.i <- 1 + self.i
     done;
     if self.i < String.length self.src then (
-      assert (String.get self.src self.i = 'b');
+      assert (String.get self.src self.i = '\n');
       self.i <- 1 + self.i;
     );
     self.col <- 1;
@@ -194,12 +196,13 @@ module Lexer = struct
       | c when is_alpha c ->
         let i0 = self.i in
         let j = read_many
-            self (fun c -> is_alpha c || is_digit c) self.i in
+            self (fun c -> is_alpha c || is_digit c || c =='_') self.i in
         self.i <- j;
         self.col <- (j-i0) + self.col;
         let s = String.sub self.src i0 (j-i0) in
         begin match s with
           | "let" -> LET
+          | "by" -> BY
           | "and" -> AND
           | "in" -> IN
           | "end" -> END
@@ -216,7 +219,7 @@ module Lexer = struct
         let i0 = self.i in
         self.i <- 1 + self.i;
         self.col <- 1 + self.col;
-        let j = read_many self (fun c -> is_symbol c) self.i in
+        let j = read_many self (fun c -> is_symbol c || c=='_') self.i in
         self.i <- j;
         self.col <- (j-i0+1) + self.col;
         let s = String.sub self.src i0 (j-i0) in
@@ -276,6 +279,26 @@ module P_state = struct
       q_args;
       bindings=Str_tbl.create 16;
     }
+
+  let eat_p ~msg self ~f : token =
+    let pos = Lexer.pos self.lex in
+    let t2 = Lexer.cur self.lex in
+    if f t2 then (
+      Lexer.junk self.lex;
+      t2
+    ) else (
+      errorf (fun k->k "unexpected token %a while parsing %s at %a"
+                 Token.pp t2 msg Position.pp pos)
+    )
+
+  let eat_p' ~msg self ~f : unit =
+    ignore (eat_p ~msg self ~f : token)
+
+  let eat_eq ~msg self (t:token) : unit =
+    eat_p' ~msg self ~f:(Token.equal t)
+
+  let eat_end ~msg self : unit =
+    eat_p' self ~msg ~f:(function END -> true | _ -> false)
 end
 
 (* We follow a mix of:
@@ -299,29 +322,9 @@ module P_expr = struct
     | "\\" -> F.binder 50
     | "=" -> F.infix 150
     | _ ->
-      match A.Env.find self.env s with
+      match A.Env.find_const self.env s with
       | None -> F.normal
       | Some (_,f) -> f
-
-  let eat_p ~msg self ~f : token =
-    let pos = Lexer.pos self.lex in
-    let t2 = Lexer.cur self.lex in
-    if f t2 then (
-      Lexer.junk self.lex;
-      t2
-    ) else (
-      errorf (fun k->k "unexpected token %a while parsing %s at %a"
-                 Token.pp t2 msg Position.pp pos)
-    )
-
-  let eat_p' ~msg self ~f : unit =
-    ignore (eat_p ~msg self ~f : token)
-
-  let eat_eq ~msg self (t:token) : unit =
-    eat_p' ~msg self ~f:(Token.equal t)
-
-  let eat_end ~msg self : unit =
-    eat_p' self ~msg ~f:(function END -> true | _ -> false)
 
   (* parse an identifier *)
   let p_ident self : string =
@@ -349,7 +352,7 @@ module P_expr = struct
         | u -> AE.var u
         | exception Not_found ->
           let pos = pos_ self in
-          begin match A.Env.find self.env s with
+          begin match A.Env.find_const self.env s with
             | Some (c,_) -> AE.const ~pos ~at c
             | None ->
               let ty = AE.ty_meta ~pos (fresh_ ()) in
@@ -360,7 +363,7 @@ module P_expr = struct
   (* parse let bindings *)
   let rec p_bindings_ self : (A.var * AE.t) list =
     let v = A.Var.make (p_ident self) None in
-    eat_p' self ~msg:"`=` in let binding" ~f:(function SYM "=" -> true | _ -> false);
+    eat_eq self EQDEF ~msg:"`:=` in let binding";
     let e = p_expr_ ~ty_expect:None self 0 in
     if Token.equal (Lexer.cur self.lex) IN then (
       [v, e]
@@ -422,7 +425,7 @@ module P_expr = struct
       AE.var (A.Var.make s (Some ty))
     | _ ->
       let pos = Lexer.pos self.lex in
-      match A.Env.find self.env s with
+      match A.Env.find_const self.env s with
       | Some (c,_) -> AE.const ~pos ~at c
       | None ->
         if s<>"" && (at || is_ascii (String.get s 0)) then (
@@ -468,7 +471,7 @@ module P_expr = struct
             | "pi" -> AE.ty_pi ~pos vars body
             | "with" -> AE.with_ ~pos vars body
             | _ ->
-              match A.Env.find self.env s with
+              match A.Env.find_const self.env s with
               | None -> assert false
               | Some (c,_) ->
                 AE.bind ~at:false ~pos c vars body
@@ -495,11 +498,9 @@ module P_expr = struct
       end
     | NUM _ ->
       errorf (fun k->k"TODO: parse numbers") (* TODO *)
-    | RPAREN | COLON | DOT | IN | AND | EOF | QUOTED_STR _ | END | EQDEF ->
+    | RPAREN | COLON | DOT | IN | AND | EOF | QUOTED_STR _
+    | BY | END | EQDEF ->
       errorf (fun k->k"expected expression at %a" Position.pp pos)
-
-  (* TODO: parse bound variables as a list of:
-      "x : ty" or "x" or "(x y z : ty)" *)
 
   and p_expr_ ~ty_expect (self:t) (p:precedence) : AE.t =
     let lhs = ref (p_expr_atomic_ ~ty_expect self) in
@@ -508,7 +509,7 @@ module P_expr = struct
     while !continue do
       let pos = Lexer.pos self.lex in
       match Lexer.cur self.lex with
-      | EOF | END | EQDEF -> continue := false
+      | EOF | END | BY | EQDEF -> continue := false
       | LPAREN ->
         Lexer.junk self.lex;
         let e = p_expr_ ~ty_expect:None self 0 in
@@ -584,6 +585,107 @@ module P_expr = struct
     e
 end
 
+module P_proof : sig
+  type t = P_state.t
+  val proof : t -> A.Proof.t
+end = struct
+  type t = P_state.t
+  open P_state
+
+  let p_subst _self = assert false (* TODO *)
+
+  let rec p_step self : A.Proof.step =
+    let p_start_r ~pos (r:string) =
+      match A.Env.find_rule self.env r with
+      | None ->
+        errorf
+          (fun k->k"unknown rule '%s'@ while parsing a proof step@ at %a"
+              r Position.pp pos)
+      | Some sgn ->
+        Log.debugf 5 (fun k->k"rule `%s` has signature %a" r Rule.pp_signature sgn);
+        let args =
+          List.map
+            (function
+              | Rule.Arg_expr ->
+                let e = P_expr.expr_atomic self in
+                A.Proof.arg_expr e
+              | Rule.Arg_subst ->
+                let s = p_subst self in
+                A.Proof.arg_subst s
+              | Rule.Arg_thm ->
+                begin match Lexer.cur self.lex with
+                  | LPAREN ->
+                    Lexer.junk self.lex;
+                    let s = p_step self in
+                    eat_eq self RPAREN ~msg:"expect `)` after a proof sub-step";
+                    A.Proof.arg_step s
+                  | SYM s ->
+                    Lexer.junk self.lex;
+                    A.Proof.arg_var s
+                  | tok ->
+                    let pos = Lexer.pos self.lex in
+                    errorf
+                      (fun k->k"expected a theorem or sub-step@ but got %a@ at %a"
+                          Token.pp tok Position.pp pos)
+                end)
+            sgn
+        in
+        A.Proof.step_apply_rule ~pos r args
+    in
+    let tok = Lexer.cur self.lex in
+    let pos = Lexer.pos self.lex in
+    match tok with
+    | SYM "proof" ->
+      (* subproof *)
+      let p = proof self in
+      A.Proof.step_subproof ~pos p
+    | LPAREN ->
+      Lexer.junk self.lex;
+      let r = P_expr.p_ident self in
+      let s = p_start_r ~pos r in
+      eat_eq self RPAREN ~msg:"expect `)` to close the step";
+      s
+    | SYM r ->
+      Lexer.junk self.lex;
+      p_start_r ~pos r
+    | _ ->
+      errorf (fun k->k"expected to parse a proof step@ at %a" Position.pp pos)
+
+  and p_lets self acc : _ list =
+    match Lexer.cur self.lex with
+    | LET ->
+      Lexer.junk self.lex;
+      let let_ =
+        match Lexer.cur self.lex with
+        | SYM "expr" ->
+          Lexer.junk self.lex;
+          let name = P_expr.p_ident self in
+          eat_eq self EQDEF ~msg:"expect `:=` after the name of the step";
+          let e = P_expr.expr self in
+          A.Proof.let_expr name e
+        | _ ->
+          let name = P_expr.p_ident self in
+          eat_eq self EQDEF ~msg:"expect `:=` after the name of the step";
+          let s = p_step self in
+          A.Proof.let_step name s
+      in
+      Log.debugf 5 (fun k->k"parsed pr-let %a" A.Proof.pp_pr_let let_);
+      eat_eq self IN ~msg:"expect `in` after a `let`-defined proof step";
+      p_lets self (let_ :: acc)
+    | _ -> List.rev acc
+
+  and proof (self:t) : A.Proof.t =
+    Log.debugf 5 (fun k->k"start parsing proof");
+    eat_p' self ~msg:"expect `proof` to start a proof"
+      ~f:(function SYM "proof" -> true | _ -> false);
+    let pos = Lexer.pos self.lex in
+    let lets = p_lets self [] in
+    let last = p_step self in
+    let p = A.Proof.make ~pos lets last in
+    eat_end self ~msg:"proof must finish with `end`";
+    p
+end
+
 module P_top = struct
   type t = P_state.t
   open P_state
@@ -596,48 +698,78 @@ module P_top = struct
       | _ -> Lexer.junk self.lex; true
     do () done
 
-  let p_def ~pos self : _ =
+  let p_def ~pos self : A.top_statement =
     let name = P_expr.p_ident self in
     let tok, vars =
       P_expr.p_tyvars_until self []
-        ~f:(function COLON | EQDEF -> true |_ -> false)
+        ~f:(function COLON | EQDEF | BY -> true |_ -> false)
     in
     Log.debugf 5 (fun k->k"got vars %a" (Fmt.Dump.list A.Var.pp_with_ty) vars);
-    let ret = match tok with
+    let tok, ret = match tok with
       | COLON ->
-        Some (P_expr.expr_atomic ~ty_expect:AE.type_ self)
+        let e =  P_expr.expr_atomic ~ty_expect:AE.type_ self in
+        let tok = Lexer.cur self.lex in
+        Lexer.junk self.lex;
+        tok, Some (e)
+      | _ -> tok, None
+    in
+    let th_name = match tok with
+      | BY -> Some (P_expr.p_ident self)
       | _ -> None
     in
-    P_expr.eat_p' self
+    eat_p' self
       ~msg:"expect `:=` in a definition after <vars> and optional return type"
       ~f:(function EQDEF -> true | _ -> false);
     Log.debugf 5 (fun k->k"def: return type %a, %d vars, cur tok %a"
                      (Fmt.Dump.option AE.pp) ret (List.length vars)
                      Token.pp (Lexer.cur self.lex));
     let body = P_expr.expr self in
-    P_expr.eat_end self ~msg:"expect `end` after a definition";
-    A.Top_stmt.def ~pos name vars ret body
+    eat_end self ~msg:"expect `end` after a definition";
+    A.Top_stmt.def ~pos name ~th_name vars ret body
+
+  let p_declare ~pos self : A.top_statement =
+    let name = P_expr.p_ident self in
+    eat_eq self COLON ~msg:"expect `:` in a type declaration";
+    let ty = P_expr.expr_atomic ~ty_expect:AE.type_ self in
+    Log.debugf 5 (fun k->k"decl: type %a" AE.pp ty);
+    eat_end self ~msg:"expect `end` after a declaration";
+    A.Top_stmt.decl ~pos name ty
 
   let p_show ~pos self : _ =
     match Lexer.cur self.lex with
     | SYM "expr" ->
       Lexer.junk self.lex;
       let e = P_expr.expr self in
-      P_expr.eat_end self ~msg:"expect `end` after `show expr`";
+      eat_end self ~msg:"expect `end` after `show expr`";
       A.Top_stmt.show_expr ~pos e
     | SYM "proof" ->
-      assert false (* TODO: parse proof *)
+      let p = P_proof.proof self in
+      eat_end self ~msg:"expect `end` after `show proof`";
+      A.Top_stmt.show_proof ~pos p
     | SYM s ->
       Lexer.junk self.lex;
-      P_expr.eat_end self ~msg:"expect `end` after `show`";
+      eat_end self ~msg:"expect `end` after `show`";
       A.Top_stmt.show ~pos s
     | _ ->
       errorf (fun k->k{|expected a name, or "expr", or a proof|})
+
+  let p_thm ~pos self : _ =
+    let name = P_expr.p_ident self in
+    eat_eq self EQDEF ~msg:"expect `:=` after the theorem's name";
+    let e = P_expr.p_expr_ self 0
+        ~ty_expect:(Some (AE.const (A.Env.bool self.env)))
+    in
+    eat_eq self BY ~msg:"expect `by` after the theorem's statement";
+    let pr = P_proof.proof self in
+    eat_end self ~msg:"expect `end` after the theorem";
+    A.Top_stmt.theorem ~pos name (A.Goal.make_nohyps e) pr
 
   (* list of toplevel parsers *)
   let parsers = [
     "def", p_def;
     "show", p_show;
+    "declare", p_declare;
+    "theorem", p_thm;
   ]
 
   let top (self:t) : A.top_statement option =
@@ -795,9 +927,9 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     (A.of_str "!(x:A) (y:B). p1 (f1 x)")
   A.(c M.plus @ [v "x"; v "y"]) (A.of_str "x + y")
   A.(c M.plus @ [v "x"; c M.plus @ [v "y"; v "z"]]) (A.of_str "x + y + z")
-  A.(let_ [vv"x", c M.a] (c M.p1 @ [v "x"])) (A.of_str "let x = a0 in p1 x")
+  A.(let_ [vv"x", c M.a] (c M.p1 @ [v "x"])) (A.of_str "let x := a0 in p1 x")
   A.(let_ [vv"x", c M.a; vv"y", c M.b] (c M.p2 @ [v "x"; v"y"])) \
-    (A.of_str "let x=a0 and y=b0 in p2 x y")
+    (A.of_str "let x:=a0 and y:=b0 in p2 x y")
   A.(ty_arrow (v"a")(v"b")) (A.of_str "a->b")
   A.(eq (v"a")(v"b")) (A.of_str "a = b")
   A.(b_forall ["x", Some (c M.a @-> c M.b @-> c M.c)] (A.eq (v"x")(v"x"))) \
@@ -868,12 +1000,13 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
       RPAREN; \
       SYM("---"); \
       LET; \
+      BY; \
       SYM("z"); \
       RPAREN; \
       SYM("wlet"); \
       RPAREN; \
       EOF; \
     ] \
-    (lex_to_list {test|((12+end f(x, : in ?a ? ? b Y \( ))---let z)wlet)|test})
+    (lex_to_list {test|((12+end f(x, : in ?a ? ? b Y \( ))---let by z)wlet)|test})
   [EOF] (lex_to_list "  ")
 *)

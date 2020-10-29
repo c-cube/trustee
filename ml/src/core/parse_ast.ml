@@ -58,6 +58,8 @@ and view =
   | Eq of expr * expr
   | Let of binding list * expr
 
+type subst = (string * expr) list
+
 let nopos: position = Position.none
 
 let rec pp_ (p:_) out (e:expr) : unit =
@@ -89,11 +91,14 @@ let rec pp_ (p:_) out (e:expr) : unit =
       s pp_const c (pp_list pp_var_ty) vars (pp_ p) body
   | With (vars,bod) ->
     Fmt.fprintf out "@[with %a.@ %a@]" (pp_list pp_var_ty) vars (pp_ p) bod
-  | Eq (a,b) -> Fmt.fprintf out "@[%a@ =@ %a@]" pp_atom_ a pp_atom_ b
+  | Eq (a,b) ->
+    if p>0 then Fmt.char out '(';
+    Fmt.fprintf out "@[%a@ =@ %a@]" pp_atom_ a pp_atom_ b;
+    if p>0 then Fmt.char out ')';
   | Wildcard -> Fmt.string out "_"
   | Let (bs,bod) ->
     if p>0 then Fmt.char out '(';
-    let pp_b out (v,e) : unit = Fmt.fprintf out "@[%s@ = %a@]" v.v_name (pp_ 0) e in
+    let pp_b out (v,e) : unit = Fmt.fprintf out "@[%s@ := %a@]" v.v_name (pp_ 0) e in
     Fmt.fprintf out "@[let %a in@ %a@]" (pp_list ~sep:" and " pp_b) bs (pp_ 0) bod;
     if p>0 then Fmt.char out ')';
 and pp_atom_ out e = pp_ max_int out e
@@ -159,11 +164,23 @@ module Expr = struct
   let to_string = Fmt.to_string @@ Fmt.hvbox pp
 end
 
+module Subst = struct
+  type t = subst
+
+  let pp out s =
+    let pppair out (v,e) = Fmt.fprintf out "(@[%s := %a@])" v Expr.pp e in
+    Fmt.fprintf out "(@[%a@])" (pp_list ~sep:"," pppair) s
+  let to_string = Fmt.to_string pp
+end
+
 module Goal = struct
   type t = {
     hyps: Expr.t list;
     concl: Expr.t;
   }
+
+  let make hyps concl = {hyps; concl}
+  let make_nohyps c = make [] c
 
   let pp out (self:t) : unit =
     if CCList.is_empty self.hyps then (
@@ -201,23 +218,28 @@ module Proof = struct
   and rule_arg =
     | Arg_var of string
     | Arg_step of step
+    | Arg_expr of expr
+    | Arg_subst of subst
+
+  type rule_signature = Rule.signature
 
   let rec pp out (self:t) : unit =
     Fmt.fprintf out "@[<hv>@[<hv2>proof@ ";
     begin match self.view with
       | Proof_atom s -> pp_step ~top:true out s
       | Proof_steps {lets; ret} ->
-        List.iter
-          (function
-            | Let_expr (s,e) ->
-              Fmt.fprintf out "@[<2>let expr %s =@ %a in@]@ " s Expr.pp e
-            | Let_step (s,p) ->
-              Fmt.fprintf out "@[<2>let step %s =@ %a in@]@ "
-                s (pp_step ~top:true) p)
-          lets;
+        List.iter (fun l -> Fmt.fprintf out "%a@ " pp_pr_let l) lets;
         pp_step ~top:true out ret
     end;
     Fmt.fprintf out "@]@,end@]"
+
+  and pp_pr_let out l =
+    match l with
+    | Let_expr (s,e) ->
+      Fmt.fprintf out "@[<2>let expr %s =@ %a in@]" s Expr.pp e
+    | Let_step (s,p) ->
+      Fmt.fprintf out "@[<2>let %s =@ %a in@]"
+        s (pp_step ~top:true) p
 
   and pp_step ~top out (s:step) : unit =
     match s.view with
@@ -231,8 +253,31 @@ module Proof = struct
     match a with
     | Arg_var s -> Fmt.string out s
     | Arg_step s -> pp_step ~top:false out s (* always in ( ) *)
+    | Arg_expr e -> Expr.pp out e
+    | Arg_subst s -> Subst.pp out s
+
+  let pp_rule_signature = Rule.pp_signature
 
   let to_string = Fmt.to_string pp
+
+  let make ~pos lets ret = match lets with
+    | [] -> {pos; view=Proof_atom ret}
+    | _ -> {pos; view=Proof_steps {lets; ret}}
+
+  let let_expr s e = Let_expr (s,e)
+  let let_step s p = Let_step (s,p)
+
+  let step_apply_rule ~pos r args : step = {pos; view=Pr_apply_rule (r, args)}
+  let step_subproof ~pos p : step =
+    match p.view with
+    | Proof_atom s -> s (* inline sub-proof *)
+    | _ -> {pos; view=Pr_sub_proof p}
+  let step_error ~pos e : step = {pos; view=Pr_error e}
+
+  let arg_var v = Arg_var v
+  let arg_step v = Arg_step v
+  let arg_expr v = Arg_expr v
+  let arg_subst v = Arg_subst v
 end
 
 (** {2 Statements} *)
@@ -242,6 +287,7 @@ and top_statement_view =
   | Top_enter_file of string
   | Top_def of {
       name: string;
+      th_name: string option;
       vars: var list;
       ret: ty option;
       body: expr;
@@ -290,15 +336,19 @@ module Top_stmt = struct
       | None -> ()
       | Some ty -> Fmt.fprintf out "@ : %a" Expr.pp ty
     in
+    let pp_th_name out th = match th with
+      | None -> ()
+      | Some th -> Fmt.fprintf out "@ by %s" th
+    in
     match self.view with
     | Top_enter_file f ->
       Fmt.fprintf out "@[enter_file '%s' end@]" f
-    | Top_def { name; vars=[]; ret; body } ->
-      Fmt.fprintf out "@[<hv>@[<2>def %s%a :=@ %a@]@ end@]"
-        name pp_ty_opt ret pp body
-    | Top_def { name; vars; ret; body } ->
-      Fmt.fprintf out "@[<hv>@[<2>def %s %a%a :=@ %a@]@ end@]"
-        name (pp_list pp_var_ty) vars pp_ty_opt ret pp body
+    | Top_def { name; th_name; vars=[]; ret; body } ->
+      Fmt.fprintf out "@[<hv>@[<2>def %s%a%a :=@ %a@]@ end@]"
+        name pp_ty_opt ret pp_th_name th_name pp body
+    | Top_def { name; th_name; vars; ret; body } ->
+      Fmt.fprintf out "@[<hv>@[<2>def %s %a%a%a :=@ %a@]@ end@]"
+        name (pp_list pp_var_ty) vars pp_ty_opt ret pp_th_name th_name pp body
     | Top_decl { name; ty } ->
       Fmt.fprintf out "@[<hv>@[<2>decl %s :@ %a@]@ end@]"
         name pp ty
@@ -312,7 +362,7 @@ module Top_stmt = struct
       Fmt.fprintf out "@[<hv>@[<2>goal %a@ by %a@]@ end@]"
         Goal.pp goal Proof.pp proof
     | Top_theorem { name; goal; proof } ->
-      Fmt.fprintf out "@[<hv>@[<2>theorem %s :=@ %a@ by %a@]@ end@]"
+      Fmt.fprintf out "@[<hv>@[<2>theorem %s :=@ %a@]@ @[<2>by@ %a@]@ end@]"
         name Goal.pp goal Proof.pp proof
     | Top_show s -> Fmt.fprintf out "@[show %s end@]" s
     | Top_show_expr e -> Fmt.fprintf out "@[@[<hv2>show expr@ %a@]@ end@]" Expr.pp e
@@ -323,7 +373,8 @@ module Top_stmt = struct
 
   let make ~pos view : t = {pos; view}
   let enter_file ~pos f : t = make ~pos (Top_enter_file f)
-  let def ~pos name vars ret body : t = make ~pos (Top_def {name; ret; vars; body})
+  let def ~pos name ~th_name vars ret body : t =
+    make ~pos (Top_def {name; th_name; ret; vars; body})
   let decl ~pos name ty : t = make ~pos (Top_decl {name; ty})
   let fixity ~pos name f : t = make ~pos (Top_fixity {name; fixity=f})
   let axiom ~pos name e : t = make ~pos (Top_axiom {name; thm=e})
@@ -339,10 +390,14 @@ module Env = struct
   type t = {
     ctx: K.Ctx.t;
     mutable consts: fixity Str_map.t;
+    mutable rules: Proof.rule_signature Str_map.t;
   }
 
   let create ctx : t =
-    { ctx; consts=Str_map.empty; }
+    { ctx;
+      consts=Str_map.empty;
+      rules=Str_map.empty;
+    }
 
   let copy e : t = {e with consts=e.consts}
   let ctx e = e.ctx
@@ -357,13 +412,21 @@ module Env = struct
   let declare_fixity self s f =
     self.consts <- Str_map.add s f self.consts
 
-  let find self s : _ option =
+  let declare_rule self s r =
+    self.rules <- Str_map.add s r self.rules
+
+  let find_const self s : _ option =
     match Str_map.get s self.consts with
     | Some f -> Some (C_local s, f)
     | None ->
       match K.Ctx.find_const_by_name self.ctx s with
       | Some c -> Some (C_k (K.Expr.const self.ctx c), K.Const.fixity c)
       | None -> None
+
+  let find_rule self s : _ option =
+    match Rule.find_builtin s with
+    | Some r -> Some (Rule.signature r)
+    | None -> Str_map.get s self.rules
 
   let process (self:t) (st:top_statement) : unit =
     match st.view with
@@ -378,3 +441,4 @@ module Env = struct
   let bool self : const = C_k (K.Expr.bool self.ctx)
   let eq self : const = C_k (K.Expr.eq self.ctx)
 end
+
