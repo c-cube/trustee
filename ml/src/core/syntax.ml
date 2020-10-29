@@ -502,8 +502,28 @@ module P_expr = struct
     | BY | END | EQDEF ->
       errorf (fun k->k"expected expression at %a" Position.pp pos)
 
+  and p_expr_app_ ~ty_expect self : AE.t =
+    let e = ref (p_expr_atomic_ ~ty_expect self) in
+    let continue = ref true in
+    while !continue do
+      match Lexer.cur self.lex with
+      | LPAREN ->
+        let pos = Lexer.pos self.lex in
+        Lexer.junk self.lex;
+        let e2 = p_expr_ self ~ty_expect:None 0 in
+        eat_eq self RPAREN ~msg:"expect `)` to close expression";
+        e := AE.app ~pos !e [e2];
+      | SYM s when fixity_ self s = Fixity.F_normal ->
+        let pos = Lexer.pos self.lex in
+        Lexer.junk self.lex;
+        let e2 = p_nullary_ ~at:false self s in
+        e := AE.app ~pos !e [e2];
+      | _ -> continue := false;
+    done;
+    !e
+
   and p_expr_ ~ty_expect (self:t) (p:precedence) : AE.t =
-    let lhs = ref (p_expr_atomic_ ~ty_expect self) in
+    let lhs = ref (p_expr_app_ ~ty_expect self) in
     let p = ref p in
     let continue = ref true in
     while !continue do
@@ -525,7 +545,7 @@ module P_expr = struct
         let f = fixity_ self s in
         begin match f with
           | (F_left_assoc p' | F_right_assoc p' | F_infix p') when p' >= !p ->
-            let rhs = ref (p_expr_atomic_ ~ty_expect:None self) in
+            let rhs = ref (p_expr_app_ ~ty_expect:None self) in
             let continue2 = ref true in
             (* parse right-assoc series *)
             while !continue2 do
@@ -687,11 +707,10 @@ end = struct
 end
 
 module P_top = struct
-  type t = P_state.t
   open P_state
 
   (* recover: skip to the next "end" *)
-  let try_recover_ self : unit =
+  let try_recover_ (self:t) : unit =
     while
       match Lexer.cur self.lex with
       | END -> Lexer.junk self.lex; false
@@ -939,6 +958,8 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     (A.of_str "\\ (x:a0->b0->c0). x=x")
   A.(of_expr ~at:true M.eq) (A.of_str "@=")
   A.(of_expr M.bool) (A.of_str "bool")
+  A.(eq (c M.p2 @ [v "x"; v "y"]) (c M.q2 @ [v "y"; v "x"])) \
+    (A.of_str "p2 x y = q2 y x")
 *)
 
 (* test type inference *)

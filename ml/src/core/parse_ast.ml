@@ -84,14 +84,22 @@ let rec pp_ (p:_) out (e:expr) : unit =
     if p>0 then Fmt.char out ')';
   | Meta v -> Fmt.fprintf out "?%s" v.name
   | Lambda (vars,bod) ->
-    Fmt.fprintf out "@[\\%a.@ %a@]" (pp_list pp_var_ty) vars (pp_ p) bod
+    if p>0 then Fmt.char out '(';
+    Fmt.fprintf out "@[\\%a.@ %a@]" (pp_list pp_var_ty) vars (pp_ 0) bod;
+    if p>0 then Fmt.char out ')';
   | Bind {c; at; vars; body} ->
+    if p>0 then Fmt.char out '(';
     let s = if at then "@" else "" in
     Fmt.fprintf out "@[%s%a %a.@ %a@]"
-      s pp_const c (pp_list pp_var_ty) vars (pp_ p) body
+      s pp_const c (pp_list pp_var_ty) vars (pp_ 0) body;
+    if p>0 then Fmt.char out ')';
   | With (vars,bod) ->
-    Fmt.fprintf out "@[with %a.@ %a@]" (pp_list pp_var_ty) vars (pp_ p) bod
+    if p>0 then Fmt.char out '(';
+    Fmt.fprintf out "@[with %a.@ %a@]" (pp_list pp_var_ty) vars (pp_ 0) bod;
+    if p>0 then Fmt.char out ')';
   | Eq (a,b) ->
+    (* TODO: actually, allow applications to be () free in there.
+       we need proper precedences for that. *)
     if p>0 then Fmt.char out '(';
     Fmt.fprintf out "@[%a@ =@ %a@]" pp_atom_ a pp_atom_ b;
     if p>0 then Fmt.char out ')';
