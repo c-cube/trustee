@@ -81,6 +81,7 @@ module Expr : sig
   type t = expr
 
   include PP with type t := t
+  val pp_quoted : t Fmt.printer
 
   val pos : t -> Position.t
   val view : t -> view

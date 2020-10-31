@@ -54,7 +54,8 @@ module Check = struct
                (fun env st ->
                   TA.process_stmt
                     ~on_show:(fun pos pp ->
-                        Fmt.printf "@[<2>at %a:@ %a@]@." Pos.pp pos pp())
+                        Fmt.printf "@[<2>@{<Yellow>Show@}: at %a:@ %a@]@."
+                          Pos.pp pos pp())
                     ~on_error:(fun pos pp ->
                         Fmt.printf "@[<2>@{<Red>Error@} at %a:@ %a@]@."
                           Pos.pp pos pp())

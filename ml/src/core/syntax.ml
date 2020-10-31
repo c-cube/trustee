@@ -747,8 +747,8 @@ module P_top = struct
     eat_p' self
       ~msg:"expect `:=` in a definition after <vars> and optional return type"
       ~f:(function EQDEF -> true | _ -> false);
-    Log.debugf 5 (fun k->k"def: return type %a, %d vars, cur tok %a"
-                     (Fmt.Dump.option AE.pp) ret (List.length vars)
+    Log.debugf 5 (fun k->k"def: return type %a, %d vars, curren token: %a"
+                     (Fmt.Dump.option AE.pp_quoted) ret (List.length vars)
                      Token.pp (Lexer.cur self.lex));
     let body = P_expr.expr self in
     eat_end self ~msg:"expect `end` after a definition";
@@ -791,6 +791,15 @@ module P_top = struct
     eat_end self ~msg:"expect `end` after the theorem";
     A.Top_stmt.theorem ~pos name (A.Goal.make_nohyps e) pr
 
+  let p_goal ~pos self : _ =
+    let e = P_expr.p_expr_ self 0
+        ~ty_expect:(Some (AE.const (A.Env.bool self.env)))
+    in
+    eat_eq self BY ~msg:"expect `by` after the goal's statement";
+    let pr = P_proof.proof self in
+    eat_end self ~msg:"expect `end` after the goal";
+    A.Top_stmt.goal ~pos (A.Goal.make_nohyps e) pr
+
   let p_fixity ~pos self =
     let name = P_expr.p_ident self in
     eat_eq self EQDEF ~msg:"expect `:=` after symbol";
@@ -828,6 +837,7 @@ module P_top = struct
     "fixity", p_fixity;
     "declare", p_declare;
     "theorem", p_thm;
+    "goal", p_goal;
   ]
 
   let top (self:t) : A.top_statement option =

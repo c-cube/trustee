@@ -147,6 +147,7 @@ module Expr = struct
   let[@inline] view e = e.view
   let[@inline] pos e = e.pos
   let pp = pp
+  let pp_quoted = Fmt.within "`" "`" @@ pp
 
   let type_ : t = mk_ Type
   let ty_var ?pos s : t = mk_ ?pos (Var (Var.make s (Some type_)))
@@ -241,7 +242,7 @@ module Proof = struct
         List.iter (fun l -> Fmt.fprintf out "%a@ " pp_pr_let l) lets;
         pp_step ~top:true out ret
     end;
-    Fmt.fprintf out "@]@,end@]"
+    Fmt.fprintf out "@]@ end@]"
 
   and pp_pr_let out l =
     match l with
