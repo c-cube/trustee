@@ -96,9 +96,9 @@ let expr_pp_ out (e:expr) : unit =
       Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp _ty (aux (k+1)) bod
     | E_pi (ty, bod) ->
       if expr_db_depth bod = 0 then (
-        Fmt.fprintf out "(@[%a@ -> %a@])" pp ty (aux (k+1)) bod
+        Fmt.fprintf out "(@[%a@ -> %a@])" pp ty (aux k) bod
       ) else (
-        Fmt.fprintf out "(@[@<1>Π x_%d:%a.@ %a@])" k pp ty (aux (k+1)) bod
+        Fmt.fprintf out "(@[pi x_%d:%a.@ %a@])" k pp ty (aux (k+1)) bod
       )
   in
   aux 0 out e
@@ -262,7 +262,7 @@ module Expr = struct
     in
     let d2 = match view e with
       | E_kind | E_type | E_const _ | E_var _ -> 0
-      | E_bound_var v -> v.bv_idx
+      | E_bound_var v -> v.bv_idx+1
       | E_app (f,g) -> max (db_depth f) (db_depth g)
       | E_lam (ty,bod) | E_pi (ty,bod) ->
         max (db_depth ty) (max 0 (db_depth bod - 1))
@@ -439,11 +439,13 @@ module Expr = struct
     | E_pi (ty_v, body) ->
       let tya = ty_exn a in
       if not (equal ty_v tya) then (
-        errorf (fun k->k"cannot apply f (= `@[%a@]`)@ to a (= `@[%a@]`)@ \
-                f expects argument of type %a, but a has type %a"
+        errorf (fun k->k"kernel:@ cannot apply function `@[%a@]`@ \
+                         to argument `@[%a@]`@ \
+                         function expects argument of type %a,@ \
+                         but arg has type %a"
           pp f pp a pp ty_v pp tya)
       );
-      let ty2 = subst_db_0 ctx body ~by:tya in
+      let ty2 = subst_db_0 ctx body ~by:a in
       ty2
     | _ ->
       errorf (fun k->k"cannot apply `@[%a@]`@ of type %a"
