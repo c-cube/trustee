@@ -691,12 +691,12 @@ let process_stmt
       | A.Top_goal _
       | A.Top_theorem _
       | A.Top_show _ ->
-        assert false (* TODO *)
+        error "TODO" (* TODO *)
       | A.Top_show_expr e ->
         let e = Ty_infer.infer_expr env e in
         on_show pos (fun out () -> Fmt.fprintf out "expr %a" Expr.pp e)
       | A.Top_show_proof _ ->
-        assert false (* TODO *)
+        error "TODO" (* TODO *)
       | A.Top_error { msg } ->
         on_error pos msg
     with

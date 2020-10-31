@@ -6,6 +6,7 @@ module K = Trustee_core.Kernel
 module A = Trustee_core.Parse_ast
 module TA = Trustee_core.Type_ast
 module Syntax = Trustee_core.Syntax
+module Pos = Trustee_core.Position
 
 module Cat = struct
   let args = [
@@ -49,7 +50,16 @@ module Check = struct
            Fmt.printf "# file %S@." file;
            let l = Syntax.parse_top_l_process ~file ~env:aenv lex in
            let tyenv' =
-             CCList.fold_left TA.process_stmt !tyenv l
+             CCList.fold_left
+               (fun env st ->
+                  TA.process_stmt
+                    ~on_show:(fun pos pp ->
+                        Fmt.printf "@[<2>at %a:@ %a@]@." Pos.pp pos pp())
+                    ~on_error:(fun pos pp ->
+                        Fmt.printf "@[<2>@{<Red>Error@} at %a:@ %a@]@."
+                          Pos.pp pos pp())
+                    env st)
+               !tyenv l
            in
            tyenv := tyenv';
            Fmt.printf "# processed %S@." file;
@@ -88,6 +98,7 @@ let () =
            r := Some r'
        ))
     help;
+  Fmt.set_color_default true;
   match !r with
   | None -> Fmt.eprintf "please provide a command@."; exit 1
   | Some r -> r (List.rev !anon_args)
