@@ -76,6 +76,13 @@ let unfold_app_ e =
   in
   aux [] e
 
+let unfold_lam e =
+  let[@unroll 1] rec aux acc e = match view_expr_ e with
+    | Lambda (v,e) -> aux (v::acc) e
+    | _ -> e, acc
+  in
+  aux [] e
+
 module Meta = struct
   type t = meta
   let make ~pos s ty : t =
@@ -100,8 +107,9 @@ let rec pp_expr_ out (e:expr) : unit =
     let f, l = unfold_app_ e in
     Fmt.fprintf out "(@[%a@ %a@])" pp_expr_ f (pp_list pp_expr_) l
   | Meta v -> Meta.pp out v
-  | Lambda (v,bod) ->
-    Fmt.fprintf out "(@[\\%a.@ %a@])" pp_bvar_ty v pp_expr_ bod
+  | Lambda _ ->
+    let vars, bod = unfold_lam e in
+    Fmt.fprintf out "(@[\\%a.@ %a@])" (pp_list pp_bvar_ty) vars pp_expr_ bod
   | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp_expr_ a pp_expr_ b
   | Let (bs,bod) ->
     let pp_b out (v,e) : unit =
@@ -231,6 +239,7 @@ module Expr = struct
   let ty_pi_l ~pos vars bod : ty = List.fold_right (ty_pi ~pos) vars bod
 
   let var ~pos (v:var) : expr = mk_ ~pos (Var v) v.v_ty
+  let var' ~pos name ty : expr = var ~pos (Var.make name ty)
   let bvar ~pos (v:bvar) : expr = mk_ ~pos (BVar v) v.bv_ty
 
   let is_eq_to_type (e:expr) = match view e with
@@ -307,6 +316,14 @@ module Expr = struct
   type unif_err_trace = (expr*expr) list
   exception E_unif_err of unif_err_trace
 
+  let pp_unif_trace_ out (st:unif_err_trace) : unit =
+    Fmt.fprintf out "@[<hv>";
+    List.iter (fun (e1,e2) ->
+        Fmt.fprintf out "@[<2>- unifying@ %a@ and %a@];@ "
+          pp (deref_ e1) pp (deref_ e2))
+      st;
+    Fmt.fprintf out "@]"
+
   (* compute type of [f a] *)
   let rec ty_app_ env ~pos (f:expr) (a:expr) : ty =
     let ty_f = deref_ (ty f) in
@@ -316,11 +333,11 @@ module Expr = struct
       | Error st ->
         errorf
           (fun k->k
-              "@[<2>type error@ in the application \
+              "@[<hv2>type error@ in the application \
                @[<2>of %a@ of type %a@]@ @[<2>to term %a@ of type %a@]:@ \
-               unification error in the following trace:@ %a"
+               unification error in the following trace:@ %a@]"
               pp f pp ty_f pp a pp ty_a
-              Fmt.Dump.(list @@ pair pp pp) st)
+              pp_unif_trace_ st)
     in
     begin match view ty_f with
       | Ty_arrow (f_arg, f_ret) ->
@@ -340,6 +357,7 @@ module Expr = struct
   (* unify two terms. This only needs to be complete for types. *)
   and unif_ (a:expr) (b:expr) : (unit, unif_err_trace) result =
     let[@inline] fail_ st a b =
+      Log.debugf 10 (fun k->k"unif fail: %a@ and %a" pp a pp b);
       raise_notrace (E_unif_err ((a,b) :: st))
     in
     let rec aux st renaming a b =
@@ -351,10 +369,14 @@ module Expr = struct
         begin match a.ty, b.ty with
           | Some tya, Some tyb -> aux st' renaming tya tyb
           | None, None -> ()
-          | Some _, None | None, Some _ -> fail_ st a b
+          | Some _, None | None, Some _ -> fail_ st' a b
         end;
         match a.view, b.view with
         | Type, Type | Kind, Kind | Bool, Bool -> ()
+        | Type, Const c when K.Expr.is_eq_to_type c.c -> ()
+        | Const c, Type when K.Expr.is_eq_to_type c.c -> ()
+        | Bool, Const c when K.Expr.is_eq_to_bool c.c -> ()
+        | Const c, Bool when K.Expr.is_eq_to_bool c.c -> ()
         | Var a, Var b when a.v_name = b.v_name -> ()
         | BVar a, BVar b
           when
@@ -409,10 +431,10 @@ module Expr = struct
   let lambda ~pos v bod : expr =
     let ty_lam =
       let tyv = deref_ v.bv_ty in
-      if is_a_type tyv then (
+      if is_eq_to_type tyv then (
         ty_pi ~pos v (ty bod)
       ) else (
-        ty_arrow ~pos v.bv_ty (ty bod)
+        ty_arrow ~pos tyv (ty bod)
       )
     in
     mk_ ~pos (Lambda (v, bod)) ty_lam
@@ -427,7 +449,7 @@ module Expr = struct
   let to_string = Fmt.to_string @@ Fmt.hvbox pp
 
   let to_k_expr (ctx:K.Ctx.t) (e:expr) : K.Expr.t =
-    let rec aux bs k e : K.Expr.t =
+    let rec aux (bs:_ ID.Map.t) k e : K.Expr.t =
       let recurse = aux bs k in
       let pos = pos e in
       match view e with
@@ -446,7 +468,7 @@ module Expr = struct
         K.Expr.arrow ctx (recurse a) (recurse b)
       | BVar v ->
         begin match ID.Map.find v.bv_name bs with
-          | (e, k_e) -> K.Expr.db_shift ctx e (k - k_e)
+          | (e, k_e) -> K.Expr.db_shift ctx e (k - k_e - 1)
           | exception Not_found ->
             errorf
               (fun k->k"variable %a is not bound@ at %a"
@@ -469,12 +491,12 @@ module Expr = struct
         aux bs' k body
       | Ty_pi (v, bod) ->
         let ty = recurse v.bv_ty in
-        let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx k ty, k) bs in
+        let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx 0 ty, k) bs in
         let bod = aux bs (k+1) bod in
         K.Expr.pi_db ctx ~ty_v:ty bod
       | Lambda (v, bod) ->
         let ty = recurse v.bv_ty in
-        let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx k ty, k) bs in
+        let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx 0 ty, k) bs in
         let bod = aux bs (k+1) bod in
         K.Expr.lambda_db ctx ~ty_v:ty bod
     in
@@ -489,16 +511,6 @@ end
 
 module Env = struct
   type t = env
-
-  let create ctx : t =
-    {ctx;
-     cur_file="";
-     gensym=0;
-     consts=Str_map.empty;
-     fvars=Str_map.empty;
-     theorems=Str_map.empty;
-     to_gen=[];
-    }
 
   let copy self = {self with to_gen=self.to_gen}
 
@@ -536,6 +548,19 @@ module Env = struct
     | Some r -> Some (N_rule r)
     | None ->
       None (* TODO: look in local defined rules *)
+
+  let create ctx : t =
+    let env = {
+      ctx;
+      cur_file="";
+      gensym=0;
+      consts=Str_map.empty;
+      fvars=Str_map.empty;
+      theorems=Str_map.empty;
+      to_gen=[];
+    } in
+    declare_const env "bool" (K.Expr.bool ctx);
+    env
 end
 
 (** {2 type inference} *)
@@ -561,12 +586,24 @@ module Ty_infer = struct
     | Error st ->
       errorf
         (fun k->k
-            "@[<2>type error@ while inferring the type @[<2>of %a@ at %a@]:@ \
-             unification error in the following trace:@ %a"
+            "@[<hv2>type error@ \
+             @[while inferring the type @[<2>of %a@ at %a@]@]:@ \
+             unification error in the following trace:@ %a@]"
             AE.pp e Position.pp pos
-            Fmt.Dump.(list @@ pair Expr.pp Expr.pp) st)
+            Expr.pp_unif_trace_ st)
 
-  let infer_expr (env:env) (e0:AE.t) : expr =
+  let unif_type_with_ ~pos e ty = match Expr.unif_ (Expr.ty e) ty with
+    | Ok () -> ()
+    | Error st ->
+      errorf
+        (fun k->k
+            "@[<hv2>type error@ \
+             @[<2>while unifying the type @[<2>of %a@ at %a@]@ with %a@]:@ \
+             unification error in the following trace:@ %a@]"
+            Expr.pp e Position.pp pos Expr.pp ty
+            Expr.pp_unif_trace_ st)
+
+  let infer_expr_vars ~pos (env:env) (vars:A.var list) (e0:AE.t) : bvar list * expr =
     (* type inference.
        @param bv the local variables, for scoping *)
     let rec inf_rec_ (bv:expr Str_map.t) (e:AE.t) : expr =
@@ -584,6 +621,8 @@ module Ty_infer = struct
               bv vars
           in
           Expr.ty_pi_l ~pos vars @@ inf_rec_ bv body
+        | A.Var v when Str_map.mem v.A.v_name bv ->
+          Str_map.find v.A.v_name bv (* bound variable *)
         | A.Var v ->
           let v =
             match Str_map.find v.A.v_name env.fvars with
@@ -592,7 +631,8 @@ module Ty_infer = struct
                 | Some ty ->
                   (* unify expected type with actual type *)
                   let ty = inf_rec_ bv ty in
-                  unif_exn_ ty v'.v_ty | None -> ()
+                  unif_exn_ ty v'.v_ty
+                | None -> ()
               end;
               v'
             | exception Not_found ->
@@ -649,7 +689,7 @@ module Ty_infer = struct
           let bv =
             List.fold_left
               (fun bv v ->
-                 let ty = infer_ty_opt_ ~pos bv v.A.v_ty in
+                 let ty = infer_ty_opt_ ~pos ~default:Expr.type_ bv v.A.v_ty in
                  let var = Expr.var ~pos (Var.make v.A.v_name ty) in
                  Str_map.add v.A.v_name var bv)
               bv vs
@@ -663,7 +703,8 @@ module Ty_infer = struct
                  Str_map.add v.A.v_name (Expr.bvar ~pos v') bv, v')
               bv vars
           in
-          Expr.lambda_l ~pos vars @@ inf_rec_ bv bod
+          let bod = inf_rec_ bv bod in
+          Expr.lambda_l ~pos vars bod
         | A.Bind _ ->
           errorf (fun k->k"cannot infer for binder %a" AE.pp e)
           (* TODO *)
@@ -674,6 +715,8 @@ module Ty_infer = struct
                  let v' = infer_bvar_ ~pos bv v in
                  let t = inf_rec_ bv t in
                  unif_exn_ v'.bv_ty (Expr.ty t);
+                 Log.debugf 10 (fun k->k"binding %a := %a@ of type %a"
+                                   BVar.pp_with_ty v' Expr.pp t Expr.pp (Expr.ty t));
                  let bv' = Str_map.add v.A.v_name (Expr.bvar ~pos v') bv' in
                  bv', (v', t))
               bv bindings
@@ -681,21 +724,40 @@ module Ty_infer = struct
           Expr.let_ ~pos bindings @@ inf_rec_ bv' body
         end
 
-     and infer_ty_opt_ ~pos bv ty : ty =
-       match ty with
-       | None -> Expr.type_
-       | Some ty0 ->
-         let ty = inf_rec_ bv ty0 in
-         if not @@ Expr.is_eq_to_type ty then (
-           unif_exn_ ~pos ty0 ty Expr.type_;
-         );
-         ty
-     and infer_bvar_ ~pos bv v : bvar =
-       let ty_v = infer_ty_opt_ ~pos bv v.A.v_ty in
-       let v' = BVar.make (ID.make v.A.v_name) ty_v in
-       v'
+    and infer_ty_opt_ ~pos ?default bv ty : ty =
+      match ty with
+      | None ->
+        begin match default with
+          | Some ty -> ty
+          | None ->
+            let ty, m = Expr.ty_meta ~pos env in
+            env.to_gen <- m :: env.to_gen;
+            ty
+        end
+      | Some ty0 ->
+        let ty = inf_rec_ bv ty0 in
+        if not @@ (Expr.is_a_type ty || Expr.is_eq_to_type ty) then (
+          unif_exn_ ~pos ty0 ty Expr.type_;
+        );
+        ty
+    and infer_bvar_ ~pos ?default bv v : bvar =
+      let ty_v = infer_ty_opt_ ?default ~pos bv v.A.v_ty in
+      let v' = BVar.make (ID.make v.A.v_name) ty_v in
+      v'
     in
-    inf_rec_ Str_map.empty e0
+    let bv, vars =
+      CCList.fold_map
+        (fun bv v ->
+           let v' = infer_bvar_ ~pos bv v in
+           Str_map.add v.A.v_name (Expr.bvar ~pos v') bv, v')
+        Str_map.empty vars
+    in
+    let e = inf_rec_ bv e0 in
+    vars, e
+
+  let infer_expr (env:env) (e0:AE.t) : expr =
+    let _, e = infer_expr_vars ~pos:(AE.pos e0) env [] e0 in
+    e
 
   let infer_expr_with_ty env e0 ty : expr =
     let e = infer_expr env e0 in
@@ -703,7 +765,12 @@ module Ty_infer = struct
     e
 
   let infer_ty env e0 : ty =
-    infer_expr_with_ty env e0 Expr.type_
+    let e = infer_expr env e0 in
+    if not @@ (Expr.is_eq_to_type e || Expr.is_a_type e) then (
+      (* if not already a type or kind, force it to be *)
+      unif_exn_ ~pos:(AE.pos e0) e0 (Expr.ty e) (Expr.ty e);
+    );
+    e
 
   let infer_expr_bool env e0 : expr =
     infer_expr_with_ty env e0 Expr.bool
@@ -726,20 +793,48 @@ let process_stmt
   ~on_show ~on_error
   (env:env) (st:A.top_statement) : env =
   Log.debugf 2 (fun k->k"(@[TA.process-stmt@ %a@])" A.Top_stmt.pp st);
-  begin
+  let ok =
     let pos = A.Top_stmt.pos st in
     try
       match A.Top_stmt.view st with
       | A.Top_enter_file s ->
-        env.cur_file <- s
+        env.cur_file <- s;
+        true
       | A.Top_decl { name; ty } ->
         let ty =
           Ty_infer.and_then_generalize env (fun () -> Ty_infer.infer_ty env ty)
           |> Expr.to_k_expr env.ctx in
         let c = K.Expr.new_const env.ctx name ty in
         Env.declare_const env name c;
-      | A.Top_def _ ->
-        error "TODO" (* TODO *)
+        true
+      | A.Top_def { name; th_name; vars; ret; body } ->
+        (* turn [def f x y := bod] into [def f := \x y. bod] *)
+        let vars, e = Ty_infer.infer_expr_vars ~pos env vars body in
+        let def_rhs = Expr.lambda_l ~pos vars e in
+        let ty_rhs = Expr.ty def_rhs in
+        (* now ensure that [f vars : ret] *)
+        begin match ret with
+          | None -> ()
+          | Some ret ->
+            let ret = Ty_infer.infer_ty env ret in
+            (* [ret] should be the type of [real_def x1…xn] *)
+            let e_app =
+              Expr.app_l ~pos env def_rhs
+                (List.map
+                   (fun bv -> Expr.var' ~pos (ID.name bv.bv_name) bv.bv_ty)
+                   vars)
+            in
+            Ty_infer.unif_type_with_ ~pos e_app ret
+        end;
+        Env.generalize_ty_vars env;
+        (* the defining equation `name = def_rhs` *)
+        let def_eq = Expr.eq ~pos (Expr.var' ~pos name ty_rhs) def_rhs in
+        let th, ke =
+          K.Thm.new_basic_definition env.ctx
+            (Expr.to_k_expr env.ctx def_eq) in
+        Env.declare_const env name ke;
+        CCOpt.iter (fun th_name -> Env.define_thm env th_name th) th_name;
+        true
       | A.Top_fixity { name; fixity } ->
         let c =
           match K.Ctx.find_const_by_name env.ctx name with
@@ -747,6 +842,7 @@ let process_stmt
           | None -> errorf (fun k->k"constant `%s` not in scope" name)
         in
         K.Const.set_fixity c fixity;
+        true
       | A.Top_axiom {name; thm} ->
         let e =
           Ty_infer.and_then_generalize env
@@ -754,35 +850,52 @@ let process_stmt
           |> Expr.to_k_expr env.ctx
         in
         let th = K.Thm.axiom env.ctx e in
-        Env.define_thm env name th
+        Env.define_thm env name th;
+        true
       | A.Top_goal { goal; proof } ->
         let goal = Ty_infer.infer_goal env goal in
         Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp goal);
         (* TODO *)
-        errorf (fun k->k"TODO: process proof %a@ for goal %a"
+        errorf (fun k->k"TODO: process `@[%a@]`@ for goal `@[%a@]`"
                    A.Proof.pp proof K.Goal.pp goal)
       | A.Top_theorem _ ->
         error "TODO" (* TODO *)
       | A.Top_show s ->
         begin match Env.find_named env s with
           | Some (Env.N_expr e) ->
-            on_show pos (fun out () -> Fmt.fprintf out "expr: %a" K.Expr.pp e)
+            on_show pos (fun out () ->
+                Fmt.fprintf out "@[<2>expr:@ `@[%a@]`@ with type: %a@]" K.Expr.pp e
+                  (Fmt.Dump.option K.Expr.pp) (K.Expr.ty e));
+            true
           | Some (Env.N_thm th) ->
-            on_show pos (fun out () -> Fmt.fprintf out "theorem: %a" K.Thm.pp th)
+            on_show pos (fun out () ->
+                Fmt.fprintf out "@[<2>theorem:@ %a@]" K.Thm.pp th);
+            true
           | Some (Env.N_rule r) ->
-            on_show pos (fun out () -> Fmt.fprintf out "rule: %a" Proof.Rule.pp r)
+            on_show pos (fun out () ->
+                Fmt.fprintf out "@[<2>rule:@ %a@]" Proof.Rule.pp r);
+            true
           | None ->
-            on_show pos (fun out () -> Fmt.fprintf out "not found")
+            on_show pos (fun out () -> Fmt.fprintf out "not found");
+            false
         end
       | A.Top_show_expr e ->
         let e = Ty_infer.infer_expr env e in
-        on_show pos (fun out () -> Fmt.fprintf out "expr %a" Expr.pp e)
+        on_show pos (fun out () ->
+            Fmt.fprintf out "@[<2>expr:@ %a@ as-kernel-expr: %a@]"
+              Expr.pp e K.Expr.pp (Expr.to_k_expr env.ctx e));
+        true
       | A.Top_show_proof _ ->
         error "TODO" (* TODO *)
       | A.Top_error { msg } ->
-        on_error pos msg
+        on_error pos msg;
+        false
     with
     | Trustee_error.E e ->
-      on_error pos (fun out () -> Trustee_error.pp out e)
-  end;
+      on_error pos (fun out () -> Trustee_error.pp out e);
+      false
+  in
+  if ok then (
+    Log.debugf 1 (fun k->k"@{<green>OK@}: %a" A.Top_stmt.pp st);
+  );
   env
