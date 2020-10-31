@@ -46,8 +46,20 @@ and view =
 
 and meta
 
+type subst
+
 (** Typing environment *)
 type env
+
+module Var : sig
+  type t = var
+  include PP with type t := t
+end
+
+module BVar : sig
+  type t = bvar
+  include PP with type t := t
+end
 
 (* {2 Expressions} *)
 module Expr : sig
@@ -55,6 +67,14 @@ module Expr : sig
   include PP with type t := expr
 
   val to_k_expr : K.Ctx.t -> expr -> K.Expr.t
+end
+
+(** {2 Substitutions} *)
+module Subst : sig
+  type t = subst
+  include PP with type t := t
+
+  val to_k_subst : K.Ctx.t -> t -> K.Subst.t
 end
 
 (** {2 Typing Environment}
@@ -76,9 +96,49 @@ module Env : sig
       obtained with this environment and {!infer}. *)
 end
 
+module Proof : sig
+  type t
+  type step
+
+  type view =
+    | Proof_atom of step
+    | Proof_steps of {
+        lets: pr_let list;
+        (** intermediate steps *)
+        ret: step;
+        (** proof to return *)
+      }
+
+  (** named steps *)
+  and pr_let = ID.t * step
+
+  and step_view =
+    | Pr_apply_rule of Proof.Rule.t * rule_arg list
+    | Pr_sub_proof of t
+    | Pr_error of unit Fmt.printer (* parse error *)
+
+  (** An argument to a rule *)
+  and rule_arg =
+    | Arg_var_step of ID.t
+    | Arg_step of step
+    | Arg_expr of expr
+    | Arg_subst of subst
+
+  type rule_signature = Proof.Rule.signature
+
+  include PP with type t := t
+  val pp_pr_let : pr_let Fmt.printer
+  val pp_rule_arg : rule_arg Fmt.printer
+  val pp_rule_signature : rule_signature Fmt.printer
+
+  (** Run the proof to get a kernel theorem (or a failure) *)
+  val run : K.Ctx.t -> t -> K.Thm.t
+end
+
 (* {2 type inference} *)
 module Ty_infer : sig
   val infer_expr : env -> A.expr -> expr
+  val infer_proof : env -> A.Proof.t -> Proof.t
 end
 
 (** {2 Process statements} *)

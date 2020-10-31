@@ -270,8 +270,12 @@ module Proof = struct
     | Arg_subst s -> Subst.pp out s
 
   let pp_rule_signature = TyRule.pp_signature
-
   let to_string = Fmt.to_string pp
+
+  let view p = p.view
+  let pos p = p.pos
+  let s_view s = s.view
+  let s_pos s = s.pos
 
   let make ~pos lets ret = match lets with
     | [] -> {pos; view=Proof_atom ret}

@@ -163,6 +163,12 @@ module Proof : sig
   val pp_rule_arg : rule_arg Fmt.printer
   val pp_rule_signature : rule_signature Fmt.printer
 
+  val view : t -> top
+  val pos : t -> position
+
+  val s_view : step -> step_view
+  val s_pos : step -> position
+
   val make : pos:position -> pr_let list -> step -> t
   val let_expr : string -> expr -> pr_let
   val let_step : string -> step -> pr_let

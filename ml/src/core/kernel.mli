@@ -182,6 +182,9 @@ module Thm : sig
   val n_hyps : t -> int
   (* TODO: store proofs optionally *)
 
+  val is_proof_of : t -> Goal.t -> bool
+  (** Is this theorem a proof of the given goal? *)
+
   (** {3 Deduction rules} *)
 
   val assume : ctx -> expr -> t

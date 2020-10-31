@@ -91,7 +91,12 @@ let expr_pp_ out (e:expr) : unit =
     | E_const c -> ID.pp out c.c_name
     | E_app _ ->
       let f, args = unfold_app e in
-      Fmt.fprintf out "(@[%a@ %a@])" pp f (pp_list pp) args
+      begin match f.e_view, args with
+        | E_const c, [_;a;b] when ID.name c.c_name = "=" ->
+          Fmt.fprintf out "(@[%a@ = %a@])" pp a pp b
+        | _ ->
+          Fmt.fprintf out "(@[%a@ %a@])" pp f (pp_list pp) args
+      end
     | E_lam (_ty, bod) ->
       Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp _ty (aux (k+1)) bod
     | E_pi (ty, bod) ->
@@ -660,6 +665,10 @@ module Thm = struct
     )
 
   let to_string = Fmt.to_string pp
+
+  let is_proof_of self (g:Goal.t) : bool =
+    Expr.equal self.th_concl (Goal.concl g) &&
+    Expr_set.subset self.th_hyps (Goal.hyps g)
 
   (** {3 Deduction rules} *)
 

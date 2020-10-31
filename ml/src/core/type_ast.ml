@@ -4,6 +4,7 @@ open Sigs
 module K = Kernel
 module A = Parse_ast
 module AE = A.Expr
+module KProof = Proof
 
 type position = A.position
 let nopos: position = Position.none
@@ -54,6 +55,8 @@ and meta = {
   mutable meta_deref: expr option;
 }
 
+type subst = (var * expr) list
+
 type env = {
   ctx: K.Ctx.t;
   mutable cur_file: string;
@@ -79,7 +82,7 @@ let unfold_app_ e =
 let unfold_lam e =
   let[@unroll 1] rec aux acc e = match view_expr_ e with
     | Lambda (v,e) -> aux (v::acc) e
-    | _ -> e, acc
+    | _ -> List.rev acc, e
   in
   aux [] e
 
@@ -129,12 +132,14 @@ module Var = struct
   type t = var
   let make v_name v_ty : var = {v_name; v_ty; }
   let pp = pp_var
+  let to_string = Fmt.to_string pp
 end
 
 module BVar = struct
   type t = bvar
   let make bv_name bv_ty : bvar = {bv_name; bv_ty; }
   let pp = pp_bvar
+  let to_string = Fmt.to_string pp
   let pp_with_ty = pp_bvar_ty
 end
 
@@ -503,6 +508,30 @@ module Expr = struct
     aux ID.Map.empty 0 e
 end
 
+module Subst = struct
+  type t = subst
+
+  let is_empty = CCList.is_empty
+  let pp out (self:t) : unit =
+    if is_empty self then Fmt.string out "{}"
+    else (
+      let pp_b out (v,t) =
+        Fmt.fprintf out "(@[%a := %a@])" Var.pp v Expr.pp t
+      in
+      Fmt.fprintf out "@[<hv>{@,%a@,}@]"
+        (pp_list ~sep:" " pp_b) self
+    )
+  let to_string = Fmt.to_string pp
+
+  let to_k_subst ctx (self:t) =
+    List.fold_left
+      (fun s (v,t) ->
+         let v = K.Var.make v.v_name (Expr.to_k_expr ctx v.v_ty) in
+         let t = Expr.to_k_expr ctx t in
+         K.Subst.bind v t s)
+      K.Subst.empty self
+end
+
 (** {2 Typing Environment}
 
     This environment is (mostly) functional, and is used to handle
@@ -539,12 +568,18 @@ module Env = struct
     | N_thm of K.Thm.t
     | N_rule of Proof.Rule.t
 
+  let find_rule (_self:t) name : KProof.Rule.t option =
+    match Proof.Rule.find_builtin name with
+    | Some _ as r -> r
+    | None ->
+      None (* TODO: lookup in locally defined rules *)
+
   let find_named (self:t) name : named_object option =
     try Some (N_expr (Str_map.find name self.consts))
     with Not_found ->
     try Some (N_thm (Str_map.find name self.theorems))
     with Not_found ->
-    match Proof.Rule.find_builtin name with
+    match find_rule self name with
     | Some r -> Some (N_rule r)
     | None ->
       None (* TODO: look in local defined rules *)
@@ -561,6 +596,145 @@ module Env = struct
     } in
     declare_const env "bool" (K.Expr.bool ctx);
     env
+end
+
+(** {2 Processing proofs} *)
+module Proof = struct
+  module R = Proof.Rule
+
+  type t = {
+    pos: position;
+    view: view
+  }
+
+  and view =
+    | Proof_atom of step
+    | Proof_steps of {
+        lets: pr_let list;
+        (** intermediate steps *)
+        ret: step;
+        (** proof to return *)
+      }
+
+  (** named steps *)
+  and pr_let = ID.t * step
+
+  and step = {
+    s_pos: position;
+    s_view: step_view;
+  }
+
+  and step_view =
+    | Pr_apply_rule of Proof.Rule.t * rule_arg list
+    | Pr_sub_proof of t
+    | Pr_error of unit Fmt.printer (* parse error *)
+
+  (** An argument to a rule *)
+  and rule_arg =
+    | Arg_var_step of ID.t
+    | Arg_step of step
+    | Arg_expr of expr
+    | Arg_subst of subst
+
+  type rule_signature = Proof.Rule.signature
+
+  let rec pp out (self:t) : unit =
+    Fmt.fprintf out "@[<hv>@[<hv2>proof@ ";
+    begin match self.view with
+      | Proof_atom s -> pp_step ~top:true out s
+      | Proof_steps {lets; ret} ->
+        List.iter (fun l -> Fmt.fprintf out "%a@ " pp_pr_let l) lets;
+        pp_step ~top:true out ret
+    end;
+    Fmt.fprintf out "@]@ end@]"
+
+  and pp_pr_let out (name,p) =
+      Fmt.fprintf out "@[<2>let %a =@ %a in@]"
+      ID.pp name (pp_step ~top:true) p
+
+  and pp_step ~top out (s:step) : unit =
+    match s.s_view with
+    | Pr_apply_rule (r, []) when top -> R.pp out r
+    | Pr_apply_rule (r, args) ->
+      if not top then Fmt.char out '(';
+      Fmt.fprintf out "@[<hv2>%a@ %a@]" R.pp r (pp_list pp_rule_arg) args;
+      if not top then Fmt.char out ')';
+    | Pr_sub_proof p -> pp out p
+    | Pr_error e -> Fmt.fprintf out "<@[error:@ %a@]>" e ()
+
+  and pp_rule_arg out (a:rule_arg) : unit =
+    match a with
+    | Arg_var_step s -> Fmt.fprintf out "<step %a>" ID.pp s
+    | Arg_step s -> pp_step ~top:false out s (* always in ( ) *)
+    | Arg_expr e -> Expr.pp out e
+    | Arg_subst s -> Subst.pp out s
+
+  let to_string = Fmt.to_string pp
+  let pp_rule_signature = R.pp_signature
+
+  let mk ~pos (view:view) : t = {view; pos}
+  let mk_step ~pos (s_view:step_view) : step = {s_view; s_pos=pos}
+
+  type env = {
+    e_th: K.Thm.t ID.Map.t; (* steps *)
+  }
+
+  (* how to run a proof, and obtain a theorem at the end *)
+  let run (ctx:K.Ctx.t) (self:t) : K.Thm.t =
+    let module KR = KProof.Rule in
+    let rec run_pr (env:env) (p:t) =
+      let pos = p.pos in
+      try
+        match p.view with
+        | Proof_atom s -> run_step env s
+        | Proof_steps { lets; ret } ->
+          let env =
+            List.fold_left
+              (fun env (name,s) ->
+                 let th = run_step env s in
+                 let env = {e_th = ID.Map.add name th env.e_th} in
+                 env)
+              env lets in
+          run_step env ret
+      with e ->
+        errorf ~src:e (fun k->k"@[<2>while checking proof@ at %a@]" Position.pp pos)
+
+    and run_step env (s:step) : K.Thm.t =
+      let pos = s.s_pos in
+      try
+        match s.s_view with
+        | Pr_sub_proof p -> run_pr env p
+        | Pr_error e ->
+          errorf (fun k->k"invalid proof step@ at %a:@ %a" Position.pp pos e())
+        | Pr_apply_rule (r, args) ->
+          let args = List.map (conv_arg ~pos env) args in
+          Log.debugf 10
+            (fun k->k"apply rule %a@ to args %a"
+                KR.pp r (Fmt.Dump.list KR.pp_arg_val) args);
+          KR.apply ctx r args
+      with e ->
+        errorf ~src:e
+          (fun k->k"@[<2>while checking proof step@ at %a@]"
+               Position.pp pos)
+
+    (* convert a rule argument *)
+    and conv_arg ~pos env = function
+      | Arg_expr e ->
+        KR.AV_expr (Expr.to_k_expr ctx e)
+      | Arg_subst s ->
+        KR.AV_subst (Subst.to_k_subst ctx s)
+      | Arg_step s ->
+        let th = run_step env s in
+        KR.AV_thm th
+      | Arg_var_step s ->
+        begin match ID.Map.find s env.e_th with
+          | th -> KR.AV_thm th
+          | exception Not_found ->
+            errorf
+              (fun k->k"unbound proof step `%a`@ at %a" ID.pp s Position.pp pos)
+        end
+    in
+    run_pr {e_th=ID.Map.empty;} self
 end
 
 (** {2 type inference} *)
@@ -603,7 +777,8 @@ module Ty_infer = struct
             Expr.pp e Position.pp pos Expr.pp ty
             Expr.pp_unif_trace_ st)
 
-  let infer_expr_vars ~pos (env:env) (vars:A.var list) (e0:AE.t) : bvar list * expr =
+  let infer_expr_full_ ~pos ~bv:bv0
+      (env:env) (vars:A.var list) (e0:AE.t) : bvar list * expr =
     (* type inference.
        @param bv the local variables, for scoping *)
     let rec inf_rec_ (bv:expr Str_map.t) (e:AE.t) : expr =
@@ -750,10 +925,13 @@ module Ty_infer = struct
         (fun bv v ->
            let v' = infer_bvar_ ~pos bv v in
            Str_map.add v.A.v_name (Expr.bvar ~pos v') bv, v')
-        Str_map.empty vars
+        bv0 vars
     in
     let e = inf_rec_ bv e0 in
     vars, e
+
+  let infer_expr_vars ~pos env vars e0 : bvar list * expr =
+    infer_expr_full_ ~pos ~bv:Str_map.empty env vars e0
 
   let infer_expr (env:env) (e0:AE.t) : expr =
     let _, e = infer_expr_vars ~pos:(AE.pos e0) env [] e0 in
@@ -787,115 +965,242 @@ module Ty_infer = struct
     let x = f() in
     Env.generalize_ty_vars env;
     x
+
+  type pr_env = {
+    e_expr: expr Str_map.t;
+    e_step: ID.t Str_map.t;
+  }
+
+  let infer_proof (env:env) (pr:A.Proof.t) : Proof.t =
+    let rec infer_proof (pr_env:pr_env) (pr:A.Proof.t) : Proof.t =
+      let pos = A.Proof.pos pr in
+      match A.Proof.view pr with
+      | A.Proof.Proof_atom s ->
+        let s = infer_step pr_env s in
+        Proof.mk ~pos (Proof.Proof_atom s)
+      | A.Proof.Proof_steps { lets; ret } ->
+        (* convert let-steps, inline let-expr bindings *)
+        let pr_env = ref pr_env in
+        let lets =
+          CCList.filter_map
+            (function
+              | A.Proof.Let_expr (name,e) ->
+                let _, e = infer_expr_full_ ~pos ~bv:(!pr_env).e_expr env [] e in
+                pr_env := {
+                  (!pr_env) with
+                  e_expr=Str_map.add name e (!pr_env).e_expr;
+                };
+                None
+              | A.Proof.Let_step (name,s) ->
+                let name_id = ID.make name in
+                let s = infer_step !pr_env s in
+                pr_env := {
+                  (!pr_env) with
+                  e_step=Str_map.add name name_id (!pr_env).e_step;
+                };
+                Some (name_id, s))
+            lets
+        in
+        let ret = infer_step !pr_env ret in
+        Proof.mk ~pos (Proof.Proof_steps {lets; ret})
+    (* convert individual steps *)
+    and infer_step (pr_env:pr_env) (s:A.Proof.step) : Proof.step =
+      let pos = A.Proof.s_pos s in
+      match A.Proof.s_view s with
+      | A.Proof.Pr_error e ->
+        Proof.mk_step ~pos (Proof.Pr_error e)
+      | A.Proof.Pr_apply_rule (r, args) ->
+        let r = match Env.find_rule env r with
+          | None ->
+            errorf (fun k->k"unknown rule '%s'@ at %a" r Position.pp pos)
+          | Some r -> r
+        in
+        let args = List.map (conv_arg ~pos pr_env) args in
+        Proof.mk_step ~pos (Proof.Pr_apply_rule (r, args))
+      | A.Proof.Pr_sub_proof p ->
+        let p = infer_proof pr_env p in
+        Proof.mk_step ~pos (Proof.Pr_sub_proof p)
+
+    and conv_arg ~pos (pr_env:pr_env) (a:A.Proof.rule_arg) : Proof.rule_arg =
+      match a with
+      | A.Proof.Arg_var s ->
+        begin match
+            Str_map.get s pr_env.e_expr,
+            Str_map.get s pr_env.e_step
+          with
+          | Some e, _ -> Proof.Arg_expr e
+          | None, Some id -> Proof.Arg_var_step id
+          | None, None ->
+            errorf
+              (fun k->k "unknown proof variable '%s'@ at %a" s Position.pp pos)
+        end
+      | A.Proof.Arg_step s ->
+        let s = infer_step pr_env s in
+        Proof.Arg_step s
+      | A.Proof.Arg_expr e ->
+        let _, e = infer_expr_full_ ~pos ~bv:pr_env.e_expr env [] e in
+        Proof.Arg_expr e
+      | A.Proof.Arg_subst _s ->
+        errorf (fun k->k"TODO: convert subst")
+    in
+    let e0 = {e_expr=Str_map.empty; e_step=Str_map.empty} in
+    infer_proof e0 pr
 end
 
-let process_stmt
-  ~on_show ~on_error
-  (env:env) (st:A.top_statement) : env =
-  Log.debugf 2 (fun k->k"(@[TA.process-stmt@ %a@])" A.Top_stmt.pp st);
-  let ok =
-    let pos = A.Top_stmt.pos st in
-    try
-      match A.Top_stmt.view st with
-      | A.Top_enter_file s ->
-        env.cur_file <- s;
-        true
-      | A.Top_decl { name; ty } ->
-        let ty =
-          Ty_infer.and_then_generalize env (fun () -> Ty_infer.infer_ty env ty)
-          |> Expr.to_k_expr env.ctx in
-        let c = K.Expr.new_const env.ctx name ty in
-        Env.declare_const env name c;
-        true
-      | A.Top_def { name; th_name; vars; ret; body } ->
-        (* turn [def f x y := bod] into [def f := \x y. bod] *)
-        let vars, e = Ty_infer.infer_expr_vars ~pos env vars body in
-        let def_rhs = Expr.lambda_l ~pos vars e in
-        let ty_rhs = Expr.ty def_rhs in
-        (* now ensure that [f vars : ret] *)
-        begin match ret with
-          | None -> ()
-          | Some ret ->
-            let ret = Ty_infer.infer_ty env ret in
-            (* [ret] should be the type of [real_def x1…xn] *)
-            let e_app =
-              Expr.app_l ~pos env def_rhs
-                (List.map
-                   (fun bv -> Expr.var' ~pos (ID.name bv.bv_name) bv.bv_ty)
-                   vars)
-            in
-            Ty_infer.unif_type_with_ ~pos e_app ret
-        end;
-        Env.generalize_ty_vars env;
-        (* the defining equation `name = def_rhs` *)
-        let def_eq = Expr.eq ~pos (Expr.var' ~pos name ty_rhs) def_rhs in
-        let th, ke =
-          K.Thm.new_basic_definition env.ctx
-            (Expr.to_k_expr env.ctx def_eq) in
-        Env.declare_const env name ke;
-        CCOpt.iter (fun th_name -> Env.define_thm env th_name th) th_name;
-        true
-      | A.Top_fixity { name; fixity } ->
-        let c =
-          match K.Ctx.find_const_by_name env.ctx name with
-          | Some c -> c
-          | None -> errorf (fun k->k"constant `%s` not in scope" name)
+module Process_stmt = struct
+  type t = {
+    env: env;
+    on_show: position -> unit Fmt.printer -> unit;
+    on_error: position -> unit Fmt.printer -> unit;
+  }
+
+  let top_decl_ self name ty : unit =
+    let ty =
+      Ty_infer.and_then_generalize self.env
+        (fun () -> Ty_infer.infer_ty self.env ty)
+      |> Expr.to_k_expr self.env.ctx in
+    let c = K.Expr.new_const self.env.ctx name ty in
+    Env.declare_const self.env name c
+
+  let top_def_ ~pos self name th_name vars ret body : unit =
+    (* turn [def f x y := bod] into [def f := \x y. bod] *)
+    let vars, e = Ty_infer.infer_expr_vars ~pos self.env vars body in
+    let def_rhs = Expr.lambda_l ~pos vars e in
+    let ty_rhs = Expr.ty def_rhs in
+    (* now ensure that [f vars : ret] *)
+    begin match ret with
+      | None -> ()
+      | Some ret ->
+        let ret = Ty_infer.infer_ty self.env ret in
+        (* [ret] should be the type of [real_def x1…xn] *)
+        let e_app =
+          Expr.app_l ~pos self.env def_rhs
+            (List.map
+               (fun bv -> Expr.var' ~pos (ID.name bv.bv_name) bv.bv_ty)
+               vars)
         in
-        K.Const.set_fixity c fixity;
+        Ty_infer.unif_type_with_ ~pos e_app ret
+    end;
+    Env.generalize_ty_vars self.env;
+    (* the defining equation `name = def_rhs` *)
+    let def_eq = Expr.eq ~pos (Expr.var' ~pos name ty_rhs) def_rhs in
+    let th, ke =
+      K.Thm.new_basic_definition self.env.ctx
+        (Expr.to_k_expr self.env.ctx def_eq) in
+    Env.declare_const self.env name ke;
+    CCOpt.iter (fun th_name -> Env.define_thm self.env th_name th) th_name;
+    ()
+
+  let top_show_ self ~pos s : bool =
+    begin match Env.find_named self.env s with
+      | Some (Env.N_expr e) ->
+        self.on_show pos (fun out () ->
+            Fmt.fprintf out "@[<2>expr:@ `@[%a@]`@ with type: %a@]" K.Expr.pp e
+              (Fmt.Dump.option K.Expr.pp) (K.Expr.ty e));
         true
-      | A.Top_axiom {name; thm} ->
-        let e =
-          Ty_infer.and_then_generalize env
-            (fun () -> Ty_infer.infer_expr_with_ty env thm Expr.bool)
-          |> Expr.to_k_expr env.ctx
-        in
-        let th = K.Thm.axiom env.ctx e in
-        Env.define_thm env name th;
+      | Some (Env.N_thm th) ->
+        self.on_show pos (fun out () ->
+            Fmt.fprintf out "@[<2>theorem:@ %a@]" K.Thm.pp th);
         true
-      | A.Top_goal { goal; proof } ->
-        let goal = Ty_infer.infer_goal env goal in
-        Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp goal);
-        (* TODO *)
-        errorf (fun k->k"TODO: process `@[%a@]`@ for goal `@[%a@]`"
-                   A.Proof.pp proof K.Goal.pp goal)
-      | A.Top_theorem _ ->
-        error "TODO" (* TODO *)
-      | A.Top_show s ->
-        begin match Env.find_named env s with
-          | Some (Env.N_expr e) ->
-            on_show pos (fun out () ->
-                Fmt.fprintf out "@[<2>expr:@ `@[%a@]`@ with type: %a@]" K.Expr.pp e
-                  (Fmt.Dump.option K.Expr.pp) (K.Expr.ty e));
-            true
-          | Some (Env.N_thm th) ->
-            on_show pos (fun out () ->
-                Fmt.fprintf out "@[<2>theorem:@ %a@]" K.Thm.pp th);
-            true
-          | Some (Env.N_rule r) ->
-            on_show pos (fun out () ->
-                Fmt.fprintf out "@[<2>rule:@ %a@]" Proof.Rule.pp r);
-            true
-          | None ->
-            on_show pos (fun out () -> Fmt.fprintf out "not found");
-            false
-        end
-      | A.Top_show_expr e ->
-        let e = Ty_infer.infer_expr env e in
-        on_show pos (fun out () ->
-            Fmt.fprintf out "@[<2>expr:@ %a@ as-kernel-expr: %a@]"
-              Expr.pp e K.Expr.pp (Expr.to_k_expr env.ctx e));
+      | Some (Env.N_rule r) ->
+        self.on_show pos (fun out () ->
+            Fmt.fprintf out "@[<2>rule:@ %a@]" KProof.Rule.pp r);
         true
-      | A.Top_show_proof _ ->
-        error "TODO" (* TODO *)
-      | A.Top_error { msg } ->
-        on_error pos msg;
+      | None ->
+        self.on_show pos (fun out () -> Fmt.fprintf out "not found");
         false
-    with
-    | Trustee_error.E e ->
-      on_error pos (fun out () -> Trustee_error.pp out e);
+    end
+
+  let top_axiom_ self name thm : unit =
+    let e =
+      Ty_infer.and_then_generalize self.env
+        (fun () -> Ty_infer.infer_expr_with_ty self.env thm Expr.bool)
+      |> Expr.to_k_expr self.env.ctx
+    in
+    let th = K.Thm.axiom self.env.ctx e in
+    Env.define_thm self.env name th
+
+  let top_goal_ ~pos self goal proof : bool =
+    let goal = Ty_infer.infer_goal self.env goal in
+    Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp goal);
+    (* convert proof *)
+    let pr =
+      Ty_infer.infer_proof self.env proof
+    in
+    Log.debugf 10 (fun k->k"typed proof:@ %a" Proof.pp pr);
+    let th = Proof.run self.env.ctx pr in
+    if K.Thm.is_proof_of th goal then (
+      self.on_show pos
+        (fun out() ->
+           Fmt.fprintf out "@[<2>goal proved@ with theorem `@[%a@]`@]" K.Thm.pp th);
+      true
+    ) else (
+      self.on_error
+        pos
+        (fun out() ->
+           Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
+             K.Thm.pp th K.Goal.pp goal);
       false
-  in
-  if ok then (
-    Log.debugf 1 (fun k->k"@{<green>OK@}: %a" A.Top_stmt.pp st);
-  );
-  env
+    )
+
+  let top_ (self:t) st : unit =
+    Log.debugf 2 (fun k->k"(@[TA.process-stmt@ %a@])" A.Top_stmt.pp st);
+    let ok =
+      let pos = A.Top_stmt.pos st in
+      try
+        match A.Top_stmt.view st with
+        | A.Top_enter_file s ->
+          self.env.cur_file <- s;
+          true
+        | A.Top_decl { name; ty } ->
+          top_decl_ self name ty;
+          true
+        | A.Top_def { name; th_name; vars; ret; body } ->
+          top_def_ self ~pos name th_name vars ret body;
+          true
+        | A.Top_fixity { name; fixity } ->
+          let c =
+            match K.Ctx.find_const_by_name self.env.ctx name with
+            | Some c -> c
+            | None -> errorf (fun k->k"constant `%s` not in scope" name)
+          in
+          K.Const.set_fixity c fixity;
+          true
+        | A.Top_axiom {name; thm} ->
+          top_axiom_ self name thm;
+          true
+        | A.Top_goal { goal; proof } ->
+          top_goal_ ~pos self goal proof
+        | A.Top_theorem _ ->
+          error "TODO" (* TODO *)
+        | A.Top_show s ->
+          top_show_ self ~pos s
+        | A.Top_show_expr e ->
+          let e = Ty_infer.infer_expr self.env e in
+          self.on_show pos (fun out () ->
+              Fmt.fprintf out "@[<2>expr:@ %a@ as-kernel-expr: %a@]"
+                Expr.pp e K.Expr.pp (Expr.to_k_expr self.env.ctx e));
+          true
+        | A.Top_show_proof _ ->
+          error "TODO" (* TODO *)
+        | A.Top_error { msg } ->
+          self.on_error pos msg;
+          false
+      with
+      | Trustee_error.E e ->
+        self.on_error pos (fun out () -> Trustee_error.pp out e);
+        false
+    in
+    if ok then (
+      Log.debugf 1 (fun k->k"@{<green>OK@}: %a" A.Top_stmt.pp st);
+    );
+    ()
+
+  let top ~on_show ~on_error (env:env) (st:A.top_statement) : env =
+    let state = {env; on_show; on_error} in
+    top_ state st;
+    env
+end
+
+let process_stmt = Process_stmt.top
+
