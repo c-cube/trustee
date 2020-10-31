@@ -121,6 +121,7 @@ module Proof : sig
   and rule_arg =
     | Arg_var_step of ID.t
     | Arg_step of step
+    | Arg_thm of K.Thm.t
     | Arg_expr of expr
     | Arg_subst of subst
 

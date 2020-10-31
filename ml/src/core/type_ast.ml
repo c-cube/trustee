@@ -574,6 +574,9 @@ module Env = struct
     | None ->
       None (* TODO: lookup in locally defined rules *)
 
+  let find_thm self name : K.Thm.t option =
+    Str_map.get name self.theorems
+
   let find_named (self:t) name : named_object option =
     try Some (N_expr (Str_map.find name self.consts))
     with Not_found ->
@@ -633,6 +636,7 @@ module Proof = struct
   and rule_arg =
     | Arg_var_step of ID.t
     | Arg_step of step
+    | Arg_thm of K.Thm.t
     | Arg_expr of expr
     | Arg_subst of subst
 
@@ -666,6 +670,7 @@ module Proof = struct
     match a with
     | Arg_var_step s -> Fmt.fprintf out "<step %a>" ID.pp s
     | Arg_step s -> pp_step ~top:false out s (* always in ( ) *)
+    | Arg_thm th -> K.Thm.pp out th
     | Arg_expr e -> Expr.pp out e
     | Arg_subst s -> Subst.pp out s
 
@@ -726,6 +731,7 @@ module Proof = struct
       | Arg_step s ->
         let th = run_step env s in
         KR.AV_thm th
+      | Arg_thm th -> KR.AV_thm th
       | Arg_var_step s ->
         begin match ID.Map.find s env.e_th with
           | th -> KR.AV_thm th
@@ -1031,8 +1037,12 @@ module Ty_infer = struct
           | Some e, _ -> Proof.Arg_expr e
           | None, Some id -> Proof.Arg_var_step id
           | None, None ->
-            errorf
-              (fun k->k "unknown proof variable '%s'@ at %a" s Position.pp pos)
+            begin match Env.find_thm env s with
+              | Some th -> Proof.Arg_thm th
+              | None ->
+                errorf
+                  (fun k->k "unknown proof variable '%s'@ at %a" s Position.pp pos)
+            end
         end
       | A.Proof.Arg_step s ->
         let s = infer_step pr_env s in
@@ -1120,7 +1130,7 @@ module Process_stmt = struct
     let th = K.Thm.axiom self.env.ctx e in
     Env.define_thm self.env name th
 
-  let top_goal_ ~pos self goal proof : bool =
+  let top_proof_ self goal proof : K.Goal.t * Proof.t * K.Thm.t =
     let goal = Ty_infer.infer_goal self.env goal in
     Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp goal);
     (* convert proof *)
@@ -1129,10 +1139,28 @@ module Process_stmt = struct
     in
     Log.debugf 10 (fun k->k"typed proof:@ %a" Proof.pp pr);
     let th = Proof.run self.env.ctx pr in
+    goal, pr, th
+
+  let top_goal_ ~pos self goal proof : bool =
+    let goal, _pr, th = top_proof_ self goal proof in
     if K.Thm.is_proof_of th goal then (
       self.on_show pos
         (fun out() ->
            Fmt.fprintf out "@[<2>goal proved@ with theorem `@[%a@]`@]" K.Thm.pp th);
+      true
+    ) else (
+      self.on_error
+        pos
+        (fun out() ->
+           Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
+             K.Thm.pp th K.Goal.pp goal);
+      false
+    )
+
+  let top_thm_ ~pos self name goal proof : bool =
+    let goal, _pr, th = top_proof_ self goal proof in
+    if K.Thm.is_proof_of th goal then (
+      Env.define_thm self.env name th;
       true
     ) else (
       self.on_error
@@ -1171,14 +1199,14 @@ module Process_stmt = struct
           true
         | A.Top_goal { goal; proof } ->
           top_goal_ ~pos self goal proof
-        | A.Top_theorem _ ->
-          error "TODO" (* TODO *)
+        | A.Top_theorem { name; goal; proof } ->
+          top_thm_ ~pos self name goal proof
         | A.Top_show s ->
           top_show_ self ~pos s
         | A.Top_show_expr e ->
           let e = Ty_infer.infer_expr self.env e in
           self.on_show pos (fun out () ->
-              Fmt.fprintf out "@[<2>expr:@ %a@ as-kernel-expr: %a@]"
+              Fmt.fprintf out "@[<v>@[<2>expr:@ %a@]@ @[<2>as-kernel-expr:@ %a@]@]"
                 Expr.pp e K.Expr.pp (Expr.to_k_expr self.env.ctx e));
           true
         | A.Top_show_proof _ ->
