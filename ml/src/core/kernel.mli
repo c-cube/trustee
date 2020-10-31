@@ -130,6 +130,27 @@ module Expr : sig
   module Tbl : CCHashtbl.S with type key = t
 end
 
+(** {2 Toplevel goals}
+
+    A goal is simply a conjecture that does not have been proved yet.
+    It might therefore be invalid. *)
+module Goal : sig
+  type t = private {
+    hyps: Expr.Set.t;
+    concl: Expr.t;
+  }
+
+  val make : Expr.Set.t -> Expr.t -> t
+  val make_l : Expr.t list -> Expr.t -> t
+  val make_nohyps : Expr.t -> t
+
+  val concl : t -> Expr.t
+  val hyps : t -> Expr.Set.t
+  val hyps_iter : t -> Expr.t iter
+
+  include Sigs.PP with type t := t
+end
+
 module New_ty_def : sig
   type t = {
     tau: expr;

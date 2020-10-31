@@ -64,6 +64,9 @@ type thm = {
   th_hyps: Expr_set.t;
   mutable th_flags: int; (* [bool flags|ctx uid] *)
 }
+(* TODO:
+   - store set of axioms used
+   *)
 
 let[@inline] thm_ctx_uid th : int = th.th_flags land ctx_id_mask
 
@@ -533,6 +536,32 @@ module Expr = struct
   module Tbl = CCHashtbl.Make(AsKey)
 end
 
+(** {2 Toplevel goals} *)
+module Goal = struct
+  type t = {
+    hyps: Expr.Set.t;
+    concl: Expr.t;
+  }
+
+  let make hyps concl : t = {hyps; concl}
+  let make_l h c = make (Expr.Set.of_list h) c
+  let make_nohyps c : t = make Expr.Set.empty c
+
+  let[@inline] concl g = g.concl
+  let[@inline] hyps g = g.hyps
+  let[@inline] hyps_iter g = Expr.Set.to_iter g.hyps
+
+  let pp out (self:t) : unit =
+    if Expr.Set.is_empty self.hyps then (
+      Fmt.fprintf out "@[?-@ %a@]" Expr.pp self.concl
+    ) else (
+      Fmt.fprintf out "@[<hv>%a@ ?-@ %a@]"
+        (pp_iter ~sep:", " Expr.pp) (hyps_iter self)
+        Expr.pp self.concl
+    )
+  let to_string = Fmt.to_string pp
+end
+
 (** {2 Context}
 
     The context is storing the term state, list of axioms,
@@ -609,6 +638,7 @@ module New_ty_def = struct
   }
 end
 
+(** {2 Theorems and Deduction Rules} *)
 module Thm = struct
   type t = thm
 

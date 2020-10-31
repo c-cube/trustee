@@ -57,8 +57,9 @@ and meta = {
 type env = {
   ctx: K.Ctx.t;
   mutable cur_file: string;
-  mutable tys: ty ID.Map.t;
+  mutable consts: K.Expr.t Str_map.t;
   mutable fvars: var Str_map.t;
+  mutable theorems: K.Thm.t Str_map.t;
   mutable gensym: int;
   mutable to_gen: meta list; (* to generalize *)
 }
@@ -492,13 +493,14 @@ module Env = struct
   let create ctx : t =
     {ctx;
      cur_file="";
-     tys=ID.Map.empty;
      gensym=0;
+     consts=Str_map.empty;
      fvars=Str_map.empty;
+     theorems=Str_map.empty;
      to_gen=[];
     }
 
-  let copy self = {self with tys=self.tys}
+  let copy self = {self with to_gen=self.to_gen}
 
   let generalize_ty_vars (self:t) : unit =
     let metas = self.to_gen in
@@ -513,6 +515,27 @@ module Env = struct
            m.meta_deref <- Some (Expr.var ~pos:nopos v))
       metas;
     ()
+
+  let declare_const (self:t) name c : unit =
+    self.consts <- Str_map.add name c self.consts
+
+  let define_thm (self:t) name th : unit =
+    self.theorems <- Str_map.add name th self.theorems
+
+  type named_object =
+    | N_expr of K.Expr.t
+    | N_thm of K.Thm.t
+    | N_rule of Proof.Rule.t
+
+  let find_named (self:t) name : named_object option =
+    try Some (N_expr (Str_map.find name self.consts))
+    with Not_found ->
+    try Some (N_thm (Str_map.find name self.theorems))
+    with Not_found ->
+    match Proof.Rule.find_builtin name with
+    | Some r -> Some (N_rule r)
+    | None ->
+      None (* TODO: look in local defined rules *)
 end
 
 (** {2 type inference} *)
@@ -533,18 +556,17 @@ module Ty_infer = struct
     in
     aux e
 
-  let infer_expr (env:env) (e0:AE.t) : expr =
-    let unif_exn_ ~pos e a b = match Expr.unif_ a b with
-      | Ok () -> ()
-      | Error st ->
-        errorf
-          (fun k->k
-              "@[<2>type error@ while inferring the type @[<2>of %a@ at %a@]:@ \
-               unification error in the following trace:@ %a"
-              AE.pp e Position.pp pos
-              Fmt.Dump.(list @@ pair Expr.pp Expr.pp) st)
-    in
+  let unif_exn_ ~pos e a b = match Expr.unif_ a b with
+    | Ok () -> ()
+    | Error st ->
+      errorf
+        (fun k->k
+            "@[<2>type error@ while inferring the type @[<2>of %a@ at %a@]:@ \
+             unification error in the following trace:@ %a"
+            AE.pp e Position.pp pos
+            Fmt.Dump.(list @@ pair Expr.pp Expr.pp) st)
 
+  let infer_expr (env:env) (e0:AE.t) : expr =
     (* type inference.
        @param bv the local variables, for scoping *)
     let rec inf_rec_ (bv:expr Str_map.t) (e:AE.t) : expr =
@@ -612,7 +634,7 @@ module Ty_infer = struct
                 match K.Ctx.find_const_by_name env.ctx name with
                 | None ->
                   errorf
-                    (fun k->k"cannot find constant %a@ at %a"
+                    (fun k->k"cannot find constant `@[%a@]`@ at %a"
                          A.Const.pp c Position.pp pos)
                 | Some c -> K.Expr.const env.ctx c
             in
@@ -642,7 +664,9 @@ module Ty_infer = struct
               bv vars
           in
           Expr.lambda_l ~pos vars @@ inf_rec_ bv bod
-        | A.Bind _ -> assert false (* TODO *)
+        | A.Bind _ ->
+          errorf (fun k->k"cannot infer for binder %a" AE.pp e)
+          (* TODO *)
         | A.Let (bindings, body) ->
           let bv', bindings =
             CCList.fold_map
@@ -672,6 +696,30 @@ module Ty_infer = struct
        v'
     in
     inf_rec_ Str_map.empty e0
+
+  let infer_expr_with_ty env e0 ty : expr =
+    let e = infer_expr env e0 in
+    unif_exn_ ~pos:(AE.pos e0) e0 ty (Expr.ty e);
+    e
+
+  let infer_ty env e0 : ty =
+    infer_expr_with_ty env e0 Expr.type_
+
+  let infer_expr_bool env e0 : expr =
+    infer_expr_with_ty env e0 Expr.bool
+
+  let infer_goal env (g:A.Goal.t) : K.Goal.t =
+    let hyps = List.map (infer_expr_bool env) g.A.Goal.hyps in
+    let concl = infer_expr_bool env g.A.Goal.concl in
+    Env.generalize_ty_vars env;
+    K.Goal.make_l
+      (List.map (Expr.to_k_expr env.ctx) hyps)
+      (Expr.to_k_expr env.ctx concl)
+
+  let and_then_generalize env f =
+    let x = f() in
+    Env.generalize_ty_vars env;
+    x
 end
 
 let process_stmt
@@ -684,14 +732,48 @@ let process_stmt
       match A.Top_stmt.view st with
       | A.Top_enter_file s ->
         env.cur_file <- s
-      | A.Top_def _
-      | A.Top_decl _
-      | A.Top_fixity _
-      | A.Top_axiom _
-      | A.Top_goal _
-      | A.Top_theorem _
-      | A.Top_show _ ->
+      | A.Top_decl { name; ty } ->
+        let ty =
+          Ty_infer.and_then_generalize env (fun () -> Ty_infer.infer_ty env ty)
+          |> Expr.to_k_expr env.ctx in
+        let c = K.Expr.new_const env.ctx name ty in
+        Env.declare_const env name c;
+      | A.Top_def _ ->
         error "TODO" (* TODO *)
+      | A.Top_fixity { name; fixity } ->
+        let c =
+          match K.Ctx.find_const_by_name env.ctx name with
+          | Some c -> c
+          | None -> errorf (fun k->k"constant `%s` not in scope" name)
+        in
+        K.Const.set_fixity c fixity;
+      | A.Top_axiom {name; thm} ->
+        let e =
+          Ty_infer.and_then_generalize env
+            (fun () -> Ty_infer.infer_expr_with_ty env thm Expr.bool)
+          |> Expr.to_k_expr env.ctx
+        in
+        let th = K.Thm.axiom env.ctx e in
+        Env.define_thm env name th
+      | A.Top_goal { goal; proof } ->
+        let goal = Ty_infer.infer_goal env goal in
+        Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp goal);
+        (* TODO *)
+        errorf (fun k->k"TODO: process proof %a@ for goal %a"
+                   A.Proof.pp proof K.Goal.pp goal)
+      | A.Top_theorem _ ->
+        error "TODO" (* TODO *)
+      | A.Top_show s ->
+        begin match Env.find_named env s with
+          | Some (Env.N_expr e) ->
+            on_show pos (fun out () -> Fmt.fprintf out "expr: %a" K.Expr.pp e)
+          | Some (Env.N_thm th) ->
+            on_show pos (fun out () -> Fmt.fprintf out "theorem: %a" K.Thm.pp th)
+          | Some (Env.N_rule r) ->
+            on_show pos (fun out () -> Fmt.fprintf out "rule: %a" Proof.Rule.pp r)
+          | None ->
+            on_show pos (fun out () -> Fmt.fprintf out "not found")
+        end
       | A.Top_show_expr e ->
         let e = Ty_infer.infer_expr env e in
         on_show pos (fun out () -> Fmt.fprintf out "expr %a" Expr.pp e)
