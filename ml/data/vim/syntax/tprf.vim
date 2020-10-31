@@ -1,7 +1,7 @@
 
 set expandtab
 
-syn keyword     tprfKW    def declare axiom show expr proof end fixity
+syn keyword     tprfKW    def declare axiom show expr proof end fixity goal
 syn keyword     tprfKW    theorem by
 syn keyword     tprfKW    let in
 

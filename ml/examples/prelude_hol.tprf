@@ -13,7 +13,14 @@ show expr
   (T = T) = T
 end
 
+goal T = T
+  by proof refl T end
+end
+
+show T end
 show DefTrue end
+
+show expr \x y z: bool. x = (y = z) end
 
 theorem TrueIsTrue := T
 by
@@ -44,7 +51,6 @@ def forall : (pi a. (a -> bool) -> bool) by DefForall
   := \ (a:type) (f:a -> bool). f = (\x:a. T)
 end
 
-# TODO: parse this properly
 fixity forall := binder 12 end
 
 show expr forall (x y : tau). x = y end
