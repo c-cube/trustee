@@ -4,6 +4,7 @@ open Trustee_core.Sigs
 module Log = Trustee_core.Log
 module K = Trustee_core.Kernel
 module A = Trustee_core.Parse_ast
+module TA = Trustee_core.Type_ast
 module Syntax = Trustee_core.Syntax
 
 module Cat = struct
@@ -30,9 +31,39 @@ module Cat = struct
 
 end
 
+module Check = struct
+  let args = [
+    "-d", Arg.Int Log.set_level, " debug level";
+  ] |> Arg.align
+
+  let run args =
+    Log.debugf 1 (fun k->k"check files %a" (Fmt.Dump.(list string)) args);
+    let ctx = K.Ctx.create() in
+    let aenv = A.Env.create ctx in
+    let tyenv = ref @@ TA.Env.create ctx in
+    List.iter
+      (fun file ->
+         match CCIO.File.read file with
+         | Ok s ->
+           let lex = Syntax.Lexer.create s in
+           Fmt.printf "# file %S@." file;
+           let l = Syntax.parse_top_l_process ~file ~env:aenv lex in
+           let tyenv' =
+             CCList.fold_left TA.process_stmt !tyenv l
+           in
+           tyenv := tyenv';
+           Fmt.printf "# processed %S@." file;
+         | Error e ->
+           errorf (fun k->k"cannot read '%s': %s" file e))
+      args;
+    ()
+
+end
+
 
 let cmds = [
   "cat", (Cat.args, Cat.run);
+  "check", (Check.args, Check.run);
 ]
 
 let () =

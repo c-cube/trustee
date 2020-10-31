@@ -2,6 +2,8 @@
 open Sigs
 
 module K = Kernel
+module TyProof = Proof
+module TyRule = TyProof.Rule
 
 type position = Position.t
 type fixity = Fixity.t
@@ -220,7 +222,7 @@ module Proof = struct
   and step_view =
     | Pr_apply_rule of string * rule_arg list
     | Pr_sub_proof of t
-    | Pr_error of string (* parse error *)
+    | Pr_error of unit Fmt.printer (* parse error *)
 
   (** An argument to a rule *)
   and rule_arg =
@@ -229,7 +231,7 @@ module Proof = struct
     | Arg_expr of expr
     | Arg_subst of subst
 
-  type rule_signature = Rule.signature
+  type rule_signature = TyRule.signature
 
   let rec pp out (self:t) : unit =
     Fmt.fprintf out "@[<hv>@[<hv2>proof@ ";
@@ -257,7 +259,7 @@ module Proof = struct
       Fmt.fprintf out "@[<hv2>%s@ %a@]" r (pp_list pp_rule_arg) args;
       if not top then Fmt.char out ')';
     | Pr_sub_proof p -> pp out p
-    | Pr_error e -> Fmt.fprintf out "<error %s>" e
+    | Pr_error e -> Fmt.fprintf out "<@[error:@ %a@]>" e ()
 
   and pp_rule_arg out (a:rule_arg) : unit =
     match a with
@@ -266,7 +268,7 @@ module Proof = struct
     | Arg_expr e -> Expr.pp out e
     | Arg_subst s -> Subst.pp out s
 
-  let pp_rule_signature = Rule.pp_signature
+  let pp_rule_signature = TyRule.pp_signature
 
   let to_string = Fmt.to_string pp
 
@@ -357,7 +359,7 @@ module Top_stmt = struct
       Fmt.fprintf out "@[<hv>@[<2>def %s%a%a :=@ %a@]@ end@]"
         name pp_ty_opt ret pp_th_name th_name pp body
     | Top_def { name; th_name; vars; ret; body } ->
-      Fmt.fprintf out "@[<hv>@[<2>def %s %a%a%a :=@ %a@]@ end@]"
+      Fmt.fprintf out "@[<v>@[<v2>@[<2>def %s %a%a%a :=@]@ %a@]@ end@]"
         name (pp_list pp_var_ty) vars pp_ty_opt ret pp_th_name th_name pp body
     | Top_decl { name; ty } ->
       Fmt.fprintf out "@[<hv>@[<2>decl %s :@ %a@]@ end@]"
@@ -434,8 +436,8 @@ module Env = struct
       | None -> None
 
   let find_rule self s : _ option =
-    match Rule.find_builtin s with
-    | Some r -> Some (Rule.signature r)
+    match TyRule.find_builtin s with
+    | Some r -> Some (TyRule.signature r)
     | None -> Str_map.get s self.rules
 
   let process (self:t) (st:top_statement) : unit =

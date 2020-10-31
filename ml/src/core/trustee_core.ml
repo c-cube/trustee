@@ -9,5 +9,5 @@ module Location = Location
 module Hashcons = Hashcons
 module Parse_ast = Parse_ast
 module Type_ast = Type_ast
-module Rule = Rule
+module Proof = Proof
 module Fixity = Fixity

@@ -49,9 +49,12 @@ and meta
 (** Typing environment *)
 type env
 
+(* {2 Expressions} *)
 module Expr : sig
   type t = expr
   include PP with type t := expr
+
+  val to_k_expr : K.Ctx.t -> expr -> K.Expr.t
 end
 
 (** {2 Typing Environment}
@@ -67,15 +70,23 @@ module Env : sig
   val copy : t -> t
   (** Make a copy. The two copies share the same underlying context
       but nothing else. *)
+
+  val generalize_ty_vars : t -> unit
+  (** Generalize remaining variables. This modifies terms previously
+      obtained with this environment and {!infer}. *)
 end
 
 (* {2 type inference} *)
+module Ty_infer : sig
+  val infer_expr : env -> A.expr -> expr
+end
 
-val infer : Env.t -> Parse_ast.expr -> expr
+(** {2 Process statements} *)
 
-val generalize : Env.t -> unit
-(** Generalize remaining variables. This modifies terms previously
-    obtained with this environment and {!infer}. *)
+(* TODO: build position/range-addressable index for LSP *)
 
-val to_expr : K.Ctx.t -> expr -> K.Expr.t
-
+val process_stmt :
+  on_show:(position -> unit Fmt.printer -> unit) ->
+  on_error:(position -> unit Fmt.printer -> unit) ->
+  env -> A.top_statement -> env
+(** Process a toplevel statement, returning a new environment. *)

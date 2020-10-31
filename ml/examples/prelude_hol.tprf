@@ -45,11 +45,15 @@ def forall : (pi a. (a -> bool) -> bool) by DefForall
 end
 
 # TODO: parse this properly
-set_fixity forall (binder 12) end
+fixity forall := binder 12 end
+
+show expr forall (x y : tau). x = y end
 
 # TODO RForallSubst
 # TODO RForallIntro
 
 def /\ (a b : bool) : bool by DefAnd
-  := forall (\f. f a b = f T T)
+  := forall f. f a b = f T T
 end
+
+fixity /\ := rassoc 15 end

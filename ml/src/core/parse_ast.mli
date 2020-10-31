@@ -3,6 +3,8 @@
 open Sigs
 
 module K = Kernel
+module TyProof = Proof
+module TyRule = TyProof.Rule
 
 type position = Position.t
 type fixity = Fixity.t
@@ -144,7 +146,7 @@ module Proof : sig
   and step_view =
     | Pr_apply_rule of string * rule_arg list
     | Pr_sub_proof of t
-    | Pr_error of string (* parse error *)
+    | Pr_error of unit Fmt.printer (* parse error *)
 
   (** An argument to a rule *)
   and rule_arg =
@@ -153,7 +155,7 @@ module Proof : sig
     | Arg_expr of expr
     | Arg_subst of subst
 
-  type rule_signature = Rule.signature
+  type rule_signature = TyRule.signature
 
   include PP with type t := t
   val pp_pr_let : pr_let Fmt.printer
@@ -166,7 +168,7 @@ module Proof : sig
 
   val step_apply_rule : pos:position -> string -> rule_arg list -> step
   val step_subproof : pos:position -> t -> step
-  val step_error : pos:position -> string -> step
+  val step_error : pos:position -> unit Fmt.printer -> step
 
   val arg_var : string -> rule_arg
   val arg_step : step -> rule_arg

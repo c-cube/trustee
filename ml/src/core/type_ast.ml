@@ -56,6 +56,7 @@ and meta = {
 
 type env = {
   ctx: K.Ctx.t;
+  mutable cur_file: string;
   mutable tys: ty ID.Map.t;
   mutable fvars: var Str_map.t;
   mutable gensym: int;
@@ -186,7 +187,7 @@ module Expr = struct
   let pp out e = Fmt.fprintf out "`@[%a@]`" pp_expr_ e
 
   let kind_ = {view=Kind; pos=nopos; ty=None}
-  let mk_ ~pos view ty : expr = {view; pos; ty=Some ty}
+  let[@inline] mk_ ~pos view ty : expr = {view; pos; ty=Some ty}
 
   let[@inline] pos e = e.pos
   let[@inline] ty e = match e.ty with Some t -> t | None -> assert false
@@ -423,6 +424,60 @@ module Expr = struct
     ty_meta ~pos env
 
   let to_string = Fmt.to_string @@ Fmt.hvbox pp
+
+  let to_k_expr (ctx:K.Ctx.t) (e:expr) : K.Expr.t =
+    let rec aux bs k e : K.Expr.t =
+      let recurse = aux bs k in
+      let pos = pos e in
+      match view e with
+      | Meta {meta_deref=Some _; _} -> assert false
+      | Meta {meta_deref=None; _} ->
+        errorf (fun k->k"meta %a@ has not been generalized at %a"
+                   pp e Position.pp pos)
+      | Kind ->
+        errorf (fun k->k"cannot translate `kind`@ at %a" Position.pp pos)
+      | Type -> K.Expr.type_ ctx
+      | Bool -> K.Expr.bool ctx
+      | Var { v_name; v_ty } ->
+        let ty = recurse v_ty in
+        K.Expr.var ctx (K.Var.make v_name ty)
+      | Ty_arrow (a, b) ->
+        K.Expr.arrow ctx (recurse a) (recurse b)
+      | BVar v ->
+        begin match ID.Map.find v.bv_name bs with
+          | (e, k_e) -> K.Expr.db_shift ctx e (k - k_e)
+          | exception Not_found ->
+            errorf
+              (fun k->k"variable %a is not bound@ at %a"
+                  pp e Position.pp pos)
+        end
+      | Const e -> e.c
+      | App (f, a) ->
+        K.Expr.app ctx (recurse f) (recurse a)
+      | Eq (a, b) ->
+        K.Expr.app_eq ctx (recurse a) (recurse b)
+      | Let (bindings, body) ->
+        let bs' =
+          List.fold_left
+            (fun bs' (v,t) ->
+               let t = recurse t in
+               (* let does not bind anything in the final term, no need to change k *)
+               ID.Map.add v.bv_name (t,k) bs')
+            bs bindings
+        in
+        aux bs' k body
+      | Ty_pi (v, bod) ->
+        let ty = recurse v.bv_ty in
+        let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx k ty, k) bs in
+        let bod = aux bs (k+1) bod in
+        K.Expr.pi_db ctx ~ty_v:ty bod
+      | Lambda (v, bod) ->
+        let ty = recurse v.bv_ty in
+        let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx k ty, k) bs in
+        let bod = aux bs (k+1) bod in
+        K.Expr.lambda_db ctx ~ty_v:ty bod
+    in
+    aux ID.Map.empty 0 e
 end
 
 (** {2 Typing Environment}
@@ -436,6 +491,7 @@ module Env = struct
 
   let create ctx : t =
     {ctx;
+     cur_file="";
      tys=ID.Map.empty;
      gensym=0;
      fvars=Str_map.empty;
@@ -444,235 +500,207 @@ module Env = struct
 
   let copy self = {self with tys=self.tys}
 
-
-  (* TODO: keep track of names and types, and provide "bool" and the likes *)
-
-  (* TODO: conversion to K.Expr.t once all metas have been generalized *)
-
+  let generalize_ty_vars (self:t) : unit =
+    let metas = self.to_gen in
+    self.to_gen <- metas;
+    List.iter
+      (fun m ->
+         match m.meta_deref with
+         | Some _ -> ()
+         | None ->
+           (* TODO: emit warning if this is a type variable *)
+           let v = Var.make m.meta_name m.meta_type in
+           m.meta_deref <- Some (Expr.var ~pos:nopos v))
+      metas;
+    ()
 end
 
 (** {2 type inference} *)
-
-(* add meta variables as type arguments *)
-let complete_ty_args_ ~pos (env:env) (e:expr) : expr =
-  let rec aux e =
-    let ty_e = Expr.ty e in
-    match Expr.view ty_e with
-    | Ty_pi (x, _) when Expr.is_eq_to_type x.bv_ty ->
-      (* [e] has type [pi a:type. …], so we assume [a] is implicit and
-         create a new meta [?x : a], and then complete [e ?x] *)
-      let tyv, m = Expr.ty_meta ~pos env in
-      env.to_gen <- m :: env.to_gen;
-      let e = Expr.app ~pos env e tyv in
-      aux e
-    | _ -> e
-  in
-  aux e
-
-let infer (env:env) (e0:AE.t) : expr =
-  let unif_exn_ ~pos e a b = match Expr.unif_ a b with
-    | Ok () -> ()
-    | Error st ->
-      errorf
-        (fun k->k
-            "@[<2>type error@ while inferring the type @[<2>of %a@ at %a@]:@ \
-             unification error in the following trace:@ %a"
-            AE.pp e Position.pp pos
-            Fmt.Dump.(list @@ pair Expr.pp Expr.pp) st)
-  in
-
-  (* type inference.
-     @param bv the local variables, for scoping *)
-  let rec inf_rec_ (bv:expr Str_map.t) (e:AE.t) : expr =
-    let pos = AE.pos e in
-    let unif_exn_ a b = unif_exn_ ~pos e a b in
-    begin match AE.view e with
-      | A.Type -> Expr.type_
-      | A.Ty_arrow (a, b) -> Expr.ty_arrow ~pos (inf_rec_ bv a) (inf_rec_ bv b)
-      | A.Ty_pi (vars, body) ->
-        let bv, vars =
-          CCList.fold_map
-            (fun bv v ->
-               let v' = infer_bvar_ ~pos bv v in
-               Str_map.add v.A.v_name (Expr.bvar ~pos v') bv, v')
-            bv vars
-        in
-        Expr.ty_pi_l ~pos vars @@ inf_rec_ bv body
-      | A.Var v ->
-        let v =
-          match Str_map.find v.A.v_name env.fvars with
-          | v' ->
-            begin match v.A.v_ty with
-              | Some ty ->
-                (* unify expected type with actual type *)
-                let ty = inf_rec_ bv ty in
-                unif_exn_ ty v'.v_ty | None -> ()
-            end;
-            v'
-          | exception Not_found ->
-            let ty = match v.A.v_ty with
-              | Some ty -> inf_rec_ bv ty
-              | None ->
-                let ty, m = Expr.ty_meta ~pos env in
-                env.to_gen <- m :: env.to_gen;
-                ty
-            in
-            let v = Var.make v.A.v_name ty in
-            env.fvars <- Str_map.add v.v_name v env.fvars;
-            v
-        in
-        Expr.var ~pos v
-      | A.Wildcard ->
-        let t, m = Expr.wildcard ~pos env in
+module Ty_infer = struct
+  (* add meta variables as type arguments *)
+  let complete_ty_args_ ~pos (env:env) (e:expr) : expr =
+    let rec aux e =
+      let ty_e = Expr.ty e in
+      match Expr.view ty_e with
+      | Ty_pi (x, _) when Expr.is_eq_to_type x.bv_ty ->
+        (* [e] has type [pi a:type. …], so we assume [a] is implicit and
+           create a new meta [?x : a], and then complete [e ?x] *)
+        let tyv, m = Expr.ty_meta ~pos env in
         env.to_gen <- m :: env.to_gen;
-        t
-      | A.Meta {name;ty} ->
-        let ty = match ty with
-          | None -> Expr.type_
-          | Some ty -> inf_rec_ bv ty
-        in
-        let t, m = Expr.meta ~pos name ty in
-        env.to_gen <- m :: env.to_gen;
-        t
-      | A.Eq (a,b) ->
-        let a = inf_rec_ bv a in
-        let b = inf_rec_ bv b in
-        unif_exn_ (Expr.ty a) (Expr.ty b);
-        Expr.eq ~pos a b
-      | A.Const {c;at} ->
-        (* convert directly into a proper kernel constant *)
-        let t =
-          let c = match c with
-            | A.C_k c -> c
-            | A.C_local name ->
-              match K.Ctx.find_const_by_name env.ctx name with
-              | None ->
-                errorf
-                  (fun k->k"cannot find constant %a@ at %a"
-                       A.Const.pp c Position.pp pos)
-              | Some c -> K.Expr.const env.ctx c
+        let e = Expr.app ~pos env e tyv in
+        aux e
+      | _ -> e
+    in
+    aux e
+
+  let infer_expr (env:env) (e0:AE.t) : expr =
+    let unif_exn_ ~pos e a b = match Expr.unif_ a b with
+      | Ok () -> ()
+      | Error st ->
+        errorf
+          (fun k->k
+              "@[<2>type error@ while inferring the type @[<2>of %a@ at %a@]:@ \
+               unification error in the following trace:@ %a"
+              AE.pp e Position.pp pos
+              Fmt.Dump.(list @@ pair Expr.pp Expr.pp) st)
+    in
+
+    (* type inference.
+       @param bv the local variables, for scoping *)
+    let rec inf_rec_ (bv:expr Str_map.t) (e:AE.t) : expr =
+      let pos = AE.pos e in
+      let unif_exn_ a b = unif_exn_ ~pos e a b in
+      begin match AE.view e with
+        | A.Type -> Expr.type_
+        | A.Ty_arrow (a, b) -> Expr.ty_arrow ~pos (inf_rec_ bv a) (inf_rec_ bv b)
+        | A.Ty_pi (vars, body) ->
+          let bv, vars =
+            CCList.fold_map
+              (fun bv v ->
+                 let v' = infer_bvar_ ~pos bv v in
+                 Str_map.add v.A.v_name (Expr.bvar ~pos v') bv, v')
+              bv vars
           in
-          Expr.const ~pos c
-        in
-        if at then t else complete_ty_args_ ~pos env t
-      | A.App (f,l) ->
-        let f = inf_rec_ bv f in
-        let l = List.map (inf_rec_ bv) l in
-        Expr.app_l ~pos env f l
-      | A.With (vs, bod) ->
-        let bv =
-          List.fold_left
-            (fun bv v ->
-               let ty = infer_ty_opt_ ~pos bv v.A.v_ty in
-               let var = Expr.var ~pos (Var.make v.A.v_name ty) in
-               Str_map.add v.A.v_name var bv)
-            bv vs
-        in
-        inf_rec_ bv bod
-      | A.Lambda (vars, bod) ->
-        let bv, vars =
-          CCList.fold_map
-            (fun bv v ->
-               let v' = infer_bvar_ ~pos bv v in
-               Str_map.add v.A.v_name (Expr.bvar ~pos v') bv, v')
-            bv vars
-        in
-        Expr.lambda_l ~pos vars @@ inf_rec_ bv bod
-      | A.Bind _ -> assert false (* TODO *)
-      | A.Let (bindings, body) ->
-        let bv', bindings =
-          CCList.fold_map
-            (fun bv' (v,t) ->
-               let v' = infer_bvar_ ~pos bv v in
-               let t = inf_rec_ bv t in
-               unif_exn_ v'.bv_ty (Expr.ty t);
-               let bv' = Str_map.add v.A.v_name (Expr.bvar ~pos v') bv' in
-               bv', (v', t))
-            bv bindings
-        in
-        Expr.let_ ~pos bindings @@ inf_rec_ bv' body
-      end
+          Expr.ty_pi_l ~pos vars @@ inf_rec_ bv body
+        | A.Var v ->
+          let v =
+            match Str_map.find v.A.v_name env.fvars with
+            | v' ->
+              begin match v.A.v_ty with
+                | Some ty ->
+                  (* unify expected type with actual type *)
+                  let ty = inf_rec_ bv ty in
+                  unif_exn_ ty v'.v_ty | None -> ()
+              end;
+              v'
+            | exception Not_found ->
+              let ty = match v.A.v_ty with
+                | Some ty -> inf_rec_ bv ty
+                | None ->
+                  let ty, m = Expr.ty_meta ~pos env in
+                  env.to_gen <- m :: env.to_gen;
+                  ty
+              in
+              let v = Var.make v.A.v_name ty in
+              env.fvars <- Str_map.add v.v_name v env.fvars;
+              v
+          in
+          Expr.var ~pos v
+        | A.Wildcard ->
+          let t, m = Expr.wildcard ~pos env in
+          env.to_gen <- m :: env.to_gen;
+          t
+        | A.Meta {name;ty} ->
+          let ty = match ty with
+            | None -> Expr.type_
+            | Some ty -> inf_rec_ bv ty
+          in
+          let t, m = Expr.meta ~pos name ty in
+          env.to_gen <- m :: env.to_gen;
+          t
+        | A.Eq (a,b) ->
+          let a = inf_rec_ bv a in
+          let b = inf_rec_ bv b in
+          unif_exn_ (Expr.ty a) (Expr.ty b);
+          Expr.eq ~pos a b
+        | A.Const {c;at} ->
+          (* convert directly into a proper kernel constant *)
+          let t =
+            let c = match c with
+              | A.C_k c -> c
+              | A.C_local name ->
+                match K.Ctx.find_const_by_name env.ctx name with
+                | None ->
+                  errorf
+                    (fun k->k"cannot find constant %a@ at %a"
+                         A.Const.pp c Position.pp pos)
+                | Some c -> K.Expr.const env.ctx c
+            in
+            Expr.const ~pos c
+          in
+          if at then t else complete_ty_args_ ~pos env t
+        | A.App (f,l) ->
+          let f = inf_rec_ bv f in
+          let l = List.map (inf_rec_ bv) l in
+          Expr.app_l ~pos env f l
+        | A.With (vs, bod) ->
+          let bv =
+            List.fold_left
+              (fun bv v ->
+                 let ty = infer_ty_opt_ ~pos bv v.A.v_ty in
+                 let var = Expr.var ~pos (Var.make v.A.v_name ty) in
+                 Str_map.add v.A.v_name var bv)
+              bv vs
+          in
+          inf_rec_ bv bod
+        | A.Lambda (vars, bod) ->
+          let bv, vars =
+            CCList.fold_map
+              (fun bv v ->
+                 let v' = infer_bvar_ ~pos bv v in
+                 Str_map.add v.A.v_name (Expr.bvar ~pos v') bv, v')
+              bv vars
+          in
+          Expr.lambda_l ~pos vars @@ inf_rec_ bv bod
+        | A.Bind _ -> assert false (* TODO *)
+        | A.Let (bindings, body) ->
+          let bv', bindings =
+            CCList.fold_map
+              (fun bv' (v,t) ->
+                 let v' = infer_bvar_ ~pos bv v in
+                 let t = inf_rec_ bv t in
+                 unif_exn_ v'.bv_ty (Expr.ty t);
+                 let bv' = Str_map.add v.A.v_name (Expr.bvar ~pos v') bv' in
+                 bv', (v', t))
+              bv bindings
+          in
+          Expr.let_ ~pos bindings @@ inf_rec_ bv' body
+        end
 
-   and infer_ty_opt_ ~pos bv ty : ty =
-     match ty with
-     | None -> Expr.type_
-     | Some ty0 ->
-       let ty = inf_rec_ bv ty0 in
-       if not @@ Expr.is_eq_to_type ty then (
-         unif_exn_ ~pos ty0 ty Expr.type_;
-       );
-       ty
-   and infer_bvar_ ~pos bv v : bvar =
-     let ty_v = infer_ty_opt_ ~pos bv v.A.v_ty in
-     let v' = BVar.make (ID.make v.A.v_name) ty_v in
-     v'
-  in
-  inf_rec_ Str_map.empty e0
+     and infer_ty_opt_ ~pos bv ty : ty =
+       match ty with
+       | None -> Expr.type_
+       | Some ty0 ->
+         let ty = inf_rec_ bv ty0 in
+         if not @@ Expr.is_eq_to_type ty then (
+           unif_exn_ ~pos ty0 ty Expr.type_;
+         );
+         ty
+     and infer_bvar_ ~pos bv v : bvar =
+       let ty_v = infer_ty_opt_ ~pos bv v.A.v_ty in
+       let v' = BVar.make (ID.make v.A.v_name) ty_v in
+       v'
+    in
+    inf_rec_ Str_map.empty e0
+end
 
-let generalize (env:env) : unit =
-  let metas = env.to_gen in
-  env.to_gen <- metas;
-  List.iter
-    (fun m ->
-       match m.meta_deref with
-       | Some _ -> ()
-       | None ->
-         (* TODO: emit warning if this is a type variable *)
-         let v = Var.make m.meta_name m.meta_type in
-         m.meta_deref <- Some (Expr.var ~pos:nopos v))
-    metas;
-  ()
-
-let to_expr (ctx:K.Ctx.t) (e:expr) : K.Expr.t =
-  let rec aux bs k e : K.Expr.t =
-    let recurse = aux bs k in
-    let pos = Expr.pos e in
-    match Expr.view e with
-    | Meta {meta_deref=Some _; _} -> assert false
-    | Meta {meta_deref=None; _} ->
-      errorf (fun k->k"meta %a@ has not been generalized at %a"
-                 Expr.pp e Position.pp pos)
-    | Kind ->
-      errorf (fun k->k"cannot translate `kind`@ at %a" Position.pp pos)
-    | Type -> K.Expr.type_ ctx
-    | Bool -> K.Expr.bool ctx
-    | Var { v_name; v_ty } ->
-      let ty = recurse v_ty in
-      K.Expr.var ctx (K.Var.make v_name ty)
-    | Ty_arrow (a, b) ->
-      K.Expr.arrow ctx (recurse a) (recurse b)
-    | BVar v ->
-      begin match ID.Map.find v.bv_name bs with
-        | (e, k_e) -> K.Expr.db_shift ctx e (k - k_e)
-        | exception Not_found ->
-          errorf
-            (fun k->k"variable %a is not bound@ at %a"
-                Expr.pp e Position.pp pos)
-      end
-    | Const e -> e.c
-    | App (f, a) ->
-      K.Expr.app ctx (recurse f) (recurse a)
-    | Eq (a, b) ->
-      K.Expr.app_eq ctx (recurse a) (recurse b)
-    | Let (bindings, body) ->
-      let bs' =
-        List.fold_left
-          (fun bs' (v,t) ->
-             let t = recurse t in
-             (* let does not bind anything in the final term, no need to change k *)
-             ID.Map.add v.bv_name (t,k) bs')
-          bs bindings
-      in
-      aux bs' k body
-    | Ty_pi (v, bod) ->
-      let ty = recurse v.bv_ty in
-      let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx k ty, k) bs in
-      let bod = aux bs (k+1) bod in
-      K.Expr.pi_db ctx ~ty_v:ty bod
-    | Lambda (v, bod) ->
-      let ty = recurse v.bv_ty in
-      let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx k ty, k) bs in
-      let bod = aux bs (k+1) bod in
-      K.Expr.lambda_db ctx ~ty_v:ty bod
-  in
-  aux ID.Map.empty 0 e
+let process_stmt
+  ~on_show ~on_error
+  (env:env) (st:A.top_statement) : env =
+  Log.debugf 2 (fun k->k"(@[TA.process-stmt@ %a@])" A.Top_stmt.pp st);
+  begin
+    let pos = A.Top_stmt.pos st in
+    try
+      match A.Top_stmt.view st with
+      | A.Top_enter_file s ->
+        env.cur_file <- s
+      | A.Top_def _
+      | A.Top_decl _
+      | A.Top_fixity _
+      | A.Top_axiom _
+      | A.Top_goal _
+      | A.Top_theorem _
+      | A.Top_show _ ->
+        assert false (* TODO *)
+      | A.Top_show_expr e ->
+        let e = Ty_infer.infer_expr env e in
+        on_show pos (fun out () -> Fmt.fprintf out "expr %a" Expr.pp e)
+      | A.Top_show_proof _ ->
+        assert false (* TODO *)
+      | A.Top_error { msg } ->
+        on_error pos msg
+    with
+    | Trustee_error.E e ->
+      on_error pos (fun out () -> Trustee_error.pp out e)
+  end;
+  env

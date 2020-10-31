@@ -7,6 +7,7 @@ module K = Kernel
 module Expr = Kernel.Expr
 module A = Parse_ast
 module AE = Parse_ast.Expr
+module TA = Type_ast
 
 type token =
   | LPAREN
@@ -403,7 +404,7 @@ module P_expr = struct
         p_tyvars_until ~f self (List.rev_append l acc)
       | SYM _ ->
         let l = p_tyvar_grp_ self in
-        let last = eat_p ~msg:"bound variables" self ~f in
+        let last = eat_p self ~f ~msg:"`.` terminating list of bound variables" in
         last, List.rev @@ List.rev_append l acc
       | _ ->
         let pos = Lexer.pos self.lex in
@@ -609,11 +610,13 @@ module P_proof : sig
   type t = P_state.t
   val proof : t -> A.Proof.t
 end = struct
+  module Rule = Proof.Rule
   type t = P_state.t
   open P_state
 
   let p_subst _self = assert false (* TODO *)
 
+  (* TODO: error recovery (until "in" or "end") for steps *)
   let rec p_step self : A.Proof.step =
     let p_start_r ~pos (r:string) =
       match A.Env.find_rule self.env r with
@@ -622,7 +625,8 @@ end = struct
           (fun k->k"unknown rule '%s'@ while parsing a proof step@ at %a"
               r Position.pp pos)
       | Some sgn ->
-        Log.debugf 5 (fun k->k"rule `%s` has signature %a" r Rule.pp_signature sgn);
+        Log.debugf 5 (fun k->k"rule `%s` has signature %a" r
+                         Rule.pp_signature sgn);
         let args =
           List.map
             (function
@@ -654,22 +658,26 @@ end = struct
     in
     let tok = Lexer.cur self.lex in
     let pos = Lexer.pos self.lex in
-    match tok with
-    | SYM "proof" ->
-      (* subproof *)
-      let p = proof self in
-      A.Proof.step_subproof ~pos p
-    | LPAREN ->
-      Lexer.junk self.lex;
-      let r = P_expr.p_ident self in
-      let s = p_start_r ~pos r in
-      eat_eq self RPAREN ~msg:"expect `)` to close the step";
-      s
-    | SYM r ->
-      Lexer.junk self.lex;
-      p_start_r ~pos r
-    | _ ->
-      errorf (fun k->k"expected to parse a proof step@ at %a" Position.pp pos)
+    try
+      begin match tok with
+        | SYM "proof" ->
+          (* subproof *)
+          let p = proof self in
+          A.Proof.step_subproof ~pos p
+        | LPAREN ->
+          Lexer.junk self.lex;
+          let r = P_expr.p_ident self in
+          let s = p_start_r ~pos r in
+          eat_eq self RPAREN ~msg:"expect `)` to close the step";
+          s
+        | SYM r ->
+          Lexer.junk self.lex;
+          p_start_r ~pos r
+        | _ ->
+          errorf (fun k->k"expected to parse a proof step@ at %a" Position.pp pos)
+      end
+    with Trustee_error.E e ->
+      A.Proof.step_error ~pos (fun out () -> Trustee_error.pp out e)
 
   and p_lets self acc : _ list =
     match Lexer.cur self.lex with
@@ -710,7 +718,7 @@ module P_top = struct
   open P_state
 
   (* recover: skip to the next "end" *)
-  let try_recover_ (self:t) : unit =
+  let try_recover_end_ (self:t) : unit =
     while
       match Lexer.cur self.lex with
       | END -> Lexer.junk self.lex; false
@@ -783,10 +791,41 @@ module P_top = struct
     eat_end self ~msg:"expect `end` after the theorem";
     A.Top_stmt.theorem ~pos name (A.Goal.make_nohyps e) pr
 
+  let p_fixity ~pos self =
+    let name = P_expr.p_ident self in
+    eat_eq self EQDEF ~msg:"expect `:=` after symbol";
+    let mkfix, needsint =
+      match P_expr.p_ident self with
+      | "infix" -> Fixity.infix, true
+      | "prefix" -> Fixity.prefix, true
+      | "postfix" -> Fixity.postfix, true
+      | "lassoc" -> Fixity.lassoc, true
+      | "rassoc" -> Fixity.rassoc, true
+      | "binder" -> Fixity.binder, true
+      | "normal" -> (fun _->Fixity.normal), false
+      | s ->
+        errorf
+          (fun k->k
+              "expected one of: normal|infix|prefix|postfix|lassoc|rassoc|binder@ \
+               but got '%s'" s)
+    in
+    let n =
+      if needsint then (
+        let n = eat_p self ~msg:"expect a number after fixity"
+            ~f:(function NUM _ -> true | _ -> false)
+        in
+        match n with NUM s -> int_of_string s | _ -> assert false
+      ) else 0
+    in
+    let fix = mkfix n in
+    eat_end self ~msg:"expect `end` after fixity declarations";
+    A.Top_stmt.fixity ~pos name fix
+
   (* list of toplevel parsers *)
   let parsers = [
     "def", p_def;
     "show", p_show;
+    "fixity", p_fixity;
     "declare", p_declare;
     "theorem", p_thm;
   ]
@@ -809,7 +848,7 @@ module P_top = struct
           | exception Not_found ->
             Log.debugf 5 (fun k->k"unknown toplevek tok %a" Token.pp t);
             let err = errm ~pos t in
-            try_recover_ self;
+            try_recover_end_ self;
             Some (A.Top_stmt.error ~pos err)
           | p ->
             parsing := Some s;
@@ -820,12 +859,12 @@ module P_top = struct
       | t ->
         let pos = Lexer.pos self.lex in
         let err = errm ~pos t in
-        try_recover_ self;
+        try_recover_end_ self;
         Some (A.Top_stmt.error ~pos err)
     with
     | Trustee_error.E e ->
       let pos = Lexer.pos self.lex in
-      try_recover_ self;
+      try_recover_end_ self;
       let msg out () =
         let parsing out () = match !parsing with
           | None -> ()
@@ -871,9 +910,9 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
   let e = parse_expr ?q_args ~env lex in
   let ctx = A.Env.ctx env in
   let ty_env = Type_ast.Env.create ctx in
-  let e = Type_ast.infer ty_env e in
-  Type_ast.generalize ty_env;
-  Type_ast.to_expr ctx e
+  let e = TA.Ty_infer.infer_expr ty_env e in
+  TA.Env.generalize_ty_vars ty_env;
+  TA.Expr.to_k_expr ctx e
 
 (*$inject
   module E = K.Expr
