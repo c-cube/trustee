@@ -1003,15 +1003,20 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
   module A = struct
     include Parse_ast
     include AE
-    let v (s:string) : t = var (A.Var.make s None)
+    let loc = Loc.none
+    let v (s:string) : t = var ~loc (A.Var.make s None)
     let vv s : A.var = A.Var.make s None
     let of_str s : AE.t = Syntax.parse_expr ~env:M.env (Lexer.create s)
-    let b_forall vars bod : AE.t =
-      AE.bind (A.Const.of_expr M.forall)
+    let let_ = let_ ~loc
+    let ty_arrow = ty_arrow ~loc
+    let eq = eq ~loc
+    let of_expr = of_expr ~loc
+    let b_forall vars (bod:AE.t) : AE.t =
+      AE.bind ~loc (A.Const.of_expr M.forall)
         (List.map (fun (x,ty)-> A.Var.make x ty) vars) bod
-    let c x : t = AE.of_expr x
-    let (@->) a b = AE.ty_arrow a b
-    let (@) a b = AE.app a b
+    let c x : t = AE.of_expr ~loc x
+    let (@->) a b = AE.ty_arrow ~loc a b
+    let (@) a b = AE.app ~loc a b
   end
   open A
 
@@ -1039,7 +1044,7 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
   A.(eq (v"a")(v"b")) (A.of_str "a = b")
   A.(b_forall ["x", Some (c M.a @-> c M.b @-> c M.c)] (A.eq (v"x")(v"x"))) \
     (A.of_str "! (x:a0->b0->c0). x=x")
-    A.(lambda [A.Var.make "x" @@ Some (c M.a @-> c M.b @-> c M.c)] \
+    A.(lambda ~loc [A.Var.make "x" @@ Some (c M.a @-> c M.b @-> c M.c)] \
          (A.eq (v"x")(v"x"))) \
     (A.of_str "\\ (x:a0->b0->c0). x=x")
   A.(of_expr ~at:true M.eq) (A.of_str "@=")
