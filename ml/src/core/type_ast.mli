@@ -11,7 +11,7 @@ module K = Kernel
 module A = Parse_ast
 
 type expr
-type position = A.position
+type location = A.location
 
 type ty = expr
 
@@ -147,7 +147,7 @@ end
 (* TODO: build position/range-addressable index for LSP *)
 
 val process_stmt :
-  on_show:(position -> unit Fmt.printer -> unit) ->
-  on_error:(position -> unit Fmt.printer -> unit) ->
+  on_show:(location -> unit Fmt.printer -> unit) ->
+  on_error:(location -> unit Fmt.printer -> unit) ->
   env -> A.top_statement -> env
 (** Process a toplevel statement, returning a new environment. *)

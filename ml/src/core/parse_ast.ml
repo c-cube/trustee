@@ -5,15 +5,15 @@ module K = Kernel
 module TyProof = Proof
 module TyRule = TyProof.Rule
 
-type position = Position.t
+type location = Loc.t
 type fixity = Fixity.t
 
-type 'a with_pos = {
-  pos: position;
+type 'a with_loc = {
+  loc: location;
   view: 'a;
 }
 
-type expr = view with_pos
+type expr = view with_loc
 
 and ty = expr
 
@@ -62,7 +62,7 @@ and view =
 
 type subst = (string * expr) list
 
-let nopos: position = Position.none
+let noloc: location = Loc.none
 
 let rec pp_ (p:_) out (e:expr) : unit =
   match e.view with
@@ -142,35 +142,35 @@ end
 
 module Expr = struct
   type t = expr
-  let mk_ ?(pos=nopos) view : t = {view; pos=pos}
+  let mk_ ?(loc=noloc) view : t = {view; loc}
 
   let[@inline] view e = e.view
-  let[@inline] pos e = e.pos
+  let[@inline] loc e = e.loc
   let pp = pp
   let pp_quoted = Fmt.within "`" "`" @@ pp
 
   let type_ : t = mk_ Type
-  let ty_var ?pos s : t = mk_ ?pos (Var (Var.make s (Some type_)))
-  let ty_meta ?pos (s:string) : ty = mk_ ?pos (Meta {ty=Some type_; name=s})
-  let ty_arrow ?pos a b : ty = mk_ ?pos (Ty_arrow (a,b))
-  let ty_pi ?pos vars bod : ty = match vars with
+  let ty_var ~loc s : t = mk_ ~loc (Var (Var.make s (Some type_)))
+  let ty_meta ~loc (s:string) : ty = mk_ ~loc (Meta {ty=Some type_; name=s})
+  let ty_arrow ~loc a b : ty = mk_ ~loc (Ty_arrow (a,b))
+  let ty_pi ~loc vars bod : ty = match vars with
     | [] -> bod
-    | _ -> mk_ ?pos (Ty_pi (vars, bod))
+    | _ -> mk_ ~loc (Ty_pi (vars, bod))
 
-  let var ?pos (v:var) : t = mk_ ?pos (Var v)
-  let const ?pos ?(at=false) c : t = mk_ ?pos (Const {c; at})
-  let of_expr ?pos ?at e : t = const ?pos ?at (Const.of_expr e)
-  let meta ?pos (s:string) ty : t = mk_ ?pos (Meta {ty; name=s})
-  let app ?pos (f:t) (l:t list) : t =
+  let var ~loc (v:var) : t = mk_ ~loc (Var v)
+  let const ~loc ?(at=false) c : t = mk_ ~loc (Const {c; at})
+  let of_expr ~loc ?at e : t = const ~loc ?at (Const.of_expr e)
+  let meta ~loc (s:string) ty : t = mk_ ~loc (Meta {ty; name=s})
+  let app ~loc (f:t) (l:t list) : t =
     match f.view with
-    | App (f1,l1) -> mk_ ?pos (App (f1,l1@l))
-    | _ -> mk_ ?pos (App (f,l))
-  let let_ ?pos bs bod : t = mk_ ?pos (Let (bs, bod))
-  let with_ ?pos vs bod : t = mk_ ?pos (With (vs, bod))
-  let lambda ?pos vs bod : t = mk_ ?pos (Lambda (vs, bod))
-  let bind ?pos ?(at=false) c vars body : t = mk_ ?pos (Bind {c; at; vars; body})
-  let eq ?pos a b : t = mk_ ?pos (Eq (a,b))
-  let wildcard ?pos () : t = mk_ ?pos Wildcard
+    | App (f1,l1) -> mk_ ~loc (App (f1,l1@l))
+    | _ -> mk_ ~loc (App (f,l))
+  let let_ ~loc bs bod : t = mk_ ~loc (Let (bs, bod))
+  let with_ ~loc vs bod : t = mk_ ~loc (With (vs, bod))
+  let lambda ~loc vs bod : t = mk_ ~loc (Lambda (vs, bod))
+  let bind ~loc ?(at=false) c vars body : t = mk_ ~loc (Bind {c; at; vars; body})
+  let eq ~loc a b : t = mk_ ~loc (Eq (a,b))
+  let wildcard ~loc () : t = mk_ ~loc Wildcard
 
   let to_string = Fmt.to_string @@ Fmt.hvbox pp
 end
@@ -205,7 +205,7 @@ end
 
 (** {2 Proofs} *)
 module Proof = struct
-  type t = top with_pos
+  type t = top with_loc
   and top =
     | Proof_atom of step
     | Proof_steps of {
@@ -219,7 +219,7 @@ module Proof = struct
     | Let_expr of string * expr
     | Let_step of string * step
 
-  and step = step_view with_pos
+  and step = step_view with_loc
   and step_view =
     | Pr_apply_rule of string * rule_arg list
     | Pr_sub_proof of t
@@ -273,23 +273,23 @@ module Proof = struct
   let to_string = Fmt.to_string pp
 
   let view p = p.view
-  let pos p = p.pos
+  let loc p = p.loc
   let s_view s = s.view
-  let s_pos s = s.pos
+  let s_loc s = s.loc
 
-  let make ~pos lets ret = match lets with
-    | [] -> {pos; view=Proof_atom ret}
-    | _ -> {pos; view=Proof_steps {lets; ret}}
+  let make ~loc lets ret = match lets with
+    | [] -> {loc; view=Proof_atom ret}
+    | _ -> {loc; view=Proof_steps {lets; ret}}
 
   let let_expr s e = Let_expr (s,e)
   let let_step s p = Let_step (s,p)
 
-  let step_apply_rule ~pos r args : step = {pos; view=Pr_apply_rule (r, args)}
-  let step_subproof ~pos p : step =
+  let step_apply_rule ~loc r args : step = {loc; view=Pr_apply_rule (r, args)}
+  let step_subproof ~loc p : step =
     match p.view with
     | Proof_atom s -> s (* inline sub-proof *)
-    | _ -> {pos; view=Pr_sub_proof p}
-  let step_error ~pos e : step = {pos; view=Pr_error e}
+    | _ -> {loc; view=Pr_sub_proof p}
+  let step_error ~loc e : step = {loc; view=Pr_error e}
 
   let arg_var v = Arg_var v
   let arg_step v = Arg_step v
@@ -299,7 +299,7 @@ end
 
 (** {2 Statements} *)
 
-type top_statement = top_statement_view with_pos
+type top_statement = top_statement_view with_loc
 and top_statement_view =
   | Top_enter_file of string
   | Top_def of {
@@ -347,7 +347,7 @@ module Top_stmt = struct
   type t = top_statement
 
   let[@inline] view st = st.view
-  let[@inline] pos st = st.pos
+  let[@inline] loc st = st.loc
   let pp out (self:t) : unit =
     let pp_ty_opt out ty = match ty with
       | None -> ()
@@ -388,19 +388,19 @@ module Top_stmt = struct
 
   let to_string = Fmt.to_string pp
 
-  let make ~pos view : t = {pos; view}
-  let enter_file ~pos f : t = make ~pos (Top_enter_file f)
-  let def ~pos name ~th_name vars ret body : t =
-    make ~pos (Top_def {name; th_name; ret; vars; body})
-  let decl ~pos name ty : t = make ~pos (Top_decl {name; ty})
-  let fixity ~pos name f : t = make ~pos (Top_fixity {name; fixity=f})
-  let axiom ~pos name e : t = make ~pos (Top_axiom {name; thm=e})
-  let goal ~pos goal proof : t = make ~pos (Top_goal {goal; proof})
-  let theorem ~pos name g p : t = make ~pos (Top_theorem{name; goal=g; proof=p})
-  let show ~pos s : t = make ~pos (Top_show s)
-  let show_expr ~pos e : t = make ~pos (Top_show_expr e)
-  let show_proof ~pos p : t = make ~pos (Top_show_proof p)
-  let error ~pos e : t = make ~pos (Top_error {msg=e})
+  let make ~loc view : t = {loc; view}
+  let enter_file ~loc f : t = make ~loc (Top_enter_file f)
+  let def ~loc name ~th_name vars ret body : t =
+    make ~loc (Top_def {name; th_name; ret; vars; body})
+  let decl ~loc name ty : t = make ~loc (Top_decl {name; ty})
+  let fixity ~loc name f : t = make ~loc (Top_fixity {name; fixity=f})
+  let axiom ~loc name e : t = make ~loc (Top_axiom {name; thm=e})
+  let goal ~loc goal proof : t = make ~loc (Top_goal {goal; proof})
+  let theorem ~loc name g p : t = make ~loc (Top_theorem{name; goal=g; proof=p})
+  let show ~loc s : t = make ~loc (Top_show s)
+  let show_expr ~loc e : t = make ~loc (Top_show_expr e)
+  let show_proof ~loc p : t = make ~loc (Top_show_proof p)
+  let error ~loc e : t = make ~loc (Top_error {msg=e})
 end
 
 module Env = struct

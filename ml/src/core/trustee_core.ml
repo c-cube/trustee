@@ -5,6 +5,7 @@ module Kernel = Kernel
 module Log = Log
 module Syntax = Syntax
 module Position = Position
+module Loc = Loc
 module Location = Location
 module Hashcons = Hashcons
 module Parse_ast = Parse_ast

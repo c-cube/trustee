@@ -653,7 +653,7 @@ module Thm = struct
   let[@inline] hyps_ self = self.th_hyps
   let[@inline] hyps_iter self k = Expr_set.iter k self.th_hyps
   let[@inline] hyps_l self = Expr_set.elements self.th_hyps
-  let[@inline] has_hyps self = Expr_set.is_empty self.th_hyps
+  let[@inline] has_hyps self = not (Expr_set.is_empty self.th_hyps)
   let n_hyps self = Expr_set.cardinal self.th_hyps
 
   let pp out (th:t) =
@@ -665,6 +665,7 @@ module Thm = struct
     )
 
   let to_string = Fmt.to_string pp
+  let pp_quoted = Fmt.within "`" "`" pp
 
   let is_proof_of self (g:Goal.t) : bool =
     Expr.equal self.th_concl (Goal.concl g) &&

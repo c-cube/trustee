@@ -36,13 +36,15 @@ end
 theorem EqTrueElim := (x = T) = x
 by
   proof
-    bool_eq_intro
+    let th1 := bool_eq_intro
       (bool_eq TrueIsTrue (sym (assume (x=T))))
-      (bool_eq_intro TrueIsTrue (assume (x:bool)))
+      (bool_eq_intro (assume (x:bool)) TrueIsTrue)
+    in
+    sym th1
   end
 end
 
-theorem EqTrueIntro := x = (x = T) by proof sym EqTruElim end end
+theorem EqTrueIntro := x = (x = T) by proof sym EqTrueElim end end
 
 # TODO: REqTrueIntro
 # TODO: REqTrueElim
@@ -63,3 +65,4 @@ def /\ (a b : bool) : bool by DefAnd
 end
 
 fixity /\ := rassoc 15 end
+

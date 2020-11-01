@@ -6,7 +6,7 @@ module K = Trustee_core.Kernel
 module A = Trustee_core.Parse_ast
 module TA = Trustee_core.Type_ast
 module Syntax = Trustee_core.Syntax
-module Pos = Trustee_core.Position
+module Loc = Trustee_core.Loc
 
 module Cat = struct
   let args = [
@@ -53,12 +53,12 @@ module Check = struct
              CCList.fold_left
                (fun env st ->
                   TA.process_stmt
-                    ~on_show:(fun pos pp ->
-                        Fmt.printf "@[<2>@{<Yellow>Show@}: at %a:@ %a@]@."
-                          Pos.pp pos pp())
-                    ~on_error:(fun pos pp ->
+                    ~on_show:(fun loc pp ->
+                        Fmt.printf "@[<2>@{<bold>>>> Show@}: at %a:@ %a@]@."
+                          Loc.pp loc pp())
+                    ~on_error:(fun loc pp ->
                         Fmt.printf "@[<2>@{<Red>Error@} at %a:@ %a@]@."
-                          Pos.pp pos pp())
+                          Loc.pp loc pp())
                     env st)
                !tyenv l
            in

@@ -174,6 +174,7 @@ module Thm : sig
   type t = thm
 
   include Sigs.PP with type t := t
+  val pp_quoted : t Fmt.printer
 
   val concl : t -> expr
   val hyps_iter : t -> expr iter

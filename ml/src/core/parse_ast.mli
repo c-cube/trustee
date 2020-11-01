@@ -6,15 +6,15 @@ module K = Kernel
 module TyProof = Proof
 module TyRule = TyProof.Rule
 
-type position = Position.t
+type location = Loc.t
 type fixity = Fixity.t
 
-type 'a with_pos = {
-  pos: position;
+type 'a with_loc = {
+  loc: location;
   view: 'a;
 }
 
-type expr = private view with_pos
+type expr = private view with_loc
 
 and ty = expr
 
@@ -83,26 +83,26 @@ module Expr : sig
   include PP with type t := t
   val pp_quoted : t Fmt.printer
 
-  val pos : t -> Position.t
+  val loc : t -> location
   val view : t -> view
 
   val type_ : t
-  val ty_var : ?pos:position -> string -> t
-  val ty_meta : ?pos:position -> string -> t
-  val ty_arrow : ?pos:position -> t -> t -> t
-  val ty_pi : ?pos:position -> var list -> t -> t
+  val ty_var : loc:location -> string -> t
+  val ty_meta : loc:location -> string -> t
+  val ty_arrow : loc:location -> t -> t -> t
+  val ty_pi : loc:location -> var list -> t -> t
 
-  val var : ?pos:position -> var -> t
-  val const : ?pos:position -> ?at:bool -> const -> t
-  val of_expr : ?pos:position -> ?at:bool -> K.Expr.t -> t
-  val meta : ?pos:position -> string -> ty option -> t
-  val app : ?pos:position -> t -> t list -> t
-  val let_ : ?pos:position -> (var * t) list -> t -> t
-  val with_ : ?pos:position -> var list -> t -> t
-  val lambda : ?pos:position -> var list -> t -> t
-  val bind : ?pos:position -> ?at:bool -> const -> var list -> t -> t
-  val eq : ?pos:position -> t -> t -> t
-  val wildcard : ?pos:position -> unit -> t
+  val var : loc:location -> var -> t
+  val const : loc:location -> ?at:bool -> const -> t
+  val of_expr : loc:location -> ?at:bool -> K.Expr.t -> t
+  val meta : loc:location -> string -> ty option -> t
+  val app : loc:location -> t -> t list -> t
+  val let_ : loc:location -> (var * t) list -> t -> t
+  val with_ : loc:location -> var list -> t -> t
+  val lambda : loc:location -> var list -> t -> t
+  val bind : loc:location -> ?at:bool -> const -> var list -> t -> t
+  val eq : loc:location -> t -> t -> t
+  val wildcard : loc:location -> unit -> t
 end
 
 (** {2 Substitution} *)
@@ -129,7 +129,7 @@ end
 
 (** {2 Proofs} *)
 module Proof : sig
-  type t = private top with_pos
+  type t = private top with_loc
   and top =
     | Proof_atom of step
     | Proof_steps of {
@@ -143,7 +143,7 @@ module Proof : sig
     | Let_expr of string * expr
     | Let_step of string * step
 
-  and step = step_view with_pos
+  and step = step_view with_loc
   and step_view =
     | Pr_apply_rule of string * rule_arg list
     | Pr_sub_proof of t
@@ -164,18 +164,18 @@ module Proof : sig
   val pp_rule_signature : rule_signature Fmt.printer
 
   val view : t -> top
-  val pos : t -> position
+  val loc : t -> location
 
   val s_view : step -> step_view
-  val s_pos : step -> position
+  val s_loc : step -> location
 
-  val make : pos:position -> pr_let list -> step -> t
+  val make : loc:location -> pr_let list -> step -> t
   val let_expr : string -> expr -> pr_let
   val let_step : string -> step -> pr_let
 
-  val step_apply_rule : pos:position -> string -> rule_arg list -> step
-  val step_subproof : pos:position -> t -> step
-  val step_error : pos:position -> unit Fmt.printer -> step
+  val step_apply_rule : loc:location -> string -> rule_arg list -> step
+  val step_subproof : loc:location -> t -> step
+  val step_error : loc:location -> unit Fmt.printer -> step
 
   val arg_var : string -> rule_arg
   val arg_step : step -> rule_arg
@@ -187,7 +187,7 @@ end
 (** {2 Expressions to construct proofs, tactics, etc.} *)
 module Meta_expr : sig
 
-  type mexpr = private mexpr_view with_pos
+  type mexpr = private mexpr_view with_loc
 
   and mexpr_view =
     | E_expr of Expr.t
@@ -195,7 +195,7 @@ module Meta_expr : sig
     | E_proof of proof
     | E_tactic of tactic
 
-  and tactic = private tactic_view with_pos
+  and tactic = private tactic_view with_loc
 
   and tactic_view =
     | Tac_apply of string * mexpr list
@@ -227,7 +227,7 @@ end
 
 (** {2 Statements} *)
 
-type top_statement = private top_statement_view with_pos
+type top_statement = private top_statement_view with_loc
 and top_statement_view =
   | Top_enter_file of string
   | Top_def of {
@@ -276,22 +276,22 @@ module Top_stmt : sig
 
   include Sigs.PP with type t := t
 
-  val pos : t -> position
+  val loc : t -> location
   val view : t -> top_statement_view
-  val make : pos:position -> top_statement_view -> t
+  val make : loc:location -> top_statement_view -> t
 
-  val enter_file : pos:position -> string -> t
-  val def : pos:position -> string ->
+  val enter_file : loc:location -> string -> t
+  val def : loc:location -> string ->
     th_name: string option -> var list -> ty option -> expr -> t
-  val decl : pos:position -> string -> ty -> t
-  val fixity : pos:position -> string -> fixity -> t
-  val axiom : pos:position -> string -> expr -> t
-  val goal : pos:position -> Goal.t -> Proof.t -> t
-  val theorem : pos:position -> string -> Goal.t -> Proof.t -> t
-  val show : pos:position -> string -> t
-  val show_expr : pos:position -> expr -> t
-  val show_proof : pos:position -> Proof.t -> t
-  val error : pos:position -> unit Fmt.printer -> t
+  val decl : loc:location -> string -> ty -> t
+  val fixity : loc:location -> string -> fixity -> t
+  val axiom : loc:location -> string -> expr -> t
+  val goal : loc:location -> Goal.t -> Proof.t -> t
+  val theorem : loc:location -> string -> Goal.t -> Proof.t -> t
+  val show : loc:location -> string -> t
+  val show_expr : loc:location -> expr -> t
+  val show_proof : loc:location -> Proof.t -> t
+  val error : loc:location -> unit Fmt.printer -> t
 end
 
 module Env : sig

@@ -27,7 +27,7 @@ type token =
   | ERROR of char
   | EOF
 
-type position = A.position
+type location = A.location
 
 module Token : sig
   type t = token
@@ -45,7 +45,7 @@ module Lexer : sig
 
   val to_list : t -> token list
 
-  val pos : t -> Position.t
+  val loc : t -> location
 end
 
 (** {2 Parser} *)
