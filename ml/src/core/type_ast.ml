@@ -906,8 +906,6 @@ module Ty_infer = struct
           CCList.fold_right
             (fun bv body ->
                let lam = Expr.lambda ~loc bv body in
-               Log.debugf 10 (fun k->k"f: %a,@ ty-f: %a,@ lam: %a"
-                                 Expr.pp f Expr.pp (Expr.ty f) Expr.pp lam);
                Expr.app ~loc env f lam)
             vars body
         | A.Let (bindings, body) ->
@@ -917,8 +915,6 @@ module Ty_infer = struct
                  let v' = infer_bvar_ ~loc bv v in
                  let t = inf_rec_ bv t in
                  unif_exn_ v'.bv_ty (Expr.ty t);
-                 Log.debugf 10 (fun k->k"binding %a := %a@ of type %a"
-                                   BVar.pp_with_ty v' Expr.pp t Expr.pp (Expr.ty t));
                  let bv' = Str_map.add v.A.v_name (Expr.bvar ~loc v') bv' in
                  bv', (v', t))
               bv bindings

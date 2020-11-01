@@ -66,3 +66,4 @@ end
 
 fixity /\ := rassoc 15 end
 
+show expr T /\ a /\ b /\ c end
