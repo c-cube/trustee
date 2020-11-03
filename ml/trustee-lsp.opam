@@ -1,0 +1,25 @@
+opam-version: "2.0"
+version: "0.1"
+maintainer: "simon.cruanes.2007@m4x.org"
+author: "Simon Cruanes"
+homepage: "https://github.com/c-cube/trustee"
+synopsis: "LSP server for trustee"
+build: [
+  ["dune" "build" "@install" "-p" name "-j" jobs]
+  ["dune" "build" "@runtest" "-p" name "-j" jobs] {with-test}
+  ["dune" "build" "@doc" "-p" name "-j" jobs] {with-doc}
+]
+depends: [
+  "dune" { >= "1.0" }
+  "containers" { >= "3.0" & < "4.0" }
+  "lsp" { >= "1.1" & < "1.2" }
+  "trustee" { = version }
+  "ocaml" { >= "4.08" }
+  "qtest" {with-test}
+  "odoc" { with-doc }
+]
+tags: [ "logic" "proof" "HOL" "assistant" "lsp" ]
+bug-reports: "https://github.com/c-cube/trustee/issues"
+dev-repo: "git+https://github.com/c-cube/trustem.git"
+
+
