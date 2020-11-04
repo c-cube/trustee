@@ -5,8 +5,6 @@ module K = T.Kernel
 module TA = T.Type_ast
 
 module St = struct
-  open Fiber.O
-
   type t = {
     ctx: K.Ctx.t;
     mutable env: TA.env;
@@ -20,11 +18,16 @@ module St = struct
     }
 
   let reply_err
-      ?(code=Lsp.Jsonrpc.Response.Error.Code.InternalError)
+      ?(code=Jsonrpc.Response.Error.Code.InternalError)
       ~msg:message () =
-    Lsp.Jsonrpc.Response.Error.make ~code ~message ()
+    Jsonrpc.Response.Error.make ~code ~message ()
 
-  let on_request =
+  let on_request
+    : type r. t -> r Lsp.Client_request.t -> r
+    = fun (_self:t) (_r:_ Lsp.Client_request.t) ->
+    assert false
+      (*
+    Jsonrpc.Response
     { Lsp.Server.Handler.
       on_request=fun (_server:t Lsp.Server.t) _r : _ result Fiber.t ->
         Lsp.Logger.log
@@ -32,11 +35,11 @@ module St = struct
           "got request";
         Fiber.return (Error (reply_err ~msg:"not implemented" ()));
     }
+         *)
 
   let on_notification
-      (server:t Lsp.Server.t) (_n:Lsp.Client_notification.t) : _ =
-    (* TODO *)
-    Fiber.return (Lsp.Server.state server)
+      (self:t) (_n:Lsp.Client_notification.t) : _ =
+    () (* TODO *)
 end
 
 let logger oc (s,title,msg) =
@@ -50,7 +53,6 @@ let () =
     at_exit (fun () -> flush oc; close_out_noerr oc);
     Lsp.Logger.register_consumer (logger (Format.formatter_of_out_channel oc));
   );
-  let sched = Lsp.Scheduler.create() in
   let rpc =
     Lsp.Rpc.Stream_io.make sched (Lsp.Io.make stdin stdout) in
   let handle =

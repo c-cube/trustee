@@ -12,7 +12,7 @@
   (mode fallback)
   (action (run qtest extract --preamble "open Trustee_core;;" %{deps} -o %{targets})))
 
-(alias
- (name    runtest)
+(rule
+ (alias    runtest)
  (action  (run ./run_qtest.exe)))
 

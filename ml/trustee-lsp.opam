@@ -12,11 +12,14 @@ build: [
 depends: [
   "dune" { >= "1.0" }
   "containers" { >= "3.0" & < "4.0" }
-  "lsp" { >= "1.1" & < "1.2" }
+  "lsp" { >= "1.2" & < "1.3" }
   "trustee" { = version }
   "ocaml" { >= "4.08" }
   "qtest" {with-test}
   "odoc" { with-doc }
+]
+pin-depends: [
+  ["lsp.dev" "https://github.com/ocaml/ocaml-lsp.git#master"]
 ]
 tags: [ "logic" "proof" "HOL" "assistant" "lsp" ]
 bug-reports: "https://github.com/c-cube/trustee/issues"
