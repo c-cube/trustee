@@ -53,6 +53,9 @@ let () =
     at_exit (fun () -> flush oc; close_out_noerr oc);
     Lsp.Logger.register_consumer (logger (Format.formatter_of_out_channel oc));
   );
+  (* TODO: the task is the LSP server *)
+  let task = Task.start (fun _tsk -> assert false) in
+  (* TODO
   let rpc =
     Lsp.Rpc.Stream_io.make sched (Lsp.Io.make stdin stdout) in
   let handle =
@@ -66,7 +69,9 @@ let () =
     ~section:"trustee" ~title:Lsp.Logger.Title.Debug
     "start";
   let fib = Lsp.Server.start server in
-  match Fiber.run fib with
-  | None ->
-    failwith "return none"
-  | Some () -> ()
+  *)
+  match Task.run task with
+  | Error e ->
+    Printf.eprintf "error: %s\n%!" (Printexc.to_string e);
+    exit 1
+  | Ok () -> ()
