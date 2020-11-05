@@ -19,7 +19,7 @@ depends: [
   "odoc" { with-doc }
 ]
 pin-depends: [
-  ["lsp.dev" "https://github.com/ocaml/ocaml-lsp.git#master"]
+  ["lsp.dev" "git+https://github.com/ocaml/ocaml-lsp.git#master"]
 ]
 tags: [ "logic" "proof" "HOL" "assistant" "lsp" ]
 bug-reports: "https://github.com/c-cube/trustee/issues"
