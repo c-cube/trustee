@@ -86,7 +86,7 @@ let log_lsp_ msg =
   Fmt.kasprintf
     (fun s ->
       Lsp.Logger.log ~title:Lsp.Logger.Title.Debug ~section:"jsonrpc2"
-      "%s\n%!" s)
+      "%s" s)
     msg
 
 (* read a full message *)
@@ -128,7 +128,7 @@ let read_msg (self:t) : (Jsonrpc.Message.either, exn) result m =
       let*? () =
         try_ @@ fun () -> Lwt_io.read_into_exactly self.ic buf 0 n
       in
-      log_lsp_ "got bytes %S" (Bytes.unsafe_to_string buf);
+      (* log_lsp_ "got bytes %S" (Bytes.unsafe_to_string buf); *)
       let*? j =
         try_ @@ fun () ->
         Lwt.return @@ J.from_string (Bytes.unsafe_to_string buf)

@@ -39,12 +39,30 @@ module MkServer() : Jsonrpc2.SERVER = struct
          *)
 
   let on_notification
-    ~notify (_n:Lsp.Client_notification.t) : unit m =
+    ~notify (n:Lsp.Client_notification.t) : unit m =
+    Log.debugf 5 (fun k->k"got notification");
+    let open Lsp.Types in
+    begin match n with
+      | Lsp.Client_notification.TextDocumentDidOpen
+          {DidOpenTextDocumentParams.textDocument=doc} ->
+        Log.debugf 5
+          (fun k->k"open document %s" doc.TextDocumentItem.uri);
+        () (* TODO *)
+      | Lsp.Client_notification.TextDocumentDidClose _
+      | Lsp.Client_notification.TextDocumentDidChange _
+      | Lsp.Client_notification.DidSaveTextDocument _
+      | Lsp.Client_notification.WillSaveTextDocument _
+      | Lsp.Client_notification.ChangeWorkspaceFolders _
+      | Lsp.Client_notification.ChangeConfiguration _
+      | Lsp.Client_notification.Initialized|Lsp.Client_notification.Exit
+      | Lsp.Client_notification.Unknown_notification _ ->
+        ()
+    end;
     Lwt.return () (* TODO *)
 end
 
 let lsp_logger_ oc (s,title,msg) =
-  Format.fprintf oc "@[<2>%s[%s]:@ %s@]."
+  Format.fprintf oc "@[<2>%s[%s]:@ %s@]@."
     s (Lsp.Logger.Title.to_string title) msg;
   ()
 
@@ -85,21 +103,6 @@ let () =
          Task.return ()
       )
   in
-  (* TODO
-  let rpc =
-    Lsp.Rpc.Stream_io.make sched (Lsp.Io.make stdin stdout) in
-  let handle =
-    Lsp.Server.Handler.make
-      ~on_request:St.on_request
-      ~on_notification:St.on_notification
-      ()
-  in
-  let server = Lsp.Server.make handle rpc (St.make ()) in
-  Lsp.Logger.log
-    ~section:"trustee" ~title:Lsp.Logger.Title.Debug
-    "start";
-  let fib = Lsp.Server.start server in
-  *)
   match Task.run task with
   | Error e ->
     let e = Printexc.to_string e in
