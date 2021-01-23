@@ -7,10 +7,17 @@ module Err = Jsonrpc.Response.Error
 open Task.Infix
 
 module IO = struct
-  type 'a t = 'a Task.m
+  type 'a t = 'a Lwt.t
+  let (let+) = Lwt.(>|=)
+  let (let*) = Lwt.(>>=)
+  let (and+) a b =
+    let open Lwt in
+    a >>= fun x -> b >|= fun y -> x,y
   type in_channel = Lwt_io.input Lwt_io.channel
   type out_channel = Lwt_io.output Lwt_io.channel
 end
+
+include Lsp_server.Make(IO)
 
 type json = J.t
 type 'a m = 'a Task.m
@@ -31,21 +38,10 @@ end
                *)
 exception E of ErrorCode.t * string
 
-module type SERVER = sig
-  val on_notification :
-    notify:(Lsp.Server_notification.t -> unit IO.t) ->
-    Lsp.Client_notification.t ->
-    unit m
-
-  val on_request :
-    'a Lsp.Client_request.t ->
-    'a m
-end
-
 type t = {
   ic: Lwt_io.input Lwt_io.channel;
   oc: Lwt_io.output Lwt_io.channel;
-  s: (module SERVER);
+  s: server;
 }
 
 let create ~ic ~oc server : t = {ic; oc; s=server}
@@ -149,14 +145,13 @@ let read_msg (self:t) : (Jsonrpc.Message.either, exn) result m =
 let run (self:t) (task:_ Task.t) : unit m =
   let process_msg r =
     let module M = Jsonrpc.Message in
-    let module S = (val self.s) in
     match r.M.id with
     | None ->
       (* notification *)
       begin match Lsp.Client_notification.of_jsonrpc {r with M.id=()} with
         | Ok n ->
-          S.on_notification n
-            ~notify:(fun n ->
+          (self.s)#on_notification n
+            ~notify_back:(fun n ->
                 let msg =
                   Lsp.Server_notification.to_jsonrpc n
                 in
@@ -170,7 +165,7 @@ let run (self:t) (task:_ Task.t) : unit m =
         (fun () ->
           begin match Lsp.Client_request.of_jsonrpc {r with M.id} with
             | Ok (Lsp.Client_request.E r) ->
-              let* reply = S.on_request r in
+              let* reply = self.s#on_request r in
               let reply_json = Lsp.Client_request.yojson_of_result r reply in
               let response = Jsonrpc.Response.ok id reply_json in
               send_response self response
