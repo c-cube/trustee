@@ -1,3 +1,3 @@
 [submodule "ml/vendor/lsp"]
-	path = ml/vendor/lsp
+	path = vendor/lsp
 	url = https://github.com/ocaml/ocaml-lsp.git

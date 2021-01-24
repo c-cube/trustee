@@ -1,19 +1,14 @@
+all:
+	@dune build @all
 
-build:
-	@cargo build --release
-
-all: build test
-
-clean:
-	@cargo clean
-
-check:
-	@cargo check --all
-
-doc:
-	@cargo doc
+watch:
+	@dune build @all -w
 
 test:
-	@cargo test
+	@dune runtest --force --no-buffer
 
-.PHONY: doc clean
+clean:
+	@dune clean
+
+doc:
+	@dune build @doc
