@@ -3,6 +3,7 @@ module T = Trustee_core
 
 module Log = T.Log
 module K = T.Kernel
+module PA = T.Parse_ast
 module TA = T.Type_ast
 
 open Task.Infix
@@ -10,51 +11,63 @@ type 'a m = 'a Task.m
 
 class trustee_server =
   let _ctx = K.Ctx.create () in
+  let open Lsp.Types in
   object
     inherit Jsonrpc2.server
-    val env = TA.Env.create _ctx
-    val mutable _quit = false
 
-    method! must_quit = _quit
+    (* one env per document *)
+    val envs: (DocumentUri.t, PA.Env.t * TA.Env.t) Hashtbl.t = Hashtbl.create 32
 
-    method on_request
-    : type r. r Lsp.Client_request.t -> r m
-    = fun (_r:_ Lsp.Client_request.t) ->
-      Log.debugf 5 (fun k->k "lsp: got request");
-      Lwt.fail_with "TODO: on request"
-      (*
-    Jsonrpc.Response
-    { Lsp.Server.Handler.
-      on_request=fun (_server:t Lsp.Server.t) _r : _ result Fiber.t ->
-        Lsp.Logger.log
-          ~section:"trustee" ~title:Lsp.Logger.Title.Debug
-          "got request";
-        Fiber.return (Error (reply_err ~msg:"not implemented" ()));
-    }
-         *)
+    method _on_doc ~(notify_back:Jsonrpc2.notify_back) (d:DocumentUri.t) (content:string) =
+      (* TODO: use penv/env from dependencies, if any, once we have import *)
 
-    method on_notification ~notify_back:_ (n:Lsp.Client_notification.t) : unit m =
-      Log.debugf 5 (fun k->k"got notification");
-      let open Lsp.Types in
-      begin match n with
-        | Lsp.Client_notification.TextDocumentDidOpen
-            {DidOpenTextDocumentParams.textDocument=doc} ->
-          Log.debugf 5
-            (fun k->k"open document %s" doc.TextDocumentItem.uri);
-          () (* TODO *)
-        | Lsp.Client_notification.Exit ->
-          Log.debugf 5  (fun k->k"client asked to quit");
-          _quit <- true
-        | Lsp.Client_notification.TextDocumentDidClose _
-        | Lsp.Client_notification.TextDocumentDidChange _
-        | Lsp.Client_notification.DidSaveTextDocument _
-        | Lsp.Client_notification.WillSaveTextDocument _
-        | Lsp.Client_notification.ChangeWorkspaceFolders _
-        | Lsp.Client_notification.ChangeConfiguration _
-        | Lsp.Client_notification.Initialized
-        | Lsp.Client_notification.Unknown_notification _ ->
-          ()
-      end;
+      let penv = PA.Env.create _ctx in
+      let stmts =
+        T.Syntax.parse_top_l_process
+          ~file:(Filename.basename d) ~env:penv
+          (T.Syntax.Lexer.create content)
+      in
+      Log.debugf 3 (fun k->k "for %s: parsed %d statements" d (List.length stmts));
+
+      let diags = ref [] in
+      let env = TA.Env.create _ctx in
+      let env = List.fold_left
+          (TA.process_stmt
+             ~on_show:(fun loc e ->
+                 () (* TODO *)
+(*
+                 let d = Diagnostic.create () in
+                 diags := d :: !diags
+*)
+               )
+             ~on_error:(fun loc e ->
+                 () (* TODO *)
+(*
+                 let d = Diagnostic.create () in
+                 diags := d :: !diags
+*)
+               ))
+          env stmts
+      in
+
+      Hashtbl.replace envs d (penv, env);
+
+      Log.debugf 2 (fun k->k"send back %d diagnostics" (List.length !diags));
+      notify_back#send_diagnostic !diags;
+
+      Task.return ()
+
+    method on_notif_doc_did_open ~notify_back d ~content : unit m =
+      Log.debugf 2 (fun k->k "did open %s (%d bytes)" d.uri (String.length content));
+      Lwt.return () (* TODO *)
+
+    method on_notif_doc_did_close ~notify_back d : unit m =
+      Log.debugf 2 (fun k->k "did close %s" d.uri);
+      Lwt.return () (* TODO *)
+
+    method on_notif_doc_did_change ~notify_back d _c ~old_content:_old ~new_content : unit m =
+      Log.debugf 5 (fun k->k "did update %s (%d bytes -> %d bytes)" d.uri
+                   (String.length _old) (String.length new_content));
       Lwt.return () (* TODO *)
   end
 
@@ -66,16 +79,6 @@ let setup_logger_ () =
     Log.set_debug_out out;
     Log.set_level 50;
   )
-
-(*
-let task_io self =
-  if Task.is_cancelled self then Task.return ()
-  else (
-    Jsonrpc2.run 
-    Lsp.Io.read
-
-  )
-   *)
 
 let () =
   setup_logger_ ();
