@@ -9,16 +9,23 @@ module TA = T.Type_ast
 open Task.Infix
 type 'a m = 'a Task.m
 
+open Lsp.Types
+
+let lsp_pos_of_pos (p:T.Position.t) : Position.t =
+  Position.create ~line:(p.line-1) ~character:p.col
+
+let lsp_range_of_loc (l:T.Loc.t) : Range.t =
+  Range.create ~start:(lsp_pos_of_pos l.start) ~end_:(lsp_pos_of_pos l.end_)
+
 class trustee_server =
   let _ctx = K.Ctx.create () in
-  let open Lsp.Types in
-  object
+  object(self)
     inherit Jsonrpc2.server
 
     (* one env per document *)
     val envs: (DocumentUri.t, PA.Env.t * TA.Env.t) Hashtbl.t = Hashtbl.create 32
 
-    method _on_doc ~(notify_back:Jsonrpc2.notify_back) (d:DocumentUri.t) (content:string) =
+    method private _on_doc ~(notify_back:Jsonrpc2.notify_back) (d:DocumentUri.t) (content:string) =
       (* TODO: use penv/env from dependencies, if any, once we have import *)
 
       let penv = PA.Env.create _ctx in
@@ -33,42 +40,43 @@ class trustee_server =
       let env = TA.Env.create _ctx in
       let env = List.fold_left
           (TA.process_stmt
-             ~on_show:(fun loc e ->
-                 () (* TODO *)
-(*
-                 let d = Diagnostic.create () in
+             ~on_show:(fun loc msg ->
+                 let range = lsp_range_of_loc loc in
+                 let message = Fmt.asprintf "@[info: %a@]" msg() in
+                 let d = Diagnostic.create
+                     ~severity:DiagnosticSeverity.Information
+                     ~range ~message () in
                  diags := d :: !diags
-*)
                )
              ~on_error:(fun loc e ->
-                 () (* TODO *)
-(*
-                 let d = Diagnostic.create () in
+                 let range = lsp_range_of_loc loc in
+                 let message = Fmt.asprintf "@[err: %a@]" e() in
+                 let d = Diagnostic.create
+                     ~severity:DiagnosticSeverity.Error ~range ~message () in
                  diags := d :: !diags
-*)
                ))
           env stmts
       in
 
       Hashtbl.replace envs d (penv, env);
 
-      Log.debugf 2 (fun k->k"send back %d diagnostics" (List.length !diags));
-      notify_back#send_diagnostic !diags;
-
-      Task.return ()
+      let diags = List.rev !diags in
+      Log.debugf 2 (fun k->k"send back %d diagnostics" (List.length diags));
+      notify_back#send_diagnostic diags
 
     method on_notif_doc_did_open ~notify_back d ~content : unit m =
       Log.debugf 2 (fun k->k "did open %s (%d bytes)" d.uri (String.length content));
-      Lwt.return () (* TODO *)
+      self#_on_doc ~notify_back d.uri content
 
-    method on_notif_doc_did_close ~notify_back d : unit m =
+    method on_notif_doc_did_close ~notify_back:_ d : unit m =
       Log.debugf 2 (fun k->k "did close %s" d.uri);
-      Lwt.return () (* TODO *)
+      Hashtbl.remove envs d.uri;
+      Lwt.return ()
 
     method on_notif_doc_did_change ~notify_back d _c ~old_content:_old ~new_content : unit m =
       Log.debugf 5 (fun k->k "did update %s (%d bytes -> %d bytes)" d.uri
                    (String.length _old) (String.length new_content));
-      Lwt.return () (* TODO *)
+      self#_on_doc ~notify_back d.uri new_content
   end
 
 let setup_logger_ () =

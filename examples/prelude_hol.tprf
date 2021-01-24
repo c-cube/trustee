@@ -60,6 +60,7 @@ show expr forall (x y : tau). x = y end
 # TODO RForallSubst
 # TODO RForallIntro
 
+
 def /\ (a b : bool) : bool by DefAnd
   := forall f. f a b = f T T
 end
