@@ -19,5 +19,8 @@ module Make(IO : IO) = struct
     method virtual on_request : 'a.
       'a Lsp.Client_request.t ->
       'a IO.t
+
+    (** Set to true if the client requested to exit *)
+    method must_quit = false
   end
 end

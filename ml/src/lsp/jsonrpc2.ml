@@ -414,6 +414,9 @@ module Make(IO : Jsonrpc2_intf.IO)
   let run (self:t) : _ IO.t =
     let open IO.Infix in
     let rec loop() : _ IO.t =
+      if self.s#must_quit then Lwt.return ()
+      else loop_next()
+    and loop_next() =
       read_msg self >>= function
       | Error End_of_file ->
         IO.return (Ok ()) (* done! *)

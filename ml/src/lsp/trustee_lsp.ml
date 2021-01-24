@@ -13,6 +13,9 @@ class trustee_server =
   object
     inherit Jsonrpc2.server
     val env = TA.Env.create _ctx
+    val mutable _quit = false
+
+    method! must_quit = _quit
 
     method on_request
     : type r. r Lsp.Client_request.t -> r m
@@ -39,13 +42,16 @@ class trustee_server =
           Log.debugf 5
             (fun k->k"open document %s" doc.TextDocumentItem.uri);
           () (* TODO *)
+        | Lsp.Client_notification.Exit ->
+          Log.debugf 5  (fun k->k"client asked to quit");
+          _quit <- true
         | Lsp.Client_notification.TextDocumentDidClose _
         | Lsp.Client_notification.TextDocumentDidChange _
         | Lsp.Client_notification.DidSaveTextDocument _
         | Lsp.Client_notification.WillSaveTextDocument _
         | Lsp.Client_notification.ChangeWorkspaceFolders _
         | Lsp.Client_notification.ChangeConfiguration _
-        | Lsp.Client_notification.Initialized|Lsp.Client_notification.Exit
+        | Lsp.Client_notification.Initialized
         | Lsp.Client_notification.Unknown_notification _ ->
           ()
       end;
