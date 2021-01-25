@@ -19,9 +19,6 @@ depends: [
   "qtest" {with-test}
   "odoc" { with-doc }
 ]
-pin-depends: [
-  ["lsp.dev" "git+https://github.com/ocaml/ocaml-lsp.git#master"]
-]
 tags: [ "logic" "proof" "HOL" "assistant" "lsp" ]
 bug-reports: "https://github.com/c-cube/trustee/issues"
 dev-repo: "git+https://github.com/c-cube/trustem.git"
