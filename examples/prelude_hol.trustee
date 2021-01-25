@@ -20,6 +20,10 @@ end
 show T end
 show DefTrue end
 
+show
+  proof refl T end
+end
+
 show expr \x y z: bool. x = (y = z) end
 
 theorem TrueIsTrue := T
@@ -68,3 +72,6 @@ end
 fixity /\ := rassoc 15 end
 
 show expr T /\ a /\ b /\ c end
+
+show DefAnd end # TODO
+
