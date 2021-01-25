@@ -20,7 +20,8 @@ and ty = expr
 and var = {
   v_name: string;
   v_ty: ty option;
-  v_kind: var_kind
+  v_kind: var_kind;
+  v_loc: location;
 }
 
 and var_kind =
@@ -126,7 +127,8 @@ let pp out e = Fmt.fprintf out "@[%a@]" (pp_ 0) e
 
 module Var = struct
   type t = var
-  let make ?kind:(v_kind=V_normal) v_name v_ty : var = {v_name; v_ty; v_kind}
+  let make ?kind:(v_kind=V_normal) ~loc v_name v_ty : var =
+    {v_name; v_ty; v_kind; v_loc=loc; }
 
   let pp out v = Fmt.string out v.v_name
   let to_string = Fmt.to_string pp
@@ -150,7 +152,7 @@ module Expr = struct
   let pp_quoted = Fmt.within "`" "`" @@ pp
 
   let type_ : t = mk_ Type
-  let ty_var ~loc s : t = mk_ ~loc (Var (Var.make s (Some type_)))
+  let ty_var ~loc s : t = mk_ ~loc (Var (Var.make ~loc s (Some type_)))
   let ty_meta ~loc (s:string) : ty = mk_ ~loc (Meta {ty=Some type_; name=s})
   let ty_arrow ~loc a b : ty = mk_ ~loc (Ty_arrow (a,b))
   let ty_pi ~loc vars bod : ty = match vars with
@@ -161,15 +163,16 @@ module Expr = struct
   let const ~loc ?(at=false) c : t = mk_ ~loc (Const {c; at})
   let of_expr ~loc ?at e : t = const ~loc ?at (Const.of_expr e)
   let meta ~loc (s:string) ty : t = mk_ ~loc (Meta {ty; name=s})
-  let app ~loc (f:t) (l:t list) : t =
-    match f.view with
+  let app ~loc (f:t) (l:t list) : t = match f.view with
     | App (f1,l1) -> mk_ ~loc (App (f1,l1@l))
     | _ -> mk_ ~loc (App (f,l))
   let let_ ~loc bs bod : t = mk_ ~loc (Let (bs, bod))
   let with_ ~loc vs bod : t = mk_ ~loc (With (vs, bod))
   let lambda ~loc vs bod : t = mk_ ~loc (Lambda (vs, bod))
   let bind ~loc ?(at=false) c vars body : t = mk_ ~loc (Bind {c; at; vars; body})
-  let eq ~loc a b : t = mk_ ~loc (Eq (a,b))
+  let eq ~loc a b : t =
+    Log.debugf 6 (fun k->k"mk-eq loc=%a" Loc.pp loc);
+    mk_ ~loc (Eq (a,b))
   let wildcard ~loc () : t = mk_ ~loc Wildcard
 
   let to_string = Fmt.to_string @@ Fmt.hvbox pp

@@ -13,6 +13,7 @@ type t = {
 
 include PP with type t := t
 val none : t
+val make : line:int -> col:int -> t
 
 val leq : t -> t -> bool
 val min : t -> t -> t

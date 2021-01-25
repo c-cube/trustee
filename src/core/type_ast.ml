@@ -6,6 +6,7 @@ module A = Parse_ast
 module AE = A.Expr
 module KProof = Proof
 
+type position = Position.t
 type location = A.location
 let noloc: location = Loc.none
 
@@ -27,6 +28,7 @@ and var = {
 and bvar = {
   bv_name: ID.t;
   bv_ty: ty;
+  bv_loc: location;
 }
 
 and binding = bvar * expr
@@ -128,6 +130,7 @@ and pp_bvar_ty out (v:bvar) : unit =
   Fmt.fprintf out "(@[%a@ : %a@])" ID.pp v.bv_name pp_expr_ v.bv_ty
 
 (** {2 Satellite types} *)
+
 module Var = struct
   type t = var
   let make v_name v_ty : var = {v_name; v_ty; }
@@ -137,10 +140,17 @@ end
 
 module BVar = struct
   type t = bvar
-  let make bv_name bv_ty : bvar = {bv_name; bv_ty; }
+  let make ~loc bv_name bv_ty : bvar = {bv_name; bv_ty; bv_loc=loc; }
   let pp = pp_bvar
   let to_string = Fmt.to_string pp
   let pp_with_ty = pp_bvar_ty
+
+  let as_queryable (self:t) = object
+    inherit Queryable.t
+    method loc = self.bv_loc
+    method pp out () = pp_bvar_ty out self
+  end
+
 end
 
 module Expr = struct
@@ -283,7 +293,7 @@ module Expr = struct
         end
       | K.Expr.E_pi (ty_v, bod) ->
         assert (K.Expr.is_eq_to_type ty_v || K.Expr.is_a_type ty_v);
-        let bv = BVar.make (ID.makef "_a_%d" (List.length env)) (aux env ty_v) in
+        let bv = BVar.make ~loc (ID.makef "_a_%d" (List.length env)) (aux env ty_v) in
         ty_pi ~loc bv @@ aux (bvar ~loc bv::env) bod
       | _ ->
         errorf (fun k->k"cannot convert %a@ to a type" K.Expr.pp e)
@@ -330,7 +340,7 @@ module Expr = struct
     (* rename a bound variable to avoid capture. Adds [v -> v'] to [m]. *)
     and rename_bvar m v =
       let ty = aux m v.bv_ty in
-      let v' = {bv_name=ID.copy v.bv_name; bv_ty=ty} in
+      let v' = {v with bv_name=ID.copy v.bv_name; bv_ty=ty} in
       ID.Map.add v.bv_name (mk_ ~loc:noloc (BVar v') ty) m, v'
     in
     aux m e
@@ -523,6 +533,22 @@ module Expr = struct
         K.Expr.lambda_db ctx ~ty_v:ty bod
     in
     aux ID.Map.empty 0 e
+
+  let rec as_queryable e = object
+    inherit Queryable.t
+    method loc = e.loc
+    method pp out () = Fmt.fprintf out "@[%a@ type: %a@]" pp e pp (ty e)
+    method! children yield =
+      let yield_e e = yield (as_queryable e) in
+      let yield_bv v = yield (BVar.as_queryable v) in
+      begin match view e with
+        | Kind | Type | Bool | Const _ | Meta _ | Var _ | BVar _ -> ()
+        | Ty_arrow (a, b) | Eq (a,b) | App (a,b) -> yield_e a; yield_e b
+        | Ty_pi (v, bod) | Lambda (v, bod) -> yield_bv v; yield_e bod
+        | Let (bs, bod) ->
+          List.iter (fun (v,u) -> yield_bv v; yield_e u) bs; yield_e bod
+      end
+  end
 end
 
 module Subst = struct
@@ -662,6 +688,9 @@ module Proof = struct
 
   type rule_signature = Proof.Rule.signature
 
+  let[@inline] view p = p.view
+  let[@inline] loc p = p.loc
+
   let rec pp out (self:t) : unit =
     Fmt.fprintf out "@[<hv>@[<hv2>proof@ ";
     begin match self.view with
@@ -694,8 +723,36 @@ module Proof = struct
     | Arg_expr e -> Expr.pp out e
     | Arg_subst s -> Subst.pp out s
 
+  let rec as_queryable (self:t) : Queryable.t = object
+    inherit Queryable.t
+    method pp out () = pp out self
+    method loc = self.loc
+    method! children = assert false
+  end
+  and step_q (self:step) : Queryable.t = object
+    inherit Queryable.t
+    method pp out () = pp_step ~top:true out self
+    method loc = self.s_loc
+    method! children = match self.s_view with
+      | Pr_apply_rule (_, l) ->
+        Iter.of_list l
+        |> Iter.filter_map arg_q
+      | Pr_sub_proof p -> Iter.return (as_queryable p)
+      | Pr_error _ -> Iter.empty
+  end
+  and arg_q (self:rule_arg) : Queryable.t option =
+    match self with
+    | Arg_step s -> Some (step_q s)
+    | Arg_expr e -> Some (Expr.as_queryable e)
+    | Arg_subst _ | Arg_var_step _ | Arg_thm _ -> None
+
   let to_string = Fmt.to_string pp
   let pp_rule_signature = R.pp_signature
+
+  let iter_subs (p:t) : t Iter.t =
+    match p.view with
+    | Proof_atom _
+    | Proof_steps _ -> Iter.empty (* TODO *)
 
   let mk ~loc (view:view) : t = {view; loc}
   let mk_step ~loc (s_view:step_view) : step = {s_view; s_loc=loc}
@@ -763,6 +820,41 @@ module Proof = struct
     run_pr {e_th=ID.Map.empty;} self
 end
 
+module Goal = struct
+  type t = {
+    hyps: expr list;
+    concl: expr;
+    loc: location;
+  }
+
+  let make ~loc hyps concl : t = {hyps; concl; loc}
+  let pp out (self:t) : unit =
+    if CCList.is_empty self.hyps then (
+      Fmt.fprintf out "@[?-@ %a@]" Expr.pp self.concl
+    ) else (
+      Fmt.fprintf out "@[<hv>%a@ ?-@ %a@]"
+        (pp_list ~sep:", " Expr.pp) self.hyps
+        Expr.pp self.concl
+    )
+  let to_string = Fmt.to_string pp
+
+  let as_queryable (self:t) : Queryable.t = object
+    inherit Queryable.t
+    method loc = self.loc
+    method pp out () = pp out self
+    method! children =
+      Iter.cons (Expr.as_queryable self.concl)
+        (Iter.of_list self.hyps |> Iter.map Expr.as_queryable)
+  end
+
+  let to_k_goal ctx self : K.Goal.t =
+    K.Goal.make_l
+      (List.map (Expr.to_k_expr ctx) self.hyps)
+      (Expr.to_k_expr ctx self.concl)
+end
+
+module Thm = K.Thm
+
 (** {2 type inference} *)
 module Ty_infer = struct
   (* add meta variables as type arguments *)
@@ -808,6 +900,7 @@ module Ty_infer = struct
        @param bv the local variables, for scoping *)
     let rec inf_rec_ (bv:expr Str_map.t) (e:AE.t) : expr =
       let loc = AE.loc e in
+      Log.debugf 7 (fun k->k"infer-rec loc=%a e=`%a`" Loc.pp loc AE.pp e);
       let unif_exn_ a b = unif_exn_ ~loc e a b in
       begin match AE.view e with
         | A.Type -> Expr.type_
@@ -816,7 +909,7 @@ module Ty_infer = struct
           let bv, vars =
             CCList.fold_map
               (fun bv v ->
-                 let v' = infer_bvar_ ~default:Expr.type_ ~loc bv v in
+                 let v' = infer_bvar_ ~default:Expr.type_ bv v in
                  Str_map.add v.A.v_name (Expr.bvar ~loc v') bv, v')
               bv vars
           in
@@ -867,7 +960,7 @@ module Ty_infer = struct
           Expr.eq ~loc a b
         | A.Const {c;at} ->
           (* convert directly into a proper kernel constant *)
-          infer_const_ c ~at
+          infer_const_ c ~loc ~at
         | A.App (f,l) ->
           let f = inf_rec_ bv f in
           let l = List.map (inf_rec_ bv) l in
@@ -886,18 +979,18 @@ module Ty_infer = struct
           let bv, vars =
             CCList.fold_map
               (fun bv v ->
-                 let v' = infer_bvar_ ~loc bv v in
+                 let v' = infer_bvar_ bv v in
                  Str_map.add v.A.v_name (Expr.bvar ~loc v') bv, v')
               bv vars
           in
           let bod = inf_rec_ bv bod in
           Expr.lambda_l ~loc vars bod
         | A.Bind { c; at; vars; body } ->
-          let f = infer_const_ ~at c in
+          let f = infer_const_ ~loc ~at c in
           let bv, vars =
             CCList.fold_map
               (fun bv v ->
-                 let v' = infer_bvar_ ~loc bv v in
+                 let v' = infer_bvar_ bv v in
                  Str_map.add v.A.v_name (Expr.bvar ~loc v') bv, v')
               bv vars
           in
@@ -912,7 +1005,7 @@ module Ty_infer = struct
           let bv', bindings =
             CCList.fold_map
               (fun bv' (v,t) ->
-                 let v' = infer_bvar_ ~loc bv v in
+                 let v' = infer_bvar_ bv v in
                  let t = inf_rec_ bv t in
                  unif_exn_ v'.bv_ty (Expr.ty t);
                  let bv' = Str_map.add v.A.v_name (Expr.bvar ~loc v') bv' in
@@ -922,7 +1015,7 @@ module Ty_infer = struct
           Expr.let_ ~loc bindings @@ inf_rec_ bv' body
         end
 
-    and infer_const_ ~at c : expr =
+    and infer_const_ ~at ~loc c : expr =
       let t =
         let c = match c with
           | A.C_k c -> c
@@ -954,15 +1047,15 @@ module Ty_infer = struct
           unif_exn_ ~loc ty0 ty Expr.type_;
         );
         ty
-    and infer_bvar_ ~loc ?default bv v : bvar =
-      let ty_v = infer_ty_opt_ ?default ~loc bv v.A.v_ty in
-      let v' = BVar.make (ID.make v.A.v_name) ty_v in
+    and infer_bvar_ ?default bv v : bvar =
+      let ty_v = infer_ty_opt_ ?default ~loc:v.A.v_loc bv v.A.v_ty in
+      let v' = BVar.make ~loc:v.A.v_loc (ID.make v.A.v_name) ty_v in
       v'
     in
     let bv, vars =
       CCList.fold_map
         (fun bv v ->
-           let v' = infer_bvar_ ~loc bv v in
+           let v' = infer_bvar_ bv v in
            Str_map.add v.A.v_name (Expr.bvar ~loc v') bv, v')
         bv0 vars
     in
@@ -992,13 +1085,17 @@ module Ty_infer = struct
   let infer_expr_bool env e0 : expr =
     infer_expr_with_ty env e0 Expr.bool
 
-  let infer_goal env (g:A.Goal.t) : K.Goal.t =
+  let infer_goal env (g:A.Goal.t) : Goal.t * K.Goal.t =
     let hyps = List.map (infer_expr_bool env) g.A.Goal.hyps in
     let concl = infer_expr_bool env g.A.Goal.concl in
     Env.generalize_ty_vars env;
-    K.Goal.make_l
-      (List.map (Expr.to_k_expr env.ctx) hyps)
-      (Expr.to_k_expr env.ctx concl)
+    let loc =
+      List.fold_left (fun loc e -> Loc.merge loc (Expr.loc e))
+        (Expr.loc concl) hyps
+    in
+    let goal = Goal.make ~loc hyps concl in
+    let kgoal = Goal.to_k_goal env.ctx goal in
+    goal, kgoal
 
   let and_then_generalize env f =
     let x = f() in
@@ -1090,6 +1187,27 @@ module Ty_infer = struct
     infer_proof e0 pr
 end
 
+module Index = struct
+  type t = Queryable.t list
+  let empty : t = []
+  let size = List.length
+
+  let find (self:t) (pos:Position.t) : Queryable.t list =
+    let rec aux (q:Queryable.t) : _ list option =
+      Log.debugf 6 (fun k->k"examine queryable %a at %a" q#pp () Loc.pp q#loc);
+      if Loc.contains q#loc pos then (
+        let sub = Iter.find_map aux q#children |> CCOpt.get_or ~default:[] in
+        Some (q::sub)
+      ) else None
+    in
+    begin match CCList.find_map aux self with
+      | None -> []
+      | Some l -> List.rev l (* put deeper result first *)
+    end
+
+  let add_cond ~index x l = if index then x::l else l
+end
+
 module Process_stmt = struct
   type t = {
     env: env;
@@ -1097,15 +1215,17 @@ module Process_stmt = struct
     on_error: location -> unit Fmt.printer -> unit;
   }
 
-  let top_decl_ self name ty : unit =
+  let top_decl_ self name ty : ty =
     let ty =
       Ty_infer.and_then_generalize self.env
         (fun () -> Ty_infer.infer_ty self.env ty)
-      |> Expr.to_k_expr self.env.ctx in
-    let c = K.Expr.new_const self.env.ctx name ty in
-    Env.declare_const self.env name c
+    in
+    let kty = Expr.to_k_expr self.env.ctx ty in
+    let c = K.Expr.new_const self.env.ctx name kty in
+    Env.declare_const self.env name c;
+    ty
 
-  let top_def_ ~loc self name th_name vars ret body : unit =
+  let top_def_ ~loc self name th_name vars ret body : ty * expr =
     (* turn [def f x y := bod] into [def f := \x y. bod] *)
     let vars, e = Ty_infer.infer_expr_vars ~loc self.env vars body in
     let def_rhs = Expr.lambda_l ~loc vars e in
@@ -1132,7 +1252,7 @@ module Process_stmt = struct
         (Expr.to_k_expr self.env.ctx def_eq) in
     Env.declare_const self.env name ke;
     CCOpt.iter (fun th_name -> Env.define_thm self.env th_name th) th_name;
-    ()
+    ty_rhs, def_rhs
 
   let top_show_ self ~loc s : bool =
     begin match Env.find_named self.env s with
@@ -1154,69 +1274,75 @@ module Process_stmt = struct
         false
     end
 
-  let top_axiom_ self name thm : unit =
+  let top_axiom_ self name thm : expr =
     let e =
       Ty_infer.and_then_generalize self.env
         (fun () -> Ty_infer.infer_expr_with_ty self.env thm Expr.bool)
-      |> Expr.to_k_expr self.env.ctx
     in
-    let th = K.Thm.axiom self.env.ctx e in
-    Env.define_thm self.env name th
+    let ke = Expr.to_k_expr self.env.ctx e in
+    let th = K.Thm.axiom self.env.ctx ke in
+    Env.define_thm self.env name th;
+    e
 
-  let top_proof_ self goal proof : K.Goal.t * Proof.t * K.Thm.t =
-    let goal = Ty_infer.infer_goal self.env goal in
-    Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp goal);
+  let top_proof_ self goal proof : Goal.t * K.Goal.t * Proof.t * K.Thm.t =
+    let goal, kgoal = Ty_infer.infer_goal self.env goal in
+    Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp kgoal);
     (* convert proof *)
     let pr =
       Ty_infer.infer_proof self.env proof
     in
     Log.debugf 10 (fun k->k"typed proof:@ %a" Proof.pp pr);
     let th = Proof.run self.env.ctx pr in
-    goal, pr, th
+    goal, kgoal, pr, th
 
-  let top_goal_ ~loc self goal proof : bool =
-    let goal, _pr, th = top_proof_ self goal proof in
-    if K.Thm.is_proof_of th goal then (
+  let top_goal_ ~loc self goal proof : bool * Goal.t =
+    let goal, kgoal, _pr, th = top_proof_ self goal proof in
+    if K.Thm.is_proof_of th kgoal then (
       self.on_show loc
         (fun out() ->
            Fmt.fprintf out "@[<2>goal proved@ with theorem `@[%a@]`@]" K.Thm.pp th);
-      true
+      true, goal
     ) else (
       self.on_error loc
         (fun out() ->
            Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
-             K.Thm.pp th K.Goal.pp goal);
-      false
+             K.Thm.pp th K.Goal.pp kgoal);
+      false, goal
     )
 
-  let top_thm_ ~loc self name goal proof : bool =
-    let goal, _pr, th = top_proof_ self goal proof in
-    if K.Thm.is_proof_of th goal then (
+  let top_thm_ ~loc self name goal proof : bool * Goal.t =
+    let goal, kgoal, _pr, th = top_proof_ self goal proof in
+    if K.Thm.is_proof_of th kgoal then (
       Env.define_thm self.env name th;
-      true
+      true, goal
     ) else (
       self.on_error loc
         (fun out() ->
            Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
-             K.Thm.pp th K.Goal.pp goal);
-      false
+             K.Thm.pp th K.Goal.pp kgoal);
+      false, goal
     )
 
-  let top_ (self:t) st : unit =
+  let top_ (self:t) st ~index (idx:Index.t) : Index.t =
     Log.debugf 2 (fun k->k"(@[TA.process-stmt@ %a@])" A.Top_stmt.pp st);
-    let ok =
+    let ok, idx =
       let loc = A.Top_stmt.loc st in
       try
         match A.Top_stmt.view st with
         | A.Top_enter_file s ->
           self.env.cur_file <- s;
-          true
+          true, idx
         | A.Top_decl { name; ty } ->
-          top_decl_ self name ty;
-          true
+          let ty = top_decl_ self name ty in
+          true, Index.add_cond ~index (Expr.as_queryable ty) idx
         | A.Top_def { name; th_name; vars; ret; body } ->
-          top_def_ self ~loc name th_name vars ret body;
-          true
+          let ty_ret, rhs = top_def_ self ~loc name th_name vars ret body in
+          let idx =
+            idx
+            |> Index.add_cond ~index (Expr.as_queryable ty_ret)
+            |> Index.add_cond ~index (Expr.as_queryable rhs)
+          in
+          true, idx
         | A.Top_fixity { name; fixity } ->
           let c =
             match K.Ctx.find_const_by_name self.env.ctx name with
@@ -1224,43 +1350,52 @@ module Process_stmt = struct
             | None -> errorf (fun k->k"constant `%s` not in scope" name)
           in
           K.Const.set_fixity c fixity;
-          true
+          true, idx
         | A.Top_axiom {name; thm} ->
-          top_axiom_ self name thm;
-          true
+          let th = top_axiom_ self name thm in
+          let idx = Index.add_cond ~index (Expr.as_queryable th) idx in
+          true, idx
         | A.Top_goal { goal; proof } ->
-          top_goal_ ~loc self goal proof
+          let ok, goal = top_goal_ ~loc self goal proof in
+          ok, Index.add_cond ~index (Goal.as_queryable goal) idx
         | A.Top_theorem { name; goal; proof } ->
-          top_thm_ ~loc self name goal proof
+          let ok, goal = top_thm_ ~loc self name goal proof in
+          ok, Index.add_cond ~index (Goal.as_queryable goal) idx
         | A.Top_show s ->
-          top_show_ self ~loc s
+          (* TODO: add to index *)
+          top_show_ self ~loc s, idx
         | A.Top_show_expr e ->
           let e = Ty_infer.infer_expr self.env e in
           self.on_show loc (fun out () ->
               Fmt.fprintf out "@[<v>@[<2>expr:@ %a@]@ @[<2>as-kernel-expr:@ %a@]@]"
                 Expr.pp e K.Expr.pp (Expr.to_k_expr self.env.ctx e));
-          true
+          let idx = Index.add_cond ~index (Expr.as_queryable e) idx in
+          true, idx
         | A.Top_show_proof _ ->
+          (* TODO
+          let idx = Index.add_cond ~index (Expr.as_queryable e) idx in
+             *)
           error "TODO" (* TODO *)
         | A.Top_error { msg } ->
           self.on_error loc msg;
-          false
+          false, idx
       with
       | Trustee_error.E e ->
         self.on_error loc (fun out () -> Trustee_error.pp out e);
-        false
+        false, idx
     in
     if ok then (
       Log.debugf 1
         (fun k->k"@[<v>@[<2>@{<green>OK@}:@ %a@]@ loc: %a@]"
             A.Top_stmt.pp st Loc.pp (A.Top_stmt.loc st));
     );
-    ()
+    idx
 
-  let top ~on_show ~on_error (env:env) (st:A.top_statement) : env =
+  let top ~index ~on_show ~on_error (env, idx : env * Index.t)
+      (st:A.top_statement) : env * Index.t =
     let state = {env; on_show; on_error} in
-    top_ state st;
-    env
+    let idx = top_ ~index state st idx in
+    env, idx
 end
 
 let process_stmt = Process_stmt.top

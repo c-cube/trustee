@@ -11,6 +11,7 @@ module K = Kernel
 module A = Parse_ast
 
 type expr
+type position = Position.t
 type location = A.location
 
 type ty = expr
@@ -23,10 +24,12 @@ and var = {
 and bvar = {
   bv_name: ID.t;
   bv_ty: ty;
+  bv_loc: location;
 }
 
 and binding = bvar * expr
 
+(** View of an expression *)
 and view =
   | Kind
   | Type
@@ -51,6 +54,8 @@ type subst
 (** Typing environment *)
 type env
 
+(** {2 Satellite types} *)
+
 module Var : sig
   type t = var
   include PP with type t := t
@@ -65,8 +70,10 @@ end
 module Expr : sig
   type t = expr
   include PP with type t := expr
+  include Queryable.S with type t := t
 
   val to_k_expr : K.Ctx.t -> expr -> K.Expr.t
+  val loc : t -> location
 end
 
 (** {2 Substitutions} *)
@@ -96,9 +103,11 @@ module Env : sig
       obtained with this environment and {!infer}. *)
 end
 
+(** {2 Proofs} *)
 module Proof : sig
   type t
   type step
+  val loc : t -> location
 
   type view =
     | Proof_atom of step
@@ -128,6 +137,7 @@ module Proof : sig
   type rule_signature = Proof.Rule.signature
 
   include PP with type t := t
+  include Queryable.S with type t := t
   val pp_pr_let : pr_let Fmt.printer
   val pp_rule_arg : rule_arg Fmt.printer
   val pp_rule_signature : rule_signature Fmt.printer
@@ -136,18 +146,45 @@ module Proof : sig
   val run : K.Ctx.t -> t -> K.Thm.t
 end
 
+module Goal : sig
+  type t = private {
+    hyps: expr list;
+    concl: expr;
+    loc: location;
+  }
+  include Sigs.PP with type t := t
+  include Queryable.S with type t := t
+  val to_k_goal : K.Ctx.t -> t -> K.Goal.t
+end
+
+module Thm = K.Thm
+
 (* {2 type inference} *)
 module Ty_infer : sig
   val infer_expr : env -> A.expr -> expr
+  val infer_goal : env -> A.Goal.t -> Goal.t * K.Goal.t
   val infer_proof : env -> A.Proof.t -> Proof.t
+end
+
+(** {2 Object index} *)
+
+module Index : sig
+  type t
+
+  val empty : t
+  val size : t -> int
+
+  val find : t -> Position.t -> Queryable.t list
+  (** Find items that overlap this position, from the most
+      to the least narrow *)
 end
 
 (** {2 Process statements} *)
 
-(* TODO: build position/range-addressable index for LSP *)
-
 val process_stmt :
+  index:bool ->
   on_show:(location -> unit Fmt.printer -> unit) ->
   on_error:(location -> unit Fmt.printer -> unit) ->
-  env -> A.top_statement -> env
-(** Process a toplevel statement, returning a new environment. *)
+  env * Index.t -> A.top_statement -> env * Index.t
+(** Process a toplevel statement, returning a new environment
+    and updated index. *)

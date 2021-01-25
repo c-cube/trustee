@@ -63,6 +63,7 @@ module Lexer = struct
 
   type t = {
     src: string;
+    file: string;
     mutable i: int;
     mutable line: int;
     mutable col: int;
@@ -73,11 +74,12 @@ module Lexer = struct
 
   let[@inline] loc self : location =
     {Loc.start=self.start;
+     file=self.file;
      end_={Position.line=self.line; col=self.col};
     }
 
-  let create src : t =
-    { src; i=0; line=1; col=1; st=Read_next; start=Position.none; cur=EOF }
+  let create ?(file="") src : t =
+    { src; i=0; line=1; col=1; file; st=Read_next; start=Position.none; cur=EOF }
 
   (* skip rest of line *)
   let rest_of_line self : unit =
@@ -142,18 +144,18 @@ module Lexer = struct
     ) else (
       let c = String.get self.src self.i in
       match c with
-      | '(' -> self.i <- 1 + self.i; LPAREN
-      | ')' -> self.i <- 1 + self.i; RPAREN
+      | '(' -> self.i <- 1 + self.i; self.col <- self.col + 1; LPAREN
+      | ')' -> self.i <- 1 + self.i; self.col <- self.col + 1; RPAREN
       | ':' ->
-        self.i <- 1 + self.i;
+        self.i <- 1 + self.i; self.col <- self.col + 1;
         if self.i < String.length self.src && String.get self.src self.i = '=' then (
-          self.i <- 1 + self.i;
+          self.i <- 1 + self.i; self.col <- self.col + 1;
           EQDEF
         ) else (
           COLON
         )
-      | '.' -> self.i <- 1 + self.i; DOT
-      | '_' -> self.i <- 1 + self.i; WILDCARD
+      | '.' -> self.i <- 1 + self.i; self.col <- self.col + 1; DOT
+      | '_' -> self.i <- 1 + self.i; self.col <- self.col + 1; WILDCARD
       | '?' ->
         self.i <- 1 + self.i;
         self.col <- 1 + self.col;
@@ -219,16 +221,15 @@ module Lexer = struct
         let i0 = self.i in
         let j = read_many self (fun c -> is_digit c) self.i in
         self.i <- j;
-        self.col <- (j-i0+1) + self.col;
+        self.col <- (j-i0) + self.col;
         let s = String.sub self.src i0 (j-i0) in
         NUM s
       | c when is_symbol c ->
         let i0 = self.i in
         self.i <- 1 + self.i;
-        self.col <- 1 + self.col;
         let j = read_many self (fun c -> is_symbol c || c=='_') self.i in
         self.i <- j;
-        self.col <- (j-i0+1) + self.col;
+        self.col <- (j-i0) + self.col;
         let s = String.sub self.src i0 (j-i0) in
         SYM s
       | _ -> ERROR c
@@ -242,15 +243,13 @@ module Lexer = struct
     in
     self.cur <- t;
     self.st <- Has_cur;
+    Log.debugf 2 (fun k->k"TOK.next %a at %a" Token.pp t Loc.pp (loc self));
     t
 
   let[@inline] cur self : token =
     match self.st with
     | Done -> EOF
-    | Read_next ->
-      let t = next self in
-      self.cur <- t;
-      t
+    | Read_next -> next self
     | Has_cur -> self.cur
 
   let[@inline] junk self = ignore (next self : token)
@@ -365,13 +364,15 @@ module P_expr = struct
             | Some (c,_) -> AE.const ~loc ~at c
             | None ->
               let ty = AE.ty_meta ~loc (fresh_ ()) in
-              AE.var ~loc (A.Var.make s (Some ty))
+              AE.var ~loc (A.Var.make ~loc s (Some ty))
           end
     end
 
   (* parse let bindings *)
   let rec p_bindings_ self : (A.var * AE.t) list =
-    let v = A.Var.make (p_ident self) None in
+    let vloc = loc_ self in
+    let v = A.Var.make ~loc:vloc (p_ident self) None in
+    Log.debugf 6 (fun k->k"binding: var %a loc=%a" A.Var.pp v Loc.pp v.v_loc);
     eat_eq self EQDEF ~msg:"`:=` in let binding";
     let e = p_expr_ ~ty_expect:None self 0 in
     if Token.equal (Lexer.cur self.lex) IN then (
@@ -383,17 +384,20 @@ module P_expr = struct
     )
 
   and p_tyvar_grp_ self : A.var list =
-    let loc = loc_ self in
     let rec loop names =
       match Lexer.cur self.lex with
-      | SYM s -> Lexer.junk self.lex; loop (s::names)
+      | SYM s ->
+        let loc = loc_ self in
+        Lexer.junk self.lex;
+        loop ((s,loc)::names)
       | COLON ->
         Lexer.junk self.lex;
         let ty = p_expr_ ~ty_expect:(Some AE.type_) self 0 in
-        List.rev_map (fun v -> A.Var.make v (Some ty)) names
+        List.rev_map (fun (v,loc) -> A.Var.make ~loc v (Some ty)) names
       | RPAREN | DOT ->
-        List.rev_map (fun v -> A.Var.make v None) names
+        List.rev_map (fun (v,loc) -> A.Var.make ~loc v None) names
       | _ ->
+        let loc = loc_ self in
         errorf (fun k->k"expected group of typed variables at %a" Loc.pp loc)
     in
     loop []
@@ -426,14 +430,14 @@ module P_expr = struct
     in
     l
 
-  and p_nullary_ (self:t) ?(at=false) (s:string) : AE.t =
-    let loc = Lexer.loc self.lex in
+  and p_nullary_ ~loc (self:t) ?(at=false) (s:string) : AE.t =
+    Log.debugf 6 (fun k->k"nullary `%s` loc=%a" s Loc.pp loc);
     match Lexer.cur self.lex with
     | COLON ->
       Lexer.junk self.lex;
       let ty = p_expr_ ~ty_expect:(Some AE.type_) self 0 in
       let loc = AE.loc ty ++ loc in
-      AE.var ~loc (A.Var.make s (Some ty))
+      AE.var ~loc (A.Var.make ~loc s (Some ty))
     | _ ->
       match A.Env.find_const self.env s with
       | Some (c,_) -> AE.const ~loc ~at c
@@ -468,7 +472,7 @@ module P_expr = struct
     | SYM s ->
       Lexer.junk self.lex;
       begin match fixity_ self s with
-        | F_normal -> p_nullary_ self s
+        | F_normal -> p_nullary_ ~loc self s
         | F_prefix i ->
           let arg = p_expr_ ~ty_expect:None self i in
           let lhs = expr_of_string_ ~loc self s in
@@ -495,7 +499,7 @@ module P_expr = struct
       end
     | AT_SYM s ->
       Lexer.junk self.lex;
-      p_nullary_ ~at:true self s
+      p_nullary_ ~loc ~at:true self s
     | WILDCARD ->
       Lexer.junk self.lex;
       AE.wildcard ~loc ()
@@ -524,8 +528,9 @@ module P_expr = struct
         eat_eq self RPAREN ~msg:"expect `)` to close expression";
         e := AE.app ~loc:(AE.loc !e ++ AE.loc e2) !e [e2];
       | SYM s when fixity_ self s = Fixity.F_normal ->
+        let loc = loc_ self in
         Lexer.junk self.lex;
-        let e2 = p_nullary_ ~at:false self s in
+        let e2 = p_nullary_ ~loc ~at:false self s in
         e := AE.app ~loc:(AE.loc !e ++ AE.loc e2) !e [e2];
       | _ -> continue := false;
     done;
@@ -533,16 +538,18 @@ module P_expr = struct
 
   and p_expr_ ~ty_expect (self:t) (p:precedence) : AE.t =
     let lhs = ref (p_expr_app_ ~ty_expect self) in
+    Log.debugf 6 (fun k->k"lhs: `%a` loc=%a prec=%d" AE.pp !lhs Loc.pp (AE.loc !lhs) p);
     let p = ref p in
     let continue = ref true in
     while !continue do
       match Lexer.cur self.lex with
       | EOF | END | BY | EQDEF -> continue := false
       | LPAREN ->
+        let loc = Lexer.loc self.lex in
         Lexer.junk self.lex;
         let e = p_expr_ ~ty_expect:None self 0 in
         eat_eq self ~msg:"expression" RPAREN;
-        lhs := AE.app ~loc:(AE.loc !lhs ++ AE.loc e) !lhs [e]
+        lhs := AE.app ~loc:(loc ++ AE.loc !lhs ++ AE.loc e) !lhs [e]
       | RPAREN | WILDCARD | COLON | DOT | IN
       | LET | AND -> continue := false
       | AT_SYM _ | QUESTION_MARK | QUOTED_STR _ | QUESTION_MARK_STR _ | NUM _ ->
@@ -571,7 +578,7 @@ module P_expr = struct
                         AE.ty_arrow ~loc !rhs e
                       ) else (
                         let op2 = expr_of_string_ ~loc self s2 in
-                        AE.app  op2 [!rhs; e] ~loc:(AE.loc e ++ AE.loc !rhs)
+                        AE.app op2 [!rhs; e] ~loc:(loc ++ AE.loc e ++ AE.loc !rhs)
                       )
                     )
                   | _ -> continue2 := false
@@ -579,18 +586,19 @@ module P_expr = struct
               | _ -> continue2 := false
             done;
             lhs := (
+              let loc = loc ++ AE.loc !lhs ++ (AE.loc !rhs) in
+              Log.debugf 6 (fun k->k"loc lhs: %a" Loc.pp (AE.loc !lhs));
               if s = "->" then AE.ty_arrow ~loc !lhs !rhs
               else if s = "=" then AE.eq ~loc !lhs !rhs
               else (
                 let op = expr_of_string_ ~loc self s in
-                AE.app  op [!lhs; !rhs]
-                  ~loc:(AE.loc !lhs ++ AE.loc !rhs);
+                AE.app ~loc op [!lhs; !rhs]
               )
             )
           | F_normal ->
-            let arg = p_nullary_ self s in
+            let arg = p_nullary_ ~loc self s in
             lhs := AE.app !lhs [arg]
-                ~loc:(AE.loc !lhs ++ AE.loc arg)
+                ~loc:(loc ++ AE.loc !lhs ++ AE.loc arg)
           | F_prefix _ | F_postfix _ | F_binder _ ->
             (* TODO: in case of prefix, we could just parse an appliation *)
             errorf (fun k->k"expected infix operator at %a" Loc.pp loc);
@@ -747,7 +755,7 @@ module P_top = struct
     while
       loc := Lexer.loc self.lex;
       match Lexer.cur self.lex with
-      | END -> Lexer.junk self.lex; false
+      | END | EOF -> Lexer.junk self.lex; false
       | _ -> Lexer.junk self.lex; true
     do () done;
     !loc
@@ -1004,8 +1012,8 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     include Parse_ast
     include AE
     let loc = Loc.none
-    let v (s:string) : t = var ~loc (A.Var.make s None)
-    let vv s : A.var = A.Var.make s None
+    let v (s:string) : t = var ~loc (A.Var.make ~loc s None)
+    let vv s : A.var = A.Var.make ~loc s None
     let of_str s : AE.t = Syntax.parse_expr ~env:M.env (Lexer.create s)
     let let_ = let_ ~loc
     let ty_arrow = ty_arrow ~loc
@@ -1013,7 +1021,7 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     let of_expr = of_expr ~loc
     let b_forall vars (bod:AE.t) : AE.t =
       AE.bind ~loc (A.Const.of_expr M.forall)
-        (List.map (fun (x,ty)-> A.Var.make x ty) vars) bod
+        (List.map (fun (x,ty)-> A.Var.make ~loc x ty) vars) bod
     let c x : t = AE.of_expr ~loc x
     let (@->) a b = AE.ty_arrow ~loc a b
     let (@) a b = AE.app ~loc a b
@@ -1044,7 +1052,7 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
   A.(eq (v"a")(v"b")) (A.of_str "a = b")
   A.(b_forall ["x", Some (c M.a @-> c M.b @-> c M.c)] (A.eq (v"x")(v"x"))) \
     (A.of_str "! (x:a0->b0->c0). x=x")
-    A.(lambda ~loc [A.Var.make "x" @@ Some (c M.a @-> c M.b @-> c M.c)] \
+    A.(lambda ~loc [A.Var.make ~loc "x" @@ Some (c M.a @-> c M.b @-> c M.c)] \
          (A.eq (v"x")(v"x"))) \
     (A.of_str "\\ (x:a0->b0->c0). x=x")
   A.(of_expr ~at:true M.eq) (A.of_str "@=")

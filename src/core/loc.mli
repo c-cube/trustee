@@ -7,6 +7,7 @@
 open Sigs
 
 type t = {
+  file: string;
   start: Position.t;
   end_: Position.t;
 }
@@ -14,7 +15,7 @@ type t = {
 include PP with type t := t
 val none : t
 
-val single : Position.t -> t
+val single : ?file:string -> Position.t -> t
 val merge: t -> t -> t
 val contains : t -> Position.t -> bool
 

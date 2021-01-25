@@ -28,7 +28,8 @@ and binding = var * expr
 and var = {
   v_name: string;
   v_ty: ty option;
-  v_kind: var_kind
+  v_kind: var_kind;
+  v_loc: location;
 }
 
 and const = private
@@ -65,7 +66,7 @@ type subst = (string * expr) list
 
 module Var : sig
   type t = var
-  val make : ?kind:var_kind -> string -> ty option -> var
+  val make : ?kind:var_kind -> loc:location -> string -> ty option -> var
   include PP with type t := t
   val pp_with_ty : t Fmt.printer
 end

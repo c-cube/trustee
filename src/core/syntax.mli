@@ -39,7 +39,7 @@ end
 module Lexer : sig
   type t
 
-  val create : string -> t
+  val create : ?file:string -> string -> t
   val next : t -> token
   val cur : t -> token
 

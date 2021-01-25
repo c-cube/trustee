@@ -1,0 +1,23 @@
+
+(** {1 Queryable types for the LSP server} *)
+
+open Sigs
+type location = Loc.t
+
+(** Some sort of object that can be observed via the LSP *)
+class virtual t = object
+  method virtual loc: location
+  (** Location of this object *)
+
+  method children: t Iter.t = Iter.empty
+  (** Immediate children of this object, with smaller locations *)
+
+  method virtual pp : unit Fmt.printer
+  (** Print the object in a user-readable way. *)
+end
+type queryable = t
+
+module type S = sig
+  type t
+  val as_queryable : t -> queryable
+end

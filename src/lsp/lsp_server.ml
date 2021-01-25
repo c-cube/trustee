@@ -79,12 +79,74 @@ module Make(IO : IO) = struct
       = fun _r ->
         IO.failwith "TODO: handle this request"
 
+    (** Parameter for how to synchronize content with the editor *)
+    method config_sync_opts : TextDocumentSyncOptions.t =
+      TextDocumentSyncOptions.create
+          ~change:TextDocumentSyncKind.Incremental ~willSave:false ()
+
+    method on_req_initialize (_i:InitializeParams.t) : InitializeResult.t IO.t =
+      let sync_opts = self#config_sync_opts in
+      let capabilities =
+        ServerCapabilities.create
+          ~textDocumentSync:(`TextDocumentSyncOptions sync_opts) () in
+      IO.return @@ InitializeResult.create ~capabilities ()
+
+    (** Called when the user hovers on some identifier in the document *)
+    method on_req_hover ~uri:_ ~pos:_ (_ : doc_state) : Hover.t option IO.t =
+      IO.return None
+
+    (** Called when the user requests completion in the document *)
+    method on_req_completion ~uri:_ ~pos:_ ~ctx
+        (_ : doc_state) :
+          [ `CompletionList of CompletionList.t
+          | `List of CompletionItem.t list ] option IO.t =
+      IO.return None
+
+    (** Called when the user wants to jump-to-definition  *)
+    method on_req_definition ~uri:_ ~pos:_ (_ : doc_state) : Locations.t option IO.t =
+      IO.return None
+
     method on_request
     : type r. r Lsp.Client_request.t -> r IO.t
     = fun (r:_ Lsp.Client_request.t) ->
       begin match r with
         | Lsp.Client_request.Shutdown -> _quit <- true; IO.return ()
-        | _ -> self#on_request_unhandled r
+        | Lsp.Client_request.Initialize i -> self#on_req_initialize i
+        | Lsp.Client_request.TextDocumentHover { textDocument; position } ->
+          let doc_st = Hashtbl.find docs textDocument.uri in
+          self#on_req_hover ~uri:textDocument.uri ~pos:position doc_st
+        | Lsp.Client_request.TextDocumentCompletion { textDocument; position; context } ->
+          let doc_st = Hashtbl.find docs textDocument.uri in
+          self#on_req_completion ~uri:textDocument.uri ~pos:position ~ctx:context doc_st
+        | Lsp.Client_request.TextDocumentDefinition { textDocument; position } ->
+          let doc_st = Hashtbl.find docs textDocument.uri in
+          self#on_req_definition ~uri:textDocument.uri ~pos:position doc_st
+        | Lsp.Client_request.TextDocumentDeclaration _
+        | Lsp.Client_request.TextDocumentTypeDefinition _
+        | Lsp.Client_request.TextDocumentCodeLens _
+        | Lsp.Client_request.TextDocumentCodeLensResolve _
+        | Lsp.Client_request.TextDocumentPrepareRename _
+        | Lsp.Client_request.TextDocumentRename _
+        | Lsp.Client_request.TextDocumentLink _
+        | Lsp.Client_request.TextDocumentLinkResolve _
+        | Lsp.Client_request.DocumentSymbol _
+        | Lsp.Client_request.WorkspaceSymbol _
+        | Lsp.Client_request.DebugEcho _
+        | Lsp.Client_request.DebugTextDocumentGet _
+        | Lsp.Client_request.TextDocumentReferences _
+        | Lsp.Client_request.TextDocumentHighlight _
+        | Lsp.Client_request.TextDocumentFoldingRange _
+        | Lsp.Client_request.SignatureHelp _
+        | Lsp.Client_request.CodeAction _
+        | Lsp.Client_request.CompletionItemResolve _
+        | Lsp.Client_request.WillSaveWaitUntilTextDocument _
+        | Lsp.Client_request.TextDocumentFormatting _
+        | Lsp.Client_request.TextDocumentOnTypeFormatting _
+        | Lsp.Client_request.TextDocumentColorPresentation _
+        | Lsp.Client_request.TextDocumentColor _
+        | Lsp.Client_request.SelectionRange _
+        | Lsp.Client_request.ExecuteCommand _
+        | Lsp.Client_request.UnknownRequest _ -> self#on_request_unhandled r
       end
 
     (** Called when a document is opened *)

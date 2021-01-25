@@ -46,13 +46,13 @@ module Check = struct
       (fun file ->
          match CCIO.File.read file with
          | Ok s ->
-           let lex = Syntax.Lexer.create s in
+           let lex = Syntax.Lexer.create ~file s in
            Fmt.printf "# file %S@." file;
            let l = Syntax.parse_top_l_process ~file ~env:aenv lex in
-           let tyenv' =
+           let tyenv', _ =
              CCList.fold_left
                (fun env st ->
-                  TA.process_stmt
+                  TA.process_stmt ~index:false
                     ~on_show:(fun loc pp ->
                         Fmt.printf "@[<2>@{<bold>>>> Show@}: at %a:@ %a@]@."
                           Loc.pp loc pp())
@@ -60,7 +60,7 @@ module Check = struct
                         Fmt.printf "@[<2>@{<Red>Error@} at %a:@ %a@]@."
                           Loc.pp loc pp())
                     env st)
-               !tyenv l
+               (!tyenv, TA.Index.empty) l
            in
            tyenv := tyenv';
            Fmt.printf "# processed %S@." file;

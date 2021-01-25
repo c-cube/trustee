@@ -5,6 +5,7 @@ type t = {
   col: int;
 }
 
+let make ~line ~col : t = { col; line}
 let none = {line=1; col=1}
 let pp out (p:t) : unit =
   Fmt.fprintf out "%d:%d" p.line p.col

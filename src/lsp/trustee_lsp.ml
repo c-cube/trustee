@@ -12,10 +12,19 @@ type 'a m = 'a Task.m
 open Lsp.Types
 
 let lsp_pos_of_pos (p:T.Position.t) : Position.t =
-  Position.create ~line:(p.line-1) ~character:p.col
+  Position.create ~line:(p.line-1) ~character:(p.col-1)
+
+let pos_of_lsp_pos (p:Position.t) : T.Position.t =
+  T.Position.make ~line:(p.line+1) ~col:(p.character+1)
 
 let lsp_range_of_loc (l:T.Loc.t) : Range.t =
   Range.create ~start:(lsp_pos_of_pos l.start) ~end_:(lsp_pos_of_pos l.end_)
+
+type parsed_buffer = {
+  penv: PA.Env.t;
+  env: TA.Env.t;
+  idx: TA.Index.t;
+}
 
 class trustee_server =
   let _ctx = K.Ctx.create () in
@@ -23,7 +32,7 @@ class trustee_server =
     inherit Jsonrpc2.server
 
     (* one env per document *)
-    val envs: (DocumentUri.t, PA.Env.t * TA.Env.t) Hashtbl.t = Hashtbl.create 32
+    val buffers: (DocumentUri.t, parsed_buffer) Hashtbl.t = Hashtbl.create 32
 
     method private _on_doc ~(notify_back:Jsonrpc2.notify_back) (d:DocumentUri.t) (content:string) =
       (* TODO: use penv/env from dependencies, if any, once we have import *)
@@ -38,8 +47,8 @@ class trustee_server =
 
       let diags = ref [] in
       let env = TA.Env.create _ctx in
-      let env = List.fold_left
-          (TA.process_stmt
+      let env, idx = List.fold_left
+          (TA.process_stmt ~index:true
              ~on_show:(fun loc msg ->
                  let range = lsp_range_of_loc loc in
                  let message = Fmt.asprintf "@[info: %a@]" msg() in
@@ -55,10 +64,10 @@ class trustee_server =
                      ~severity:DiagnosticSeverity.Error ~range ~message () in
                  diags := d :: !diags
                ))
-          env stmts
+          (env, TA.Index.empty) stmts
       in
 
-      Hashtbl.replace envs d (penv, env);
+      Hashtbl.replace buffers d {penv; env; idx};
 
       let diags = List.rev !diags in
       Log.debugf 2 (fun k->k"send back %d diagnostics" (List.length diags));
@@ -70,13 +79,37 @@ class trustee_server =
 
     method on_notif_doc_did_close ~notify_back:_ d : unit m =
       Log.debugf 2 (fun k->k "did close %s" d.uri);
-      Hashtbl.remove envs d.uri;
+      Hashtbl.remove buffers d.uri;
       Lwt.return ()
 
     method on_notif_doc_did_change ~notify_back d _c ~old_content:_old ~new_content : unit m =
       Log.debugf 5 (fun k->k "did update %s (%d bytes -> %d bytes)" d.uri
                    (String.length _old) (String.length new_content));
       self#_on_doc ~notify_back d.uri new_content
+
+    (* ## requests ## *)
+
+    method! on_req_hover ~uri ~pos (_d:Jsonrpc2.doc_state) : _ m =
+      match Hashtbl.find buffers uri with
+      | exception Not_found -> Lwt.return None
+      | {idx; _} ->
+        let pos = pos_of_lsp_pos pos in
+        Log.debugf 1
+          (fun k->k"lookup in idx (size %d) at pos %a"
+              (TA.Index.size idx) T.Position.pp pos);
+        let r =
+          match TA.Index.find idx pos with
+          | [] -> None
+          | q :: _ ->
+            Log.debugf 5 (fun k->k"found %a" q#pp ());
+            let s = Fmt.to_string q#pp () in
+            let r = Hover.create
+                ~contents:(`MarkedString {MarkedString.value=s; language=None})
+                ~range:(lsp_range_of_loc q#loc) ()
+            in
+            Some r
+        in
+        Lwt.return r
   end
 
 let setup_logger_ () =

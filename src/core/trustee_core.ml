@@ -12,3 +12,4 @@ module Parse_ast = Parse_ast
 module Type_ast = Type_ast
 module Proof = Proof
 module Fixity = Fixity
+module Queryable = Queryable
