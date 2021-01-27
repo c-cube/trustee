@@ -141,6 +141,7 @@ end
 module BVar = struct
   type t = bvar
   let make ~loc bv_name bv_ty : bvar = {bv_name; bv_ty; bv_loc=loc; }
+  let compare a b = ID.compare a.bv_name b.bv_name
   let pp = pp_bvar
   let to_string = Fmt.to_string pp
   let pp_with_ty = pp_bvar_ty
@@ -148,9 +149,14 @@ module BVar = struct
   let as_queryable (self:t) = object
     inherit Queryable.t
     method loc = self.bv_loc
-    method pp out () = pp_bvar_ty out self
+    method pp out () = Fmt.fprintf out "@[bound variable:@ %a@]" pp_bvar_ty self
   end
 
+  module As_key = struct
+    type nonrec t = t
+    let compare = compare
+  end
+  module Map = CCMap.Make(As_key)
 end
 
 module Expr = struct
@@ -480,7 +486,9 @@ module Expr = struct
 
   let to_string = Fmt.to_string @@ Fmt.hvbox pp
 
-  let to_k_expr (ctx:K.Ctx.t) (e:expr) : K.Expr.t =
+  let to_k_expr ?(subst=ID.Map.empty) (ctx:K.Ctx.t) (e:expr) : K.Expr.t =
+    (* [bs] is the mapping from bound variables to expressions, with their
+       binding point DB level. *)
     let rec aux (bs:_ ID.Map.t) k e : K.Expr.t =
       let recurse = aux bs k in
       let loc = loc e in
@@ -532,12 +540,13 @@ module Expr = struct
         let bod = aux bs (k+1) bod in
         K.Expr.lambda_db ctx ~ty_v:ty bod
     in
-    aux ID.Map.empty 0 e
+    let subst = ID.Map.map (fun v -> v, 0) subst in
+    aux subst 0 e
 
   let rec as_queryable e = object
     inherit Queryable.t
     method loc = e.loc
-    method pp out () = Fmt.fprintf out "@[%a@ type: %a@]" pp e pp (ty e)
+    method pp out () = Fmt.fprintf out "@[<hv>expr: %a@ type: %a@]" pp e pp (ty e)
     method! children yield =
       let yield_e e = yield (as_queryable e) in
       let yield_bv v = yield (BVar.as_queryable v) in
@@ -566,11 +575,11 @@ module Subst = struct
     )
   let to_string = Fmt.to_string pp
 
-  let to_k_subst ctx (self:t) =
+  let to_k_subst ?(subst=ID.Map.empty) ctx (self:t) =
     List.fold_left
       (fun s (v,t) ->
-         let v = K.Var.make v.v_name (Expr.to_k_expr ctx v.v_ty) in
-         let t = Expr.to_k_expr ctx t in
+         let v = K.Var.make v.v_name (Expr.to_k_expr ~subst ctx v.v_ty) in
+         let t = Expr.to_k_expr ~subst ctx t in
          K.Subst.bind v t s)
       K.Subst.empty self
 end
@@ -666,7 +675,9 @@ module Proof = struct
       }
 
   (** named steps *)
-  and pr_let = ID.t * step
+  and pr_let =
+    | Let_expr of bvar * expr
+    | Let_step of ID.t * step
 
   and step = {
     s_loc: location;
@@ -701,9 +712,12 @@ module Proof = struct
     end;
     Fmt.fprintf out "@]@ end@]"
 
-  and pp_pr_let out (name,p) =
+  and pp_pr_let out = function
+    | Let_expr (v,e) ->
+      Fmt.fprintf out "@[<2>let expr %a =@ %a in@]" BVar.pp v Expr.pp e
+    | Let_step (name,p) ->
       Fmt.fprintf out "@[<2>let %a =@ %a in@]"
-      ID.pp name (pp_step ~top:true) p
+        ID.pp name (pp_step ~top:true) p
 
   and pp_step ~top out (s:step) : unit =
     match s.s_view with
@@ -758,6 +772,7 @@ module Proof = struct
   let mk_step ~loc (s_view:step_view) : step = {s_view; s_loc=loc}
 
   type env = {
+    e_subst: K.Expr.t ID.Map.t;
     e_th: K.Thm.t ID.Map.t; (* steps *)
   }
 
@@ -772,10 +787,14 @@ module Proof = struct
         | Proof_steps { lets; ret } ->
           let env =
             List.fold_left
-              (fun env (name,s) ->
-                 let th = run_step env s in
-                 let env = {e_th = ID.Map.add name th env.e_th} in
-                 env)
+              (fun env l ->
+                match l with
+                | Let_expr (v,u) ->
+                  let u = Expr.to_k_expr ~subst:env.e_subst ctx u in
+                  {env with e_subst=ID.Map.add v.bv_name u env.e_subst}
+                | Let_step (name,s) ->
+                  let th = run_step env s in
+                  {env with e_th = ID.Map.add name th env.e_th})
               env lets in
           run_step env ret
       with e ->
@@ -802,9 +821,9 @@ module Proof = struct
     (* convert a rule argument *)
     and conv_arg ~loc env = function
       | Arg_expr e ->
-        KR.AV_expr (Expr.to_k_expr ctx e)
+        KR.AV_expr (Expr.to_k_expr ~subst:env.e_subst ctx e)
       | Arg_subst s ->
-        KR.AV_subst (Subst.to_k_subst ctx s)
+        KR.AV_subst (Subst.to_k_subst ~subst:env.e_subst ctx s)
       | Arg_step s ->
         let th = run_step env s in
         KR.AV_thm th
@@ -817,7 +836,7 @@ module Proof = struct
               (fun k->k"unbound proof step `%a`@ at %a" ID.pp s Loc.pp loc)
         end
     in
-    run_pr {e_th=ID.Map.empty;} self
+    run_pr {e_th=ID.Map.empty; e_subst=ID.Map.empty} self
 end
 
 module Goal = struct
@@ -894,11 +913,13 @@ module Ty_infer = struct
             Expr.pp e Loc.pp loc Expr.pp ty
             Expr.pp_unif_trace_ st)
 
-  let infer_expr_full_ ~loc ~bv:bv0
+  type binding = BV of bvar | V of var
+
+  let infer_expr_full_ ~bv:bv0
       (env:env) (vars:A.var list) (e0:AE.t) : bvar list * expr =
     (* type inference.
        @param bv the local variables, for scoping *)
-    let rec inf_rec_ (bv:expr Str_map.t) (e:AE.t) : expr =
+    let rec inf_rec_ (bv:binding Str_map.t) (e:AE.t) : expr =
       let loc = AE.loc e in
       Log.debugf 7 (fun k->k"infer-rec loc=%a e=`%a`" Loc.pp loc AE.pp e);
       let unif_exn_ a b = unif_exn_ ~loc e a b in
@@ -910,12 +931,16 @@ module Ty_infer = struct
             CCList.fold_map
               (fun bv v ->
                  let v' = infer_bvar_ ~default:Expr.type_ bv v in
-                 Str_map.add v.A.v_name (Expr.bvar ~loc v') bv, v')
+                 Str_map.add v.A.v_name (BV v') bv, v')
               bv vars
           in
           Expr.ty_pi_l ~loc vars @@ inf_rec_ bv body
         | A.Var v when Str_map.mem v.A.v_name bv ->
-          Str_map.find v.A.v_name bv (* bound variable *)
+          (* use variable in scope, but change location of the expression *)
+          begin match Str_map.find v.A.v_name bv with
+            | BV bv -> Expr.bvar ~loc bv (* bound variable *)
+            | V v -> Expr.var ~loc v
+          end
         | A.Var v ->
           let v =
             match Str_map.find v.A.v_name env.fvars with
@@ -970,8 +995,8 @@ module Ty_infer = struct
             List.fold_left
               (fun bv v ->
                  let ty = infer_ty_opt_ ~loc ~default:Expr.type_ bv v.A.v_ty in
-                 let var = Expr.var ~loc (Var.make v.A.v_name ty) in
-                 Str_map.add v.A.v_name var bv)
+                 let var = Var.make v.A.v_name ty in
+                 Str_map.add v.A.v_name (V var) bv)
               bv vs
           in
           inf_rec_ bv bod
@@ -980,7 +1005,7 @@ module Ty_infer = struct
             CCList.fold_map
               (fun bv v ->
                  let v' = infer_bvar_ bv v in
-                 Str_map.add v.A.v_name (Expr.bvar ~loc v') bv, v')
+                 Str_map.add v.A.v_name (BV v') bv, v')
               bv vars
           in
           let bod = inf_rec_ bv bod in
@@ -991,7 +1016,7 @@ module Ty_infer = struct
             CCList.fold_map
               (fun bv v ->
                  let v' = infer_bvar_ bv v in
-                 Str_map.add v.A.v_name (Expr.bvar ~loc v') bv, v')
+                 Str_map.add v.A.v_name (BV v') bv, v')
               bv vars
           in
           let body = inf_rec_ bv body in
@@ -1008,7 +1033,7 @@ module Ty_infer = struct
                  let v' = infer_bvar_ bv v in
                  let t = inf_rec_ bv t in
                  unif_exn_ v'.bv_ty (Expr.ty t);
-                 let bv' = Str_map.add v.A.v_name (Expr.bvar ~loc v') bv' in
+                 let bv' = Str_map.add v.A.v_name (BV v') bv' in
                  bv', (v', t))
               bv bindings
           in
@@ -1056,17 +1081,17 @@ module Ty_infer = struct
       CCList.fold_map
         (fun bv v ->
            let v' = infer_bvar_ bv v in
-           Str_map.add v.A.v_name (Expr.bvar ~loc v') bv, v')
+           Str_map.add v.A.v_name (BV v') bv, v')
         bv0 vars
     in
     let e = inf_rec_ bv e0 in
     vars, e
 
-  let infer_expr_vars ~loc env vars e0 : bvar list * expr =
-    infer_expr_full_ ~loc ~bv:Str_map.empty env vars e0
+  let infer_expr_vars env vars e0 : bvar list * expr =
+    infer_expr_full_ ~bv:Str_map.empty env vars e0
 
   let infer_expr (env:env) (e0:AE.t) : expr =
-    let _, e = infer_expr_vars ~loc:(AE.loc e0) env [] e0 in
+    let _, e = infer_expr_vars env [] e0 in
     e
 
   let infer_expr_with_ty env e0 ty : expr =
@@ -1103,7 +1128,7 @@ module Ty_infer = struct
     x
 
   type pr_env = {
-    e_expr: expr Str_map.t;
+    e_expr: binding Str_map.t;
     e_step: ID.t Str_map.t;
   }
 
@@ -1118,15 +1143,16 @@ module Ty_infer = struct
         (* convert let-steps, inline let-expr bindings *)
         let pr_env = ref pr_env in
         let lets =
-          CCList.filter_map
+          CCList.map
             (function
               | A.Proof.Let_expr (name,e) ->
-                let _, e = infer_expr_full_ ~loc ~bv:(!pr_env).e_expr env [] e in
+                let _, e = infer_expr_full_ ~bv:(!pr_env).e_expr env [] e in
+                let bv = BVar.make ~loc:e.loc (ID.make name) (Expr.ty e) in
                 pr_env := {
                   (!pr_env) with
-                  e_expr=Str_map.add name e (!pr_env).e_expr;
+                  e_expr=Str_map.add name (BV bv) (!pr_env).e_expr;
                 };
-                None
+                Proof.Let_expr (bv, e)
               | A.Proof.Let_step (name,s) ->
                 let name_id = ID.make name in
                 let s = infer_step !pr_env s in
@@ -1134,7 +1160,7 @@ module Ty_infer = struct
                   (!pr_env) with
                   e_step=Str_map.add name name_id (!pr_env).e_step;
                 };
-                Some (name_id, s))
+                Proof.Let_step (name_id, s))
             lets
         in
         let ret = infer_step !pr_env ret in
@@ -1164,7 +1190,8 @@ module Ty_infer = struct
             Str_map.get s pr_env.e_expr,
             Str_map.get s pr_env.e_step
           with
-          | Some e, _ -> Proof.Arg_expr e
+          | Some (BV bv), _ -> Proof.Arg_expr (Expr.bvar ~loc bv)
+          | Some (V v), _ -> Proof.Arg_expr (Expr.var ~loc v)
           | None, Some id -> Proof.Arg_var_step id
           | None, None ->
             begin match Env.find_thm env s with
@@ -1178,7 +1205,7 @@ module Ty_infer = struct
         let s = infer_step pr_env s in
         Proof.Arg_step s
       | A.Proof.Arg_expr e ->
-        let _, e = infer_expr_full_ ~loc ~bv:pr_env.e_expr env [] e in
+        let _, e = infer_expr_full_ ~bv:pr_env.e_expr env [] e in
         Proof.Arg_expr e
       | A.Proof.Arg_subst _s ->
         errorf (fun k->k"TODO: convert subst")
@@ -1227,7 +1254,7 @@ module Process_stmt = struct
 
   let top_def_ ~loc self name th_name vars ret body : ty * expr =
     (* turn [def f x y := bod] into [def f := \x y. bod] *)
-    let vars, e = Ty_infer.infer_expr_vars ~loc self.env vars body in
+    let vars, e = Ty_infer.infer_expr_vars self.env vars body in
     let def_rhs = Expr.lambda_l ~loc vars e in
     let ty_rhs = Expr.ty def_rhs in
     (* now ensure that [f vars : ret] *)

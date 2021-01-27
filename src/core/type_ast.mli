@@ -72,7 +72,10 @@ module Expr : sig
   include PP with type t := expr
   include Queryable.S with type t := t
 
-  val to_k_expr : K.Ctx.t -> expr -> K.Expr.t
+  val to_k_expr :
+    ?subst:K.Expr.t ID.Map.t ->
+    K.Ctx.t ->
+    expr -> K.Expr.t
   val loc : t -> location
 end
 
@@ -81,7 +84,9 @@ module Subst : sig
   type t = subst
   include PP with type t := t
 
-  val to_k_subst : K.Ctx.t -> t -> K.Subst.t
+  val to_k_subst :
+    ?subst:K.Expr.t ID.Map.t ->
+    K.Ctx.t -> t -> K.Subst.t
 end
 
 (** {2 Typing Environment}
@@ -119,7 +124,9 @@ module Proof : sig
       }
 
   (** named steps *)
-  and pr_let = ID.t * step
+  and pr_let =
+    | Let_expr of bvar * expr
+    | Let_step of ID.t * step
 
   and step_view =
     | Pr_apply_rule of Proof.Rule.t * rule_arg list

@@ -3,7 +3,7 @@ def T : bool by DefTrue :=
   let f := (\x: bool. x) in f = f
 end
 
-show expr
-  (T = T) = T
-end
+#show expr
+#  (T = T) = T
+#end
 
