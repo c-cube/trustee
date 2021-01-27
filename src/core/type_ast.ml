@@ -1337,17 +1337,17 @@ module Process_stmt = struct
       false, goal
     )
 
-  let top_thm_ ~loc self name goal proof : bool * Goal.t =
-    let goal, kgoal, _pr, th = top_proof_ self goal proof in
+  let top_thm_ ~loc self name goal proof : bool * Goal.t * Proof.t =
+    let goal, kgoal, pr, th = top_proof_ self goal proof in
     if K.Thm.is_proof_of th kgoal then (
       Env.define_thm self.env name th;
-      true, goal
+      true, goal, pr
     ) else (
       self.on_error loc
         (fun out() ->
            Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
              K.Thm.pp th K.Goal.pp kgoal);
-      false, goal
+      false, goal, pr
     )
 
   let top_ (self:t) st ~index (idx:Index.t) : Index.t =
@@ -1386,8 +1386,13 @@ module Process_stmt = struct
           let ok, goal = top_goal_ ~loc self goal proof in
           ok, Index.add_cond ~index (Goal.as_queryable goal) idx
         | A.Top_theorem { name; goal; proof } ->
-          let ok, goal = top_thm_ ~loc self name goal proof in
-          ok, Index.add_cond ~index (Goal.as_queryable goal) idx
+          let ok, goal, proof = top_thm_ ~loc self name goal proof in
+          let idx =
+            idx
+            |> Index.add_cond ~index (Goal.as_queryable goal)
+            |> Index.add_cond ~index (Proof.as_queryable proof)
+          in
+          ok, idx
         | A.Top_show s ->
           (* TODO: add to index *)
           top_show_ self ~loc s, idx
