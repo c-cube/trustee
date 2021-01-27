@@ -219,12 +219,12 @@ module Proof = struct
       }
 
   and pr_let =
-    | Let_expr of string * expr
-    | Let_step of string * step
+    | Let_expr of string with_loc * expr
+    | Let_step of string with_loc * step
 
   and step = step_view with_loc
   and step_view =
-    | Pr_apply_rule of string * rule_arg list
+    | Pr_apply_rule of string with_loc * rule_arg list
     | Pr_sub_proof of t
     | Pr_error of unit Fmt.printer (* parse error *)
 
@@ -250,17 +250,17 @@ module Proof = struct
   and pp_pr_let out l =
     match l with
     | Let_expr (s,e) ->
-      Fmt.fprintf out "@[<2>let expr %s =@ %a in@]" s Expr.pp e
+      Fmt.fprintf out "@[<2>let expr %s =@ %a in@]" s.view Expr.pp e
     | Let_step (s,p) ->
       Fmt.fprintf out "@[<2>let %s =@ %a in@]"
-        s (pp_step ~top:true) p
+        s.view (pp_step ~top:true) p
 
   and pp_step ~top out (s:step) : unit =
     match s.view with
-    | Pr_apply_rule (r, []) when top -> Fmt.string out r
+    | Pr_apply_rule (r, []) when top -> Fmt.string out r.view
     | Pr_apply_rule (r, args) ->
       if not top then Fmt.char out '(';
-      Fmt.fprintf out "@[<hv2>%s@ %a@]" r (pp_list pp_rule_arg) args;
+      Fmt.fprintf out "@[<hv2>%s@ %a@]" r.view (pp_list pp_rule_arg) args;
       if not top then Fmt.char out ')';
     | Pr_sub_proof p -> pp out p
     | Pr_error e -> Fmt.fprintf out "<@[error:@ %a@]>" e ()

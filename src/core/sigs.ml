@@ -50,6 +50,8 @@ let errorf ?src k : 'a =
   in
   raise (Trustee_error.E{pp; src})
 
+type 'a or_error = ('a, Trustee_error.t) result
+
 let () =
   Printexc.register_printer
     (function

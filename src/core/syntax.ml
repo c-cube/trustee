@@ -66,20 +66,23 @@ module Lexer = struct
     file: string;
     mutable i: int;
     mutable line: int;
-    mutable col: int;
+    mutable bol: int; (* offset of beginning of line. col=i=bol *)
     mutable start: Position.t;
     mutable st: state;
     mutable cur: token;
   }
 
+  let[@inline] col self : int = 1 + self.i - self.bol
+
   let[@inline] loc self : location =
+    let col = col self in
     {Loc.start=self.start;
      file=self.file;
-     end_={Position.line=self.line; col=self.col};
+     end_={Position.line=self.line; col};
     }
 
   let create ?(file="") src : t =
-    { src; i=0; line=1; col=1; file; st=Read_next; start=Position.none; cur=EOF }
+    { src; i=0; line=1; bol=0; file; st=Read_next; start=Position.none; cur=EOF }
 
   (* skip rest of line *)
   let rest_of_line self : unit =
@@ -91,7 +94,7 @@ module Lexer = struct
       assert (String.get self.src self.i = '\n');
       self.i <- 1 + self.i;
     );
-    self.col <- 1;
+    self.bol <- self.i;
     self.line <- 1 + self.line
 
   let is_alpha = function
@@ -126,17 +129,16 @@ module Lexer = struct
           rest_of_line self;
         ) else if c = ' ' || c = '\t' then (
           self.i <- 1 + self.i;
-          self.col <- 1 + self.col;
         ) else if c = '\n' then (
           self.i <- 1 + self.i;
-          self.col <- 1;
+          self.bol <- self.i;
           self.line <- 1 + self.line;
         ) else (
           inw := false
         );
       done;
     end;
-    let start = {Position.line=self.line; col=self.col} in
+    let start = {Position.line=self.line; col=col self} in
     self.start <- start;
     if self.i >= String.length self.src then (
       self.st <- Done;
@@ -144,21 +146,20 @@ module Lexer = struct
     ) else (
       let c = String.get self.src self.i in
       match c with
-      | '(' -> self.i <- 1 + self.i; self.col <- self.col + 1; LPAREN
-      | ')' -> self.i <- 1 + self.i; self.col <- self.col + 1; RPAREN
+      | '(' -> self.i <- 1 + self.i; LPAREN
+      | ')' -> self.i <- 1 + self.i; RPAREN
       | ':' ->
-        self.i <- 1 + self.i; self.col <- self.col + 1;
+        self.i <- 1 + self.i;
         if self.i < String.length self.src && String.get self.src self.i = '=' then (
-          self.i <- 1 + self.i; self.col <- self.col + 1;
+          self.i <- 1 + self.i;
           EQDEF
         ) else (
           COLON
         )
-      | '.' -> self.i <- 1 + self.i; self.col <- self.col + 1; DOT
-      | '_' -> self.i <- 1 + self.i; self.col <- self.col + 1; WILDCARD
+      | '.' -> self.i <- 1 + self.i; DOT
+      | '_' -> self.i <- 1 + self.i; WILDCARD
       | '?' ->
         self.i <- 1 + self.i;
-        self.col <- 1 + self.col;
         let i0 = self.i in
         let j =
           read_many
@@ -168,13 +169,11 @@ module Lexer = struct
           QUESTION_MARK
         ) else (
           self.i <- j;
-          self.col <- (j-i0) + self.col;
           QUESTION_MARK_STR (String.sub self.src i0 (j-i0))
         )
       | '@' ->
         (* operator but without any precedence *)
         self.i <- 1 + self.i;
-        self.col <- 1 + self.col;
         let i0 = self.i in
         let j =
           read_many
@@ -184,20 +183,17 @@ module Lexer = struct
           errorf (fun k->k"empty '@'")
         ) else (
           self.i <- j;
-          self.col <- (j-i0) + self.col;
           let s = String.sub self.src i0 (j-i0) in
           AT_SYM s
         )
       | '"' ->
         self.i <- 1 + self.i;
-        self.col <- 1 + self.col;
         let i0 = self.i in
         let j =
           read_many self (fun c -> c <> '"') self.i
         in
         if j < String.length self.src && String.get self.src j = '"' then (
           self.i <- j + 1;
-          self.col <- (j-i0) + self.col;
           QUOTED_STR (String.sub self.src i0 (j-i0))
         ) else (
           errorf (fun k->k"unterminated '\"' string")
@@ -207,7 +203,6 @@ module Lexer = struct
         let j = read_many
             self (fun c -> is_alpha c || is_digit c || c =='_') self.i in
         self.i <- j;
-        self.col <- (j-i0) + self.col;
         let s = String.sub self.src i0 (j-i0) in
         begin match s with
           | "let" -> LET
@@ -221,7 +216,6 @@ module Lexer = struct
         let i0 = self.i in
         let j = read_many self (fun c -> is_digit c) self.i in
         self.i <- j;
-        self.col <- (j-i0) + self.col;
         let s = String.sub self.src i0 (j-i0) in
         NUM s
       | c when is_symbol c ->
@@ -229,7 +223,6 @@ module Lexer = struct
         self.i <- 1 + self.i;
         let j = read_many self (fun c -> is_symbol c || c=='_') self.i in
         self.i <- j;
-        self.col <- (j-i0) + self.col;
         let s = String.sub self.src i0 (j-i0) in
         SYM s
       | _ -> ERROR c
@@ -642,15 +635,15 @@ end = struct
 
   (* TODO: error recovery (until "in" or "end") for steps *)
   let rec p_step self : A.Proof.step =
-    let p_start_r ~loc (r:string) =
+    let p_start_r ~loc (r:string A.with_loc) =
       let loc = ref loc in
-      match A.Env.find_rule self.env r with
+      match A.Env.find_rule self.env r.view with
       | None ->
         errorf
           (fun k->k"unknown rule '%s'@ while parsing a proof step@ at %a"
-              r Loc.pp !loc)
+              r.view Loc.pp r.loc)
       | Some sgn ->
-        Log.debugf 5 (fun k->k"rule `%s` has signature %a" r
+        Log.debugf 5 (fun k->k"rule `%s` has signature %a" r.view
                          Rule.pp_signature sgn);
         let args =
           List.map
@@ -695,15 +688,17 @@ end = struct
           A.Proof.step_subproof ~loc:(!loc ++ A.Proof.loc p) p
         | LPAREN ->
           Lexer.junk self.lex;
-          let loc = !loc ++ Lexer.loc self.lex in
+          let locr = Lexer.loc self.lex in
+          let loc = !loc ++ locr in
           let r = P_expr.p_ident self in
-          let s = p_start_r ~loc r in
+          let s = p_start_r ~loc {loc=locr; view=r} in
           eat_eq self RPAREN ~msg:"expect `)` to close the step";
           s
         | SYM r ->
-          let loc = !loc ++ Lexer.loc self.lex in
+          let r_loc = Lexer.loc self.lex in
+          let loc = !loc ++ r_loc in
           Lexer.junk self.lex;
-          p_start_r ~loc r
+          p_start_r ~loc {loc=r_loc; view=r}
         | _ ->
           errorf (fun k->k"expected to parse a proof step@ at %a" Loc.pp !loc)
       end
@@ -717,16 +712,18 @@ end = struct
       let let_ =
         match Lexer.cur self.lex with
         | SYM "expr" ->
+          let loc = Lexer.loc self.lex in
           Lexer.junk self.lex;
           let name = P_expr.p_ident self in
           eat_eq self EQDEF ~msg:"expect `:=` after the name of the step";
           let e = P_expr.expr self in
-          A.Proof.let_expr name e
+          A.Proof.let_expr {loc;view=name} e
         | _ ->
+          let l_name = Lexer.loc self.lex in
           let name = P_expr.p_ident self in
           eat_eq self EQDEF ~msg:"expect `:=` after the name of the step";
           let s = p_step self in
-          A.Proof.let_step name s
+          A.Proof.let_step {view=name;loc=l_name} s
       in
       Log.debugf 5 (fun k->k"parsed pr-let %a" A.Proof.pp_pr_let let_);
       eat_eq self IN ~msg:"expect `in` after a `let`-defined proof step";

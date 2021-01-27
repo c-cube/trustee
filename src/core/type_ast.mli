@@ -129,7 +129,7 @@ module Proof : sig
     | Let_step of ID.t * step
 
   and step_view =
-    | Pr_apply_rule of Proof.Rule.t * rule_arg list
+    | Pr_apply_rule of Proof.Rule.t A.with_loc * rule_arg list
     | Pr_sub_proof of t
     | Pr_error of unit Fmt.printer (* parse error *)
 
@@ -150,7 +150,9 @@ module Proof : sig
   val pp_rule_signature : rule_signature Fmt.printer
 
   (** Run the proof to get a kernel theorem (or a failure) *)
-  val run : K.Ctx.t -> t -> K.Thm.t
+  val run : K.Ctx.t -> t -> K.Thm.t or_error
+
+  val run_exn : K.Ctx.t -> t -> K.Thm.t
 end
 
 module Goal : sig

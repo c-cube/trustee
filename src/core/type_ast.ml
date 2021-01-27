@@ -549,7 +549,7 @@ module Expr = struct
     method pp out () = Fmt.fprintf out "@[<hv>expr: %a@ type: %a@]" pp e pp (ty e)
     method! children yield =
       let yield_e e = yield (as_queryable e) in
-      let yield_bv v = yield (BVar.as_queryable v) in
+      let yield_bv v = yield (BVar.as_queryable v); yield (as_queryable v.bv_ty) in
       begin match view e with
         | Kind | Type | Bool | Const _ | Meta _ | Var _ | BVar _ -> ()
         | Ty_arrow (a, b) | Eq (a,b) | App (a,b) -> yield_e a; yield_e b
@@ -679,19 +679,24 @@ module Proof = struct
     | Let_expr of bvar * expr
     | Let_step of ID.t * step
 
+  (* FIXME: each step must be annotated with its kernel theorem! *)
   and step = {
     s_loc: location;
     s_view: step_view;
+    (* TODO
+     mutable s_thm: K.Thm.t option
+     *)
   }
 
+  (* TODO: put a loc on each rule and rule_arg, so we can query them *)
   and step_view =
-    | Pr_apply_rule of Proof.Rule.t * rule_arg list
+    | Pr_apply_rule of Proof.Rule.t A.with_loc * rule_arg list
     | Pr_sub_proof of t
     | Pr_error of unit Fmt.printer (* parse error *)
 
   (** An argument to a rule *)
   and rule_arg =
-    | Arg_var_step of ID.t
+    | Arg_var_step of ID.t (* TODO: location? notion of "proof bvar"? *)
     | Arg_step of step
     | Arg_thm of K.Thm.t
     | Arg_expr of expr
@@ -721,10 +726,10 @@ module Proof = struct
 
   and pp_step ~top out (s:step) : unit =
     match s.s_view with
-    | Pr_apply_rule (r, []) when top -> R.pp out r
+    | Pr_apply_rule (r, []) when top -> R.pp out r.view
     | Pr_apply_rule (r, args) ->
       if not top then Fmt.char out '(';
-      Fmt.fprintf out "@[<hv2>%a@ %a@]" R.pp r (pp_list pp_rule_arg) args;
+      Fmt.fprintf out "@[<hv2>%a@ %a@]" R.pp r.view (pp_list pp_rule_arg) args;
       if not top then Fmt.char out ')';
     | Pr_sub_proof p -> pp out p
     | Pr_error e -> Fmt.fprintf out "<@[error:@ %a@]>" e ()
@@ -741,24 +746,42 @@ module Proof = struct
     inherit Queryable.t
     method pp out () = pp out self
     method loc = self.loc
-    method! children = assert false
+    method! children =
+      match self.view with
+      | Proof_atom a -> Iter.return (step_q a)
+      | Proof_steps {lets; ret} ->
+        Iter.cons (step_q ret)
+          (Iter.of_list lets |> Iter.flat_map let_as_q)
   end
   and step_q (self:step) : Queryable.t = object
     inherit Queryable.t
     method pp out () = pp_step ~top:true out self
     method loc = self.s_loc
     method! children = match self.s_view with
-      | Pr_apply_rule (_, l) ->
-        Iter.of_list l
-        |> Iter.filter_map arg_q
+      | Pr_apply_rule (r, l) ->
+        Iter.cons (rule_as_q r)
+          (Iter.of_list l |> Iter.filter_map arg_q)
       | Pr_sub_proof p -> Iter.return (as_queryable p)
       | Pr_error _ -> Iter.empty
+  end
+  and rule_as_q (r:R.t A.with_loc) : Queryable.t = object
+    inherit Queryable.t
+    method loc = r.loc
+    method pp out () =
+      (* TODO: inline doc for each rule *)
+      Fmt.fprintf out "@[<v>rule %a.@ @[<hv>signature:@ %a@]@]" R.pp r.view
+        R.pp_signature (R.signature r.view)
   end
   and arg_q (self:rule_arg) : Queryable.t option =
     match self with
     | Arg_step s -> Some (step_q s)
     | Arg_expr e -> Some (Expr.as_queryable e)
     | Arg_subst _ | Arg_var_step _ | Arg_thm _ -> None
+  and let_as_q (l:pr_let) : Queryable.t Iter.t =
+    match l with
+    | Let_expr (v, e) ->
+      Iter.of_list [BVar.as_queryable v; Expr.as_queryable e]
+    | Let_step (_, s) -> Iter.return (step_q s)
 
   let to_string = Fmt.to_string pp
   let pp_rule_signature = R.pp_signature
@@ -777,7 +800,7 @@ module Proof = struct
   }
 
   (* how to run a proof, and obtain a theorem at the end *)
-  let run (ctx:K.Ctx.t) (self:t) : K.Thm.t =
+  let run_exn (ctx:K.Ctx.t) (self:t) : K.Thm.t =
     let module KR = KProof.Rule in
     let rec run_pr (env:env) (p:t) =
       let loc = p.loc in
@@ -811,8 +834,8 @@ module Proof = struct
           let args = List.map (conv_arg ~loc env) args in
           Log.debugf 10
             (fun k->k"apply rule %a@ to args %a"
-                KR.pp r (Fmt.Dump.list KR.pp_arg_val) args);
-          KR.apply ctx r args
+                KR.pp r.view (Fmt.Dump.list KR.pp_arg_val) args);
+          KR.apply ctx r.view args
       with e ->
         errorf ~src:e
           (fun k->k"@[<2>while checking proof step@ at %a@]"
@@ -837,6 +860,10 @@ module Proof = struct
         end
     in
     run_pr {e_th=ID.Map.empty; e_subst=ID.Map.empty} self
+
+  let run ctx (self:t) : K.Thm.t or_error =
+    try Ok (run_exn ctx self)
+    with Trustee_error.E e -> Error e
 end
 
 module Goal = struct
@@ -1147,19 +1174,20 @@ module Ty_infer = struct
             (function
               | A.Proof.Let_expr (name,e) ->
                 let _, e = infer_expr_full_ ~bv:(!pr_env).e_expr env [] e in
-                let bv = BVar.make ~loc:e.loc (ID.make name) (Expr.ty e) in
+                let bv = BVar.make ~loc:name.loc (ID.make name.view) (Expr.ty e) in
                 pr_env := {
                   (!pr_env) with
-                  e_expr=Str_map.add name (BV bv) (!pr_env).e_expr;
+                  e_expr=Str_map.add name.view (BV bv) (!pr_env).e_expr;
                 };
                 Proof.Let_expr (bv, e)
               | A.Proof.Let_step (name,s) ->
-                let name_id = ID.make name in
+                let name_id = ID.make name.view in
                 let s = infer_step !pr_env s in
                 pr_env := {
                   (!pr_env) with
-                  e_step=Str_map.add name name_id (!pr_env).e_step;
+                  e_step=Str_map.add name.view name_id (!pr_env).e_step;
                 };
+                (* TODO:store loc for name_id? *)
                 Proof.Let_step (name_id, s))
             lets
         in
@@ -1172,13 +1200,14 @@ module Ty_infer = struct
       | A.Proof.Pr_error e ->
         Proof.mk_step ~loc (Proof.Pr_error e)
       | A.Proof.Pr_apply_rule (r, args) ->
-        let r = match Env.find_rule env r with
+        let r_loc = r.loc in
+        let r = match Env.find_rule env r.view with
           | None ->
-            errorf (fun k->k"unknown rule '%s'@ at %a" r Loc.pp loc)
+            errorf (fun k->k"unknown rule '%s'@ at %a" r.view Loc.pp loc)
           | Some r -> r
         in
         let args = List.map (conv_arg ~loc pr_env) args in
-        Proof.mk_step ~loc (Proof.Pr_apply_rule (r, args))
+        Proof.mk_step ~loc (Proof.Pr_apply_rule ({view=r;loc=r_loc}, args))
       | A.Proof.Pr_sub_proof p ->
         let p = infer_proof pr_env p in
         Proof.mk_step ~loc (Proof.Pr_sub_proof p)
@@ -1311,44 +1340,60 @@ module Process_stmt = struct
     Env.define_thm self.env name th;
     e
 
-  let top_proof_ self goal proof : Goal.t * K.Goal.t * Proof.t * K.Thm.t =
-    let goal, kgoal = Ty_infer.infer_goal self.env goal in
-    Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp kgoal);
+  let top_proof_ self proof : Proof.t * K.Thm.t or_error =
     (* convert proof *)
     let pr =
       Ty_infer.infer_proof self.env proof
     in
     Log.debugf 10 (fun k->k"typed proof:@ %a" Proof.pp pr);
     let th = Proof.run self.env.ctx pr in
-    goal, kgoal, pr, th
+    pr, th
 
   let top_goal_ ~loc self goal proof : bool * Goal.t =
-    let goal, kgoal, _pr, th = top_proof_ self goal proof in
-    if K.Thm.is_proof_of th kgoal then (
-      self.on_show loc
-        (fun out() ->
-           Fmt.fprintf out "@[<2>goal proved@ with theorem `@[%a@]`@]" K.Thm.pp th);
-      true, goal
-    ) else (
-      self.on_error loc
-        (fun out() ->
-           Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
-             K.Thm.pp th K.Goal.pp kgoal);
-      false, goal
-    )
+    let goal, kgoal = Ty_infer.infer_goal self.env goal in
+    Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp kgoal);
+    let _pr, th = top_proof_ self proof in
+    begin match th with
+      | Ok th when K.Thm.is_proof_of th kgoal ->
+        self.on_show loc
+          (fun out() ->
+             Fmt.fprintf out "@[<2>goal proved@ with theorem `@[%a@]`@]" K.Thm.pp th);
+        true, goal
+      | Ok th ->
+        self.on_error loc
+          (fun out() ->
+             Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
+               K.Thm.pp th K.Goal.pp kgoal);
+        false, goal
+      | Error e ->
+        self.on_error loc
+          (fun out() ->
+             Fmt.fprintf out "@[<2>proof is not valid@ %a@]"
+               Trustee_error.pp e);
+        false, goal
+    end
 
   let top_thm_ ~loc self name goal proof : bool * Goal.t * Proof.t =
-    let goal, kgoal, pr, th = top_proof_ self goal proof in
-    if K.Thm.is_proof_of th kgoal then (
-      Env.define_thm self.env name th;
-      true, goal, pr
-    ) else (
-      self.on_error loc
-        (fun out() ->
-           Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
-             K.Thm.pp th K.Goal.pp kgoal);
-      false, goal, pr
-    )
+    let goal, kgoal = Ty_infer.infer_goal self.env goal in
+    Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp kgoal);
+    let pr, th = top_proof_ self proof in
+    begin match th with
+      | Ok th when K.Thm.is_proof_of th kgoal ->
+        Env.define_thm self.env name th;
+        true, goal, pr
+      | Ok th ->
+        self.on_error loc
+          (fun out() ->
+             Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
+               K.Thm.pp th K.Goal.pp kgoal);
+        false, goal, pr
+      | Error e ->
+        self.on_error loc
+          (fun out() ->
+             Fmt.fprintf out "@[<2>proof@ is invalid:@ %a@]"
+               Trustee_error.pp e);
+        false, goal, pr
+    end
 
   let top_ (self:t) st ~index (idx:Index.t) : Index.t =
     Log.debugf 2 (fun k->k"(@[TA.process-stmt@ %a@])" A.Top_stmt.pp st);
@@ -1403,11 +1448,19 @@ module Process_stmt = struct
                 Expr.pp e K.Expr.pp (Expr.to_k_expr self.env.ctx e));
           let idx = Index.add_cond ~index (Expr.as_queryable e) idx in
           true, idx
-        | A.Top_show_proof _ ->
-          (* TODO
-          let idx = Index.add_cond ~index (Expr.as_queryable e) idx in
-             *)
-          error "TODO" (* TODO *)
+        | A.Top_show_proof proof ->
+          let proof, th = top_proof_ self proof in
+          let idx = Index.add_cond ~index (Proof.as_queryable proof) idx in
+          begin match th with
+            | Ok th ->
+              self.on_show loc
+                (fun out () ->
+                   Fmt.fprintf out "@[<hv>result:@ %a@]" K.Thm.pp th);
+              true, idx
+            | Error e ->
+              self.on_error loc e.pp;
+              false, idx
+          end
         | A.Top_error { msg } ->
           self.on_error loc msg;
           false, idx

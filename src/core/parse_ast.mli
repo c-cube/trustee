@@ -141,12 +141,12 @@ module Proof : sig
       }
 
   and pr_let =
-    | Let_expr of string * expr
-    | Let_step of string * step
+    | Let_expr of string with_loc * expr
+    | Let_step of string with_loc * step
 
   and step = step_view with_loc
   and step_view =
-    | Pr_apply_rule of string * rule_arg list
+    | Pr_apply_rule of string with_loc * rule_arg list
     | Pr_sub_proof of t
     | Pr_error of unit Fmt.printer (* parse error *)
 
@@ -171,10 +171,10 @@ module Proof : sig
   val s_loc : step -> location
 
   val make : loc:location -> pr_let list -> step -> t
-  val let_expr : string -> expr -> pr_let
-  val let_step : string -> step -> pr_let
+  val let_expr : string with_loc -> expr -> pr_let
+  val let_step : string with_loc -> step -> pr_let
 
-  val step_apply_rule : loc:location -> string -> rule_arg list -> step
+  val step_apply_rule : loc:location -> string with_loc -> rule_arg list -> step
   val step_subproof : loc:location -> t -> step
   val step_error : loc:location -> unit Fmt.printer -> step
 
