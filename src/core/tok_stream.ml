@@ -24,8 +24,9 @@ let junk self =
   )
 
 let next self =
+  let r = cur self in
   junk self;
-  self.cur, self.loc
+  r
 
 let to_list self : _ list =
   let l = ref [] in

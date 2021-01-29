@@ -4,10 +4,13 @@ def T : bool by DefTrue :=
 end
 
 show
-  proof refl T end
+  proof
+    let expr e := T in
+    refl e
+  end
 end
 
-#show expr
-#  (T = T) = T
-#end
+show expr
+  (T = T) = T
+end
 

@@ -63,7 +63,7 @@ module Lexer : sig
   module S = Tok_stream
   val create : file:string -> string -> t
 end = struct
-  type state = Read_next | Has_cur | Done
+  type state = Read_next | Done
 
   type st = {
     src: string;
@@ -240,15 +240,14 @@ end = struct
         with e ->
           errorf ~src:e (fun k->k "at %a" Loc.pp (loc self))
       in
-      self.st <- Has_cur;
       Log.debugf 2 (fun k->k"TOK.next %a at %a" Token.pp t Loc.pp (loc self));
       t, loc self, self.st == Done
     )
 
   let create ~file src : _ Tok_stream.t =
     let self = {
-      src; i=0; line=1; bol=0; file; st=Read_next; start=Position.none; }
-    in
+      src; i=0; line=1; bol=0; file; st=Read_next; start=Position.none
+    } in
     Tok_stream.create ~next:(next self) ()
 end
 
@@ -1040,12 +1039,7 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
   module Fmt = CCFormat
   let lex_to_list s =
     let lex = Lexer.create ~file:"" s in
-    let rec aux acc =
-      match Lexer.S.next lex with
-      | EOF as t, _ -> List.rev (t::acc)
-      | t, _ -> aux (t::acc)
-    in
-    aux []
+    Lexer.S.to_list lex
 
   let str_tok_to_l = Fmt.(to_string @@ Dump.list Token.pp)
 *)
