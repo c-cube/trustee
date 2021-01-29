@@ -14,6 +14,9 @@ class virtual t = object
 
   method virtual pp : unit Fmt.printer
   (** Print the object in a user-readable way. *)
+
+  method def_loc : Loc.t option = None
+  (** Location of the definition of this object, if any. *)
 end
 type queryable = t
 

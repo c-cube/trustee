@@ -10,6 +10,7 @@ type const
 type thm
 
 type fixity = Fixity.t
+type location = Loc.t
 
 type var = {
   v_name: string;
@@ -25,6 +26,7 @@ module Const : sig
   type t = const
   val fixity : t -> fixity
   val set_fixity : t -> fixity -> unit
+  val def_loc : t -> location option
   val pp : t Fmt.printer
 end
 
@@ -98,8 +100,8 @@ module Expr : sig
   val eq : ctx -> t
   val var : ctx -> var -> t
   val const : ctx -> const -> t
-  val new_const : ctx -> string -> ty -> t
-  val new_ty_const : ctx -> string -> t
+  val new_const : ctx -> ?def_loc:location -> string -> ty -> t
+  val new_ty_const : ctx -> ?def_loc:location -> string -> t
   val var_name : ctx -> string -> ty -> t
   val bvar : ctx -> int -> ty -> t
   val app : ctx -> t -> t -> t
@@ -227,7 +229,9 @@ module Thm : sig
   (** `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
       Fails if the term is not a beta-redex. *)
 
-  val new_basic_definition : ctx -> expr -> t * expr
+  val new_basic_definition :
+    ctx -> ?def_loc:location ->
+    expr -> t * expr
   (** `new_basic_definition (x=t)` where `x` is a variable and `t` a term
       with a closed type,
       returns a theorem `|- x=t` where `x` is now a constant, along with

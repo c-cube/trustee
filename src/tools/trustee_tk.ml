@@ -21,7 +21,7 @@ module Cat = struct
       (fun file ->
          match CCIO.File.read file with
          | Ok s ->
-           let lex = Syntax.Lexer.create s in
+           let lex = Syntax.Lexer.create ~file s in
            let l = Syntax.parse_top_l_process ~file ~env lex in
            Fmt.printf "# file %S@." file;
            Fmt.printf "@[<v>%a@]@." (pp_list A.Top_stmt.pp) l

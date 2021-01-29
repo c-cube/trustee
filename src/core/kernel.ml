@@ -8,6 +8,7 @@ let ctx_id_bits = 5
 let ctx_id_mask = (1 lsl ctx_id_bits) - 1
 
 type fixity = Fixity.t
+type location = Loc.t
 
 type expr_view =
   | E_kind
@@ -41,6 +42,7 @@ and ty = expr
 and const = {
   c_name: ID.t;
   c_ty: ty;
+  c_def_loc: location option;
   mutable c_fixity: fixity;
 }
 
@@ -170,6 +172,7 @@ let[@inline] ctx_check_th_uid ctx (th:thm) = assert (ctx.ctx_uid == thm_ctx_uid 
 module Const = struct
   type t = const
   let pp out c = ID.pp out c.c_name
+  let def_loc c = c.c_def_loc
   let[@inline] fixity c = c.c_fixity
   let[@inline] set_fixity c f = c.c_fixity <- f
 end
@@ -315,15 +318,17 @@ module Expr = struct
     );
     make_ ctx (E_const c) (Lazy.from_val (Some c.c_ty))
 
-  let new_const ctx name ty : t =
+  let new_const ctx ?def_loc name ty : t =
     let id = ID.make name in
-    let c = {c_name=id; c_ty=ty; c_fixity=F_normal; } in
+    let c = {
+      c_name=id; c_ty=ty;
+      c_def_loc=def_loc; c_fixity=F_normal; } in
     let tc = const ctx c in
     Str_tbl.replace ctx.ctx_named_const name c;
     tc
 
-  let new_ty_const ctx name : ty =
-    new_const ctx name (type_ ctx)
+  let new_ty_const ctx ?def_loc name : ty =
+    new_const ctx name ?def_loc (type_ ctx)
 
   let bvar ctx i ty : t =
     assert (i>=0);
@@ -596,7 +601,7 @@ module Ctx = struct
       );
       ctx_bool_c=lazy (
         let typ = Expr.type_ ctx in
-        {c_name=id_bool; c_ty=typ; c_fixity=F_normal; }
+        {c_name=id_bool; c_ty=typ; c_def_loc=None; c_fixity=F_normal; }
       );
       ctx_bool=lazy (
         Expr.const ctx (Lazy.force ctx.ctx_bool_c)
@@ -607,7 +612,7 @@ module Ctx = struct
             let db0 = bvar ctx 0 type_ in
             pi_db ctx ~ty_v:type_ @@ arrow ctx db0 @@ arrow ctx db0 @@ bool ctx
           ) in
-        {c_name=id_eq; c_ty=typ; c_fixity=F_normal; }
+        {c_name=id_eq; c_ty=typ; c_def_loc=None; c_fixity=F_normal; }
       );
       ctx_eq=lazy (
         Expr.const ctx (Lazy.force ctx.ctx_eq_c)
@@ -821,7 +826,7 @@ module Thm = struct
     | _ ->
       errorf (fun k->k"not a redex: %a not an application" Expr.pp e)
 
-  let new_basic_definition ctx (e:expr) : t * expr =
+  let new_basic_definition ctx ?def_loc (e:expr) : t * expr =
     wrap_exn (fun k->k"@[<2>in new-basic-def `@[%a@]`@]" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.unfold_eq e with
@@ -839,7 +844,7 @@ module Thm = struct
         | _ ->
           errorf (fun k-> k "LHS must be a variable,@ but got %a" Expr.pp x)
       in
-      let c = Expr.new_const ctx (Var.name x_var) (Var.ty x_var) in
+      let c = Expr.new_const ctx ?def_loc (Var.name x_var) (Var.ty x_var) in
       let th = make_ ctx Expr.Set.empty (Expr.app_eq ctx c rhs) in
       th, c
 

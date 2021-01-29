@@ -12,7 +12,7 @@ type 'a m = 'a Task.m
 open Lsp.Types
 
 let lsp_pos_of_pos (p:T.Position.t) : Position.t =
-  Position.create ~line:(p.line-1) ~character:(p.col-1)
+  Position.create ~line:(p.line-1) ~character:(p.col+1)
 
 let pos_of_lsp_pos (p:Position.t) : T.Position.t =
   T.Position.make ~line:(p.line+1) ~col:(p.character+1)
@@ -40,8 +40,8 @@ class trustee_server =
       let penv = PA.Env.create _ctx in
       let stmts =
         T.Syntax.parse_top_l_process
-          ~file:(Filename.basename d) ~env:penv
-          (T.Syntax.Lexer.create content)
+          ~file:d ~env:penv
+          (T.Syntax.Lexer.create ~file:d content)
       in
       Log.debugf 3 (fun k->k "for %s: parsed %d statements" d (List.length stmts));
 
@@ -108,6 +108,30 @@ class trustee_server =
                 ~range:(lsp_range_of_loc q#loc) ()
             in
             Some r
+        in
+        Lwt.return r
+
+    method! on_req_definition ~uri ~pos _st : _ option Lwt.t =
+      match Hashtbl.find buffers uri with
+      | exception Not_found -> Lwt.return None
+      | {idx;_} ->
+        let pos = pos_of_lsp_pos pos in
+        Log.debugf 1
+          (fun k->k"lookup for def in idx (size %d) at pos %a"
+              (TA.Index.size idx) T.Position.pp pos);
+        let r =
+          match TA.Index.find idx pos with
+          | [] -> None
+          | q :: _ ->
+            match q#def_loc with
+            | None -> None
+            | Some loc ->
+              Log.debugf 5 (fun k->k"found def at %a" T.Loc.pp q#loc);
+              let loc =
+                Location.create ~uri:loc.T.Loc.file ~range:(lsp_range_of_loc loc) in
+              let r = `Location [loc] in
+              Log.debugf 5 (fun k->k"response: %a" Yojson.Safe.pp (Locations.yojson_of_t r));
+              Some r
         in
         Lwt.return r
   end

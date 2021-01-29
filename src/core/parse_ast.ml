@@ -49,10 +49,11 @@ and view =
       c: const;
       at: bool; (* explicit types? *)
     }
-  | App of expr * expr list
+  | App of expr * expr
   | Lambda of var list * expr
   | Bind of {
       c: const;
+      c_loc: location;
       at: bool; (* explicit types? *)
       vars: var list;
       body: expr;
@@ -64,6 +65,12 @@ and view =
 type subst = (string * expr) list
 
 let noloc: location = Loc.none
+
+let unfold_app e =
+  let rec aux acc e = match e.view with
+    | App (f, a) -> aux (a::acc) f
+    | _ -> e, acc
+  in aux [] e
 
 let rec pp_ (p:_) out (e:expr) : unit =
   match e.view with
@@ -81,16 +88,17 @@ let rec pp_ (p:_) out (e:expr) : unit =
   | Const {c;at} ->
     let s = if at then "@" else "" in
     Fmt.fprintf out "%s%a" s pp_const c
-  | App (f,l) ->
+  | App _ ->
+    let f, args = unfold_app e in
     if p>0 then Fmt.char out '(';
-    Fmt.fprintf out "@[%a@ %a@]" pp_atom_ f (pp_list pp_atom_) l;
+    Fmt.fprintf out "@[%a@ %a@]" pp_atom_ f (pp_list pp_atom_) args;
     if p>0 then Fmt.char out ')';
   | Meta v -> Fmt.fprintf out "?%s" v.name
   | Lambda (vars,bod) ->
     if p>0 then Fmt.char out '(';
     Fmt.fprintf out "@[\\%a.@ %a@]" (pp_list pp_var_ty) vars (pp_ 0) bod;
     if p>0 then Fmt.char out ')';
-  | Bind {c; at; vars; body} ->
+  | Bind {c; at; vars; body; c_loc=_} ->
     if p>0 then Fmt.char out '(';
     let s = if at then "@" else "" in
     Fmt.fprintf out "@[%s%a %a.@ %a@]"
@@ -163,13 +171,13 @@ module Expr = struct
   let const ~loc ?(at=false) c : t = mk_ ~loc (Const {c; at})
   let of_expr ~loc ?at e : t = const ~loc ?at (Const.of_expr e)
   let meta ~loc (s:string) ty : t = mk_ ~loc (Meta {ty; name=s})
-  let app ~loc (f:t) (l:t list) : t = match f.view with
-    | App (f1,l1) -> mk_ ~loc (App (f1,l1@l))
-    | _ -> mk_ ~loc (App (f,l))
+  let app (f:t) (a:t) : t = mk_ ~loc:Loc.(f.loc ++ a.loc) (App (f,a))
+  let rec app_l f l = match l with [] -> f | x::xs -> app_l (app f x) xs
   let let_ ~loc bs bod : t = mk_ ~loc (Let (bs, bod))
   let with_ ~loc vs bod : t = mk_ ~loc (With (vs, bod))
   let lambda ~loc vs bod : t = mk_ ~loc (Lambda (vs, bod))
-  let bind ~loc ?(at=false) c vars body : t = mk_ ~loc (Bind {c; at; vars; body})
+  let bind ~loc ~c_loc ?(at=false) c vars body : t =
+    mk_ ~loc (Bind {c; c_loc; at; vars; body})
   let eq ~loc a b : t =
     Log.debugf 6 (fun k->k"mk-eq loc=%a" Loc.pp loc);
     mk_ ~loc (Eq (a,b))

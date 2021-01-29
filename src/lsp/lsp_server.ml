@@ -96,7 +96,7 @@ module Make(IO : IO) = struct
       IO.return None
 
     (** Called when the user requests completion in the document *)
-    method on_req_completion ~uri:_ ~pos:_ ~ctx
+    method on_req_completion ~uri:_ ~pos:_ ~ctx:_
         (_ : doc_state) :
           [ `CompletionList of CompletionList.t
           | `List of CompletionItem.t list ] option IO.t =

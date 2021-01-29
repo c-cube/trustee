@@ -107,7 +107,7 @@ let rec pp_expr_ out (e:expr) : unit =
     Fmt.fprintf out "%a@ -> %a" pp_atom_ a pp_expr_ b;
   | Ty_pi (v, bod) ->
     Fmt.fprintf out "(@[pi %a.@ %a@])" pp_bvar v pp_expr_ bod
-  | Const {c} -> K.Expr.pp out c
+  | Const {c;_} -> K.Expr.pp out c
   | App _ ->
     let f, l = unfold_app_ e in
     Fmt.fprintf out "(@[%a@ %a@])" pp_expr_ f (pp_list pp_expr_) l
@@ -192,7 +192,7 @@ module Expr = struct
         b_acc bs
       in
       f b_acc bod
-
+(*  *)
   exception E_contains
 
   (* does [e] contain the meta [sub_m] *)
@@ -307,7 +307,7 @@ module Expr = struct
     aux [] e0
 
   and const ~loc c : expr =
-    mk_ ~loc (Const {c; }) (ty_of_expr ~loc (K.Expr.ty_exn c))
+    mk_ ~loc (Const {c;}) (ty_of_expr ~loc (K.Expr.ty_exn c))
 
   let subst_bvars (m:expr ID.Map.t) (e:expr) : expr =
     let rec aux m e =
@@ -557,6 +557,18 @@ module Expr = struct
         | Let (bs, bod) ->
           List.iter (fun (v,u) -> yield_bv v; yield_e u) bs; yield_e bod
       end
+
+    method! def_loc : _ option =
+      match view e with
+      | BVar v -> Some v.bv_loc (* binding point *)
+      | Const {c} ->
+        let r =
+          match K.Expr.view c with
+          | K.Expr.E_const c -> K.Const.def_loc c | _ -> assert false
+        in
+        Log.debugf 5 (fun k->k"def-loc for %a: %a" pp e (Fmt.opt Loc.pp) r);
+        r
+      | _ -> None
   end
 end
 
@@ -1013,10 +1025,10 @@ module Ty_infer = struct
         | A.Const {c;at} ->
           (* convert directly into a proper kernel constant *)
           infer_const_ c ~loc ~at
-        | A.App (f,l) ->
+        | A.App (f,a) ->
           let f = inf_rec_ bv f in
-          let l = List.map (inf_rec_ bv) l in
-          Expr.app_l ~loc env f l
+          let a = inf_rec_ bv a in
+          Expr.app ~loc env f a
         | A.With (vs, bod) ->
           let bv =
             List.fold_left
@@ -1037,8 +1049,8 @@ module Ty_infer = struct
           in
           let bod = inf_rec_ bv bod in
           Expr.lambda_l ~loc vars bod
-        | A.Bind { c; at; vars; body } ->
-          let f = infer_const_ ~loc ~at c in
+        | A.Bind { c; c_loc; at; vars; body } ->
+          let f = infer_const_ ~loc:c_loc ~at c in
           let bv, vars =
             CCList.fold_map
               (fun bv v ->
@@ -1271,13 +1283,13 @@ module Process_stmt = struct
     on_error: location -> unit Fmt.printer -> unit;
   }
 
-  let top_decl_ self name ty : ty =
+  let top_decl_ ~loc self name ty : ty =
     let ty =
       Ty_infer.and_then_generalize self.env
         (fun () -> Ty_infer.infer_ty self.env ty)
     in
     let kty = Expr.to_k_expr self.env.ctx ty in
-    let c = K.Expr.new_const self.env.ctx name kty in
+    let c = K.Expr.new_const ~def_loc:loc self.env.ctx name kty in
     Env.declare_const self.env name c;
     ty
 
@@ -1304,7 +1316,7 @@ module Process_stmt = struct
     (* the defining equation `name = def_rhs` *)
     let def_eq = Expr.eq ~loc (Expr.var' ~loc name ty_rhs) def_rhs in
     let th, ke =
-      K.Thm.new_basic_definition self.env.ctx
+      K.Thm.new_basic_definition self.env.ctx ~def_loc:loc
         (Expr.to_k_expr self.env.ctx def_eq) in
     Env.declare_const self.env name ke;
     CCOpt.iter (fun th_name -> Env.define_thm self.env th_name th) th_name;
@@ -1405,7 +1417,7 @@ module Process_stmt = struct
           self.env.cur_file <- s;
           true, idx
         | A.Top_decl { name; ty } ->
-          let ty = top_decl_ self name ty in
+          let ty = top_decl_ ~loc self name ty in
           true, Index.add_cond ~index (Expr.as_queryable ty) idx
         | A.Top_def { name; th_name; vars; ret; body } ->
           let ty_ret, rhs = top_def_ self ~loc name th_name vars ret body in

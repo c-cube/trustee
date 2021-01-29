@@ -37,15 +37,9 @@ end
 
 (** {2 Lexer} *)
 module Lexer : sig
-  type t
-
-  val create : ?file:string -> string -> t
-  val next : t -> token
-  val cur : t -> token
-
-  val to_list : t -> token list
-
-  val loc : t -> location
+  type t = token Tok_stream.t
+  module S = Tok_stream
+  val create : file:string -> string -> t
 end
 
 (** {2 Parser} *)

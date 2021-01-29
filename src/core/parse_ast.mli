@@ -50,10 +50,11 @@ and view =
       c: const;
       at: bool; (* explicit types? *)
     }
-  | App of expr * expr list
+  | App of expr * expr
   | Lambda of var list * expr
   | Bind of {
       c: const;
+      c_loc: location;
       at: bool; (* explicit types? *)
       vars: var list;
       body: expr;
@@ -97,11 +98,14 @@ module Expr : sig
   val const : loc:location -> ?at:bool -> const -> t
   val of_expr : loc:location -> ?at:bool -> K.Expr.t -> t
   val meta : loc:location -> string -> ty option -> t
-  val app : loc:location -> t -> t list -> t
+  val app : t -> t -> t
+  val app_l : t -> t list -> t
   val let_ : loc:location -> (var * t) list -> t -> t
   val with_ : loc:location -> var list -> t -> t
   val lambda : loc:location -> var list -> t -> t
-  val bind : loc:location -> ?at:bool -> const -> var list -> t -> t
+  val bind :
+    loc:location -> c_loc:location -> ?at:bool ->
+    const -> var list -> t -> t
   val eq : loc:location -> t -> t -> t
   val wildcard : loc:location -> unit -> t
 end
