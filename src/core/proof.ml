@@ -31,6 +31,7 @@ module Rule = struct
   (** A defined rule *)
 
   let[@inline] signature r = r.r_args
+  let[@inline] name r = r.r_name
 
   let pp out (r:t) : unit = Fmt.string out r.r_name
   let to_string = Fmt.to_string pp

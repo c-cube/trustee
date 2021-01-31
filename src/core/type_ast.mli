@@ -52,7 +52,7 @@ and meta
 type subst
 
 (** Typing environment *)
-type env
+type ty_env
 
 (** {2 Satellite types} *)
 
@@ -89,19 +89,38 @@ module Subst : sig
     K.Ctx.t -> t -> K.Subst.t
 end
 
-(** {2 Typing Environment}
+(** {2 Typing environment}
+
+    This environment is (mostly) functional, and is used to handle
+    scoping and to map names into constants and expressions and their type. *)
+module Ty_env : sig
+  type t = ty_env
+
+  val empty : t
+
+  type named_object =
+    | N_expr of K.Expr.t
+    | N_thm of K.Thm.t
+    | N_rule of Proof.Rule.t
+
+  val find_thm : t -> string -> K.Thm.t option
+
+  val find_named : t -> string -> named_object option
+
+  val completions : t -> string -> (string * named_object) Iter.t
+end
+
+(** {2 Typing state}
 
     This environment is (mostly) functional, and is used to handle
     scoping and to map names into constants and expressions and their type.
     *)
-module Env : sig
-  type t = env
+module Typing_state : sig
+  type t
 
-  val create : K.Ctx.t -> t
+  val create : ?ty_env:Ty_env.t -> K.Ctx.t -> t
 
-  val copy : t -> t
-  (** Make a copy. The two copies share the same underlying context
-      but nothing else. *)
+  val ty_env : t -> Ty_env.t
 
   val generalize_ty_vars : t -> unit
   (** Generalize remaining variables. This modifies terms previously
@@ -170,9 +189,9 @@ module Thm = K.Thm
 
 (* {2 type inference} *)
 module Ty_infer : sig
-  val infer_expr : env -> A.expr -> expr
-  val infer_goal : env -> A.Goal.t -> Goal.t * K.Goal.t
-  val infer_proof : env -> A.Proof.t -> Proof.t
+  val infer_expr : Typing_state.t -> A.expr -> expr
+  val infer_goal : Typing_state.t -> A.Goal.t -> Goal.t * K.Goal.t
+  val infer_proof : Typing_state.t -> A.Proof.t -> Proof.t
 end
 
 (** {2 Object index} *)
@@ -181,19 +200,24 @@ module Index : sig
   type t
 
   val empty : t
+  val fake : t (** will not be updated *)
   val size : t -> int
 
   val find : t -> Position.t -> Queryable.t list
   (** Find items that overlap this position, from the most
       to the least narrow *)
+
+  val find_ty_env :  t -> Position.t -> ty_env
 end
 
 (** {2 Process statements} *)
 
 val process_stmt :
-  index:bool ->
   on_show:(location -> unit Fmt.printer -> unit) ->
   on_error:(location -> unit Fmt.printer -> unit) ->
-  env * Index.t -> A.top_statement -> env * Index.t
+  Index.t ->
+  Typing_state.t ->
+  A.top_statement ->
+  Index.t
 (** Process a toplevel statement, returning a new environment
     and updated index. *)

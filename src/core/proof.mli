@@ -37,6 +37,7 @@ module Rule : sig
 
   val builtins : t list
   val find_builtin : string -> t option
+  val name : t -> string
 
   val apply : K.Ctx.t -> t -> arg_val list -> K.Thm.t
 

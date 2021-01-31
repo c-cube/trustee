@@ -41,7 +41,7 @@ module Check = struct
     Log.debugf 1 (fun k->k"check files %a" (Fmt.Dump.(list string)) args);
     let ctx = K.Ctx.create() in
     let aenv = A.Env.create ctx in
-    let tyenv = ref @@ TA.Env.create ctx in
+    let tyst = TA.Typing_state.create ctx in
     List.iter
       (fun file ->
          match CCIO.File.read file with
@@ -49,20 +49,19 @@ module Check = struct
            let lex = Syntax.Lexer.create ~file s in
            Fmt.printf "# file %S@." file;
            let l = Syntax.parse_top_l_process ~file ~env:aenv lex in
-           let tyenv', _ =
+           let _idx =
              CCList.fold_left
-               (fun env st ->
-                  TA.process_stmt ~index:false
+               (fun idx stmt ->
+                  TA.process_stmt idx tyst
                     ~on_show:(fun loc pp ->
                         Fmt.printf "@[<2>@{<bold>>>> Show@}: at %a:@ %a@]@."
                           Loc.pp loc pp())
                     ~on_error:(fun loc pp ->
                         Fmt.printf "@[<2>@{<Red>Error@} at %a:@ %a@]@."
                           Loc.pp loc pp())
-                    env st)
-               (!tyenv, TA.Index.empty) l
+                    stmt)
+               TA.Index.fake l
            in
-           tyenv := tyenv';
            Fmt.printf "# processed %S@." file;
          | Error e ->
            errorf (fun k->k"cannot read '%s': %s" file e))

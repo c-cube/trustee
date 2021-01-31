@@ -5,6 +5,7 @@ module Log = T.Log
 module K = T.Kernel
 module PA = T.Parse_ast
 module TA = T.Type_ast
+module Loc = T.Loc
 
 open Task.Infix
 type 'a m = 'a Task.m
@@ -22,9 +23,26 @@ let lsp_range_of_loc (l:T.Loc.t) : Range.t =
 
 type parsed_buffer = {
   penv: PA.Env.t;
-  env: TA.Env.t;
+  env: TA.Ty_env.t;
   idx: TA.Index.t;
 }
+
+let ident_under_pos ~file (s:string) (pos:T.Position.t) : string option =
+  let open T.Syntax in
+  let module Str = T.Tok_stream in
+  let toks = Lexer.create ~file s in
+  let rec find () =
+    if Str.is_done toks then None
+    else (
+      match Str.cur toks with
+      | SYM s, loc when Loc.contains loc pos -> Some s
+      | _, loc when T.Position.leq loc.end_ pos -> None (* gone far enough *)
+      | _ ->
+        Str.junk toks;
+        find()
+    )
+  in
+  find()
 
 class trustee_server =
   let _ctx = K.Ctx.create () in
@@ -46,27 +64,30 @@ class trustee_server =
       Log.debugf 3 (fun k->k "for %s: parsed %d statements" d (List.length stmts));
 
       let diags = ref [] in
-      let env = TA.Env.create _ctx in
-      let env, idx = List.fold_left
-          (TA.process_stmt ~index:true
-             ~on_show:(fun loc msg ->
-                 let range = lsp_range_of_loc loc in
-                 let message = Fmt.asprintf "@[info: %a@]" msg() in
-                 let d = Diagnostic.create
-                     ~severity:DiagnosticSeverity.Information
-                     ~range ~message () in
-                 diags := d :: !diags
-               )
-             ~on_error:(fun loc e ->
-                 let range = lsp_range_of_loc loc in
-                 let message = Fmt.asprintf "@[err: %a@]" e() in
-                 let d = Diagnostic.create
-                     ~severity:DiagnosticSeverity.Error ~range ~message () in
-                 diags := d :: !diags
-               ))
-          (env, TA.Index.empty) stmts
+      let tyst = TA.Typing_state.create _ctx in
+      let idx = List.fold_left
+          (fun idx stmt ->
+             TA.process_stmt idx tyst
+               ~on_show:(fun loc msg ->
+                   let range = lsp_range_of_loc loc in
+                   let message = Fmt.asprintf "@[info: %a@]" msg() in
+                   let d = Diagnostic.create
+                       ~severity:DiagnosticSeverity.Information
+                       ~range ~message () in
+                   diags := d :: !diags
+                 )
+               ~on_error:(fun loc e ->
+                   let range = lsp_range_of_loc loc in
+                   let message = Fmt.asprintf "@[err: %a@]" e() in
+                   let d = Diagnostic.create
+                       ~severity:DiagnosticSeverity.Error ~range ~message () in
+                   diags := d :: !diags
+                 )
+               stmt)
+          TA.Index.empty stmts
       in
 
+      let env = TA.Typing_state.ty_env tyst in
       Hashtbl.replace buffers d {penv; env; idx};
 
       let diags = List.rev !diags in
@@ -134,6 +155,26 @@ class trustee_server =
               Some r
         in
         Lwt.return r
+
+    method! on_req_completion ~uri ~pos ~ctx:_ doc_st : _ option Lwt.t =
+      match Hashtbl.find buffers uri with
+      | exception Not_found -> Lwt.return None
+      | {idx;_} ->
+        let pos = pos_of_lsp_pos pos in
+        (* find token under the cursor, if any *)
+        begin match ident_under_pos ~file:uri doc_st.content pos with
+          | None -> Lwt.return None
+          | Some ident ->
+            Log.debugf 5 (fun k->k"completion: ident `%s`" ident);
+            let tyenv = TA.Index.find_ty_env idx pos in
+            let compls =
+              TA.Ty_env.completions tyenv ident
+            in
+            Log.debugf 5
+              (fun k->k"completions: %a" (Fmt.Dump.list Fmt.string)
+                  (Iter.map fst compls |> Iter.to_list));
+            Lwt.return (Some (`List [])) (* TODO *)
+        end
   end
 
 let setup_logger_ () =

@@ -931,9 +931,9 @@ let parse_top_l_process ?file ~env lex : _ list =
 let parse_expr_infer ?q_args ~env lex : Expr.t =
   let e = parse_expr ?q_args ~env lex in
   let ctx = A.Env.ctx env in
-  let ty_env = Type_ast.Env.create ctx in
-  let e = TA.Ty_infer.infer_expr ty_env e in
-  TA.Env.generalize_ty_vars ty_env;
+  let st = Type_ast.Typing_state.create ctx in
+  let e = TA.Ty_infer.infer_expr st e in
+  TA.Typing_state.generalize_ty_vars st;
   TA.Expr.to_k_expr ctx e
 
 (*$inject
