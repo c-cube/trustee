@@ -108,6 +108,13 @@ module Ty_env : sig
   val find_named : t -> string -> named_object option
 
   val completions : t -> string -> (string * named_object) Iter.t
+
+  val iter : t -> (string * named_object) Iter.t
+
+  include PP with type t := t
+
+  val pp_named_object : named_object Fmt.printer
+  val string_of_named_object : named_object -> string
 end
 
 (** {2 Typing state}

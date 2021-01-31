@@ -1,5 +1,5 @@
 (library
   (name trustee_core)
   (public_name trustee.core)
-  (libraries containers iter)
+  (libraries containers iter unix)
   (flags :standard -warn-error -a+8))

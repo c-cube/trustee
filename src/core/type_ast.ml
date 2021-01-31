@@ -643,24 +643,42 @@ module Ty_env = struct
 
   let empty : t = ty_env_empty_
 
-  let completions (self:t) (s:string) : _ Iter.t =
+  let iter (self:t) : _ Iter.t =
     let i1 =
-      Str_map.to_iter self.env_consts
-      |> Iter.filter_map
-        (fun (name,c) -> if CCString.prefix ~pre:s name then Some (name, N_expr c) else None)
+      Str_map.to_iter self.env_consts |> Iter.map (fun (n,c) -> n, N_expr c)
     and i2 =
       Str_map.to_iter self.env_theorems
-      |> Iter.filter_map
-        (fun (name,th) -> if CCString.prefix ~pre:s name then Some (name, N_thm th) else None)
+      |> Iter.map (fun (n,th) -> n, N_thm th)
     and i3 =
       (* TODO: locally defined rules *)
       Iter.of_list Proof.Rule.builtins
-      |> Iter.filter_map
-        (fun r ->
-           let name = Proof.Rule.name r in
-           if CCString.prefix ~pre:s name then Some (name, N_rule r) else None)
+      |> Iter.map (fun r -> Proof.Rule.name r, N_rule r)
     in
     Iter.append_l [i3; i1; i2]
+
+  let completions (self:t) (s:string) : _ Iter.t =
+    iter self
+    |> Iter.filter (fun (name,_) -> CCString.prefix ~pre:s name)
+
+  let pp_named_object out = function
+    | N_expr e -> Fmt.fprintf out "%a : %a" K.Expr.pp e K.Expr.pp (K.Expr.ty_exn e)
+    | N_thm th -> K.Thm.pp out th
+    | N_rule r ->
+      let module R = Proof.Rule in
+      Fmt.fprintf out "%a : %a" R.pp r R.pp_signature (R.signature r)
+
+  let string_of_named_object = Fmt.to_string pp_named_object
+
+  let pp out (self:t) : unit =
+    let k_of_no = function
+      | N_expr _ -> "expr"
+      | N_thm _ -> "thm"
+      | N_rule _ -> "rule"
+    in
+    let pp_pair out (name,c) = Fmt.fprintf out "(@[%s : %s@])" name (k_of_no c) in
+    Fmt.fprintf out "{@[<hv>ty_env@ %a@;<0 -1>@]}" (Fmt.iter pp_pair) (iter self)
+
+  let to_string = Fmt.to_string pp
 end
 
 (** {2 Typing state}
@@ -1507,8 +1525,9 @@ module Process_stmt = struct
   let top_ (self:t) st (idx:Index.t) : Index.t =
     Log.debugf 2 (fun k->k"(@[TA.process-stmt@ %a@])" A.Top_stmt.pp st);
     let idx = ref idx in
+    let loc = A.Top_stmt.loc st in
+    Index.add_env idx ~loc self.st.ty_env;
     let ok =
-      let loc = A.Top_stmt.loc st in
       try
         match A.Top_stmt.view st with
         | A.Top_enter_file s ->

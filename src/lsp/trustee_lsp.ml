@@ -13,7 +13,7 @@ type 'a m = 'a Task.m
 open Lsp.Types
 
 let lsp_pos_of_pos (p:T.Position.t) : Position.t =
-  Position.create ~line:(p.line-1) ~character:(p.col+1)
+  Position.create ~line:(p.line-1) ~character:(p.col-1)
 
 let pos_of_lsp_pos (p:Position.t) : T.Position.t =
   T.Position.make ~line:(p.line+1) ~col:(p.character+1)
@@ -27,7 +27,7 @@ type parsed_buffer = {
   idx: TA.Index.t;
 }
 
-let ident_under_pos ~file (s:string) (pos:T.Position.t) : string option =
+let ident_under_pos ~file (s:string) (pos:T.Position.t) : (string * Loc.t) option =
   let open T.Syntax in
   let module Str = T.Tok_stream in
   let toks = Lexer.create ~file s in
@@ -35,8 +35,8 @@ let ident_under_pos ~file (s:string) (pos:T.Position.t) : string option =
     if Str.is_done toks then None
     else (
       match Str.cur toks with
-      | SYM s, loc when Loc.contains loc pos -> Some s
-      | _, loc when T.Position.leq loc.end_ pos -> None (* gone far enough *)
+      | SYM s, loc when Loc.contains loc pos -> Some (s, loc)
+      | _, loc when T.Position.leq pos loc.start -> None (* gone far enough *)
       | _ ->
         Str.junk toks;
         find()
@@ -161,19 +161,51 @@ class trustee_server =
       | exception Not_found -> Lwt.return None
       | {idx;_} ->
         let pos = pos_of_lsp_pos pos in
+        Log.debugf 5 (fun k->k"completion at %a" T.Position.pp pos);
         (* find token under the cursor, if any *)
         begin match ident_under_pos ~file:uri doc_st.content pos with
           | None -> Lwt.return None
-          | Some ident ->
-            Log.debugf 5 (fun k->k"completion: ident `%s`" ident);
+          | Some (ident, ident_loc) ->
+            Log.debugf 5 (fun k->k"req-completion: ident `%s`" ident);
+
             let tyenv = TA.Index.find_ty_env idx pos in
+            Log.debugf 10 (fun k->k"req-completion: env@ %a" TA.Ty_env.pp tyenv);
+
             let compls =
               TA.Ty_env.completions tyenv ident
             in
             Log.debugf 5
               (fun k->k"completions: %a" (Fmt.Dump.list Fmt.string)
                   (Iter.map fst compls |> Iter.to_list));
-            Lwt.return (Some (`List [])) (* TODO *)
+            let compls =
+              compls
+              |> Iter.take 20
+              |> Iter.map
+                (fun (name, c) ->
+                  let lbl, kind = match c with
+                    | TA.Ty_env.N_expr _ -> "E", CompletionItemKind.Value
+                    | TA.Ty_env.N_thm _ -> "T", CompletionItemKind.Value
+                    | TA.Ty_env.N_rule  _ -> "R", CompletionItemKind.Operator
+                  in
+                  let label = Printf.sprintf "%s %s" lbl name in
+                  let textEdit =
+                    TextEdit.create ~range:(lsp_range_of_loc ident_loc)
+                      ~newText:name
+                  in
+                  let ci = CompletionItem.create
+                    ~label ~kind ~textEdit
+                    ~detail:(TA.Ty_env.string_of_named_object c)
+                    ()
+                  in
+                  Log.debugf 50
+                    (fun k->k"compl item: %a"
+                        Yojson.Safe.pp (CompletionItem.yojson_of_t ci));
+                  ci
+                )
+              |> Iter.to_list
+            in
+            Log.debugf 5 (fun k->k"send back %d completions" (List.length compls));
+            Lwt.return (Some (`List compls))
         end
   end
 
