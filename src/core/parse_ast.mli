@@ -156,7 +156,7 @@ module Proof : sig
 
   (** An argument to a rule *)
   and rule_arg =
-    | Arg_var of string
+    | Arg_var of string with_loc
     | Arg_step of step
     | Arg_expr of expr
     | Arg_subst of subst
@@ -182,7 +182,7 @@ module Proof : sig
   val step_subproof : loc:location -> t -> step
   val step_error : loc:location -> unit Fmt.printer -> step
 
-  val arg_var : string -> rule_arg
+  val arg_var : string with_loc -> rule_arg
   val arg_step : step -> rule_arg
   val arg_expr : expr -> rule_arg
   val arg_subst : subst -> rule_arg
@@ -236,22 +236,22 @@ type top_statement = private top_statement_view with_loc
 and top_statement_view =
   | Top_enter_file of string
   | Top_def of {
-      name: string;
-      th_name: string option;
+      name: string with_loc;
+      th_name: string with_loc option;
       vars: var list;
       ret: ty option;
       body: expr;
     }
   | Top_decl of {
-      name: string;
+      name: string with_loc;
       ty: ty;
     }
   | Top_fixity of {
-      name: string;
+      name: string with_loc;
       fixity: fixity;
     }
   | Top_axiom of {
-      name: string;
+      name: string with_loc;
       thm: expr;
     }
   | Top_goal of {
@@ -260,17 +260,21 @@ and top_statement_view =
       (* TODO: instead, Meta_expr.toplevel_proof; *)
     }
   | Top_theorem of {
-      name: string;
+      name: string with_loc;
       goal: Goal.t;
       proof: Proof.t;
       (* TODO: instead, Meta_expr.toplevel_proof; *)
     }
-  | Top_show of string
+  | Top_show of string with_loc
   | Top_show_expr of expr
   | Top_show_proof of Proof.t
   | Top_error of {
       msg: unit Fmt.printer; (* parse error *)
     }
+  (* TODO  | Top_def_ty of string *)
+  (* TODO: | Top_def_proof_rule *)
+  (* TODO: | Top_def_rule *)
+  (* TODO: | Top_def_tactic *)
   (* TODO  | Top_def_ty of string *)
   (* TODO: | Top_def_proof_rule *)
   (* TODO: | Top_def_rule *)
@@ -286,14 +290,14 @@ module Top_stmt : sig
   val make : loc:location -> top_statement_view -> t
 
   val enter_file : loc:location -> string -> t
-  val def : loc:location -> string ->
-    th_name: string option -> var list -> ty option -> expr -> t
-  val decl : loc:location -> string -> ty -> t
-  val fixity : loc:location -> string -> fixity -> t
-  val axiom : loc:location -> string -> expr -> t
+  val def : loc:location -> string with_loc ->
+    th_name: string with_loc option -> var list -> ty option -> expr -> t
+  val decl : loc:location -> string with_loc -> ty -> t
+  val fixity : loc:location -> string with_loc -> fixity -> t
+  val axiom : loc:location -> string with_loc -> expr -> t
   val goal : loc:location -> Goal.t -> Proof.t -> t
-  val theorem : loc:location -> string -> Goal.t -> Proof.t -> t
-  val show : loc:location -> string -> t
+  val theorem : loc:location -> string with_loc -> Goal.t -> Proof.t -> t
+  val show : loc:location -> string with_loc -> t
   val show_expr : loc:location -> expr -> t
   val show_proof : loc:location -> Proof.t -> t
   val error : loc:location -> unit Fmt.printer -> t

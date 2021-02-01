@@ -151,7 +151,7 @@ class trustee_server =
               let loc =
                 Location.create ~uri:loc.T.Loc.file ~range:(lsp_range_of_loc loc) in
               let r = `Location [loc] in
-              Log.debugf 5 (fun k->k"response: %a" Yojson.Safe.pp (Locations.yojson_of_t r));
+              (* Log.debugf 20 (fun k->k"response: %a" Yojson.Safe.pp (Locations.yojson_of_t r)); *)
               Some r
         in
         Lwt.return r

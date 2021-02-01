@@ -24,3 +24,10 @@ module type S = sig
   type t
   val as_queryable : t -> queryable
 end
+
+let mk_pp ?def_loc ~loc ~pp x : t = object
+  inherit t
+  method loc=loc
+  method pp out () = pp out x
+  method! def_loc = def_loc
+end

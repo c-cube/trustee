@@ -99,11 +99,11 @@ module Ty_env : sig
   val empty : t
 
   type named_object =
-    | N_expr of K.Expr.t
-    | N_thm of K.Thm.t
-    | N_rule of Proof.Rule.t
+    | N_expr of K.Expr.t A.with_loc
+    | N_thm of K.Thm.t A.with_loc
+    | N_rule of Proof.Rule.t A.with_loc
 
-  val find_thm : t -> string -> K.Thm.t option
+  val find_thm : t -> string -> K.Thm.t A.with_loc option
 
   val find_named : t -> string -> named_object option
 
@@ -152,7 +152,7 @@ module Proof : sig
   (** named steps *)
   and pr_let =
     | Let_expr of bvar * expr
-    | Let_step of ID.t * step
+    | Let_step of ID.t A.with_loc * step
 
   and step_view =
     | Pr_apply_rule of Proof.Rule.t A.with_loc * rule_arg list
@@ -161,9 +161,13 @@ module Proof : sig
 
   (** An argument to a rule *)
   and rule_arg =
-    | Arg_var_step of ID.t
+    | Arg_var_step of {
+        name: ID.t;
+        loc: location; (* loc of the variable *)
+        points_to: step;
+      }
     | Arg_step of step
-    | Arg_thm of K.Thm.t
+    | Arg_thm of K.Thm.t A.with_loc * location
     | Arg_expr of expr
     | Arg_subst of subst
 
@@ -176,9 +180,13 @@ module Proof : sig
   val pp_rule_signature : rule_signature Fmt.printer
 
   (** Run the proof to get a kernel theorem (or a failure) *)
-  val run : K.Ctx.t -> t -> K.Thm.t or_error
+  val run :
+    ?on_step_res:(step -> K.Thm.t -> unit) ->
+    K.Ctx.t -> t -> K.Thm.t or_error
 
-  val run_exn : K.Ctx.t -> t -> K.Thm.t
+  val run_exn :
+    ?on_step_res:(step -> K.Thm.t -> unit) ->
+    K.Ctx.t -> t -> K.Thm.t
 end
 
 module Goal : sig
@@ -207,7 +215,9 @@ module Index : sig
   type t
 
   val empty : t
+
   val fake : t (** will not be updated *)
+
   val size : t -> int
 
   val find : t -> Position.t -> Queryable.t list

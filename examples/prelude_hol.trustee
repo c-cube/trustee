@@ -54,7 +54,7 @@ theorem EqTrueIntro := x = (x = T) by proof sym EqTrueElim end end
 # TODO: REqTrueElim
 
 def forall : (pi a. (a -> bool) -> bool) by DefForall
-  := \ (a:type) (f:a -> bool). f = (\x:a. T)
+  := \(a:type) (f:a -> bool). f = (\x:a. T)
 end
 
 fixity forall := binder 12 end
@@ -63,6 +63,8 @@ show expr forall (x y : tau). x = y end
 
 # TODO RForallSubst
 # TODO RForallIntro
+
+show DefForall end
 
 
 def /\ (a b : bool) : bool by DefAnd

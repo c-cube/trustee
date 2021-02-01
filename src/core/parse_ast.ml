@@ -238,7 +238,7 @@ module Proof = struct
 
   (** An argument to a rule *)
   and rule_arg =
-    | Arg_var of string
+    | Arg_var of string with_loc
     | Arg_step of step
     | Arg_expr of expr
     | Arg_subst of subst
@@ -275,7 +275,7 @@ module Proof = struct
 
   and pp_rule_arg out (a:rule_arg) : unit =
     match a with
-    | Arg_var s -> Fmt.string out s
+    | Arg_var s -> Fmt.string out s.view
     | Arg_step s -> pp_step ~top:false out s (* always in ( ) *)
     | Arg_expr e -> Expr.pp out e
     | Arg_subst s -> Subst.pp out s
@@ -314,22 +314,22 @@ type top_statement = top_statement_view with_loc
 and top_statement_view =
   | Top_enter_file of string
   | Top_def of {
-      name: string;
-      th_name: string option;
+      name: string with_loc;
+      th_name: string with_loc option;
       vars: var list;
       ret: ty option;
       body: expr;
     }
   | Top_decl of {
-      name: string;
+      name: string with_loc;
       ty: ty;
     }
   | Top_fixity of {
-      name: string;
+      name: string with_loc;
       fixity: fixity;
     }
   | Top_axiom of {
-      name: string;
+      name: string with_loc;
       thm: expr;
     }
   | Top_goal of {
@@ -338,12 +338,12 @@ and top_statement_view =
       (* TODO: instead, Meta_expr.toplevel_proof; *)
     }
   | Top_theorem of {
-      name: string;
+      name: string with_loc;
       goal: Goal.t;
       proof: Proof.t;
       (* TODO: instead, Meta_expr.toplevel_proof; *)
     }
-  | Top_show of string
+  | Top_show of string with_loc
   | Top_show_expr of expr
   | Top_show_proof of Proof.t
   | Top_error of {
@@ -366,33 +366,33 @@ module Top_stmt = struct
     in
     let pp_th_name out th = match th with
       | None -> ()
-      | Some th -> Fmt.fprintf out "@ by %s" th
+      | Some th -> Fmt.fprintf out "@ by %s" th.view
     in
     match self.view with
     | Top_enter_file f ->
       Fmt.fprintf out "@[enter_file '%s' end@]" f
     | Top_def { name; th_name; vars=[]; ret; body } ->
       Fmt.fprintf out "@[<hv>@[<2>def %s%a%a :=@ %a@]@ end@]"
-        name pp_ty_opt ret pp_th_name th_name pp body
+        name.view pp_ty_opt ret pp_th_name th_name pp body
     | Top_def { name; th_name; vars; ret; body } ->
       Fmt.fprintf out "@[<v>@[<v2>@[<2>def %s %a%a%a :=@]@ %a@]@ end@]"
-        name (pp_list pp_var_ty) vars pp_ty_opt ret pp_th_name th_name pp body
+        name.view (pp_list pp_var_ty) vars pp_ty_opt ret pp_th_name th_name pp body
     | Top_decl { name; ty } ->
       Fmt.fprintf out "@[<hv>@[<2>decl %s :@ %a@]@ end@]"
-        name pp ty
+        name.view pp ty
     | Top_fixity {name; fixity} ->
       Fmt.fprintf out "@[<hv>@[<2>fixity %s = %s@]@ end@]"
-        name (Fixity.to_string_syntax fixity)
+        name.view (Fixity.to_string_syntax fixity)
     | Top_axiom { name; thm } ->
       Fmt.fprintf out "@[<hv>@[<2>axiom %s :=@ %a@]@ end@]"
-        name pp thm
+        name.view pp thm
     | Top_goal { goal; proof } ->
       Fmt.fprintf out "@[<hv>@[<2>goal %a@ by %a@]@ end@]"
         Goal.pp goal Proof.pp proof
     | Top_theorem { name; goal; proof } ->
       Fmt.fprintf out "@[<hv>@[<2>theorem %s :=@ %a@]@ @[<2>by@ %a@]@ end@]"
-        name Goal.pp goal Proof.pp proof
-    | Top_show s -> Fmt.fprintf out "@[show %s end@]" s
+        name.view Goal.pp goal Proof.pp proof
+    | Top_show s -> Fmt.fprintf out "@[show %s end@]" s.view
     | Top_show_expr e -> Fmt.fprintf out "@[@[<hv2>show expr@ %a@]@ end@]" Expr.pp e
     | Top_show_proof p -> Fmt.fprintf out "@[show %a end@]" Proof.pp p
     | Top_error {msg} -> Fmt.fprintf out "<@[<hov2>error:@ @[%a@]@]>" msg ()
@@ -458,10 +458,10 @@ module Env = struct
 
   let process (self:t) (st:top_statement) : unit =
     match st.view with
-    | Top_def {name; _} -> declare' self name
-    | Top_decl {name; _} -> declare' self name
+    | Top_def {name; _} -> declare' self name.view
+    | Top_decl {name; _} -> declare' self name.view
     | Top_fixity {name; fixity} ->
-      declare_fixity self name fixity
+      declare_fixity self name.view fixity
     | Top_axiom _ | Top_goal _ | Top_theorem _ | Top_error _
     | Top_enter_file _
     | Top_show _ | Top_show_expr _ | Top_show_proof _ -> ()

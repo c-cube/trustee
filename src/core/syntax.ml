@@ -81,7 +81,7 @@ end = struct
   let[@inline] col self : int = self.i - self.bol + 1
 
   let[@inline] loc self : location =
-    let col = col self in
+    let col = col self - 1 in
     {Loc.start=self.start;
      file=self.file;
      end_={Position.line=self.line; col};
@@ -240,7 +240,7 @@ end = struct
         with e ->
           errorf ~src:e (fun k->k "at %a" Loc.pp (loc self))
       in
-      Log.debugf 2 (fun k->k"TOK.next %a at %a" Token.pp t Loc.pp (loc self));
+      (* Log.debugf 20 (fun k->k"TOK.next %a at %a" Token.pp t Loc.pp (loc self)); *)
       t, loc self, self.st == Done
     )
 
@@ -428,10 +428,10 @@ module P_expr = struct
         )
 
   and p_expr_atomic_ ~ty_expect (self:t) : AE.t =
-    let t, loc = Lexer.S.cur self.lex in
+    let t, loc_t = Lexer.S.cur self.lex in
     match t with
     | ERROR c ->
-      errorf (fun k->k"invalid char '%c' at %a" c Loc.pp loc)
+      errorf (fun k->k"invalid char '%c' at %a" c Loc.pp loc_t)
     | LPAREN ->
       Lexer.S.junk self.lex;
       let e = p_expr_ ~ty_expect self 0 in
@@ -446,18 +446,19 @@ module P_expr = struct
       List.iter (fun (v,_) -> Str_tbl.add self.bindings v.A.v_name v) bs;
       let bod = p_expr_ ~ty_expect self 0 in
       List.iter (fun (v,_) -> Str_tbl.remove self.bindings v.A.v_name) bs;
-      AE.let_ ~loc:(loc ++ AE.loc bod) bs bod
+      AE.let_ ~loc:(loc_t ++ AE.loc bod) bs bod
     | SYM s ->
       Lexer.S.junk self.lex;
       begin match fixity_ self s with
-        | F_normal -> p_nullary_ ~loc self s
+        | F_normal -> p_nullary_ ~loc:loc_t self s
         | F_prefix i ->
           let arg = p_expr_ ~ty_expect:None self i in
-          let lhs = expr_of_string_ ~loc self s in
+          let lhs = expr_of_string_ ~loc:loc_t self s in
           AE.app lhs arg
         | F_binder i ->
           let vars = p_tyvars_and_dot self [] in
           let body = p_expr_ ~ty_expect self i in
+          let loc = loc_t ++ AE.loc body in
           begin match s with
             | "\\" -> AE.lambda ~loc vars body
             | "pi" -> AE.ty_pi ~loc vars body
@@ -466,33 +467,33 @@ module P_expr = struct
               match A.Env.find_const self.env s with
               | None -> assert false
               | Some (c,_) ->
-                AE.bind ~at:false ~c_loc:loc ~loc:Loc.(loc ++ AE.loc body) c vars body
+                AE.bind ~at:false ~c_loc:loc_t ~loc c vars body
           end
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
           errorf (fun k->k
                      "unexpected infix operator `%s`@ \
                       while parsing atomic expression@ at %a"
-                     s Loc.pp loc)
+                     s Loc.pp loc_t)
       end
     | AT_SYM s ->
       Lexer.S.junk self.lex;
-      p_nullary_ ~loc ~at:true self s
+      p_nullary_ ~loc:loc_t ~at:true self s
     | WILDCARD ->
       Lexer.S.junk self.lex;
-      AE.wildcard ~loc ()
+      AE.wildcard ~loc:loc_t ()
     | QUESTION_MARK_STR s ->
       Lexer.S.junk self.lex;
-      AE.meta ~loc s None
+      AE.meta ~loc:loc_t s None
     | QUESTION_MARK ->
       begin match self.q_args with
-        | [] -> errorf (fun k->k"no interpolation arg at %a" Loc.pp loc)
-        | t :: tl -> self.q_args <- tl; AE.const ~loc (A.Const.of_expr t)
+        | [] -> errorf (fun k->k"no interpolation arg at %a" Loc.pp loc_t)
+        | t :: tl -> self.q_args <- tl; AE.const ~loc:loc_t (A.Const.of_expr t)
       end
     | NUM _ ->
       errorf (fun k->k"TODO: parse numbers") (* TODO *)
     | RPAREN | COLON | DOT | IN | AND | EOF | QUOTED_STR _
     | BY | END | EQDEF ->
-      errorf (fun k->k"expected expression at %a" Loc.pp loc)
+      errorf (fun k->k"expected expression at %a" Loc.pp loc_t)
 
   and p_expr_app_ ~ty_expect self : AE.t =
     let e = ref (p_expr_atomic_ ~ty_expect self) in
@@ -646,7 +647,7 @@ end = struct
                   | SYM s, loc_s ->
                     loc := !loc ++ loc_s;
                     Lexer.S.junk self.lex;
-                    A.Proof.arg_var s
+                    A.Proof.arg_var {A.view=s; loc=loc_s}
                   | tok, loc_t ->
                     errorf
                       (fun k->k"expected a theorem or sub-step@ but got %a@ at %a"
@@ -731,7 +732,7 @@ module P_top = struct
     !loc
 
   let p_def ~loc:loc0 self : A.top_statement =
-    let name, _ = P_expr.p_ident self in
+    let name, loc_name = P_expr.p_ident self in
     let tok, _tok_loc, vars =
       P_expr.p_tyvars_until self []
         ~f:(function COLON | EQDEF | BY -> true |_ -> false)
@@ -746,7 +747,9 @@ module P_top = struct
       | _ -> tok, None
     in
     let th_name = match tok with
-      | BY -> Some (fst @@ P_expr.p_ident self)
+      | BY ->
+        let view, loc = P_expr.p_ident self in
+        Some {A.view;loc}
       | _ -> None
     in
     eat_p' self
@@ -758,16 +761,16 @@ module P_top = struct
     let body = P_expr.expr self in
     let loc = loc0 ++ AE.loc body in
     eat_end self ~msg:"expect `end` after a definition";
-    A.Top_stmt.def ~loc name ~th_name vars ret body
+    A.Top_stmt.def ~loc {view=name;loc=loc_name} ~th_name vars ret body
 
   let p_declare ~loc self : A.top_statement =
-    let name, _ = P_expr.p_ident self in
+    let name, loc_name = P_expr.p_ident self in
     eat_eq self COLON ~msg:"expect `:` in a type declaration";
     let ty = P_expr.expr_atomic ~ty_expect:AE.type_ self in
     Log.debugf 5 (fun k->k"decl: type %a" AE.pp ty);
     let loc = loc ++ AE.loc ty in
     eat_end self ~msg:"expect `end` after a declaration";
-    A.Top_stmt.decl ~loc name ty
+    A.Top_stmt.decl ~loc {A.view=name;loc=loc_name} ty
 
   let p_show ~loc self : _ =
     match Lexer.S.cur self.lex with
@@ -786,12 +789,12 @@ module P_top = struct
       Lexer.S.junk self.lex;
       let loc = loc ++ s_loc in
       eat_end self ~msg:"expect `end` after `show`";
-      A.Top_stmt.show ~loc s
+      A.Top_stmt.show ~loc {view=s;loc=s_loc}
     | _ ->
       errorf (fun k->k{|expected a name, or "expr", or a proof|})
 
   let p_thm ~loc self : _ =
-    let name, _ = P_expr.p_ident self in
+    let name, loc_name = P_expr.p_ident self in
     eat_eq self EQDEF ~msg:"expect `:=` after the theorem's name";
     let e = P_expr.p_expr_ self 0
         ~ty_expect:(Some (AE.const ~loc (A.Env.bool self.env)))
@@ -800,7 +803,7 @@ module P_top = struct
     let pr = P_proof.proof self in
     let loc = loc ++ A.Proof.loc pr in
     eat_end self ~msg:"expect `end` after the theorem";
-    A.Top_stmt.theorem ~loc name (A.Goal.make_nohyps e) pr
+    A.Top_stmt.theorem ~loc {A.view=name;loc=loc_name} (A.Goal.make_nohyps e) pr
 
   let p_goal ~loc self : _ =
     let e =
@@ -814,7 +817,7 @@ module P_top = struct
     A.Top_stmt.goal ~loc (A.Goal.make_nohyps e) pr
 
   let p_fixity ~loc self =
-    let name, _ = P_expr.p_ident self in
+    let name, loc_name = P_expr.p_ident self in
     eat_eq self EQDEF ~msg:"expect `:=` after symbol";
     let mkfix, needsint =
       match fst @@ P_expr.p_ident self with
@@ -842,7 +845,7 @@ module P_top = struct
     let fix = mkfix n in
     let loc = loc ++ locn in
     eat_end self ~msg:"expect `end` after fixity declarations";
-    A.Top_stmt.fixity ~loc name fix
+    A.Top_stmt.fixity ~loc {A.view=name;loc=loc_name} fix
 
   (* list of toplevel parsers *)
   let parsers = [
