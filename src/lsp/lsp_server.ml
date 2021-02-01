@@ -201,7 +201,7 @@ module Make(IO : IO) = struct
                            ~uri:doc.uri ~version:st.version ~text:st.content))
                 in
                 List.fold_left
-                  (fun d ev -> Lsp.Text_document.apply_content_change ev d)
+                  (fun d ev -> Lsp.Text_document.apply_content_change d ev)
                   doc c
               in
               let new_st = {
@@ -219,7 +219,9 @@ module Make(IO : IO) = struct
         | Lsp.Client_notification.ChangeWorkspaceFolders _
         | Lsp.Client_notification.ChangeConfiguration _
         | Lsp.Client_notification.Initialized
-        | Lsp.Client_notification.Unknown_notification _ ->
+        | Lsp.Client_notification.Unknown_notification _
+        | Lsp.Client_notification.CancelRequest _
+          ->
           IO.return () (* TODO: method for each of these *)
       end
   end
