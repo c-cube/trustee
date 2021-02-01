@@ -288,8 +288,9 @@ module P_state = struct
   let eat_eq ~msg self (t:token) : unit =
     eat_p' ~msg self ~f:(Token.equal t)
 
-  let eat_end ~msg self : unit =
-    eat_p' self ~msg ~f:(function END -> true | _ -> false)
+  let eat_end ~msg self : Loc.t =
+    let _, loc = eat_p self ~msg ~f:(function END -> true | _ -> false) in
+    loc
 end
 
 (* We follow a mix of:
@@ -710,8 +711,8 @@ end = struct
     in
     let lets = p_lets self [] in
     let last = p_step self in
-    let p = A.Proof.make ~loc:(loc ++ A.Proof.s_loc last) lets last in
-    eat_end self ~msg:"proof must finish with `end`";
+    let loc_end = eat_end self ~msg:"proof must finish with `end`" in
+    let p = A.Proof.make ~loc:(loc ++ loc_end) lets last in
     p
 end
 
@@ -759,8 +760,7 @@ module P_top = struct
                      (Fmt.Dump.option AE.pp_quoted) ret (List.length vars)
                      Token.pp (fst @@ Lexer.S.cur self.lex));
     let body = P_expr.expr self in
-    let loc = loc0 ++ AE.loc body in
-    eat_end self ~msg:"expect `end` after a definition";
+    let loc = loc0 ++ eat_end self ~msg:"expect `end` after a definition" in
     A.Top_stmt.def ~loc {view=name;loc=loc_name} ~th_name vars ret body
 
   let p_declare ~loc self : A.top_statement =
@@ -768,8 +768,7 @@ module P_top = struct
     eat_eq self COLON ~msg:"expect `:` in a type declaration";
     let ty = P_expr.expr_atomic ~ty_expect:AE.type_ self in
     Log.debugf 5 (fun k->k"decl: type %a" AE.pp ty);
-    let loc = loc ++ AE.loc ty in
-    eat_end self ~msg:"expect `end` after a declaration";
+    let loc = loc ++ eat_end self ~msg:"expect `end` after a declaration" in
     A.Top_stmt.decl ~loc {A.view=name;loc=loc_name} ty
 
   let p_show ~loc self : _ =
@@ -777,18 +776,15 @@ module P_top = struct
     | SYM "expr", _ ->
       Lexer.S.junk self.lex;
       let e = P_expr.expr self in
-      let loc = loc ++ AE.loc e in
-      eat_end self ~msg:"expect `end` after `show expr`";
+      let loc = loc ++ eat_end self ~msg:"expect `end` after `show expr`" in
       A.Top_stmt.show_expr ~loc e
     | SYM "proof", _ ->
       let p = P_proof.proof self in
-      let loc = loc ++ A.Proof.loc p in
-      eat_end self ~msg:"expect `end` after `show proof`";
+      let loc = loc ++ eat_end self ~msg:"expect `end` after `show proof`" in
       A.Top_stmt.show_proof ~loc p
     | SYM s, s_loc ->
       Lexer.S.junk self.lex;
-      let loc = loc ++ s_loc in
-      eat_end self ~msg:"expect `end` after `show`";
+      let loc = loc ++ eat_end self ~msg:"expect `end` after `show`" in
       A.Top_stmt.show ~loc {view=s;loc=s_loc}
     | _ ->
       errorf (fun k->k{|expected a name, or "expr", or a proof|})
@@ -801,8 +797,7 @@ module P_top = struct
     in
     eat_eq self BY ~msg:"expect `by` after the theorem's statement";
     let pr = P_proof.proof self in
-    let loc = loc ++ A.Proof.loc pr in
-    eat_end self ~msg:"expect `end` after the theorem";
+    let loc = loc ++ eat_end self ~msg:"expect `end` after the theorem" in
     A.Top_stmt.theorem ~loc {A.view=name;loc=loc_name} (A.Goal.make_nohyps e) pr
 
   let p_goal ~loc self : _ =
@@ -812,8 +807,7 @@ module P_top = struct
     in
     eat_eq self BY ~msg:"expect `by` after the goal's statement";
     let pr = P_proof.proof self in
-    let loc = loc ++ A.Proof.loc pr in
-    eat_end self ~msg:"expect `end` after the goal";
+    let loc = loc ++ eat_end self ~msg:"expect `end` after the goal" in
     A.Top_stmt.goal ~loc (A.Goal.make_nohyps e) pr
 
   let p_fixity ~loc self =
@@ -834,17 +828,16 @@ module P_top = struct
               "expected one of: normal|infix|prefix|postfix|lassoc|rassoc|binder@ \
                but got '%s'" s)
     in
-    let n, locn =
+    let n =
       if needsint then (
-        let n, locn = eat_p self ~msg:"expect a number after fixity"
+        let n, _ = eat_p self ~msg:"expect a number after fixity"
             ~f:(function NUM _ -> true | _ -> false)
         in
-        match n with NUM s -> int_of_string s, locn | _ -> assert false
-      ) else 0, loc
+        match n with NUM s -> int_of_string s | _ -> assert false
+      ) else 0
     in
     let fix = mkfix n in
-    let loc = loc ++ locn in
-    eat_end self ~msg:"expect `end` after fixity declarations";
+    let loc = loc ++ eat_end self ~msg:"expect `end` after fixity declarations" in
     A.Top_stmt.fixity ~loc {A.view=name;loc=loc_name} fix
 
   (* list of toplevel parsers *)
