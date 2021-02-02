@@ -38,7 +38,8 @@ module Wrapped_error : sig
   (** An exception caught and re-launched from a task *)
   exception Wrapped of t
 
-  include PP with type t := t
+  val pp : Format.formatter -> t -> unit
+  val to_string : t -> string
 end
 
 val unwrap : ('a, exn) result -> 'a m

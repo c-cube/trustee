@@ -1,4 +1,6 @@
 
+module Fmt = CCFormat
+
 type cancel = Lwt_switch.t
 
 type 'a m = 'a Lwt.t
@@ -61,8 +63,6 @@ module Wrapped_error = struct
     let descr = CCOpt.get_or ~default:"<no descr>" task.descr in
     let pp_e out e = match e with
       | Wrapped e -> pp out e
-      | Trustee_error.E e ->
-        Trustee_error.pp out e
       | e -> Fmt.string out (Printexc.to_string e)
     in
     Fmt.fprintf out "@[<v>error in task '%s':@ %a@]" descr pp_e e

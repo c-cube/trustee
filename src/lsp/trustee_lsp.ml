@@ -7,10 +7,9 @@ module PA = T.Parse_ast
 module TA = T.Type_ast
 module Loc = T.Loc
 
+open Lsp_lwt
 open Task.Infix
 type 'a m = 'a Task.m
-
-open Lsp.Types
 
 let lsp_pos_of_pos (p:T.Position.t) : Position.t =
   Position.create ~line:(p.line-1) ~character:(p.col-1)
@@ -47,12 +46,13 @@ let ident_under_pos ~file (s:string) (pos:T.Position.t) : (string * Loc.t) optio
 class trustee_server =
   let _ctx = K.Ctx.create () in
   object(self)
-    inherit Jsonrpc2.server
+    inherit Lsp_lwt.Jsonrpc2.server
 
     (* one env per document *)
     val buffers: (DocumentUri.t, parsed_buffer) Hashtbl.t = Hashtbl.create 32
 
-    method private _on_doc ~(notify_back:Jsonrpc2.notify_back) (d:DocumentUri.t) (content:string) =
+    method private _on_doc
+        ~(notify_back:Lsp_lwt.Jsonrpc2.notify_back) (d:DocumentUri.t) (content:string) =
       (* TODO: use penv/env from dependencies, if any, once we have import *)
 
       let penv = PA.Env.create _ctx in
