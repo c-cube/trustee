@@ -19,12 +19,13 @@ type expr_view =
   | E_app of expr * expr
   | E_lam of expr * expr
   | E_pi of expr * expr
+  | E_arrow of expr * expr
 
 and expr = {
   e_view: expr_view;
   e_ty: expr option lazy_t;
   mutable e_id: int;
-  mutable e_flags: int; (* ̵contains: [higher DB var | ctx uid] *)
+  mutable e_flags: int; (* ̵contains: [higher DB var | 1:has pi | 5:ctx uid] *)
 }
 
 and var = {
@@ -49,7 +50,8 @@ and const = {
 let[@inline] expr_eq (e1:expr) e2 : bool = e1 == e2
 let[@inline] expr_hash (e:expr) = H.int e.e_id
 let[@inline] expr_compare (e1:expr) e2 : int = CCInt.compare e1.e_id e2.e_id
-let[@inline] expr_db_depth e = e.e_flags lsr ctx_id_bits
+let[@inline] expr_db_depth e = e.e_flags lsr (1+ctx_id_bits)
+let[@inline] expr_has_pi e : bool = (1 land (e.e_flags lsr ctx_id_bits)) == 1
 let[@inline] expr_ctx_uid e : int = e.e_flags land ctx_id_mask
 
 let[@inline] var_eq v1 v2 = v1.v_name = v2.v_name && expr_eq v1.v_ty v2.v_ty
@@ -89,7 +91,10 @@ let expr_pp_ out (e:expr) : unit =
     | E_kind -> Fmt.string out "kind"
     | E_type -> Fmt.string out "type"
     | E_var v -> Fmt.string out v.v_name
-    | E_bound_var v -> Fmt.fprintf out "x_%d" (k-v.bv_idx-1)
+    | E_bound_var v ->
+      let idx = v.bv_idx in
+      if idx<k then Fmt.fprintf out "x_%d" (k-idx-1)
+      else Fmt.fprintf out "%%db_%d" (idx-k)
     | E_const c -> ID.pp out c.c_name
     | E_app _ ->
       let f, args = unfold_app e in
@@ -101,12 +106,10 @@ let expr_pp_ out (e:expr) : unit =
       end
     | E_lam (_ty, bod) ->
       Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp _ty (aux (k+1)) bod
+    | E_arrow(a,b) ->
+      Fmt.fprintf out "(@[%a@ -> %a@])" pp a pp b
     | E_pi (ty, bod) ->
-      if expr_db_depth bod = 0 then (
-        Fmt.fprintf out "(@[%a@ -> %a@])" pp ty (aux k) bod
-      ) else (
-        Fmt.fprintf out "(@[pi x_%d:%a.@ %a@])" k pp ty (aux (k+1)) bod
-      )
+      Fmt.fprintf out "(@[pi x_%d:%a.@ %a@])" k pp ty (aux (k+1)) bod
   in
   aux 0 out e
 
@@ -126,8 +129,10 @@ module Expr_hashcons = Hashcons.Make(struct
         | E_lam (ty1,bod1), E_lam (ty2,bod2)
         | E_pi (ty1,bod1), E_pi (ty2,bod2) ->
           expr_eq ty1 ty2 && expr_eq bod1 bod2
+        | E_arrow(a1,b1), E_arrow(a2,b2) ->
+          expr_eq a1 a2 && expr_eq b1 b2
         | (E_kind | E_type | E_const _ | E_var _ | E_bound_var _
-          | E_app _ | E_lam _ | E_pi _), _ -> false
+          | E_app _ | E_lam _ | E_pi _ | E_arrow _), _ -> false
       end
 
     let hash e : int =
@@ -142,6 +147,7 @@ module Expr_hashcons = Hashcons.Make(struct
         H.combine3 60 (expr_hash ty) (expr_hash bod)
       | E_pi (ty,bod) ->
         H.combine3 70 (expr_hash ty) (expr_hash bod)
+      | E_arrow (a,b) -> H.combine3 80 (expr_hash a) (expr_hash b)
 
     let set_id t id =
       assert (t.e_id == -1);
@@ -248,6 +254,7 @@ module Expr = struct
     | E_app of t * t
     | E_lam of t * t
     | E_pi of t * t
+    | E_arrow of t * t
 
   let equal = expr_eq
   let hash = expr_hash
@@ -255,6 +262,7 @@ module Expr = struct
   let to_string = Fmt.to_string pp
   let compare = expr_compare
   let db_depth = expr_db_depth
+  let has_pi = expr_has_pi
   let[@inline] ty e = Lazy.force e.e_ty
   let[@inline] view e = e.e_view
   let[@inline] ty_exn e = match e.e_ty with
@@ -271,11 +279,22 @@ module Expr = struct
     let d2 = match view e with
       | E_kind | E_type | E_const _ | E_var _ -> 0
       | E_bound_var v -> v.bv_idx+1
-      | E_app (f,g) -> max (db_depth f) (db_depth g)
+      | E_app (a,b) | E_arrow (a,b) -> max (db_depth a) (db_depth b)
       | E_lam (ty,bod) | E_pi (ty,bod) ->
         max (db_depth ty) (max 0 (db_depth bod - 1))
     in
     max d1 d2
+
+  (* does [e] contain a pi binder? *)
+  let has_pi_ e : bool =
+    match view e with
+    | E_pi _ -> true
+    | E_kind | E_type -> false
+    | E_const c -> has_pi c.c_ty
+    | E_var v -> has_pi v.v_ty
+    | E_bound_var v -> has_pi v.bv_ty
+    | E_app (a,b) | E_arrow (a,b) -> has_pi a || has_pi b
+    | E_lam (ty,bod) -> has_pi ty || has_pi bod
 
   (* hashconsing + computing metadata *)
   let make_ (ctx:ctx) view ty : t =
@@ -284,9 +303,12 @@ module Expr = struct
     if e == e_h then (
       (* new term, compute metadata *)
       assert ((ctx.ctx_uid land ctx_id_mask) == ctx.ctx_uid);
+      let has_pi = has_pi_ e in
       e_h.e_flags <-
-        ((compute_db_depth_ e) lsl ctx_id_bits)
+        ((compute_db_depth_ e) lsl (1+ctx_id_bits))
+        lor ((if has_pi then 1 else 0) lsl ctx_id_bits)
         lor ctx.ctx_uid;
+      ctx_check_e_uid ctx e_h;
     );
     e_h
 
@@ -352,6 +374,7 @@ module Expr = struct
         | E_app (hd,a) -> E_app (f false hd, f false a)
         | E_lam (tyv, bod) -> E_lam (f false tyv, f true bod)
         | E_pi (tyv, bod) -> E_pi (f false tyv, f true bod)
+        | E_arrow (a,b) -> E_arrow (f false a, f false b)
       in
       make_ ctx view ty
 
@@ -366,6 +389,7 @@ module Expr = struct
       | E_bound_var v -> f false v.bv_ty
       | E_app (hd,a) -> f false hd; f false a
       | E_lam (tyv, bod) | E_pi (tyv, bod) -> f false tyv; f true bod
+      | E_arrow (a,b) -> f false a; f false b
 
   exception IsSub
 
@@ -391,8 +415,12 @@ module Expr = struct
 
   let db_shift ctx (e:t) (n:int) =
     ctx_check_e_uid ctx e;
+    let is_closed_ty e = match e.e_ty with
+      | lazy None -> true
+      | lazy (Some ty) -> is_closed ty
+    in
     let rec aux e k : t =
-      if is_closed e then e
+      if is_closed e && is_closed_ty e then e
       else (
         match view e with
         | E_bound_var bv ->
@@ -404,6 +432,7 @@ module Expr = struct
           map ctx e ~f:(fun inbind u -> aux u (if inbind then k+1 else k))
       )
     in
+    assert (n >= 0);
     if n = 0 then e else aux e 0
 
   let subst ctx e (subst:t Var.Map.t) : t =
@@ -445,17 +474,26 @@ module Expr = struct
 
   let ty_app_ ctx f a =
     let ty_f = ty_exn f in
+    let tya = ty_exn a in
+    let fail ty_v =
+      errorf (fun k->k"kernel: cannot apply function `@[%a@]`@ \
+                       to argument `@[%a@]`;@ \
+                       function expects argument of type %a,@ \
+                       but arg has type %a"
+        pp f pp a pp ty_v pp tya)
+    in
     match view ty_f with
     | E_pi (ty_v, body) ->
-      let tya = ty_exn a in
       if not (equal ty_v tya) then (
-        errorf (fun k->k"kernel:@ cannot apply function `@[%a@]`@ \
-                         to argument `@[%a@]`@ \
-                         function expects argument of type %a,@ \
-                         but arg has type %a"
-          pp f pp a pp ty_v pp tya)
+        fail ty_v;
       );
       let ty2 = subst_db_0 ctx body ~by:a in
+      ty2
+    | E_arrow (ty1, ty2) ->
+      let tya = ty_exn a in
+      if not (equal tya ty1) then (
+        fail ty1;
+      );
       ty2
     | _ ->
       errorf (fun k->k"cannot apply `@[%a@]`@ of type %a"
@@ -484,27 +522,52 @@ module Expr = struct
     ctx_check_e_uid ctx ty_v;
     ctx_check_e_uid ctx bod;
     if not (is_eq_to_type ty_v) && not (is_a_type ty_v) then (
-      errorf (fun k->k"pi: variable must be a type of have type Type, not %a"
+      errorf (fun k->k"pi: variable must be a type or have type Type, not %a"
                  pp ty_v);
     );
     if not (is_eq_to_type (ty_exn bod)) && not (is_eq_to_kind (ty_exn bod)) then (
       errorf (fun k->k"pi: body must be a type of have type Type,@ not %a"
                  pp (ty_exn bod))
     );
+    if has_pi ty_v then (
+      errorf (fun k->k"pi: variable's type must not contain Pi");
+    );
     let ty = Lazy.from_val (Some (type_ ctx)) in
     make_ ctx (E_pi (ty_v, bod)) ty
 
   let arrow ctx a b : t =
-    pi_db ctx ~ty_v:a (db_shift ctx b 1)
+    if not (is_a_type a) || not (is_a_type b) then (
+      errorf (fun k->k"arrow: both arguments must be types");
+    );
+    let ty = Lazy.from_val (Some (type_ ctx)) in
+    make_ ctx (E_arrow (a,b)) ty
 
   let arrow_l ctx l ret : t = CCList.fold_right (arrow ctx) l ret
+
+  (** prenex type: all Pi quantifiers are at the beginning. *)
+  let rec is_prenex_ty ty : bool =
+    match view ty with
+    | E_pi (ty_v, bod) -> not (has_pi ty_v) && is_prenex_ty bod
+    | _ -> not (has_pi ty)
 
   let lambda_db ctx ~ty_v bod : t =
     ctx_check_e_uid ctx ty_v;
     ctx_check_e_uid ctx bod;
+    if not (is_eq_to_type ty_v) && not (is_a_type ty_v) then (
+      errorf (fun k->k"lambda: variable must be a type or have type Type, not %a"
+                 pp ty_v);
+    );
+    if has_pi ty_v then (
+      errorf (fun k->k"lambda: variable's type must not contain Pi");
+    );
     let ty = lazy (
-      (* type of [λx:a. t] is [Πx:a. typeof(b)]. *)
-      Some (pi_db ctx ~ty_v (ty_exn bod))
+      if is_eq_to_type ty_v then (
+        (* type of [λx:(a:type). t] is [Πx:a. typeof(t)]. *)
+        Some (pi_db ctx ~ty_v (ty_exn bod))
+      ) else (
+        (* type of [λx:a. t] is [a -> typeof(t)] if [a] is a type *)
+        Some (arrow ctx ty_v (ty_exn bod))
+      )
     ) in
     make_ ctx (E_lam (ty_v, bod)) ty
 
@@ -547,6 +610,35 @@ module Expr = struct
   module Set = Expr_set
   module Tbl = CCHashtbl.Make(AsKey)
 end
+
+(*$inject
+  let ctx = Ctx.create ()
+  let bool = Expr.bool ctx
+  let type_ = Expr.type_ ctx
+  let tau = Expr.new_ty_const ctx "tau"
+  let pi v t = Expr.pi ctx v t
+  let lambda v t = Expr.lambda ctx v t
+  let v' s ty = Var.make s ty
+  let v x = Expr.var ctx x
+  let (@->) a b = Expr.arrow ctx a b
+  let (@@) a b = Expr.app ctx a b
+  let a = Expr.new_const ctx "a0" tau
+  let b = Expr.new_const ctx "b0" tau
+  let c = Expr.new_const ctx "c0" tau
+  let f1: Expr.t = Expr.new_const ctx "f1" (tau @-> tau)
+  let eq = Expr.app_eq ctx
+
+  let must_fail f = try ignore (f()); false with _ -> true
+*)
+
+(*$T
+  must_fail (fun() -> a @-> b)
+  Expr.equal (tau @-> bool) (tau @-> bool)
+  (let x=v' "a" type_ in Expr.has_pi (Expr.pi ctx x (bool @-> v x)))
+  not (Expr.has_pi (tau @-> bool))
+  not (Expr.has_pi (Expr.ty_exn f1))
+*)
+
 
 (** {2 Toplevel goals} *)
 module Goal = struct
@@ -844,6 +936,10 @@ module Thm = struct
         | _ ->
           errorf (fun k-> k "LHS must be a variable,@ but got %a" Expr.pp x)
       in
+      if not (Expr.is_prenex_ty x_var.v_ty) then (
+        errorf (fun k->k "defined symbol must have a prenex type,@ not %a"
+                   Expr.pp x_var.v_ty);
+      );
       let c = Expr.new_const ctx ?def_loc (Var.name x_var) (Var.ty x_var) in
       let th = make_ ctx Expr.Set.empty (Expr.app_eq ctx c rhs) in
       th, c
@@ -919,4 +1015,30 @@ module Thm = struct
       repr_thm; abs_x; abs_thm}
 
 end
+
+(* fail because type is not prenex *)
+(*$R
+  let a_ = v' "a" type_ in
+  let b_ = v' "b" type_ in
+  assert_bool "def should fail" (must_fail (fun() ->
+      Thm.new_basic_definition ctx
+        (let thevar = v (v' "body" (v a_ @-> pi a_ (v a_ @-> v a_))) in
+         let x = v' "x" (v a_) in
+         let y = v' "y" (v a_) in
+         let rhs = lambda x (lambda a_ (lambda y (v y))) in
+         eq thevar rhs)
+  ));
+*)
+
+(* ok def *)
+(*$R
+  let a_ = v' "a" type_ in
+  let ok_def, _thm =
+    Thm.new_basic_definition ctx
+      (let thevar = v (v' "body" (pi a_ (v a_ @-> v a_))) in
+       let x = v' "a" (v a_) in
+       eq thevar (lambda a_ (lambda x (v x))))
+  in
+  ()
+*)
 

@@ -311,8 +311,13 @@ module Expr = struct
         assert (K.Expr.is_eq_to_type ty_v || K.Expr.is_a_type ty_v);
         let bv = BVar.make ~loc (ID.makef "_a_%d" (List.length env)) (aux env ty_v) in
         ty_pi ~loc bv @@ aux (bvar ~loc bv::env) bod
+      | K.Expr.E_arrow (a, b) ->
+        assert (K.Expr.is_a_type a && K.Expr.is_a_type b);
+        let a = aux env a in
+        let b = aux env b in
+        ty_arrow ~loc a b
       | _ ->
-        errorf (fun k->k"cannot convert %a@ to a type" K.Expr.pp e)
+        errorf (fun k->k"cannot convert kernel expression %a@ to a type" K.Expr.pp e)
     in
     aux [] e0
 
@@ -505,6 +510,9 @@ module Expr = struct
     let rec aux (bs:_ ID.Map.t) k e : K.Expr.t =
       let recurse = aux bs k in
       let loc = loc e in
+      (*Log.debugf 5 (fun k'->k' "@[conv-expr %a@ (k=%d, ty %a,@ bs={@[%a@]})@]"
+                       pp e k pp (ty e)
+                       (ID.Map.pp ID.pp (Fmt.Dump.pair K.Expr.pp Fmt.int)) bs);*)
       match view e with
       | Meta {meta_deref=Some _; _} -> assert false
       | Meta {meta_deref=None; _} ->
@@ -521,7 +529,9 @@ module Expr = struct
         K.Expr.arrow ctx (recurse a) (recurse b)
       | BVar v ->
         begin match ID.Map.find v.bv_name bs with
-          | (e, k_e) -> K.Expr.db_shift ctx e (k - k_e - 1)
+          | (e, k_e) ->
+            assert (k >= k_e);
+            K.Expr.db_shift ctx e (k - k_e) 
           | exception Not_found ->
             errorf
               (fun k->k"variable %a is not bound@ at %a"
@@ -544,12 +554,14 @@ module Expr = struct
         aux bs' k body
       | Ty_pi (v, bod) ->
         let ty = recurse v.bv_ty in
-        let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx 0 ty, k) bs in
+        let bs = ID.Map.add v.bv_name
+            (K.Expr.bvar ctx 0 (K.Expr.db_shift ctx ty 1), k+1) bs in
         let bod = aux bs (k+1) bod in
         K.Expr.pi_db ctx ~ty_v:ty bod
       | Lambda (v, bod) ->
         let ty = recurse v.bv_ty in
-        let bs = ID.Map.add v.bv_name (K.Expr.bvar ctx 0 ty, k) bs in
+        let bs = ID.Map.add v.bv_name
+            (K.Expr.bvar ctx 0 (K.Expr.db_shift ctx ty 1), k+1) bs in
         let bod = aux bs (k+1) bod in
         K.Expr.lambda_db ctx ~ty_v:ty bod
     in

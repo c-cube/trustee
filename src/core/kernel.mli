@@ -77,6 +77,7 @@ module Expr : sig
     | E_app of t * t
     | E_lam of t * t
     | E_pi of t * t
+    | E_arrow of expr * expr
 
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
@@ -87,6 +88,7 @@ module Expr : sig
   val ty : t -> ty option
   val ty_exn : t -> ty
   val is_closed : t -> bool
+  val has_pi : t -> bool
   val is_eq_to_type : t -> bool
   val is_eq_to_bool : t -> bool
   val is_a_bool : t -> bool
