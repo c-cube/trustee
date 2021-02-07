@@ -1016,6 +1016,16 @@ module Thm = struct
 
 end
 
+(* fail because it has a lambda on a non-atomic type *)
+(*$R
+  let a_ = v' "a" type_ in
+  assert_bool "bad lambda type" (must_fail (fun() ->
+      let x = v' "x" (pi a_ (v a_ @-> v a_)) in
+      let e = lambda x (v x) in
+      ()
+    ));
+*)
+
 (* fail because type is not prenex *)
 (*$R
   let a_ = v' "a" type_ in
