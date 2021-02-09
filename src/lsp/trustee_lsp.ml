@@ -183,7 +183,7 @@ class trustee_server =
               |> Iter.map
                 (fun (name, c) ->
                   let lbl, kind = match c with
-                    | TA.Ty_env.N_expr _ -> "E", CompletionItemKind.Value
+                    | TA.Ty_env.N_const _ -> "C", CompletionItemKind.Value
                     | TA.Ty_env.N_thm _ -> "T", CompletionItemKind.Value
                     | TA.Ty_env.N_rule  _ -> "R", CompletionItemKind.Operator
                   in

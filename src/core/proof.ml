@@ -106,15 +106,6 @@ module Rule = struct
       K.Thm.congr ctx th1 th2
     | _ -> assert false
 
-  let congr_ty : t =
-    mk_native_ "congr_ty" [Arg_thm; Arg_expr] @@
-    fun ctx args -> match args with
-    | [v1;v2] ->
-      let th1 = as_th 0 v1 in
-      let e2 = as_e 0 v2 in
-      K.Thm.congr_ty ctx th1 e2
-    | _ -> assert false
-
   let subst : t =
     mk_native_ "subst" [Arg_thm; Arg_subst] @@
     fun ctx args -> match args with
@@ -177,7 +168,7 @@ module Rule = struct
 
   (* list of pre-defined builtins *)
   let builtins : t list = [
-    assume; cut; refl; congr; sym; congr_ty; subst;
+    assume; cut; refl; congr; sym; subst;
     bool_eq; bool_eq_intro; beta_conv;
   ]
   let find_builtin s =

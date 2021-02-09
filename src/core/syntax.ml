@@ -23,7 +23,6 @@ type token =
   | IN
   | AND
   | EQDEF
-  | AT_SYM of string
   | NUM of string
   | BY
   | END
@@ -48,7 +47,6 @@ module Token = struct
     | QUESTION_MARK_STR s -> Fmt.fprintf out "QUESTION_MARK_STR %S" s
     | SYM s -> Fmt.fprintf out "SYM %S" s
     | QUOTED_STR s -> Fmt.fprintf out "QUOTED_STR %S" s
-    | AT_SYM s -> Fmt.fprintf out "AT_SYM %s" s
     | NUM s -> Fmt.fprintf out "NUM %S" s
     | BY -> Fmt.string out "BY"
     | END -> Fmt.string out "END"
@@ -174,21 +172,6 @@ end = struct
           self.i <- j;
           QUESTION_MARK_STR (String.sub self.src i0 (j-i0))
         )
-      | '@' ->
-        (* operator but without any precedence *)
-        self.i <- 1 + self.i;
-        let i0 = self.i in
-        let j =
-          read_many
-            self (fun c -> is_alpha c || is_digit c || is_symbol c) self.i
-        in
-        if i0 = j then (
-          errorf (fun k->k"empty '@'")
-        ) else (
-          self.i <- j;
-          let s = String.sub self.src i0 (j-i0) in
-          AT_SYM s
-        )
       | '"' ->
         self.i <- 1 + self.i;
         let i0 = self.i in
@@ -309,7 +292,6 @@ module P_expr = struct
     let module F = Fixity in
     match s with
     | "->" -> F.rassoc 100
-    | "pi" -> F.binder 70
     | "with" -> F.binder 1
     | "\\" -> F.binder 50
     | "=" -> F.infix 150
@@ -334,17 +316,17 @@ module P_expr = struct
   let is_ascii = function
     | 'a'..'z' | 'A'..'Z' | '_' -> true | _ -> false
 
-  let expr_of_string_ (self:t) ~loc ?(at=false) (s:string) : A.expr =
+  let expr_of_string_ (self:t) ~loc (s:string) : A.expr =
     begin match s with
       | "type" -> AE.type_
-      | "bool" -> AE.const ~loc ~at (A.Env.bool self.env)
-      | "=" -> AE.const ~loc ~at (A.Env.eq self.env)
+      | "bool" -> AE.const ~loc (A.Env.bool self.env)
+      | "=" -> AE.const ~loc (A.Env.eq self.env)
       | _ ->
         match Str_tbl.find self.bindings s with
         | u -> AE.var ~loc u
         | exception Not_found ->
           begin match A.Env.find_const self.env s with
-            | Some (c,_) -> AE.const ~loc ~at c
+            | Some (c,_) -> AE.const ~loc c
             | None ->
               let ty = AE.ty_meta ~loc (fresh_ ()) in
               AE.var ~loc (A.Var.make ~loc s (Some ty))
@@ -420,10 +402,10 @@ module P_expr = struct
       AE.var ~loc (A.Var.make ~loc s (Some ty))
     | _ ->
       match A.Env.find_const self.env s with
-      | Some (c,_) -> AE.const ~loc ~at c
+      | Some (c,_) -> AE.const ~loc c
       | None ->
         if s<>"" && (at || is_ascii (String.get s 0)) then (
-          expr_of_string_ ~loc ~at self s
+          expr_of_string_ ~loc self s
         ) else (
           errorf (fun k->k"unknown symbol `%s` at %a" s Loc.pp loc)
         )
@@ -462,13 +444,14 @@ module P_expr = struct
           let loc = loc_t ++ AE.loc body in
           begin match s with
             | "\\" -> AE.lambda ~loc vars body
-            | "pi" -> AE.ty_pi ~loc vars body
             | "with" -> AE.with_ ~loc vars body
             | _ ->
               match A.Env.find_const self.env s with
-              | None -> assert false
+              | None ->
+                Log.debugf 5 (fun k->k"const: %s" s);
+                assert false
               | Some (c,_) ->
-                AE.bind ~at:false ~c_loc:loc_t ~loc c vars body
+                AE.bind ~c_loc:loc_t ~loc c vars body
           end
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
           errorf (fun k->k
@@ -476,9 +459,6 @@ module P_expr = struct
                       while parsing atomic expression@ at %a"
                      s Loc.pp loc_t)
       end
-    | AT_SYM s ->
-      Lexer.S.junk self.lex;
-      p_nullary_ ~loc:loc_t ~at:true self s
     | WILDCARD ->
       Lexer.S.junk self.lex;
       AE.wildcard ~loc:loc_t ()
@@ -488,7 +468,7 @@ module P_expr = struct
     | QUESTION_MARK ->
       begin match self.q_args with
         | [] -> errorf (fun k->k"no interpolation arg at %a" Loc.pp loc_t)
-        | t :: tl -> self.q_args <- tl; AE.const ~loc:loc_t (A.Const.of_expr t)
+        | t :: tl -> self.q_args <- tl; AE.of_expr ~loc:loc_t t
       end
     | NUM _ ->
       errorf (fun k->k"TODO: parse numbers") (* TODO *)
@@ -508,7 +488,7 @@ module P_expr = struct
         e := AE.app !e e2;
       | SYM s, loc_s when fixity_ self s = Fixity.F_normal ->
         Lexer.S.junk self.lex;
-        let e2 = p_nullary_ ~loc:loc_s ~at:false self s in
+        let e2 = p_nullary_ ~loc:loc_s self s in
         e := AE.app !e e2;
       | _ -> continue := false;
     done;
@@ -529,7 +509,7 @@ module P_expr = struct
         lhs := AE.app !lhs e
       | (RPAREN | WILDCARD | COLON | DOT | IN
       | LET | AND), _loc -> continue := false
-      | (AT_SYM _ | QUESTION_MARK | QUOTED_STR _
+      | (QUESTION_MARK | QUOTED_STR _
         | QUESTION_MARK_STR _ | NUM _), _ ->
         let e = p_expr_atomic_ ~ty_expect:None self in
         lhs := AE.app !lhs e;
@@ -983,9 +963,9 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     let eq = eq ~loc
     let of_expr = of_expr ~loc
     let b_forall vars (bod:AE.t) : AE.t =
-      AE.bind ~loc ~c_loc:loc (A.Const.of_expr M.forall)
+      AE.bind ~loc ~c_loc:loc (A.Const.of_const M.forall)
         (List.map (fun (x,ty)-> A.Var.make ~loc x ty) vars) bod
-    let c x : t = AE.of_expr ~loc x
+    let c x : t = AE.of_const ~loc x
     let (@->) a b = AE.ty_arrow ~loc a b
     let (@) a b = AE.app_l a b
   end
@@ -1018,8 +998,8 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     A.(lambda ~loc [A.Var.make ~loc "x" @@ Some (c M.a @-> c M.b @-> c M.c)] \
          (A.eq (v"x")(v"x"))) \
     (A.of_str "\\ (x:a0->b0->c0). x=x")
-  A.(of_expr ~at:true M.eq) (A.of_str "@=")
-  A.(of_expr M.bool) (A.of_str "bool")
+  A.(of_const M.eq) (A.of_str "@=")
+  A.(of_const M.bool) (A.of_str "bool")
   A.(eq (c M.p2 @ [v "x"; v "y"]) (c M.q2 @ [v "y"; v "x"])) \
     (A.of_str "p2 x y = q2 y x")
 *)

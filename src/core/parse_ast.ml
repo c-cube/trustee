@@ -33,12 +33,12 @@ and binding = var * expr
 
 and const =
   | C_local of string (* not resolved yet *)
-  | C_k of K.expr
+  | C_k_const of K.const
+  | C_k_expr of K.expr
 
 and view =
   | Type
   | Ty_arrow of ty * ty
-  | Ty_pi of var list * ty
   | Var of var
   | Meta of {
       name: string;
@@ -47,14 +47,12 @@ and view =
   | Wildcard
   | Const of {
       c: const;
-      at: bool; (* explicit types? *)
     }
   | App of expr * expr
   | Lambda of var list * expr
   | Bind of {
       c: const;
       c_loc: location;
-      at: bool; (* explicit types? *)
       vars: var list;
       body: expr;
     }
@@ -80,14 +78,7 @@ let rec pp_ (p:_) out (e:expr) : unit =
     if p>1 then Fmt.char out '(';
     Fmt.fprintf out "%a@ -> %a" pp_atom_ a (pp_ p) b;
     if p>1 then Fmt.char out ')';
-  | Ty_pi (vars, bod) ->
-    if p>0 then Fmt.char out '(';
-    Fmt.fprintf out "@[pi %a.@ %a@]"
-      (pp_list pp_var) vars (pp_ p) bod;
-    if p>0 then Fmt.char out ')';
-  | Const {c;at} ->
-    let s = if at then "@" else "" in
-    Fmt.fprintf out "%s%a" s pp_const c
+  | Const {c;} -> pp_const out c
   | App _ ->
     let f, args = unfold_app e in
     if p>0 then Fmt.char out '(';
@@ -98,11 +89,10 @@ let rec pp_ (p:_) out (e:expr) : unit =
     if p>0 then Fmt.char out '(';
     Fmt.fprintf out "@[\\%a.@ %a@]" (pp_list pp_var_ty) vars (pp_ 0) bod;
     if p>0 then Fmt.char out ')';
-  | Bind {c; at; vars; body; c_loc=_} ->
+  | Bind {c; vars; body; c_loc=_} ->
     if p>0 then Fmt.char out '(';
-    let s = if at then "@" else "" in
-    Fmt.fprintf out "@[%s%a %a.@ %a@]"
-      s pp_const c (pp_list pp_var_ty) vars (pp_ 0) body;
+    Fmt.fprintf out "@[%a %a.@ %a@]"
+      pp_const c (pp_list pp_var_ty) vars (pp_ 0) body;
     if p>0 then Fmt.char out ')';
   | With (vars,bod) ->
     if p>0 then Fmt.char out '(';
@@ -125,7 +115,8 @@ and pp_var out v = Fmt.string out v.v_name
 and pp_const out c =
   match c with
   | C_local s -> Fmt.string out s
-  | C_k e -> K.Expr.pp out e
+  | C_k_const c -> K.Const.pp out c
+  | C_k_expr e -> K.Expr.pp out e
 and pp_var_ty out (v:var) : unit =
   match v.v_ty with
   | None -> Fmt.string out v.v_name
@@ -147,7 +138,8 @@ module Const = struct
   type t = const
   let pp = pp_const
   let to_string = Fmt.to_string pp
-  let[@inline] of_expr e = C_k e
+  let[@inline] of_const e = C_k_const e
+  let[@inline] of_expr e = C_k_expr e
 end
 
 module Expr = struct
@@ -163,21 +155,18 @@ module Expr = struct
   let ty_var ~loc s : t = mk_ ~loc (Var (Var.make ~loc s (Some type_)))
   let ty_meta ~loc (s:string) : ty = mk_ ~loc (Meta {ty=Some type_; name=s})
   let ty_arrow ~loc a b : ty = mk_ ~loc (Ty_arrow (a,b))
-  let ty_pi ~loc vars bod : ty = match vars with
-    | [] -> bod
-    | _ -> mk_ ~loc (Ty_pi (vars, bod))
 
   let var ~loc (v:var) : t = mk_ ~loc (Var v)
-  let const ~loc ?(at=false) c : t = mk_ ~loc (Const {c; at})
-  let of_expr ~loc ?at e : t = const ~loc ?at (Const.of_expr e)
+  let const ~loc c : t = mk_ ~loc (Const {c})
+  let of_expr ~loc e : t = const ~loc (Const.of_expr e)
   let meta ~loc (s:string) ty : t = mk_ ~loc (Meta {ty; name=s})
   let app (f:t) (a:t) : t = mk_ ~loc:Loc.(f.loc ++ a.loc) (App (f,a))
   let rec app_l f l = match l with [] -> f | x::xs -> app_l (app f x) xs
   let let_ ~loc bs bod : t = mk_ ~loc (Let (bs, bod))
   let with_ ~loc vs bod : t = mk_ ~loc (With (vs, bod))
   let lambda ~loc vs bod : t = mk_ ~loc (Lambda (vs, bod))
-  let bind ~loc ~c_loc ?(at=false) c vars body : t =
-    mk_ ~loc (Bind {c; c_loc; at; vars; body})
+  let bind ~loc ~c_loc c vars body : t =
+    mk_ ~loc (Bind {c; c_loc; vars; body})
   let eq ~loc a b : t =
     Log.debugf 6 (fun k->k"mk-eq loc=%a" Loc.pp loc);
     mk_ ~loc (Eq (a,b))
@@ -448,7 +437,7 @@ module Env = struct
     | Some f -> Some (C_local s, f)
     | None ->
       match K.Ctx.find_const_by_name self.ctx s with
-      | Some c -> Some (C_k (K.Expr.const self.ctx c), K.Const.fixity c)
+      | Some c -> Some (C_k_const c, K.Const.fixity c)
       | None -> None
 
   let find_rule self s : _ option =
@@ -466,7 +455,7 @@ module Env = struct
     | Top_enter_file _
     | Top_show _ | Top_show_expr _ | Top_show_proof _ -> ()
 
-  let bool self : const = C_k (K.Expr.bool self.ctx)
-  let eq self : const = C_k (K.Expr.eq self.ctx)
+  let bool self : const = C_k_const (K.Const.bool self.ctx)
+  let eq self : const = C_k_const (K.Const.eq self.ctx)
 end
 
