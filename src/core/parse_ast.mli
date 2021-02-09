@@ -34,12 +34,12 @@ and var = {
 
 and const = private
   | C_local of string (* not resolved yet *)
-  | C_k of K.expr
+  | C_k_const of K.const
+  | C_k_expr of K.expr
 
 and view =
   | Type
   | Ty_arrow of ty * ty
-  | Ty_pi of var list * ty
   | Var of var
   | Meta of {
       name: string;
@@ -48,14 +48,12 @@ and view =
   | Wildcard
   | Const of {
       c: const;
-      at: bool; (* explicit types? *)
     }
   | App of expr * expr
   | Lambda of var list * expr
   | Bind of {
       c: const;
       c_loc: location;
-      at: bool; (* explicit types? *)
       vars: var list;
       body: expr;
     }
@@ -75,6 +73,7 @@ end
 module Const : sig
   type t = const
   include PP with type t := t
+  val of_const : K.Const.t -> t
   val of_expr : K.Expr.t -> t
 end
 
@@ -92,11 +91,10 @@ module Expr : sig
   val ty_var : loc:location -> string -> t
   val ty_meta : loc:location -> string -> t
   val ty_arrow : loc:location -> t -> t -> t
-  val ty_pi : loc:location -> var list -> t -> t
 
   val var : loc:location -> var -> t
-  val const : loc:location -> ?at:bool -> const -> t
-  val of_expr : loc:location -> ?at:bool -> K.Expr.t -> t
+  val const : loc:location -> const -> t
+  val of_expr : loc:location -> K.Expr.t -> t
   val meta : loc:location -> string -> ty option -> t
   val app : t -> t -> t
   val app_l : t -> t list -> t
@@ -104,7 +102,7 @@ module Expr : sig
   val with_ : loc:location -> var list -> t -> t
   val lambda : loc:location -> var list -> t -> t
   val bind :
-    loc:location -> c_loc:location -> ?at:bool ->
+    loc:location -> c_loc:location ->
     const -> var list -> t -> t
   val eq : loc:location -> t -> t -> t
   val wildcard : loc:location -> unit -> t

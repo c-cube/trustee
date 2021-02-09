@@ -77,3 +77,7 @@ show expr T /\ a /\ b /\ c end
 
 show DefAnd end # TODO
 
+# this must fail, it's not prenex
+def yolo : (pi a. a -> (pi b. b -> a)) by DefYolo
+  := \(a:type) (x:a). (\(b:type) (y:b). x)
+end

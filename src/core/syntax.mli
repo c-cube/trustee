@@ -20,7 +20,6 @@ type token =
   | IN
   | AND
   | EQDEF
-  | AT_SYM of string
   | NUM of string
   | BY
   | END

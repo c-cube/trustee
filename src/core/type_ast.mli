@@ -35,17 +35,18 @@ and view =
   | Type
   | Bool
   | Ty_arrow of ty * ty
-  | Ty_pi of bvar * ty
   | Var of var
   | BVar of bvar
   | Meta of meta
   | Const of {
-      c: K.Expr.t;
+      c: K.const;
+      args: ty list;
     }
   | App of expr * expr
   | Lambda of bvar * expr
   | Eq of expr * expr
   | Let of binding list * expr
+  | KExpr of K.Expr.t
 
 and meta
 
@@ -99,7 +100,7 @@ module Ty_env : sig
   val empty : t
 
   type named_object =
-    | N_expr of K.Expr.t A.with_loc
+    | N_const of K.const A.with_loc
     | N_thm of K.Thm.t A.with_loc
     | N_rule of Proof.Rule.t A.with_loc
 

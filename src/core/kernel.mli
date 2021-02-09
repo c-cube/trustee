@@ -7,6 +7,7 @@ type ctx
 type expr
 type ty = expr
 type const
+type ty_const = const
 type thm
 
 type fixity = Fixity.t
@@ -16,6 +17,7 @@ type var = {
   v_name: string;
   v_ty: ty;
 }
+type ty_var = var
 
 type bvar = {
   bv_idx: int;
@@ -24,10 +26,25 @@ type bvar = {
 
 module Const : sig
   type t = const
+  include Sigs.EQ with type t := t
+  include PP with type t := t
+
   val fixity : t -> fixity
   val set_fixity : t -> fixity -> unit
   val def_loc : t -> location option
-  val pp : t Fmt.printer
+
+  type args =
+    | C_ty_vars of ty_var list
+    | C_arity of int
+
+  val args : t -> args
+  val pp_args : args Fmt.printer
+  val ty : t -> ty
+
+  val eq : ctx -> t
+  val bool : ctx -> t
+  val is_eq_to_bool : t -> bool
+  val is_eq_to_eq : t -> bool
 end
 
 (** {2 Free Variables} *)
@@ -73,10 +90,9 @@ module Expr : sig
     | E_type
     | E_var of var
     | E_bound_var of bvar
-    | E_const of const
+    | E_const of const * t list
     | E_app of t * t
     | E_lam of t * t
-    | E_pi of t * t
     | E_arrow of expr * expr
 
   include Sigs.EQ with type t := t
@@ -88,7 +104,6 @@ module Expr : sig
   val ty : t -> ty option
   val ty_exn : t -> ty
   val is_closed : t -> bool
-  val has_pi : t -> bool
   val is_eq_to_type : t -> bool
   val is_eq_to_bool : t -> bool
   val is_a_bool : t -> bool
@@ -99,11 +114,11 @@ module Expr : sig
 
   val type_ : ctx -> t
   val bool : ctx -> t
-  val eq : ctx -> t
+  val eq : ctx -> ty -> t
   val var : ctx -> var -> t
-  val const : ctx -> const -> t
-  val new_const : ctx -> ?def_loc:location -> string -> ty -> t
-  val new_ty_const : ctx -> ?def_loc:location -> string -> t
+  val const : ctx -> const -> ty list -> t
+  val new_const : ctx -> ?def_loc:location -> string -> ty_var list -> ty -> const
+  val new_ty_const : ctx -> ?def_loc:location -> string -> int -> const
   val var_name : ctx -> string -> ty -> t
   val bvar : ctx -> int -> ty -> t
   val app : ctx -> t -> t -> t
@@ -112,9 +127,6 @@ module Expr : sig
   val lambda : ctx -> var -> t -> t
   val lambda_l : ctx -> var list -> t -> t
   val lambda_db : ctx -> ty_v:ty -> t -> t
-  val pi : ctx -> var -> t -> t
-  val pi_l : ctx -> var list -> t -> t
-  val pi_db : ctx -> ty_v:ty -> t -> t
   val arrow : ctx -> t -> t -> t
   val arrow_l : ctx -> t list -> t -> t
 
@@ -126,8 +138,8 @@ module Expr : sig
 
   val unfold_app : t -> t * t list
   val unfold_eq : t -> (t * t) option
-  val as_const : t -> Const.t option
-  val as_const_exn : t -> Const.t
+  val as_const : t -> (Const.t * ty list) option
+  val as_const_exn : t -> Const.t * ty list
 
   module Set : CCSet.S with type elt = t
   module Map : CCMap.S with type key = t
@@ -157,12 +169,12 @@ end
 
 module New_ty_def : sig
   type t = {
-    tau: expr;
+    tau: ty_const;
     (** the new type constructor *)
     fvars: var list;
-    c_abs: expr;
+    c_abs: const;
     (** Function from the general type to `tau` *)
-    c_repr: expr;
+    c_repr: const;
     (** Function from `tau` back to the general type *)
     abs_thm: thm;
     (** `abs_thm` is `|- abs (repr x) = x` *)
@@ -209,9 +221,6 @@ module Thm : sig
   val congr : ctx -> t -> t -> t
   (** `congr (|- f=g) (|- t=u)` is `|- (f t) = (g u)` *)
 
-  val congr_ty : ctx -> t -> ty -> t
-  (** `congr_ty (|- f=g) ty` is `|- (f ty) = (g ty)` where `ty` is a type *)
-
   val subst : ctx -> t -> Subst.t -> t
   (** `subst (A |- t) \sigma` is `A\sigma |- t\sigma` *)
 
@@ -233,7 +242,7 @@ module Thm : sig
 
   val new_basic_definition :
     ctx -> ?def_loc:location ->
-    expr -> t * expr
+    expr -> t * const
   (** `new_basic_definition (x=t)` where `x` is a variable and `t` a term
       with a closed type,
       returns a theorem `|- x=t` where `x` is now a constant, along with
