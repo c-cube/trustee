@@ -56,8 +56,7 @@ and const_args =
 let[@inline] expr_eq (e1:expr) e2 : bool = e1 == e2
 let[@inline] expr_hash (e:expr) = H.int e.e_id
 let[@inline] expr_compare (e1:expr) e2 : int = CCInt.compare e1.e_id e2.e_id
-let[@inline] expr_db_depth e = e.e_flags lsr (1+ctx_id_bits)
-let[@inline] expr_has_pi e : bool = (1 land (e.e_flags lsr ctx_id_bits)) == 1
+let[@inline] expr_db_depth e = e.e_flags lsr ctx_id_bits
 let[@inline] expr_ctx_uid e : int = e.e_flags land ctx_id_mask
 
 let[@inline] var_eq v1 v2 = v1.v_name = v2.v_name && expr_eq v1.v_ty v2.v_ty
@@ -93,6 +92,7 @@ let unfold_app (e:expr) : expr * expr list =
 let expr_pp_ out (e:expr) : unit =
   let rec aux k out e =
     let pp = aux k in
+    let pp' = aux' k in
     match e.e_view with
     | E_kind -> Fmt.string out "kind"
     | E_type -> Fmt.string out "type"
@@ -103,19 +103,23 @@ let expr_pp_ out (e:expr) : unit =
       else Fmt.fprintf out "%%db_%d" (idx-k)
     | E_const (c,[]) -> ID.pp out c.c_name
     | E_const (c,args) ->
-      Fmt.fprintf out "(@[%a@ %a@])" ID.pp c.c_name (pp_list pp) args
+      Fmt.fprintf out "(@[%a@ %a@])" ID.pp c.c_name (pp_list pp') args
     | E_app _ ->
       let f, args = unfold_app e in
       begin match f.e_view, args with
         | E_const (c, [_]), [a;b] when ID.name c.c_name = "=" ->
-          Fmt.fprintf out "(@[%a@ = %a@])" pp a pp b
+          Fmt.fprintf out "@[%a@ = %a@]" pp a pp b
         | _ ->
-          Fmt.fprintf out "(@[%a@ %a@])" pp f (pp_list pp) args
+          Fmt.fprintf out "@[%a@ %a@]" pp' f (pp_list pp') args
       end
     | E_lam (_ty, bod) ->
-      Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp _ty (aux (k+1)) bod
+      Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp' _ty (aux (k+1)) bod
     | E_arrow(a,b) ->
-      Fmt.fprintf out "(@[%a@ -> %a@])" pp a pp b
+      Fmt.fprintf out "@[%a@ -> %a@]" pp' a pp b
+
+  and aux' k out e = match e.e_view with
+    | E_kind | E_type | E_var _ | E_const (_, []) -> aux k out e
+    | _ -> Fmt.fprintf out "(%a)" (aux k) e
   in
   aux 0 out e
 
@@ -283,7 +287,6 @@ module Expr = struct
   let to_string = Fmt.to_string pp
   let compare = expr_compare
   let db_depth = expr_db_depth
-  let has_pi = expr_has_pi
   let[@inline] ty e = Lazy.force e.e_ty
   let[@inline] view e = e.e_view
   let[@inline] ty_exn e = match e.e_ty with
@@ -323,7 +326,6 @@ module Expr = struct
   let kind ctx = Lazy.force ctx.ctx_kind
   let type_ ctx = Lazy.force ctx.ctx_type
 
-  let[@inline] is_eq_to_kind e = match view e with E_kind -> true | _ -> false
   let[@inline] is_eq_to_type e = match view e with | E_type -> true | _ -> false
   let[@inline] is_a_type e = is_eq_to_type (ty_exn e)
   let is_eq_to_bool e =
@@ -411,8 +413,10 @@ module Expr = struct
     let fvars = free_vars ty in
     if not (Var.Set.equal fvars (Var.Set.of_list ty_vars)) then (
       errorf
-        (fun k->k "new_const: type variables should be %a,@ but given set is %a"
-            Var.Set.(pp Var.pp) fvars (Fmt.Dump.list Var.pp) ty_vars)
+        (fun k->k
+            "Kernel.new_const: type variables should be [@[%a@]],@ \
+             but RHS has free type variables %a"
+            (Fmt.Dump.list Var.pp) ty_vars Var.Set.(pp Var.pp) fvars)
     );
     new_const_ ctx ?def_loc name (C_ty_vars ty_vars) ty
 
@@ -525,14 +529,17 @@ module Expr = struct
       ty2
     | _ ->
       errorf
-        (fun k->k"cannot apply `@[%a@]`@ of type %a"
+        (fun k->k
+            "@[kernel: cannot apply `@[%a@]`@ of type %a;@ it is not a function@]"
             pp f pp ty_f)
 
   let app ctx f a : t =
     ctx_check_e_uid ctx f;
     ctx_check_e_uid ctx a;
     let ty = lazy (Some (ty_app_ f a)) in
-    make_ ctx (E_app (f,a)) ty
+    let e = make_ ctx (E_app (f,a)) ty in
+    ignore (Lazy.force e.e_ty);
+    e
 
   let rec app_l ctx f l = match l with
     | [] -> f
@@ -612,10 +619,10 @@ end
   let v x = Expr.var ctx x
   let (@->) a b = Expr.arrow ctx a b
   let (@@) a b = Expr.app ctx a b
-  let a = Expr.new_const ctx "a0" [] tau
-  let b = Expr.new_const ctx "b0" [] tau
-  let c = Expr.new_const ctx "c0" [] tau
-  let f1: Expr.t = Expr.new_const ctx "f1" (tau @-> tau)
+  let a = Expr.const ctx (Expr.new_const ctx "a0" [] tau) []
+  let b = Expr.const ctx (Expr.new_const ctx "b0" [] tau) []
+  let c = Expr.const ctx (Expr.new_const ctx "c0" [] tau) []
+  let f1: const = Expr.new_const ctx "f1" [] (tau @-> tau)
   let eq = Expr.app_eq ctx
 
   let must_fail f = try ignore (f()); false with _ -> true
@@ -889,6 +896,7 @@ module Thm = struct
       errorf (fun k->k"not a redex: %a not an application" Expr.pp e)
 
   let new_basic_definition ctx ?def_loc (e:expr) : t * const =
+    Log.debugf 5 (fun k->k"new-basic-def %a" Expr.pp e);
     wrap_exn (fun k->k"@[<2>in new-basic-def `@[%a@]`@]" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.unfold_eq e with
@@ -907,15 +915,16 @@ module Thm = struct
           errorf (fun k-> k "LHS must be a variable,@ but got %a" Expr.pp x)
       in
       let ty_vars = Expr.free_vars rhs |> Var.Set.to_list in
-      begin match List.find (fun v -> not (Expr.is_a_type v.v_ty)) ty_vars with
+      begin match List.find (fun v -> not (Expr.is_eq_to_type v.v_ty)) ty_vars with
         | v ->
           errorf
-            (fun k->k"RHS contains free variable `%a`@ which is not a type variable"
-                Var.pp v)
+            (fun k->k"RHS contains free variable `@[%a : %a@]`@ which is not a type variable"
+                Var.pp v Expr.pp v.v_ty)
         | exception Not_found -> ()
       end;
       let c = Expr.new_const ctx ?def_loc (Var.name x_var) ty_vars (Var.ty x_var) in
-      let th = make_ ctx Expr.Set.empty (Expr.app_eq ctx e rhs) in
+      let c_e = Expr.const ctx c (List.map (Expr.var ctx) ty_vars) in
+      let th = make_ ctx Expr.Set.empty (Expr.app_eq ctx c_e rhs) in
       th, c
 
   let new_basic_type_definition ctx
@@ -990,38 +999,14 @@ module Thm = struct
 
 end
 
-(* fail because it has a lambda on a non-atomic type *)
-(*$R
-  let a_ = v' "a" type_ in
-  assert_bool "bad lambda type" (must_fail (fun() ->
-      let x = v' "x" (pi a_ (v a_ @-> v a_)) in
-      let e = lambda x (v x) in
-      ()
-    ));
-*)
-
-(* fail because type is not prenex *)
-(*$R
-  let a_ = v' "a" type_ in
-  let b_ = v' "b" type_ in
-  assert_bool "def should fail" (must_fail (fun() ->
-      Thm.new_basic_definition ctx
-        (let thevar = v (v' "body" (v a_ @-> pi a_ (v a_ @-> v a_))) in
-         let x = v' "x" (v a_) in
-         let y = v' "y" (v a_) in
-         let rhs = lambda x (lambda a_ (lambda y (v y))) in
-         eq thevar rhs)
-  ));
-*)
-
 (* ok def *)
 (*$R
   let a_ = v' "a" type_ in
   let ok_def, _thm =
     Thm.new_basic_definition ctx
-      (let thevar = v (v' "body" (pi a_ (v a_ @-> v a_))) in
-       let x = v' "a" (v a_) in
-       eq thevar (lambda a_ (lambda x (v x))))
+      (let thevar = v (v' "body" (v a_ @-> v a_)) in
+       let x = v' "x" (v a_) in
+       eq thevar (lambda x (v x)))
   in
   ()
 *)

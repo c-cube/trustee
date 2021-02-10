@@ -15,6 +15,7 @@ type token =
   | QUESTION_MARK
   | QUESTION_MARK_STR of string
   | SYM of string
+  | QUOTE_STR of string (* 'foo *)
   | QUOTED_STR of string
   | LET
   | IN

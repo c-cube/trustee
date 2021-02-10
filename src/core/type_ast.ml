@@ -102,6 +102,12 @@ module Meta = struct
   let pp out m = Fmt.fprintf out "?%s" m.meta_name
 end
 
+(** Follow assigned meta-variables *)
+let[@inline][@unroll 1] rec expr_deref_ (e:expr) : expr =
+  match e.view with
+  | Meta {meta_deref=Some u; _} -> expr_deref_ u
+  | _ -> e
+
 let rec pp_expr_ out (e:expr) : unit =
   match view_expr_ e with
   | Kind -> Fmt.string out "kind"
@@ -113,10 +119,10 @@ let rec pp_expr_ out (e:expr) : unit =
     Fmt.fprintf out "%a@ -> %a" pp_atom_ a pp_expr_ b;
   | Const {c;args=[]} -> K.Const.pp out c
   | Const {c;args} ->
-    Fmt.fprintf out "%a@ %a" K.Const.pp c (pp_list pp_expr_) args
+    Fmt.fprintf out "%a@ %a" K.Const.pp c (pp_list pp_atom_) args
   | App _ ->
     let f, l = unfold_app_ e in
-    Fmt.fprintf out "(@[%a@ %a@])" pp_expr_ f (pp_list pp_expr_) l
+    Fmt.fprintf out "(@[%a@ %a@])" pp_atom_ f (pp_list pp_atom_) l
   | Meta v -> Meta.pp out v
   | Lambda _ ->
     let vars, bod = unfold_lam e in
@@ -128,13 +134,15 @@ let rec pp_expr_ out (e:expr) : unit =
     Fmt.fprintf out "(@[let %a in@ %a@])" (pp_list ~sep:" and " pp_b) bs pp_expr_ bod
   | KExpr e -> K.Expr.pp out e
 and pp_atom_ out e =
+  let e = expr_deref_ e in
   match e.view with
-  | Type | Var _ | Meta _ | Const _ -> pp_expr_ out e
+  | Kind | Type | Var _ | BVar _ | Meta _ | Const {args=[];_} ->
+    pp_expr_ out e
   | _ -> Fmt.fprintf out "(@[%a@])" pp_expr_ e
 and pp_var out v = Fmt.string out v.v_name
 and pp_bvar out v = ID.pp out v.bv_name
 and pp_bvar_ty out (v:bvar) : unit =
-  Fmt.fprintf out "(@[%a@ : %a@])" ID.pp v.bv_name pp_expr_ v.bv_ty
+  Fmt.fprintf out "(@[%a@ : %a@])" ID.pp v.bv_name pp_atom_ v.bv_ty
 
 let ty_env_empty_ : ty_env = {
   env_consts=Str_map.empty;
@@ -176,11 +184,7 @@ module Expr = struct
   let view = view_expr_
   let unfold_app = unfold_app_
 
-  (** Follow assigned meta-variables *)
-  let[@inline][@unroll 1] rec deref_ (e:expr) : expr =
-    match e.view with
-    | Meta {meta_deref=Some u; _} -> deref_ u
-    | _ -> e
+  let deref_ = expr_deref_
 
   (** Iterate on immediate subterms *)
   let iter ~f ~f_bind b_acc (e:expr) : unit =
@@ -516,9 +520,9 @@ module Expr = struct
     let rec aux (bs:_ ID.Map.t) k e : K.Expr.t =
       let recurse = aux bs k in
       let loc = loc e in
-      Log.debugf 5 (fun k'->k' "@[<hv>>> conv-expr %a@ k: %d ty: %a@ bs: {@[%a@]}@]"
+      (*Log.debugf 50 (fun k'->k' "@[<hv>>> conv-expr %a@ k: %d ty: %a@ bs: {@[%a@]}@]"
                        pp e k pp (ty e)
-                       (ID.Map.pp ID.pp (Fmt.Dump.pair K.Expr.pp Fmt.int)) bs);
+                       (ID.Map.pp ID.pp (Fmt.Dump.pair K.Expr.pp Fmt.int)) bs);*)
       match view e with
       | Meta {meta_deref=Some _; _} -> assert false
       | Meta {meta_deref=None; _} ->
@@ -1090,11 +1094,11 @@ module Ty_infer = struct
             | BV bv -> Expr.bvar ~loc bv (* bound variable *)
             | V v -> Expr.var ~loc v
           end
-        | A.Var v ->
+        | A.Var va ->
           let v =
-            match Str_map.find v.A.v_name st.fvars with
+            match Str_map.find va.A.v_name st.fvars with
             | v' ->
-              begin match v.A.v_ty with
+              begin match va.A.v_ty with
                 | Some ty ->
                   (* unify expected type with actual type *)
                   let ty = inf_rec_ bv ty in
@@ -1103,14 +1107,14 @@ module Ty_infer = struct
               end;
               v'
             | exception Not_found ->
-              let ty = match v.A.v_ty with
+              let ty = match va.A.v_ty with
                 | Some ty -> inf_rec_ bv ty
                 | None ->
                   let ty, m = Expr.ty_meta ~loc st in
                   st.to_gen <- m :: st.to_gen;
                   ty
               in
-              let v = Var.make v.A.v_name ty in
+              let v = Var.make va.A.v_name ty in
               st.fvars <- Str_map.add v.v_name v st.fvars;
               v
           in
@@ -1134,7 +1138,6 @@ module Ty_infer = struct
           Expr.eq a b
         | A.Const {c} ->
           (* convert directly into a proper kernel constant *)
-          Log.debugf 5 (fun k->k"infer-const %a at %a" A.Const.pp c Loc.pp loc);
           infer_const_ st c ~loc
         | A.App (f,a) ->
           let f = inf_rec_ bv f in
@@ -1162,6 +1165,7 @@ module Ty_infer = struct
           Expr.lambda_l ~loc vars bod
         | A.Bind { c; c_loc; vars; body } ->
           let f = infer_const_ st ~loc:c_loc c in
+          Log.debugf 5 (fun k->k"binder: f=%a@ ty=%a" Expr.pp f Expr.pp (Expr.ty f));
           let bv, vars =
             CCList.fold_map
               (fun bv v ->
@@ -1170,11 +1174,14 @@ module Ty_infer = struct
               bv vars
           in
           let body = inf_rec_ bv body in
+          Log.debugf 5 (fun k->k"body: f=%a@ ty=%a" Expr.pp body Expr.pp (Expr.ty body));
           (* now for each [v], create [f (\x. bod)] *)
           CCList.fold_right
             (fun bv body ->
                let lam = Expr.lambda ~loc bv body in
-               Expr.app st f lam)
+               let e = Expr.app st f lam in
+               Log.debugf 5 (fun k->k"app: f=%a@ ty=%a" Expr.pp e Expr.pp (Expr.ty e));
+               e)
             vars body
         | A.Let (bindings, body) ->
           let bv', bindings =
@@ -1191,6 +1198,7 @@ module Ty_infer = struct
         end
 
     and infer_const_ ~loc env c : expr =
+      (*Log.debugf 50 (fun k->k"infer-const %a at %a" A.Const.pp c Loc.pp loc);*)
       let mk_c c =
         let arity =
           match K.Const.args c with
@@ -1446,6 +1454,10 @@ module Process_stmt = struct
     on_error: location -> unit Fmt.printer -> unit;
   }
 
+  let reset_ (self:t) =
+    self.st.fvars <- Str_map.empty;
+    ()
+
   let top_decl_ ~loc self name ty : ty =
     let ty =
       Ty_infer.and_then_generalize self.st
@@ -1458,7 +1470,7 @@ module Process_stmt = struct
     ty
 
   let top_def_ ~loc self name (th_name:string A.with_loc option)
-      vars ret body : ty * expr =
+      vars ret body : ty * expr * K.Thm.t =
     (* turn [def f x y := bod] into [def f := \x y. bod] *)
     let vars, e = Ty_infer.infer_expr_vars self.st vars body in
     let def_rhs = Expr.lambda_l ~loc:e.loc vars e in
@@ -1487,9 +1499,10 @@ module Process_stmt = struct
     Typing_state.declare_const self.st name.A.view {A.view=ke;loc};
     CCOpt.iter
       (fun th_name -> Typing_state.define_thm self.st th_name.A.view {A.view=th;loc}) th_name;
-    ty_ret, def_rhs
+    ty_ret, def_rhs, th
 
   let top_show_ self ~loc s : bool * Ty_env.named_object option =
+    reset_ self;
     let named = Typing_state.find_named self.st s in
     begin match named with
       | Some (Ty_env.N_const c) ->
@@ -1582,6 +1595,7 @@ module Process_stmt = struct
 
   let top_ (self:t) st (idx:Index.t) : Index.t =
     Log.debugf 2 (fun k->k"(@[TA.process-stmt@ %a@])" A.Top_stmt.pp st);
+    reset_ self;
     let idx = ref idx in
     let loc = A.Top_stmt.loc st in
     Index.add_env idx ~loc self.st.ty_env;
@@ -1597,8 +1611,8 @@ module Process_stmt = struct
           Index.add_q idx (Expr.as_queryable ty);
           true
         | A.Top_def { name; th_name; vars; ret; body } ->
-          let ty_ret, rhs = top_def_ self ~loc name th_name vars ret body in
-          Log.debugf 5 (fun k->k "add index ty_ret=%a loc=%a" Expr.pp ty_ret Loc.pp ty_ret.loc);
+          let ty_ret, rhs, th = top_def_ self ~loc name th_name vars ret body in
+          Log.debugf 5 (fun k->k "top-def: theorem is %a" K.Thm.pp_quoted th);
           Index.add_q idx (Expr.as_queryable ty_ret);
           Index.add_q idx (Expr.as_queryable rhs);
           true

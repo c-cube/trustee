@@ -53,8 +53,8 @@ theorem EqTrueIntro := x = (x = T) by proof sym EqTrueElim end end
 # TODO: REqTrueIntro
 # TODO: REqTrueElim
 
-def forall : (pi a. (a -> bool) -> bool) by DefForall
-  := \(a:type) (f:a -> bool). f = (\x:a. T)
+def forall : ('a -> bool) -> bool by DefForall
+  := \(f: 'a -> bool). f = (\x:'a. T)
 end
 
 fixity forall := binder 12 end
@@ -68,16 +68,13 @@ show DefForall end
 
 
 def /\ (a b : bool) : bool by DefAnd
-  := forall f. f a b = f T T
+  := forall (f: bool -> bool -> bool). f a b = f T T
 end
 
 fixity /\ := rassoc 15 end
 
 show expr T /\ a /\ b /\ c end
 
-show DefAnd end # TODO
+# TODO: import defs and theorems from rust prelude
 
-# this must fail, it's not prenex
-def yolo : (pi a. a -> (pi b. b -> a)) by DefYolo
-  := \(a:type) (x:a). (\(b:type) (y:b). x)
-end
+show DefAnd end # TODO

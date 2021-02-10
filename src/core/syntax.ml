@@ -18,6 +18,7 @@ type token =
   | QUESTION_MARK
   | QUESTION_MARK_STR of string
   | SYM of string
+  | QUOTE_STR of string (* 'foo *)
   | QUOTED_STR of string
   | LET
   | IN
@@ -46,6 +47,7 @@ module Token = struct
     | QUESTION_MARK -> Fmt.string out "QUESTION_MARK"
     | QUESTION_MARK_STR s -> Fmt.fprintf out "QUESTION_MARK_STR %S" s
     | SYM s -> Fmt.fprintf out "SYM %S" s
+    | QUOTE_STR s -> Fmt.fprintf out "QUOTE_STR %S" s
     | QUOTED_STR s -> Fmt.fprintf out "QUOTED_STR %S" s
     | NUM s -> Fmt.fprintf out "NUM %S" s
     | BY -> Fmt.string out "BY"
@@ -159,18 +161,21 @@ end = struct
         )
       | '.' -> self.i <- 1 + self.i; DOT
       | '_' -> self.i <- 1 + self.i; WILDCARD
-      | '?' ->
+      | ('?' | '\'') as c0 ->
         self.i <- 1 + self.i;
         let i0 = self.i in
         let j =
           read_many
             self (fun c -> is_alpha c || is_digit c || is_symbol c) self.i
         in
-        if i0 = j then (
+        if i0 = j && c0 = '?' then (
           QUESTION_MARK
-        ) else (
+        ) else if c0 = '?' then (
           self.i <- j;
           QUESTION_MARK_STR (String.sub self.src i0 (j-i0))
+        ) else (
+          self.i <- j;
+          QUOTE_STR (String.sub self.src i0 (j-i0))
         )
       | '"' ->
         self.i <- 1 + self.i;
@@ -236,8 +241,8 @@ end
 
 (*$= & ~printer:Q.Print.(list Token.to_string)
      [SYM "f"; SYM "x"; EOF] (Lexer.create ~file:"" "f x" |> Lexer.S.to_list)
-     [SYM "f"; LPAREN; SYM "x"; SYM"+"; AT_SYM "="; RPAREN; EOF] \
-      (Lexer.create ~file:"" "f (x + @=)" |> Lexer.S.to_list)
+     [SYM "f"; LPAREN; SYM "x"; SYM"+"; SYM "="; RPAREN; EOF] \
+      (Lexer.create ~file:"" "f (x + =)" |> Lexer.S.to_list)
 *)
 
 module P_state = struct
@@ -261,7 +266,7 @@ module P_state = struct
       Lexer.S.junk self.lex;
       t2, loc
     ) else (
-      errorf (fun k->k "unexpected token %a while parsing %s at %a"
+      errorf (fun k->k "unexpected token %a while parsing;@ %s at %a"
                  Token.pp t2 msg Loc.pp loc)
     )
 
@@ -312,9 +317,6 @@ module P_expr = struct
   let fresh_ =
     let n = ref 0 in
     fun ?(pre="a") () -> Printf.sprintf "_%s_%d" pre (incr n; !n)
-
-  let is_ascii = function
-    | 'a'..'z' | 'A'..'Z' | '_' -> true | _ -> false
 
   let expr_of_string_ (self:t) ~loc (s:string) : A.expr =
     begin match s with
@@ -392,7 +394,7 @@ module P_expr = struct
     in
     l
 
-  and p_nullary_ ~loc (self:t) ?(at=false) (s:string) : AE.t =
+  and p_nullary_ ~loc (self:t) (s:string) : AE.t =
     Log.debugf 6 (fun k->k"nullary `%s` loc=%a" s Loc.pp loc);
     match Lexer.S.cur self.lex with
     | COLON, _ ->
@@ -404,7 +406,7 @@ module P_expr = struct
       match A.Env.find_const self.env s with
       | Some (c,_) -> AE.const ~loc c
       | None ->
-        if s<>"" && (at || is_ascii (String.get s 0)) then (
+        if s<>"" then (
           expr_of_string_ ~loc self s
         ) else (
           errorf (fun k->k"unknown symbol `%s` at %a" s Loc.pp loc)
@@ -433,6 +435,9 @@ module P_expr = struct
     | SYM s ->
       Lexer.S.junk self.lex;
       begin match fixity_ self s with
+        | _ when fst (Lexer.S.cur self.lex) = RPAREN ->
+          (* case: `(=)` or `(+)`: return the sybol *)
+          p_nullary_ ~loc:loc_t self s
         | F_normal -> p_nullary_ ~loc:loc_t self s
         | F_prefix i ->
           let arg = p_expr_ ~ty_expect:None self i in
@@ -465,6 +470,9 @@ module P_expr = struct
     | QUESTION_MARK_STR s ->
       Lexer.S.junk self.lex;
       AE.meta ~loc:loc_t s None
+    | QUOTE_STR s ->
+      Lexer.S.junk self.lex;
+      AE.ty_var ~loc:loc_t s
     | QUESTION_MARK ->
       begin match self.q_args with
         | [] -> errorf (fun k->k"no interpolation arg at %a" Loc.pp loc_t)
@@ -509,7 +517,7 @@ module P_expr = struct
         lhs := AE.app !lhs e
       | (RPAREN | WILDCARD | COLON | DOT | IN
       | LET | AND), _loc -> continue := false
-      | (QUESTION_MARK | QUOTED_STR _
+      | (QUESTION_MARK | QUOTED_STR _ | QUOTE_STR _
         | QUESTION_MARK_STR _ | NUM _), _ ->
         let e = p_expr_atomic_ ~ty_expect:None self in
         lhs := AE.app !lhs e;
@@ -569,8 +577,8 @@ module P_expr = struct
   let expr_atomic ?ty_expect self : AE.t =
     p_expr_atomic_ ~ty_expect self
 
-  let expr (self:t) : AE.t =
-    p_expr_ ~ty_expect:None self 0
+  let expr ?ty_expect (self:t) : AE.t =
+    p_expr_ ~ty_expect self 0
 
   (* main entry point for expressions *)
   let expr_and_eof (self:t) : AE.t =
@@ -721,7 +729,7 @@ module P_top = struct
     Log.debugf 5 (fun k->k"got vars %a" (Fmt.Dump.list A.Var.pp_with_ty) vars);
     let tok, ret = match tok with
       | COLON ->
-        let e =  P_expr.expr_atomic ~ty_expect:AE.type_ self in
+        let e =  P_expr.expr ~ty_expect:AE.type_ self in
         let tok, _ = Lexer.S.cur self.lex in
         Lexer.S.junk self.lex;
         tok, Some (e)
@@ -918,33 +926,39 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     let ctx = K.Ctx.create ()
     let env = A.Env.create ctx
     let bool = K.Expr.bool ctx
-    let tau = K.Expr.new_ty_const ctx "tau"
-    let v s ty = K.Expr.var ctx (K.Var.make s ty)
+    let c_bool = K.Const.bool ctx
+    let type_ = K.Expr.type_ ctx
+    let tau = K.Expr.const ctx (K.Expr.new_ty_const ctx "tau" 0) []
+    let lambda v t = K.Expr.lambda ctx v t
+    let v' s ty = K.Var.make s ty
+    let v x = K.Expr.var ctx x
     let (@->) a b = K.Expr.arrow ctx a b
     let (@@) a b = K.Expr.app ctx a b
-    let a = K.Expr.new_const ctx "a0" tau
-    let b = K.Expr.new_const ctx "b0" tau
-    let c = K.Expr.new_const ctx "c0" tau
-    let f1 = K.Expr.new_const ctx "f1" (tau @-> tau)
-    let g1 = K.Expr.new_const ctx "g1" (tau @-> tau)
-    let h1 = K.Expr.new_const ctx "h1" (tau @-> tau)
-    let f2 = K.Expr.new_const ctx "f2" (tau @-> tau @-> tau)
-    let g2 = K.Expr.new_const ctx "g2" (tau @-> tau @-> tau)
-    let h2 = K.Expr.new_const ctx "h2" (tau @-> tau @-> tau)
-    let p0 = K.Expr.new_const ctx "p0" bool
-    let q0 = K.Expr.new_const ctx "q0" bool
-    let r0 = K.Expr.new_const ctx "r0" bool
-    let p1 = K.Expr.new_const ctx "p1" (tau @-> bool)
-    let q1 = K.Expr.new_const ctx "q1" (tau @-> bool)
-    let r1 = K.Expr.new_const ctx "r1" (tau @-> bool)
-    let p2 = K.Expr.new_const ctx "p2" (tau @-> tau @-> bool)
-    let q2 = K.Expr.new_const ctx "q2" (tau @-> tau @-> bool)
-    let r2 = K.Expr.new_const ctx "r2" (tau @-> tau @-> bool)
-    let forall = K.Expr.new_const ctx "!" ((tau @-> bool) @-> bool)
-    let () = K.Const.set_fixity (K.Expr.as_const_exn forall) (F_binder 10)
-    let plus = K.Expr.new_const ctx "+" (tau @-> tau @-> tau)
-    let eq = K.Expr.eq ctx
-    let () = K.Const.set_fixity (K.Expr.as_const_exn plus) (F_right_assoc 20)
+    let new_const ctx s ty = K.Expr.new_const ctx s [] ty
+    let const c = K.Expr.const ctx c []
+    let a = new_const ctx "a0" tau
+    let b = new_const ctx "b0" tau
+    let c = new_const ctx "c0" tau
+    let f1 = new_const ctx "f1" (tau @-> tau)
+    let g1 = new_const ctx "g1" (tau @-> tau)
+    let h1 = new_const ctx "h1" (tau @-> tau)
+    let f2 = new_const ctx "f2" (tau @-> tau @-> tau)
+    let g2 = new_const ctx "g2" (tau @-> tau @-> tau)
+    let h2 = new_const ctx "h2" (tau @-> tau @-> tau)
+    let p0 = new_const ctx "p0" bool
+    let q0 = new_const ctx "q0" bool
+    let r0 = new_const ctx "r0" bool
+    let p1 = new_const ctx "p1" (tau @-> bool)
+    let q1 = new_const ctx "q1" (tau @-> bool)
+    let r1 = new_const ctx "r1" (tau @-> bool)
+    let p2 = new_const ctx "p2" (tau @-> tau @-> bool)
+    let q2 = new_const ctx "q2" (tau @-> tau @-> bool)
+    let r2 = new_const ctx "r2" (tau @-> tau @-> bool)
+    let forall = K.Expr.new_const ctx "!" [] ((tau @-> bool) @-> bool)
+    let () = K.Const.set_fixity forall (F_binder 10)
+    let plus = K.Expr.new_const ctx "+" [] (tau @-> tau @-> tau)
+    let eq = K.Const.eq ctx
+    let () = K.Const.set_fixity plus (F_right_assoc 20)
 
     let of_str s = Syntax.parse_expr_infer ~env (Lexer.create ~file:"" s)
   end
@@ -965,7 +979,7 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     let b_forall vars (bod:AE.t) : AE.t =
       AE.bind ~loc ~c_loc:loc (A.Const.of_const M.forall)
         (List.map (fun (x,ty)-> A.Var.make ~loc x ty) vars) bod
-    let c x : t = AE.of_const ~loc x
+    let c x : t = AE.const ~loc (A.Const.of_const x)
     let (@->) a b = AE.ty_arrow ~loc a b
     let (@) a b = AE.app_l a b
   end
@@ -998,16 +1012,16 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     A.(lambda ~loc [A.Var.make ~loc "x" @@ Some (c M.a @-> c M.b @-> c M.c)] \
          (A.eq (v"x")(v"x"))) \
     (A.of_str "\\ (x:a0->b0->c0). x=x")
-  A.(of_const M.eq) (A.of_str "@=")
-  A.(of_const M.bool) (A.of_str "bool")
+  A.(c M.eq) (A.of_str "(=)")
+  A.(c M.c_bool) (A.of_str "bool")
   A.(eq (c M.p2 @ [v "x"; v "y"]) (c M.q2 @ [v "y"; v "x"])) \
     (A.of_str "p2 x y = q2 y x")
 *)
 
 (* test type inference *)
 (*$= & ~cmp:E.equal ~printer:E.to_string
-  M.(tau @-> tau) (K.Expr.ty_exn M.f1)
-  M.(f1 @@ v "a" tau) (parse_e "f1 a")
+  M.(tau @-> tau) (K.Const.ty M.f1)
+  M.(const f1 @@ v (v' "a" tau)) (parse_e "f1 a")
 *)
 
 (* test lexer *)
@@ -1031,11 +1045,12 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
       EQDEF; \
       QUOTED_STR(" co co"); \
       END; \
+      QUOTE_STR "a"; \
       SYM("world"); \
       RPAREN; \
       EOF; \
     ] \
-    (lex_to_list {test| foo + _ bar13(hello! := " co co" end world) |test})
+    (lex_to_list {test| foo + _ bar13(hello! := " co co" end 'a world) |test})
     [ LPAREN; \
       LPAREN; \
       NUM("12"); \
