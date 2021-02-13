@@ -61,7 +61,7 @@ and view =
   | Eq of expr * expr
   | Let of binding list * expr
 
-type subst = (string * expr) list
+type subst = (string with_loc * expr) list with_loc
 
 module Var : sig
   type t = var
@@ -111,6 +111,7 @@ end
 (** {2 Substitution} *)
 module Subst : sig
   type t = subst
+  val mk_ : ?loc:location -> (string with_loc * expr) list -> t
   include PP with type t := t
 end
 

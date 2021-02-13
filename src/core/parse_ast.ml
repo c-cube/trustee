@@ -60,7 +60,7 @@ and view =
   | Eq of expr * expr
   | Let of binding list * expr
 
-type subst = (string * expr) list
+type subst = (string with_loc * expr) list with_loc
 
 let noloc: location = Loc.none
 
@@ -177,10 +177,11 @@ end
 
 module Subst = struct
   type t = subst
+  let mk_ ?(loc=noloc) view : t = {view; loc}
 
   let pp out s =
-    let pppair out (v,e) = Fmt.fprintf out "(@[%s := %a@])" v Expr.pp e in
-    Fmt.fprintf out "(@[%a@])" (pp_list ~sep:"," pppair) s
+    let pppair out (v,e) = Fmt.fprintf out "(@[%s := %a@])" v.view Expr.pp e in
+    Fmt.fprintf out "(@[%a@])" (pp_list ~sep:"," pppair) s.view
   let to_string = Fmt.to_string pp
 end
 

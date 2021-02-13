@@ -71,6 +71,8 @@ class trustee_server =
                ~on_show:(fun loc msg ->
                    let range = lsp_range_of_loc loc in
                    let message = Fmt.asprintf "@[info: %a@]" msg() in
+                   Log.debugf 5 (fun k->k"LSP info loc: %a"
+                                    Yojson.Safe.pp (Range.yojson_of_t range));
                    let d = Diagnostic.create
                        ~severity:DiagnosticSeverity.Information
                        ~range ~message () in

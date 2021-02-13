@@ -85,6 +85,11 @@ module Subst : sig
   type t = subst
   include PP with type t := t
 
+  val is_empty : t -> bool
+  val empty : t
+  val add : Var.t -> expr -> t -> t
+  val to_list : t -> (Var.t * expr) list
+
   val to_k_subst :
     ?subst:K.Expr.t ID.Map.t ->
     K.Ctx.t -> t -> K.Subst.t

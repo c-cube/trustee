@@ -14,6 +14,8 @@ type token =
   | RPAREN
   | COLON
   | DOT
+  | COMMA
+  | SEMI_COLON
   | WILDCARD
   | QUESTION_MARK
   | QUESTION_MARK_STR of string
@@ -39,6 +41,8 @@ module Token = struct
     | RPAREN -> Fmt.string out "RPAREN"
     | COLON -> Fmt.string out "COLON"
     | DOT -> Fmt.string out "DOT"
+    | COMMA -> Fmt.string out "COMMA"
+    | SEMI_COLON -> Fmt.string out "SEMI_COLON"
     | LET -> Fmt.string out "LET"
     | AND -> Fmt.string out "AND"
     | IN -> Fmt.string out "IN"
@@ -55,7 +59,7 @@ module Token = struct
     | ERROR c -> Fmt.fprintf out "ERROR '%c'" c
     | EOF -> Fmt.string out "EOF"
   let to_string = Fmt.to_string pp
-  let equal = (=)
+  let equal : t -> t -> bool = (=)
 end
 
 module Lexer : sig
@@ -151,6 +155,8 @@ end = struct
       match c with
       | '(' -> self.i <- 1 + self.i; LPAREN
       | ')' -> self.i <- 1 + self.i; RPAREN
+      | ',' -> self.i <- 1 + self.i; COMMA
+      | ';' -> self.i <- 1 + self.i; SEMI_COLON
       | ':' ->
         self.i <- 1 + self.i;
         if self.i < String.length self.src && String.get self.src self.i = '=' then (
@@ -281,17 +287,24 @@ module P_state = struct
     loc
 end
 
+type state = P_state.t
+
 (* We follow a mix of:
    - https://en.wikipedia.org/wiki/Operator-precedence_parser
    - https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
 *)
-module P_expr = struct
+module P_expr : sig
+  val expr : ?ty_expect:AE.t -> state -> AE.t
+  val expr_atomic : ?ty_expect:AE.t -> state -> AE.t
+  val expr_and_eof : state -> AE.t
+  val p_tyvars_until : 
+    f:(token -> bool) -> state -> A.var list -> token * location * A.var list
+  val p_ident : state -> string * location
+end = struct
   open P_state
   open Loc.Infix
   type precedence = int
   type t = P_state.t
-
-  let create = P_state.create
 
   let fixity_ (self:t) (s:string) : K.fixity =
     let module F = Fixity in
@@ -481,7 +494,7 @@ module P_expr = struct
     | NUM _ ->
       errorf (fun k->k"TODO: parse numbers") (* TODO *)
     | RPAREN | COLON | DOT | IN | AND | EOF | QUOTED_STR _
-    | BY | END | EQDEF ->
+    | BY | END | EQDEF | SEMI_COLON | COMMA ->
       errorf (fun k->k"expected expression at %a" Loc.pp loc_t)
 
   and p_expr_app_ ~ty_expect self : AE.t =
@@ -515,7 +528,7 @@ module P_expr = struct
         let e = p_expr_ ~ty_expect:None self 0 in
         eat_eq self ~msg:"expression" RPAREN;
         lhs := AE.app !lhs e
-      | (RPAREN | WILDCARD | COLON | DOT | IN
+      | (RPAREN | WILDCARD | COLON | DOT | IN | COMMA | SEMI_COLON
       | LET | AND), _loc -> continue := false
       | (QUESTION_MARK | QUOTED_STR _ | QUOTE_STR _
         | QUESTION_MARK_STR _ | NUM _), _ ->
@@ -591,6 +604,39 @@ module P_expr = struct
     e
 end
 
+module P_subst : sig
+  val subst : state -> A.subst
+end = struct
+  open P_state
+  open Loc.Infix
+
+  let subst st =
+    let _, loc1 = Lexer.S.cur st.lex in
+    let rec p_binding ~expect_comma s =
+      let tok, loc_t = Lexer.S.cur st.lex in
+      match tok with
+      | END ->
+        Lexer.S.junk st.lex;
+        A.Subst.mk_ ~loc:(loc1 ++ loc_t) (List.rev s)
+      | COMMA when expect_comma ->
+        Lexer.S.junk st.lex;
+        p_binding ~expect_comma:false s
+      | _ ->
+        if expect_comma then (
+          errorf
+            (fun k->k"expected `,` or `end` after a substitution binding")
+        ) else (
+          let v, loc_v = P_expr.p_ident st in
+          eat_eq st ~msg:"expect `:=` in substitution" EQDEF;
+          let e = P_expr.expr st in
+          let s = ({A.view=v;loc=loc_v},e)::s in
+          p_binding ~expect_comma:true s
+        )
+    in
+    eat_eq ~msg:"expect `subst`" st (SYM "subst");
+    p_binding ~expect_comma:false []
+end
+
 module P_proof : sig
   type t = P_state.t
   val proof : t -> A.Proof.t
@@ -599,8 +645,6 @@ end = struct
   type t = P_state.t
   open P_state
   open Loc.Infix
-
-  let p_subst _self = assert false (* TODO *)
 
   (* TODO: error recovery (until "in" or "end") for steps *)
   let rec p_step self : A.Proof.step =
@@ -622,8 +666,7 @@ end = struct
                 loc := !loc ++ AE.loc e;
                 A.Proof.arg_expr e
               | Rule.Arg_subst ->
-                let s = p_subst self in
-                (* TODO: loc for subst? *)
+                let s = P_subst.subst self in
                 A.Proof.arg_subst s
               | Rule.Arg_thm ->
                 begin match Lexer.S.cur self.lex with
@@ -780,8 +823,8 @@ module P_top = struct
   let p_thm ~loc self : _ =
     let name, loc_name = P_expr.p_ident self in
     eat_eq self EQDEF ~msg:"expect `:=` after the theorem's name";
-    let e = P_expr.p_expr_ self 0
-        ~ty_expect:(Some (AE.const ~loc (A.Env.bool self.env)))
+    let e = P_expr.expr self
+        ~ty_expect:(AE.const ~loc (A.Env.bool self.env))
     in
     eat_eq self BY ~msg:"expect `by` after the theorem's statement";
     let pr = P_proof.proof self in
@@ -790,8 +833,8 @@ module P_top = struct
 
   let p_goal ~loc self : _ =
     let e =
-      P_expr.p_expr_ self 0
-        ~ty_expect:(Some (AE.const ~loc (A.Env.bool self.env)))
+      P_expr.expr self
+        ~ty_expect:(AE.const ~loc (A.Env.bool self.env))
     in
     eat_eq self BY ~msg:"expect `by` after the goal's statement";
     let pr = P_proof.proof self in
@@ -884,7 +927,7 @@ module P_top = struct
 end
 
 let parse_expr ?q_args ~env lex : AE.t =
-  let p = P_expr.create ?q_args ~env lex in
+  let p = P_state.create ?q_args ~env lex in
   let e =
     try P_expr.expr_and_eof p
     with e ->
@@ -1059,13 +1102,14 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
       SYM("f"); \
       LPAREN; \
       SYM("x"); \
-      SYM(","); \
+      COMMA; \
       COLON; \
       IN; \
       QUESTION_MARK_STR("a"); \
       QUESTION_MARK; \
       QUESTION_MARK; \
       SYM("b"); \
+      SEMI_COLON; \
       SYM("Y"); \
       SYM("\\"); \
       LPAREN; \
@@ -1080,6 +1124,6 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
       RPAREN; \
       EOF; \
     ] \
-    (lex_to_list {test|((12+end f(x, : in ?a ? ? b Y \( ))---let by z)wlet)|test})
+    (lex_to_list {test|((12+end f(x, : in ?a ? ? b; Y \( ))---let by z)wlet)|test})
   [EOF] (lex_to_list "  ")
 *)

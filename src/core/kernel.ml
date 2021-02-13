@@ -108,7 +108,7 @@ let expr_pp_ out (e:expr) : unit =
       let f, args = unfold_app e in
       begin match f.e_view, args with
         | E_const (c, [_]), [a;b] when ID.name c.c_name = "=" ->
-          Fmt.fprintf out "@[%a@ = %a@]" pp a pp b
+          Fmt.fprintf out "@[%a@ = %a@]" pp' a pp' b
         | _ ->
           Fmt.fprintf out "@[%a@ %a@]" pp' f (pp_list pp') args
       end

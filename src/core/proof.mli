@@ -21,7 +21,7 @@ module Rule : sig
   val cut : t
   val refl : t
   val congr : t
-  val subst : t
+  val inst : t
   val sym : t
   val bool_eq : t
   val bool_eq_intro : t

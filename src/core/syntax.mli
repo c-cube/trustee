@@ -11,6 +11,8 @@ type token =
   | RPAREN
   | COLON
   | DOT
+  | COMMA
+  | SEMI_COLON
   | WILDCARD
   | QUESTION_MARK
   | QUESTION_MARK_STR of string

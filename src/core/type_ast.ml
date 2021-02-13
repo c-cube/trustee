@@ -604,6 +604,10 @@ end
 module Subst = struct
   type t = subst
 
+  let to_list l = l
+  let empty : t = []
+  let add v e s = (v,e) :: s
+
   let is_empty = CCList.is_empty
   let pp out (self:t) : unit =
     if is_empty self then Fmt.string out "{}"
@@ -624,6 +628,13 @@ module Subst = struct
          K.Subst.bind v t s)
       K.Subst.empty self
 end
+
+let name_with_def_as_q ?def_loc (name:string) ~loc pp_def def : Queryable.t =
+  let pp out () = Fmt.fprintf out "%s :=@ %a" name pp_def def in
+  Queryable.mk_pp ?def_loc ~loc ~pp ()
+let id_with_def_as_q ?def_loc (id:ID.t) ~loc pp_def def : Queryable.t =
+  let pp out () = Fmt.fprintf out "%a :=@ %a" ID.pp id pp_def def in
+  Queryable.mk_pp ?def_loc ~loc ~pp ()
 
 module Ty_env = struct
   type t = ty_env
@@ -705,6 +716,16 @@ module Ty_env = struct
     let pp_pair out (name,c) = Fmt.fprintf out "(@[%s : %s@])" name (k_of_no c) in
     Fmt.fprintf out "{@[<hv>ty_env@ %a@;<0 -1>@]}" (Fmt.iter pp_pair) (iter self)
 
+  let name_with_def_as_q ~loc (n:named_object) : Queryable.t = object
+    inherit Queryable.t
+    method loc = loc
+    method! def_loc = Some (loc_of_named_object n)
+    method pp out () = match n with
+      | N_const c -> K.Const.pp out c.view
+      | N_thm th -> K.Thm.pp_quoted out th.view
+      | N_rule r -> Proof.Rule.pp out r.view
+  end
+
   let to_string = Fmt.to_string pp
 end
 
@@ -765,13 +786,6 @@ module Typing_state = struct
     } in
     env
 end
-
-let name_with_def_as_q ?def_loc (name:string) ~loc pp_def def : Queryable.t =
-  let pp out () = Fmt.fprintf out "%s :=@ %a" name pp_def def in
-  Queryable.mk_pp ?def_loc ~loc ~pp ()
-let id_with_def_as_q ?def_loc (id:ID.t) ~loc pp_def def : Queryable.t =
-  let pp out () = Fmt.fprintf out "%a :=@ %a" ID.pp id pp_def def in
-  Queryable.mk_pp ?def_loc ~loc ~pp ()
 
 (** {2 Processing proofs} *)
 module Proof = struct
@@ -1501,26 +1515,25 @@ module Process_stmt = struct
       (fun th_name -> Typing_state.define_thm self.st th_name.A.view {A.view=th;loc}) th_name;
     ty_ret, def_rhs, th
 
-  let top_show_ self ~loc s : bool * Ty_env.named_object option =
-    reset_ self;
+  let top_show_ self ~loc s : bool * Queryable.t list =
     let named = Typing_state.find_named self.st s in
     begin match named with
-      | Some (Ty_env.N_const c) ->
+      | Some (Ty_env.N_const c as n) ->
         self.on_show loc (fun out () ->
             Fmt.fprintf out "@[<2>expr:@ `@[%a@]`@ with type: %a@]" K.Const.pp c.A.view
               K.Expr.pp (K.Const.ty c.A.view));
-        true, named
-      | Some (Ty_env.N_thm th) ->
+        true, [Ty_env.name_with_def_as_q ~loc n]
+      | Some (Ty_env.N_thm th as n) ->
         self.on_show loc (fun out () ->
             Fmt.fprintf out "@[<2>theorem:@ %a@]" K.Thm.pp_quoted th.A.view);
-        true, named
-      | Some (Ty_env.N_rule r) ->
+        true, [Ty_env.name_with_def_as_q ~loc n]
+      | Some (Ty_env.N_rule r as n) ->
         self.on_show loc (fun out () ->
             Fmt.fprintf out "@[<2>rule:@ %a@]" KProof.Rule.pp r.A.view);
-        true, named
+        true, [Ty_env.name_with_def_as_q ~loc n]
       | None ->
         self.on_show loc (fun out () -> Fmt.fprintf out "not found");
-        false, named
+        false, []
     end
 
   let top_axiom_ self name thm : expr =
@@ -1594,7 +1607,7 @@ module Process_stmt = struct
     end
 
   let top_ (self:t) st (idx:Index.t) : Index.t =
-    Log.debugf 2 (fun k->k"(@[TA.process-stmt@ %a@])" A.Top_stmt.pp st);
+    Log.debugf 2 (fun k->k"(@[TA.process-stmt@ `%a`@])" A.Top_stmt.pp st);
     reset_ self;
     let idx = ref idx in
     let loc = A.Top_stmt.loc st in
@@ -1648,15 +1661,9 @@ module Process_stmt = struct
           Index.add_q idx (Proof.as_queryable proof);
           ok
         | A.Top_show s ->
-          let ok, named = top_show_ self ~loc s.view in
+          let ok, qs = top_show_ self ~loc s.view in
           (* add to index *)
-          CCOpt.iter
-            (fun named ->
-              Index.add_q idx
-                (name_with_def_as_q s.view
-                   ~def_loc:(Ty_env.loc_of_named_object named)
-                   ~loc:s.loc Ty_env.pp_named_object named))
-            named;
+          List.iter (Index.add_q idx) qs;
           ok
         | A.Top_show_expr e ->
           let e = Ty_infer.infer_expr self.st e in
