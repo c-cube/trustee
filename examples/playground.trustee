@@ -1,3 +1,4 @@
+# A first example.
 
 def T : bool by DefTrue :=
   let f := (\x: bool. x) in f = f
@@ -9,6 +10,8 @@ show
     refl e
   end
 end
+
+declare tau : type end
 
 show expr
   (T = T) = T

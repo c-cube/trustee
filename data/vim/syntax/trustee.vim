@@ -1,13 +1,13 @@
 
 set expandtab
 
-syn keyword     tprfKW    def declare axiom show expr proof end fixity goal
+syn keyword     tprfKW    def declare axiom show expr proof end fixity goal subst
 syn keyword     tprfKW    theorem by
 syn keyword     tprfKW    let in
 
 syn keyword tprfPrim   assume axiom mp bool_eq bool_eq_intro congr
 syn keyword tprfPrim   trans refl abs absv congr_ty beta_conv sym cut
-syn keyword tprfPrim   subst abs rw concl def_ty
+syn keyword tprfPrim   inst abs rw concl def_ty
 
 
 syn match       tprfComment "#.*" contains=tprfTodo
