@@ -1,0 +1,3 @@
+[submodule "opentheory"]
+	path = opentheory
+	url = https://github.com/gilith/opentheory
