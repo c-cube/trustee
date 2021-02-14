@@ -1,6 +1,7 @@
 
 module K = Trustee_core.Kernel
 module Log = Trustee_core.Log
+module Unif = Trustee_core.Unif
 
 type input = {
   iter_lines: string Iter.t;
@@ -29,6 +30,15 @@ module Name = struct
     path: string list;
     name: string;
   }
+
+  let of_string s : t =
+    match CCString.split_on_char '.' s with
+    | [name] -> {path=[]; name}
+    | [] -> errorf (fun k->k"invalid name: '%s'" s)
+    | l ->
+      let name = List.hd @@ CCList.last 1 l in
+      let path = CCList.take (List.length l-1) l in
+      {path; name}
 
   let to_string (self:t) =
     match self.path with
@@ -62,7 +72,7 @@ module Article = struct
     | I_thm th -> Fmt.fprintf out "(@[theorem %a@])" K.Thm.pp_quoted th
 
   let pp out (self:t) =
-    Fmt.fprintf out "@[<v>art {@,%a@<1 -4>}@]"
+    Fmt.fprintf out "@[<v>art {@,%a@;<1 -4>}@]"
       (Fmt.iter pp_item) (items self)
   let to_string = Fmt.to_string pp
 end
@@ -70,12 +80,11 @@ end
 module OT = struct
   type name = string list * string
 
-  type ty_op = string * (K.ctx -> K.ty list -> K.ty)
-  type const = string * (K.ctx -> K.expr list -> K.expr)
+  type ty_op = Name.t * (K.ctx -> K.ty list -> K.ty)
+  type const = Name.t * (K.ctx -> K.ty -> K.expr)
 
   type obj =
     | O_int of int
-    | O_string of string
     | O_name of Name.t
     | O_ty of K.ty
     | O_ty_op of ty_op
@@ -87,11 +96,10 @@ module OT = struct
 
   let rec pp_obj out = function
     | O_int i -> Fmt.int out i
-    | O_string s -> Fmt.fprintf out "%S" s
     | O_name n -> Name.pp out n
     | O_ty ty -> Fmt.fprintf out "@[ty: %a@]" K.Expr.pp ty
-    | O_ty_op (c,_) -> Fmt.fprintf out "@[ty-const: %s@]" c
-    | O_const (c,_) -> Fmt.fprintf out "@[const: %s@]" c
+    | O_ty_op (c,_) -> Fmt.fprintf out "@[ty-const: %a@]" Name.pp c
+    | O_const (c,_) -> Fmt.fprintf out "@[const: %a@]" Name.pp c
     | O_var v -> Fmt.fprintf out "@[var: %a@]" K.Var.pp v
     | O_term e -> Fmt.fprintf out "@[term: %a@]" K.Expr.pp e
     | O_thm th -> Fmt.fprintf out "@[thm: %a@]" K.Thm.pp_quoted th
@@ -107,18 +115,29 @@ module OT = struct
     mutable theorems: K.Thm.t list;
   }
 
-  let pp out (self:state) : unit =
+  let get_article self : Article.t =
+    {
+      Article.consts=self.consts;
+      theorems=self.theorems;
+      axioms=self.axioms;
+    }
+
+  let pp_vm out (self:state) : unit =
     Fmt.fprintf out "{@[stack:@ %a;@ dict={@[%a@]}@]}"
       (Fmt.Dump.list pp_obj) self.stack
       (Fmt.iter Fmt.Dump.(pair int pp_obj)) (CCHashtbl.to_iter self.dict)
+
+  let pp out self : unit =
+    Fmt.fprintf out "{@[vm:@ %a;@ art: %a@]}"
+      pp_vm self Article.pp (get_article self)
 
   (* a rule associated with a keyword *)
   type rule = state -> unit
 
   let version : rule = fun self ->
     match self.stack with
-    | O_int 6 :: st -> self.stack <- st
-    | O_int n :: _ -> errorf (fun k->k"expected version to be '6', not %d" n)
+    | O_int (5 | 6) :: st -> self.stack <- st
+    | O_int n :: _ -> errorf (fun k->k"expected version to be '5' or '6', not %d" n)
     | _ -> errorf (fun k->k"version: expected an integer")
 
   let absTerm : rule = fun self ->
@@ -126,44 +145,44 @@ module OT = struct
     | O_term b :: O_var v :: st ->
       let t = K.Expr.lambda self.ctx v b in
       self.stack <- O_term t :: st;
-    | _ -> errorf (fun k->k"cannot apply absTerm@ in state %a" pp self)
+    | _ -> errorf (fun k->k"cannot apply absTerm@ in state %a" pp_vm self)
 
   let absThm : rule = fun self ->
     match self.stack with
     | O_thm th :: O_var v :: st ->
       let th = K.Thm.abs self.ctx th v in
       self.stack <- O_thm th :: st;
-    | _ -> errorf (fun k->k"cannot apply absThm@ in state %a" pp self)
+    | _ -> errorf (fun k->k"cannot apply absThm@ in state %a" pp_vm self)
 
   let typeOp : rule = fun self ->
     match self.stack with
-    | O_string  s :: st ->
-      let f_op = match s with
-        | "->" ->
+    | O_name n :: st ->
+      let f_op = match n with
+        | {Name.path=[];name="->"} ->
           (fun ctx -> function
              | [a;b] -> K.Expr.arrow ctx a b
              | _ -> error "arrow expects 2 args")
-        | "bool" ->
+        | {Name.path=[];name="bool"} ->
           (fun ctx -> function [] -> K.Expr.bool ctx | _ -> error "bool is a const")
-        | _ -> errorf (fun k->k"unknown type operator '%s'" s)
+        | _ -> errorf (fun k->k"unknown type operator '%a'" Name.pp n)
       in
-      let op = "->", f_op in
+      let op = n, f_op in
       self.stack <- O_ty_op op :: st;
-    | _ -> errorf (fun k->k"cannot apply typeOp@ in state %a" pp self)
+    | _ -> errorf (fun k->k"cannot apply typeOp@ in state %a" pp_vm self)
 
   let def : rule = fun self ->
     match self.stack with
     | O_int i :: x :: st ->
       self.stack <- x :: st;
       Hashtbl.replace self.dict i x
-    | _ -> errorf (fun k->k"cannot apply def@ in state %a" pp self)
+    | _ -> errorf (fun k->k"cannot apply def@ in state %a" pp_vm self)
 
   let varType : rule = fun self ->
     match self.stack with
-    | O_string s :: st ->
+    | O_name {Name.path=[]; name=s} :: st ->
       let v = K.Var.make s (K.Expr.type_ self.ctx) in
       self.stack <- O_ty (K.Expr.var self.ctx v) :: st;
-    | _ -> errorf (fun k->k"cannot apply varType@ in state %a" pp self)
+    | _ -> errorf (fun k->k"cannot apply varType@ in state %a" pp_vm self)
 
   let nil : rule = fun self -> self.stack <- O_list [] :: self.stack
 
@@ -171,7 +190,7 @@ module OT = struct
     match self.stack with
     | O_list l :: o :: st ->
       self.stack <- O_list (o::l) :: st
-    | _ -> errorf (fun k->k"cannot apply cons@ in state %a" pp self)
+    | _ -> errorf (fun k->k"cannot apply cons@ in state %a" pp_vm self)
 
   let opType : rule = fun self ->
     match self.stack with
@@ -182,39 +201,117 @@ module OT = struct
       in
       let ty = op self.ctx args in
       self.stack <- O_ty ty :: st;
-    | _ -> errorf (fun k->k"cannot apply typeOp@ in state %a" pp self)
+    | _ -> errorf (fun k->k"cannot apply typeOp@ in state %a" pp_vm self)
 
   let var : rule = fun self ->
     match self.stack with
-    | O_ty ty :: O_string n :: st ->
+    | O_ty ty :: O_name {Name.path=[];name=n} :: st ->
       let v = K.Var.make n ty in
       self.stack <- O_var v :: st
-    | O_ty ty :: O_name n :: st ->
-      let v = K.Var.make (Name.to_string n) ty in
-      self.stack <- O_var v :: st
-    | _ -> errorf (fun k->k"cannot apply var@ in state %a" pp self)
+    | _ -> errorf (fun k->k"cannot apply var@ in state %a" pp_vm self)
 
   let const : rule = fun self ->
-    let mk_ s st =
-      let f_op = match s with
-        | "=" ->
-          (fun ctx -> function [a;b] -> K.Expr.app_eq ctx a b
-                             | _ -> error "= is binary")
-        | _ -> errorf (fun k->k"unknown const '%s'" s)
-      in
-      self.stack <- O_const (s, f_op) :: st
-    in
     match self.stack with
-    | O_string s :: st -> mk_ s st
-    | O_name n :: st -> mk_ (Name.to_string n) st
-    | _ -> errorf (fun k->k"cannot apply const@ in state %a" pp self)
+    | O_name n :: st ->
+      let f_op = match n with
+        | {Name.path=[]; name="="} ->
+          (fun ctx ty ->
+             match K.Expr.view ty with
+             | K.Expr.E_arrow (a, _) -> K.Expr.eq ctx a
+             | _ -> error "= has an arrow type")
+        | {Name.path=[]; name="select"} ->
+          (fun ctx ty ->
+             match K.Expr.view ty with
+             | K.Expr.E_arrow (_, a) -> K.Expr.select ctx a
+             | _ -> error "select has an arrow type")
+        | _ -> errorf (fun k->k"unknown const '%a'" Name.pp n)
+      in
+      self.stack <- O_const (n, f_op) :: st
+    | _ -> errorf (fun k->k"cannot apply const@ in state %a" pp_vm self)
 
   let ref_ : rule = fun self ->
     match self.stack with
     | O_int i :: st ->
       (try self.stack <- Hashtbl.find self.dict i :: st
        with Not_found -> errorf (fun k->k"undefined ref %d" i))
-    | _ -> errorf (fun k->k"cannot apply ref@ in state %a" pp self)
+    | _ -> errorf (fun k->k"cannot apply ref@ in state %a" pp_vm self)
+
+  let constTerm : rule = fun self ->
+    match self.stack with
+    | O_ty ty :: O_const (_,c) :: st ->
+      let t = c self.ctx ty in
+      self.stack <- O_term t :: st
+    | _ -> errorf (fun k->k"cannot apply constTerm@ in state %a" pp_vm self)
+
+  let varTerm : rule = fun self ->
+    match self.stack with
+    | O_var v :: st ->
+      let t = K.Expr.var self.ctx v in
+      self.stack <- O_term t :: st
+    | _ -> errorf (fun k->k"cannot apply varTerm@ in state %a" pp_vm self)
+
+  let appTerm : rule = fun self ->
+    match self.stack with
+    | O_term a :: O_term f :: st ->
+      let t = K.Expr.app self.ctx f a in
+      self.stack <- O_term t :: st
+    | _ -> errorf (fun k->k"cannot apply appTerm@ in state %a" pp_vm self)
+
+  let mk_defined_const_ c =
+    match K.Const.args c with
+    | K.Const.C_arity _ -> errorf (fun k->k"not a term const: %a" K.Const.pp c)
+    | K.Const.C_ty_vars [] ->
+      (* non-polymorphic constant *)
+      (fun ctx _ty -> assert (K.Var.Set.is_empty @@ K.Expr.free_vars _ty); K.Expr.const ctx c [])
+    | K.Const.C_ty_vars ty_vars ->
+      (* make new variables *)
+      let vars =
+        List.mapi (fun i v -> K.Var.makef " _%d" (K.Var.ty v) i) ty_vars in
+      (fun ctx ty ->
+        let e = K.Expr.const ctx c (List.map (K.Expr.var ctx) vars) in
+        let ty_e = K.Expr.ty_exn e in
+        match Unif.match_ ty_e ty with
+        | None ->
+          errorf (fun k->k"type %a@ does not match type of %a"
+                     K.Expr.pp ty K.Expr.pp e)
+        | Some subst -> K.Expr.subst ctx e subst
+      )
+
+  let defineConst : rule = fun self ->
+    match self.stack with
+    | O_term t :: O_name n :: st ->
+      let s = Name.to_string n in
+      let t' =
+        K.Expr.(app_eq self.ctx
+                  (var self.ctx (K.Var.make s (ty_exn t))) t)
+      in
+      let th, c = K.Thm.new_basic_definition self.ctx t' in
+      let c = mk_defined_const_ c in
+      self.stack <- O_thm th :: O_const (n, c) :: st
+    | _ -> errorf (fun k->k"cannot apply defineConst@ in state %a" pp_vm self)
+
+  let pop : rule = fun self ->
+    match self.stack with
+    | _ :: st -> self.stack <- st
+    | [] -> errorf (fun k->k"cannot apply pop@ in state %a" pp_vm self)
+
+  let remove : rule = fun self ->
+    match self.stack with
+    | O_int i :: st ->
+      let o =
+        (try Hashtbl.find self.dict i
+         with Not_found -> errorf (fun k->k"key %d not defined" i))
+      in
+      Hashtbl.remove self.dict i;
+      self.stack <- o :: st
+    | _ -> errorf (fun k->k"cannot apply pop@ in state %a" pp_vm self)
+
+  let thm : rule = fun self ->
+    match self.stack with
+    | O_term _ :: O_list _ :: O_thm th :: st ->
+      self.stack <- st; (* note: we skip the alpha renaming because of DB indices *)
+      self.theorems <- th :: self.theorems;
+    | _ -> errorf (fun k->k"cannot apply pop@ in state %a" pp_vm self)
 
   let rules : rule Str_map.t = [
     "version", version;
@@ -229,6 +326,13 @@ module OT = struct
     "var", var;
     "const", const;
     "ref", ref_;
+    "constTerm", constTerm;
+    "varTerm", varTerm;
+    "appTerm", appTerm;
+    "defineConst", defineConst;
+    "pop", pop;
+    "remove", remove;
+    "thm", thm;
   ] |> Str_map.of_list
 
   let parse_and_check_art (ctx:K.ctx) (input:input) : Article.t or_error =
@@ -241,10 +345,12 @@ module OT = struct
 
     (* how to parse one line *)
     let process_line (s:string) : unit =
+      incr i;
+
       let s = String.trim s in
       if s="" then errorf (fun k->k"empty line (at line %d)" !i);
 
-      Log.debugf 50 (fun k->k"(@[ot: cur state is@ %a@])" pp self);
+      Log.debugf 50 (fun k->k"(@[ot: cur VM state is@ %a@])" pp_vm self);
       Log.debugf 20 (fun k->k"(@[ot: process line: %s@])" s);
 
       begin match s.[0] with
@@ -258,7 +364,8 @@ module OT = struct
           let n = String.length s in
           if s.[n-1] <> '"' then errorf (fun k->k"expected closing \" at line %d" !i);
           let s = String.sub s 1 (n-2) in
-          self.stack <- O_string s :: self.stack
+          let n = Name.of_string s in
+          self.stack <- O_name n :: self.stack
         | _ ->
           begin match Str_map.find s rules with
             | r -> r self
@@ -266,15 +373,10 @@ module OT = struct
               errorf (fun k->k"unknown rule '%s' at line %d" s !i)
           end
       end;
-      incr i;
     in
     try
       input.iter_lines process_line;
-      let art = {
-        Article.consts=self.consts;
-        theorems=self.theorems;
-        axioms=self.axioms;
-      } in
+      let art = get_article self in
       Ok art
     with Trustee_error.E e -> Error e
 end
