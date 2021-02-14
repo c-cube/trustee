@@ -97,6 +97,7 @@ let expr_pp_ out (e:expr) : unit =
     | E_kind -> Fmt.string out "kind"
     | E_type -> Fmt.string out "type"
     | E_var v -> Fmt.string out v.v_name
+    (* | E_var v -> Fmt.fprintf out "(@[%s : %a@])" v.v_name pp v.v_ty *)
     | E_bound_var v ->
       let idx = v.bv_idx in
       if idx<k then Fmt.fprintf out "x_%d" (k-idx-1)
@@ -224,6 +225,7 @@ module Var = struct
   let equal = var_eq
   let hash = var_hash
   let pp = var_pp
+  let pp_with_ty out v = Fmt.fprintf out "(@[%s :@ %a@])" v.v_name expr_pp_ v.v_ty
   let to_string = Fmt.to_string pp
   let compare a b : int =
     if expr_eq a.v_ty b.v_ty
@@ -260,7 +262,7 @@ module Subst = struct
     if is_empty s then Fmt.string out "{}"
     else (
       let pp_b out (v,t) =
-        Fmt.fprintf out "(@[%a := %a@])" Var.pp v expr_pp_ t
+        Fmt.fprintf out "(@[%a := %a@])" Var.pp_with_ty v expr_pp_ t
       in
       Fmt.fprintf out "@[<hv>{@,%a@,}@]"
         (pp_iter ~sep:" " pp_b) (Var.Map.to_iter s)
@@ -352,7 +354,7 @@ module Expr = struct
     make_ ctx (E_bound_var {bv_idx=i; bv_ty=ty}) (Lazy.from_val (Some ty))
 
   (* map immediate subterms *)
-  let map ctx ~f (e:t) : t =
+  let[@inline] map ctx ~f (e:t) : t =
     match view e with
     | E_kind | E_type | E_const _ -> e
     | _ ->
@@ -371,7 +373,7 @@ module Expr = struct
       in
       make_ ctx view ty
 
-  let iter ~f (e:t) : unit =
+  let[@inline] iter ~f (e:t) : unit =
     match view e with
     | E_kind | E_type | E_const _ -> ()
     | _ ->
@@ -386,12 +388,12 @@ module Expr = struct
 
   exception E_exit
 
-  let exists ~f e : bool =
+  let[@inline] exists ~f e : bool =
     try
       iter e ~f:(fun b x -> if f b x then raise_notrace E_exit); false
     with E_exit -> true
 
-  let for_all ~f e : bool =
+  let[@inline] for_all ~f e : bool =
     try
       iter e ~f:(fun b x -> if not (f b x) then raise_notrace E_exit); true
     with E_exit -> false
@@ -471,12 +473,15 @@ module Expr = struct
     let rec aux k e =
       match view e with
       | E_var v ->
+        (* first, subst in type *)
+        let v = {v with v_ty=aux k v.v_ty} in
         begin match Var.Map.find v subst with
           | u -> db_shift ctx u k
-          | exception Not_found -> e
+          | exception Not_found -> var ctx v
         end
       | E_const (_, []) -> e
       | E_const (c, args) ->
+        (* subst in args, thus changing the whole term's type *)
         let ty = lazy (Some (aux k (ty_exn e))) in
         mk_const_ ctx c (List.map (aux k) args) ty
       | _ ->
@@ -822,7 +827,7 @@ module Thm = struct
       errorf ~src:e k
 
   let assume ctx (e:Expr.t) : t =
-    wrap_exn (fun k->k"in assume `@[%a@]`" Expr.pp e) @@ fun () ->
+    wrap_exn (fun k->k"in assume `@[%a@]`:" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     if not (is_bool_ ctx e) then (
       error "assume takes a boolean"
@@ -830,7 +835,7 @@ module Thm = struct
     make_ ctx (Expr.Set.singleton e) e
 
   let axiom ctx e : t =
-    wrap_exn (fun k->k"in axiom `@[%a@]`" Expr.pp e) @@ fun () ->
+    wrap_exn (fun k->k"in axiom `@[%a@]`:" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     if not ctx.ctx_axioms_allowed then (
       error "the context does not accept new axioms, see `pledge_no_more_axioms`"
@@ -843,7 +848,7 @@ module Thm = struct
   let merge_hyps_ = Expr.Set.union
 
   let cut ctx th1 th2 : t =
-    wrap_exn (fun k->k"@[<2>in cut@ th1=`@[%a@]`@ th2=`@[%a@]`@]" pp th1 pp th2)
+    wrap_exn (fun k->k"@[<2>in cut@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2)
     @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
@@ -856,7 +861,7 @@ module Thm = struct
     make_ ctx Expr.Set.empty (Expr.app_eq ctx e e)
 
   let congr ctx th1 th2 : t =
-    wrap_exn (fun k->k"@[<2>in congr@ th1=`@[%a@]`@ th2=`@[%a@]`@]" pp th1 pp th2)
+    wrap_exn (fun k->k"@[<2>in congr@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2)
     @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
@@ -886,16 +891,30 @@ module Thm = struct
     make_ ctx hyps concl
 
   let sym ctx th : t =
-    wrap_exn (fun k->k"@[<2>in sym@ `@[%a@]`@]" pp th) @@ fun () ->
+    wrap_exn (fun k->k"@[<2>in sym@ `@[%a@]`@]:" pp th) @@ fun () ->
     ctx_check_th_uid ctx th;
     match Expr.unfold_eq (concl th) with
     | None -> errorf (fun k->k"sym: concl of %a@ should be an equation" pp th)
     | Some (t,u) ->
       make_ ctx (hyps_ th) (Expr.app_eq ctx u t)
 
+  let trans ctx th1 th2 : t =
+    wrap_exn (fun k->k"@[<2>in trans@ %a@ %a@]:" pp_quoted th1 pp_quoted th2) @@ fun () ->
+    ctx_check_th_uid ctx th1;
+    ctx_check_th_uid ctx th2;
+    match Expr.unfold_eq (concl th1), Expr.unfold_eq (concl th2) with
+    | None, _ -> errorf (fun k->k"trans: concl of %a@ should be an equation" pp th1)
+    | _, None -> errorf (fun k->k"trans: concl of %a@ should be an equation" pp th2)
+    | Some (t,u), Some (u',v) ->
+      if not (Expr.equal u u') then (
+        errorf (fun k->k"trans: conclusions of %a@ and %a@ do not match" pp th1 pp th2)
+      );
+      let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
+      make_ ctx hyps (Expr.app_eq ctx t v)
+
   let bool_eq ctx th1 th2 : t =
-    wrap_exn (fun k->k"@[<2>in bool_eq@ th1=`@[%a@]`@ th2=`@[%a@]`@]"
-                 pp th1 pp th2) @@ fun () ->
+    wrap_exn (fun k->k"@[<hv2>in bool_eq@ th1=%a@ th2=%a@]:"
+                 pp_quoted th1 pp_quoted th2) @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     match Expr.unfold_eq (concl th2) with
@@ -907,12 +926,15 @@ module Thm = struct
         let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
         make_ ctx hyps u
       ) else (
-        errorf (fun k->k"bool-eq: mismatch,@ conclusion of %a@ does not match LHS of %a"
-                   pp th1 pp th2)
+        errorf
+          (fun k->k
+              "bool-eq: mismatch,@ conclusion of %a@ does not match LHS of %a@ \
+               (lhs is: `@[%a@]`)"
+              pp_quoted th1 pp_quoted th2 Expr.pp t)
       )
 
   let bool_eq_intro ctx th1 th2 : t =
-    wrap_exn (fun k->k"@[<2>in bool_eq_intro@ th1=`@[%a@]`@ th2=`@[%a@]`@]"
+    wrap_exn (fun k->k"@[<2>in bool_eq_intro@ th1=`@[%a@]`@ th2=`@[%a@]`@]:"
                  pp th1 pp th2) @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
@@ -926,13 +948,13 @@ module Thm = struct
     make_ ctx hyps (Expr.app_eq ctx e1 e2)
 
   let beta_conv ctx e : t =
-    wrap_exn (fun k->k"@[<2>in beta-conv `@[%a@]`" Expr.pp e) @@ fun () ->
+    wrap_exn (fun k->k"@[<2>in beta-conv `@[%a@]`:" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.view e with
     | E_app (f, a) ->
       (match Expr.view f with
        | E_lam (ty_v, body) ->
-         assert (Expr.equal ty_v (Expr.ty_exn e));
+         assert (Expr.equal ty_v (Expr.ty_exn a)); (* else `app` would have failed *)
          let rhs = Expr.subst_db_0 ctx body ~by:a in
          make_ ctx Expr.Set.empty (Expr.app_eq ctx e rhs)
        | _ ->
@@ -942,7 +964,7 @@ module Thm = struct
       errorf (fun k->k"not a redex: %a not an application" Expr.pp e)
 
   let abs ctx th v : t =
-    wrap_exn (fun k->k"@[<2>in abs `@[%a@]` var %a" pp th Var.pp v) @@ fun () ->
+    wrap_exn (fun k->k"@[<2>in abs `@[%a@]` var %a:" pp th Var.pp v) @@ fun () ->
     ctx_check_th_uid ctx th;
     ctx_check_e_uid ctx v.v_ty;
     match Expr.unfold_eq th.th_concl with
@@ -957,7 +979,7 @@ module Thm = struct
 
   let new_basic_definition ctx ?def_loc (e:expr) : t * const =
     Log.debugf 5 (fun k->k"new-basic-def %a" Expr.pp e);
-    wrap_exn (fun k->k"@[<2>in new-basic-def `@[%a@]`@]" Expr.pp e) @@ fun () ->
+    wrap_exn (fun k->k"@[<2>in new-basic-def `@[%a@]`@]:" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.unfold_eq e with
     | None ->
@@ -989,7 +1011,7 @@ module Thm = struct
 
   let new_basic_type_definition ctx
       ~name ~abs ~repr ~thm_inhabited () : New_ty_def.t =
-    wrap_exn (fun k->k"@[<2>in new-basic-ty-def %s `@[%a@]`@]"
+    wrap_exn (fun k->k"@[<2>in new-basic-ty-def %s `@[%a@]`@]:"
                  name pp thm_inhabited) @@ fun () ->
     ctx_check_th_uid ctx thm_inhabited;
     if has_hyps thm_inhabited then (

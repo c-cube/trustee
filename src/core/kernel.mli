@@ -63,6 +63,7 @@ module Var : sig
   include Sigs.HASH with type t := t
   include Sigs.COMPARE with type t := t
   include Sigs.PP with type t := t
+  val pp_with_ty : t Fmt.printer
 
   module Set : CCSet.S with type elt = t
   module Map : CCMap.S with type key = t
@@ -238,6 +239,9 @@ module Thm : sig
 
   val sym : ctx -> t -> t
   (** `sym (|- t=u)` is `|- u=t` *)
+
+  val trans : ctx -> t -> t -> t
+  (** trans (F1 |- t=u)` `(F2 |- u=v)` is `F1, F2 |- t=v` *)
 
   val bool_eq : ctx -> t -> t -> t
   (** `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
