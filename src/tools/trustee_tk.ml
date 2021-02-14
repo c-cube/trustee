@@ -70,10 +70,44 @@ module Check = struct
 
 end
 
+module OT_check = struct
+  module OTP = Trustee_opentheory.OT_parser
+
+  let cat_ = ref false
+
+  let args = [
+    "-d", Arg.Int Log.set_level, " debug level";
+    "-cat", Arg.Set cat_, " print back the parsed articles";
+  ] |> Arg.align
+
+  let run args =
+    Log.debugf 1 (fun k->k"check opentheory files %a" (Fmt.Dump.(list string)) args);
+    let ctx = K.Ctx.create() in
+    let is_ok = ref true in
+    List.iter
+      (fun file ->
+         CCIO.with_in file (fun ic ->
+             let input = OTP.Input.of_chan ic in
+             match OTP.parse_and_check_art ctx input with
+             | Ok art ->
+               Fmt.printf "; parsed and validated '%s'@." file;
+               if !cat_ then (
+                 Fmt.printf "%a@." OTP.Article.pp art;
+               )
+             | Error e ->
+               is_ok := false;
+               Fmt.eprintf "error: %a@." Trustee_error.pp e))
+      args;
+    if not !is_ok then exit 1;
+    ()
+
+end
+
 
 let cmds = [
   "cat", (Cat.args, Cat.run);
   "check", (Check.args, Check.run);
+  "ot-check", (OT_check.args, OT_check.run);
 ]
 
 let () =
@@ -83,7 +117,7 @@ let () =
   let help =
     Fmt.asprintf "@[<v>trustee_tk <cmd> [arg]*.@,@,Available commands:@ %a@]@."
       (pp_list (fun out (a,_) ->
-           Fmt.fprintf out "@[<2>- %a@]@," Fmt.text a)) cmds
+           Fmt.fprintf out "@[<2>- %a@]" Fmt.text a)) cmds
   in
   Arg.parse_dynamic args
     (fun s ->

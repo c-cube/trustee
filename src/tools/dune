@@ -1,6 +1,9 @@
+
+; toolkit
 (executable
   (name trustee_tk)
   (public_name trustee_tk)
+  (optional)
   (package trustee)
-  (libraries containers trustee.core)
-  (flags :standard -warn-error -a+8))
+  (libraries containers trustee.core trustee.opentheory)
+  (flags :standard -warn-error -a+8 -open Trustee_core.Sigs))
