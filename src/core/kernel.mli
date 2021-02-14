@@ -134,6 +134,7 @@ module Expr : sig
   val iter : f:(bool -> t -> unit) -> t -> unit
   val contains : t -> sub:t -> bool
   val free_vars : t -> Var.Set.t
+  val free_vars_iter : t -> var Iter.t
   val db_shift: ctx -> t -> int -> t
 
   val unfold_app : t -> t * t list
@@ -239,6 +240,10 @@ module Thm : sig
   val beta_conv : ctx -> expr -> t
   (** `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
       Fails if the term is not a beta-redex. *)
+
+  val abs : ctx -> t -> var -> t
+  (** `abs (F |- a=b) x` is `F |- (\x. a) = (\x. b)`
+      fails if `x` occurs in `F`. *)
 
   val new_basic_definition :
     ctx -> ?def_loc:location ->

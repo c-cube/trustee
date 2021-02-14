@@ -387,17 +387,18 @@ module Expr = struct
     in
     try aux e; false with IsSub -> true
 
+  let free_vars_iter e : var Iter.t =
+    fun yield ->
+      let rec aux e =
+        match view e with
+        | E_var v -> yield v; aux (Var.ty v)
+        | _ -> iter e ~f:(fun _ u -> aux u)
+      in
+      aux e
+
   let free_vars e : Var.Set.t =
     let set = ref Var.Set.empty in
-    let rec aux e =
-      match view e with
-      | E_var v ->
-        set := Var.Set.add v !set;
-        aux (Var.ty v)
-      | _ ->
-        iter e ~f:(fun _ u -> aux u)
-    in
-    aux e;
+    free_vars_iter e (fun v -> set := Var.Set.add v !set);
     !set
 
   let new_const_ ctx ?def_loc name args ty : const =
@@ -894,6 +895,20 @@ module Thm = struct
       )
     | _ ->
       errorf (fun k->k"not a redex: %a not an application" Expr.pp e)
+
+  let abs ctx th v : t =
+    wrap_exn (fun k->k"@[<2>in abs `@[%a@]` var %a" pp th Var.pp v) @@ fun () ->
+    ctx_check_th_uid ctx th;
+    ctx_check_e_uid ctx v.v_ty;
+    match Expr.unfold_eq th.th_concl with
+    | Some (a,b) ->
+      let is_in_hyp hyp = Iter.mem ~eq:Var.equal v (Expr.free_vars_iter hyp) in
+      if Expr.Set.exists is_in_hyp th.th_hyps then (
+        errorf (fun k->k"variable `%a` occurs in an hypothesis@ of %a" Var.pp v pp th);
+      );
+      make_ ctx th.th_hyps
+        (Expr.app_eq ctx (Expr.lambda ctx v a) (Expr.lambda ctx v b))
+    | None -> errorf (fun k->k"conclusion of `%a`@ is not an equation" pp th)
 
   let new_basic_definition ctx ?def_loc (e:expr) : t * const =
     Log.debugf 5 (fun k->k"new-basic-def %a" Expr.pp e);
