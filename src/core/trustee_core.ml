@@ -13,3 +13,4 @@ module Proof = Proof
 module Fixity = Fixity
 module Queryable = Queryable
 module Tok_stream = Tok_stream
+module Unif = Unif

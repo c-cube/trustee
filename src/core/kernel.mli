@@ -43,6 +43,9 @@ module Const : sig
 
   val eq : ctx -> t
   val bool : ctx -> t
+  val select : ctx -> t
+  (** Choice constant *)
+
   val is_eq_to_bool : t -> bool
   val is_eq_to_eq : t -> bool
 end
@@ -54,6 +57,7 @@ module Var : sig
   val name : t -> string
   val ty : t -> ty
   val make : string -> ty -> t
+  val makef : ('a, Format.formatter, unit, t) format4 -> ty -> 'a
 
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
@@ -75,6 +79,8 @@ end
 module Subst : sig
   type t = expr Var.Map.t
   include Sigs.PP with type t := t
+  val find_exn : var -> t -> expr
+  val get : var -> t -> expr option
   val empty : t
   val is_empty : t -> bool
   val bind : var -> expr -> t -> t
@@ -115,6 +121,7 @@ module Expr : sig
   val type_ : ctx -> t
   val bool : ctx -> t
   val eq : ctx -> ty -> t
+  val select : ctx -> ty -> t
   val var : ctx -> var -> t
   val const : ctx -> const -> ty list -> t
   val new_const : ctx -> ?def_loc:location -> string -> ty_var list -> ty -> const
@@ -132,6 +139,9 @@ module Expr : sig
 
   val map : ctx -> f:(bool -> t -> t) -> t -> t
   val iter : f:(bool -> t -> unit) -> t -> unit
+  val exists : f:(bool -> t -> bool) -> t -> bool
+  val for_all : f:(bool -> t -> bool) -> t -> bool
+
   val contains : t -> sub:t -> bool
   val free_vars : t -> Var.Set.t
   val free_vars_iter : t -> var Iter.t
@@ -139,6 +149,7 @@ module Expr : sig
 
   val unfold_app : t -> t * t list
   val unfold_eq : t -> (t * t) option
+  val unfold_arrow : t -> t list * t
   val as_const : t -> (Const.t * ty list) option
   val as_const_exn : t -> Const.t * ty list
 

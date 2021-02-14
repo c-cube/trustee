@@ -175,6 +175,7 @@ type ctx = {
   ctx_bool: expr lazy_t;
   ctx_bool_c: const lazy_t;
   ctx_eq_c: const lazy_t;
+  ctx_select_c : const lazy_t;
   mutable ctx_axioms: thm list;
   mutable ctx_axioms_allowed: bool;
 }
@@ -185,6 +186,7 @@ let[@inline] ctx_check_th_uid ctx (th:thm) = assert (ctx.ctx_uid == thm_ctx_uid 
 
 let id_bool = ID.make "bool"
 let id_eq = ID.make "="
+let id_select = ID.make "select"
 
 module Const = struct
   type t = const
@@ -207,6 +209,7 @@ module Const = struct
 
   let[@inline] eq ctx = Lazy.force ctx.ctx_eq_c
   let[@inline] bool ctx = Lazy.force ctx.ctx_bool_c
+  let[@inline] select ctx = Lazy.force ctx.ctx_select_c
   let is_eq_to_bool c = ID.equal c.c_name id_bool
   let is_eq_to_eq c = ID.equal c.c_name id_bool
 end
@@ -217,6 +220,7 @@ module Var = struct
   let[@inline] name v = v.v_name
   let[@inline] ty v = v.v_ty
   let make v_name v_ty : t = {v_name; v_ty}
+  let makef fmt ty = Fmt.kasprintf (fun s->make s ty) fmt
   let equal = var_eq
   let hash = var_hash
   let pp = var_pp
@@ -249,6 +253,8 @@ module Subst = struct
   type t = expr Var.Map.t
 
   let is_empty = Var.Map.is_empty
+  let find_exn = Var.Map.find
+  let get = Var.Map.get
 
   let pp out (s:t) : unit =
     if is_empty s then Fmt.string out "{}"
@@ -378,6 +384,18 @@ module Expr = struct
       | E_lam (tyv, bod) -> f false tyv; f true bod
       | E_arrow (a,b) -> f false a; f false b
 
+  exception E_exit
+
+  let exists ~f e : bool =
+    try
+      iter e ~f:(fun b x -> if f b x then raise_notrace E_exit); false
+    with E_exit -> true
+
+  let for_all ~f e : bool =
+    try
+      iter e ~f:(fun b x -> if not (f b x) then raise_notrace E_exit); true
+    with E_exit -> false
+
   exception IsSub
 
   let contains e ~sub : bool =
@@ -446,18 +464,25 @@ module Expr = struct
     assert (n >= 0);
     if n = 0 then e else aux e 0
 
+  let mk_const_ ctx c args ty : t =
+    make_ ctx (E_const (c,args)) ty
+
   let subst ctx e (subst:t Var.Map.t) : t =
-    let rec aux e k =
+    let rec aux k e =
       match view e with
       | E_var v ->
         begin match Var.Map.find v subst with
           | u -> db_shift ctx u k
           | exception Not_found -> e
         end
+      | E_const (_, []) -> e
+      | E_const (c, args) ->
+        let ty = lazy (Some (aux k (ty_exn e))) in
+        mk_const_ ctx c (List.map (aux k) args) ty
       | _ ->
-        map ctx e ~f:(fun inb u -> aux u (if inb then k+1 else k))
+        map ctx e ~f:(fun inb u -> aux (if inb then k+1 else k) u)
     in
-    aux e 0
+    aux 0 e
 
   let const ctx c args : t =
     ctx_check_e_uid ctx c.c_ty;
@@ -483,11 +508,15 @@ module Expr = struct
           Some (subst ctx c.c_ty sigma)
         )
     in
-    make_ ctx (E_const (c,args)) ty
+    mk_const_ ctx c args ty
 
   let eq ctx ty =
     let eq = Lazy.force ctx.ctx_eq_c in
     const ctx eq [ty]
+
+  let select ctx ty =
+    let sel = Lazy.force ctx.ctx_select_c in
+    const ctx sel [ty]
 
   let abs_on_ ctx (v:var) (e:t) : t =
     ctx_check_e_uid ctx v.v_ty;
@@ -589,6 +618,13 @@ module Expr = struct
     match view f, l with
     | E_const ({c_name;_}, [_]), [a;b] when ID.equal c_name id_eq -> Some(a,b)
     | _ -> None
+
+  let rec unfold_arrow e =
+    match view e with
+    | E_arrow (a,b) ->
+      let args, ret = unfold_arrow b in
+      a::args, ret
+    | _ -> [], e
 
   let[@inline] as_const e = match e.e_view with
     | E_const (c,args) -> Some (c,args)
@@ -701,6 +737,15 @@ module Ctx = struct
         let typ = Expr.(arrow ctx ea @@ arrow ctx ea @@ bool ctx) in
         {c_name=id_eq; c_args=C_ty_vars [a_]; c_ty=typ;
          c_def_loc=None; c_fixity=F_normal; }
+      );
+      ctx_select_c=lazy (
+        let type_ = Expr.type_ ctx in
+        let lazy bool_ = ctx.ctx_bool in
+        let a_ = Var.make "a" type_ in
+        let ea = Expr.var ctx a_ in
+        let typ = Expr.(arrow ctx (arrow ctx ea bool_) ea) in
+        {c_name=id_select; c_args=C_ty_vars[a_]; c_ty=typ;
+         c_def_loc=None; c_fixity=F_binder 10}
       );
     } in
     ctx
