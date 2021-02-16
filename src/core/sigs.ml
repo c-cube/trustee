@@ -32,6 +32,10 @@ module Trustee_error = struct
 
   exception E of t
 
+  let mk ?src msg : t =
+    {pp=(fun out () -> Fmt.string out msg); src}
+  let mk_f ?src pp = {pp; src}
+
   let pp out (e:t) =
     let rec pp_err k src out () =
       k out();
@@ -43,7 +47,7 @@ module Trustee_error = struct
     Fmt.fprintf out  "@[<v>%a@]" (pp_err e.pp e.src) ()
 end
 
-let error ?src msg = raise (Trustee_error.E ({pp=(fun out () -> Fmt.string out msg); src}))
+let error ?src msg = raise Trustee_error.(E (mk ?src msg))
 let errorf ?src k : 'a =
   let pp out () = k (fun fmt ->
       Fmt.kfprintf (fun _o -> ()) out fmt)

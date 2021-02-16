@@ -87,6 +87,10 @@ module Article = struct
       Iter.of_list self.theorems |> Iter.map (fun th->I_thm th);
     ]
 
+  let pp_stats out (self:t) : unit =
+    Fmt.fprintf out "(@[%d consts, %d assumptions, %d theorems@])"
+      (List.length self.consts) (List.length self.axioms) (List.length self.theorems)
+
   let pp_item out = function
     | I_cst c -> Fmt.fprintf out "(@[const %a@])" K.Const.pp c
     | I_axiom th -> Fmt.fprintf out "(@[axiom %a@])" K.Thm.pp_quoted th
