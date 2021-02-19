@@ -287,6 +287,7 @@ module VM = struct
       self.stack <- O_term t :: st
     | _ -> errorf (fun k->k"cannot apply varTerm@ in state %a" pp_vm self)
 
+  (* FIXME: move polymorphic apply/congr to the kernel itself? (also implement it for congr) *)
   let appTerm : rule = fun self ->
     match self.stack with
     | O_term a :: O_term f :: st ->
@@ -336,21 +337,105 @@ module VM = struct
         | Some subst -> K.Expr.subst ctx e subst
       )
 
+  let define_named_ ctx n t : K.Thm.t * K.const =
+    let s = Name.to_string n in
+    let eqn =
+      K.Expr.(app_eq ctx
+                (var ctx (K.Var.make s (ty_exn t))) t)
+    in
+    let th, c = K.Thm.new_basic_definition ctx eqn in
+    th, c
+
   let defineConst : rule = fun self ->
     match self.stack with
     | O_term t :: O_name n :: st ->
       if Hashtbl.mem self.named_consts n then (
         errorf (fun k->k"a constant %a is already defined" Name.pp n);
       );
-      let s = Name.to_string n in
-      let t' =
-        K.Expr.(app_eq self.ctx
-                  (var self.ctx (K.Var.make s (ty_exn t))) t)
-      in
-      let th, c = K.Thm.new_basic_definition self.ctx t' in
+      let th, c = define_named_ self.ctx n t in
+      self.art <- {self.art with Article.consts=c :: self.art.Article.consts};
       let c = mk_defined_const_ c in
       Hashtbl.add self.named_consts n (n,c);
       self.stack <- O_thm th :: O_const (n, c) :: st
+    | _ -> errorf (fun k->k"cannot apply defineConst@ in state %a" pp_vm self)
+
+  let defineConstList : rule = fun self ->
+    match self.stack with
+    | O_thm th :: O_list l :: st ->
+      let hyps = K.Thm.hyps_l th in
+      let concl = K.Thm.concl th in
+
+      let names =
+        List.map
+          (function O_list [O_name n; O_var v] -> n,v
+                  | _ -> errorf (fun k->k"expected list of (name,var)"))
+          l
+      in
+
+      let vars = List.map snd names |> K.Var.Set.of_list in
+
+      (* free variables of the RHS (excluding type vars) *)
+      let fvars_concl =
+        K.Expr.free_vars_iter concl
+        |> Iter.filter (fun v -> not (K.Expr.is_eq_to_type (K.Var.ty v)))
+        |> K.Var.Set.of_iter
+      in
+      if not (K.Var.Set.subset fvars_concl vars) then (
+        Log.debugf 2 (fun k->k"thm: %a" K.Thm.pp th);
+        errorf
+          (fun k->k"defineConstList: some free vars are not in hypothesis@ \
+                    :fvars-concl %a@ :vars %a"
+              Fmt.(Dump.list K.Var.pp) (K.Var.Set.to_list fvars_concl)
+              Fmt.(Dump.list K.Var.pp) (K.Var.Set.to_list vars)
+          );
+      );
+
+      (* decompose hypothesis as [v = rhs] pairs *)
+      let hyps_as_vars =
+        List.map
+          (fun hyp -> match K.Expr.unfold_eq hyp with
+             | Some (v, rhs) ->
+               begin match K.Expr.view v with
+                 | K.Expr.E_var v -> v, rhs
+                 | _ -> error "expected hypothesis to have variable as LHS"
+               end
+             | _ -> error "expected hypothesis to be an equation")
+          hyps
+      in
+
+      let subst, (thms,consts) =
+        CCList.fold_map
+          (fun subst (n,v) ->
+            let rhs =
+              try CCList.assoc ~eq:K.Var.equal v hyps_as_vars
+              with Not_found ->
+                errorf(fun k->k"cannot find hypothesis with var `%a`" K.Var.pp v)
+            in
+
+            let th, c = define_named_ self.ctx n rhs in
+            self.art <- {self.art with Article.consts=c :: self.art.Article.consts};
+            let c' = (n,mk_defined_const_ c) in
+            Hashtbl.add self.named_consts n c';
+
+            (* add [v := c] to the substitution *)
+            let c_inst = (snd c') self.ctx (K.Var.ty v) in
+            let subst = K.Subst.bind v c_inst subst in
+
+            subst, (th,c'))
+          K.Subst.empty names
+          |> CCPair.map_snd List.split
+      in
+
+      Log.debug 10 "COUCOU 3";
+      (* instantiate theorem, and cut to remove the constant definition theorems *)
+      let th = K.Thm.subst self.ctx th subst in
+      let th =
+        List.fold_left
+          (fun th th' -> K.Thm.cut self.ctx th' th) th thms
+      in
+      Log.debugf 10 (fun k->k"(@[defineConstList.result@ %a@])" K.Thm.pp th);
+
+      self.stack <- O_thm th :: O_list (List.map (fun c->O_const c) consts) :: st
     | _ -> errorf (fun k->k"cannot apply defineConst@ in state %a" pp_vm self)
 
   let pop : rule = fun self ->
@@ -506,9 +591,12 @@ module VM = struct
           ()
       in
       let c_abs = (abs, mk_defined_const_ def.c_abs) in
+      self.art <- {self.art with Article.consts=def.c_abs :: self.art.Article.consts};
       Hashtbl.add self.named_consts abs c_abs;
+      self.art <- {self.art with Article.consts=def.c_repr :: self.art.Article.consts};
       let c_rep = (rep, mk_defined_const_ def.c_repr) in
       Hashtbl.add self.named_consts rep c_rep;
+      self.art <- {self.art with Article.consts=def.tau :: self.art.Article.consts};
       let c_tau = (tau, mk_defined_ty_ def.tau) in
       Hashtbl.add self.named_tys tau c_tau;
 
@@ -526,6 +614,12 @@ module VM = struct
         O_ty_op c_tau ::
         st;
     | _ -> errorf (fun k->k"cannot apply defineTypeOp@ in state %a" pp_vm self)
+
+  let hdTl : rule = fun self ->
+    match self.stack with
+    | O_list (x::tl) :: st ->
+      self.stack <- O_list tl :: x :: st;
+    | _ -> errorf (fun k->k"cannot apply hdTl@ in state %a" pp_vm self)
 
   let rules : rule Str_map.t = [
     "version", version;
@@ -559,6 +653,8 @@ module VM = struct
     "trans", trans;
     "proveHyp", proveHyp;
     "defineTypeOp", defineTypeOp;
+    "defineConstList", defineConstList;
+    "hdTl", hdTl;
   ] |> Str_map.of_list
 
   let create ctx : t =
