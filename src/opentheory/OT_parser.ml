@@ -133,7 +133,9 @@ module VM = struct
     mutable stack: obj list;
     dict: (int, obj) Hashtbl.t;
     mutable named_consts: (Name.t, const) Hashtbl.t;
+    mutable named_tys: (Name.t, ty_op) Hashtbl.t;
     mutable art: Article.t;
+    ind: K.const;
   }
 
   let article (self:t) : Article.t = self.art
@@ -188,7 +190,13 @@ module VM = struct
              | _ -> error "arrow expects 2 args")
         | {Name.path=[];name="bool"} ->
           (fun ctx -> function [] -> K.Expr.bool ctx | _ -> error "bool is a const")
-        | _ -> errorf (fun k->k"unknown type operator '%a'" Name.pp n)
+        | {Name.path=[];name="ind"} ->
+          (fun ctx -> function
+             | [] -> K.Expr.const ctx self.ind [] | _ -> error "ind is a const")
+        | _ ->
+          try snd @@ Hashtbl.find self.named_tys n
+          with Not_found ->
+            errorf (fun k->k"unknown type operator '%a'" Name.pp n)
       in
       let op = n, f_op in
       self.stack <- O_ty_op op :: st;
@@ -282,6 +290,26 @@ module VM = struct
   let appTerm : rule = fun self ->
     match self.stack with
     | O_term a :: O_term f :: st ->
+      (*Log.debugf 10 (fun k->k"appterm `%a : %a`@ to `%a : %a`"
+                        K.Expr.pp f K.Expr.pp (K.Expr.ty_exn f)
+                        K.Expr.pp a K.Expr.pp (K.Expr.ty_exn a));*)
+      let f =
+        let ty_f = K.Expr.ty_exn f in
+        let ty_a = K.Expr.ty_exn a in
+        match K.Expr.view ty_f with
+        | K.Expr.E_arrow (ty1, _) when K.Expr.equal ty1 ty_a ->
+          f (* no instantiation needed *)
+        | K.Expr.E_arrow (ty1, _) ->
+          (* instantiate [f] so its argument matches [ty_a] *)
+          let subst =
+            try Unif.match_exn ty1 ty_a
+            with Unif.Fail ->
+              errorf (fun k->k"cannot apply %a@ to %a" K.Expr.pp f K.Expr.pp a)
+          in
+          K.Expr.subst self.ctx f subst
+        | _ ->
+          assert false (* TODO: unify type of [f] with [ty1 -> b] where [b] fresh *)
+      in
       let t = K.Expr.app self.ctx f a in
       self.stack <- O_term t :: st
     | _ -> errorf (fun k->k"cannot apply appTerm@ in state %a" pp_vm self)
@@ -297,7 +325,7 @@ module VM = struct
     | K.Const.C_ty_vars ty_vars ->
       (* make new variables *)
       let vars =
-        List.mapi (fun i v -> K.Var.makef " _%d" (K.Var.ty v) i) ty_vars in
+        List.mapi (fun i v -> K.Var.makef "√%d" (K.Var.ty v) i) ty_vars in
       (fun ctx ty ->
         let e = K.Expr.const ctx c (List.map (K.Expr.var ctx) vars) in
         let ty_e = K.Expr.ty_exn e in
@@ -373,6 +401,7 @@ module VM = struct
   let appThm : rule = fun self ->
     match self.stack with
     | O_thm a :: O_thm f :: st ->
+      (* Log.debugf 10 (fun k->k"appThm `%a` `%a`" K.Thm.pp f K.Thm.pp a); *)
       let th = K.Thm.congr self.ctx f a in
       self.stack <- O_thm th :: st;
     | _ -> errorf (fun k->k"cannot apply appThm@ in state %a" pp_vm self)
@@ -446,6 +475,58 @@ module VM = struct
       self.stack <- O_thm th :: st;
     | _ -> errorf (fun k->k"cannot apply proveHyp@ in state %a" pp_vm self)
 
+  (* create a defined constant, with local type inference since OT
+     gives us only the expected type of the constant *)
+  let mk_defined_ty_ c =
+    match K.Const.args c with
+    | K.Const.C_arity 0 ->
+      (* non-polymorphic constant *)
+      (fun ctx _ty -> assert (_ty=[]); K.Expr.const ctx c [])
+    | K.Const.C_arity n ->
+      (fun ctx _tyargs -> assert (List.length _tyargs=n); K.Expr.const ctx c _tyargs)
+    | K.Const.C_ty_vars _ ->
+      errorf (fun k->k"not a type const: %a" K.Const.pp c)
+
+  let defineTypeOp : rule = fun self ->
+    match self.stack with
+    | O_thm th :: O_list names :: O_name rep :: O_name abs :: O_name tau :: st ->
+      (* TODO: check names? *)
+      let ty_vars =
+        List.map
+          (function
+            | O_name {path=[];name} -> K.Var.make name (K.Expr.type_ self.ctx)
+            | _ -> errorf (fun k->k"expect a list of names"))
+          names
+      in
+      let def =
+        K.Thm.new_basic_type_definition self.ctx
+          ~ty_vars
+          ~name:(Name.to_string tau) ~abs:(Name.to_string abs)
+          ~repr:(Name.to_string rep) ~thm_inhabited:th
+          ()
+      in
+      let c_abs = (abs, mk_defined_const_ def.c_abs) in
+      Hashtbl.add self.named_consts abs c_abs;
+      let c_rep = (rep, mk_defined_const_ def.c_repr) in
+      Hashtbl.add self.named_consts rep c_rep;
+      let c_tau = (tau, mk_defined_ty_ def.tau) in
+      Hashtbl.add self.named_tys tau c_tau;
+
+      (* need to abstract over the theorems *)
+      let repr_thm =
+        let th = K.Thm.sym self.ctx def.repr_thm in (* flip first *)
+        K.Thm.abs self.ctx th def.repr_x in
+      let abs_thm = K.Thm.abs self.ctx def.abs_thm def.abs_x in
+
+      self.stack <-
+        O_thm repr_thm ::
+        O_thm abs_thm ::
+        O_const c_rep ::
+        O_const c_abs ::
+        O_ty_op c_tau ::
+        st;
+    | _ -> errorf (fun k->k"cannot apply defineTypeOp@ in state %a" pp_vm self)
+
   let rules : rule Str_map.t = [
     "version", version;
     "absTerm", absTerm;
@@ -477,12 +558,15 @@ module VM = struct
     "deductAntisym", deductAntisym;
     "trans", trans;
     "proveHyp", proveHyp;
+    "defineTypeOp", defineTypeOp;
   ] |> Str_map.of_list
 
   let create ctx : t =
+    let ind = K.Expr.new_ty_const ctx "ind" 0 in (* special type *)
     let self = {
       ctx; stack=[]; dict=Hashtbl.create 32; named_consts=Hashtbl.create 32;
-      art=Article.empty;
+      named_tys=Hashtbl.create 16;
+      art=Article.empty; ind;
     } in
     self
 

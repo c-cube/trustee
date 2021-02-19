@@ -200,6 +200,7 @@ let () =
     "-check", Arg.Rest (fun s->check := s :: !check), " check given theories";
     "-check-all", Arg.Set check_all, " check all";
     "-dot", Arg.Set_string dot_file, " print graph into file";
+    "-d", Arg.Int Log.set_level, " set debug level";
   ] |> Arg.align in
   Arg.parse opts (fun _ -> failwith "invalid option") "trustee_ot [option*]";
   Fmt.set_color_default true;
