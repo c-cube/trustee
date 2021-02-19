@@ -183,18 +183,28 @@ end
 module New_ty_def : sig
   type t = {
     tau: ty_const;
-    (** the new type constructor *)
+    (** The new type constructor *)
+
     fvars: var list;
+    (** List of type variables *)
+
     c_abs: const;
     (** Function from the general type to `tau` *)
+
     c_repr: const;
     (** Function from `tau` back to the general type *)
+
     abs_thm: thm;
     (** `abs_thm` is `|- abs (repr x) = x` *)
+
     abs_x: var;
+    (** Variable used in [abs_thm] *)
+
     repr_thm: thm;
     (** `repr_thm` is `|- Phi x <=> repr (abs x) = x` *)
+
     repr_x: var;
+    (** Variable used in [repr_thm] *)
   }
 end
 
@@ -271,6 +281,7 @@ module Thm : sig
 
   val new_basic_type_definition :
     ctx ->
+    ?ty_vars:ty_var list ->
     name:string ->
     abs:string ->
     repr:string ->
@@ -289,6 +300,9 @@ module Thm : sig
       - `tau` is the new (possibly parametrized) type operator
       - `absthm` is `|- abs (repr x) = x`
       - `reprthm` is `|- Phi x <=> repr (abs x) = x`
+
+      @param ty_var if provided, use the type variables in the given order.
+      It must be the exact set of free variables of [thm_inhabited].
   *)
 end
 

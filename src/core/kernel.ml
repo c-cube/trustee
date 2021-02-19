@@ -431,14 +431,6 @@ module Expr = struct
     c
 
   let new_const ctx ?def_loc name ty_vars ty : const =
-    let fvars = free_vars ty in
-    if not (Var.Set.equal fvars (Var.Set.of_list ty_vars)) then (
-      errorf
-        (fun k->k
-            "Kernel.new_const: type variables should be [@[%a@]],@ \
-             but RHS has free type variables %a"
-            (Fmt.Dump.list Var.pp) ty_vars Var.Set.(pp Var.pp) fvars)
-    );
     new_const_ ctx ?def_loc name (C_ty_vars ty_vars) ty
 
   let new_ty_const ctx ?def_loc name n : ty_const =
@@ -978,7 +970,7 @@ module Thm = struct
     | None -> errorf (fun k->k"conclusion of `%a`@ is not an equation" pp th)
 
   let new_basic_definition ctx ?def_loc (e:expr) : t * const =
-    Log.debugf 5 (fun k->k"new-basic-def %a" Expr.pp e);
+    Log.debugf 5 (fun k->k"(@[new-basic-def@ :eqn `%a`@])" Expr.pp e);
     wrap_exn (fun k->k"@[<2>in new-basic-def `@[%a@]`@]:" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.unfold_eq e with
@@ -996,20 +988,24 @@ module Thm = struct
         | _ ->
           errorf (fun k-> k "LHS must be a variable,@ but got %a" Expr.pp x)
       in
-      let ty_vars = Expr.free_vars rhs |> Var.Set.to_list in
-      begin match List.find (fun v -> not (Expr.is_eq_to_type v.v_ty)) ty_vars with
+
+      let fvars = Expr.free_vars rhs in
+      let ty_vars_l = Var.Set.to_list fvars in
+      begin match List.find (fun v -> not (Expr.is_eq_to_type v.v_ty)) ty_vars_l with
         | v ->
           errorf
             (fun k->k"RHS contains free variable `@[%a : %a@]`@ which is not a type variable"
                 Var.pp v Expr.pp v.v_ty)
         | exception Not_found -> ()
       end;
-      let c = Expr.new_const ctx ?def_loc (Var.name x_var) ty_vars (Var.ty x_var) in
-      let c_e = Expr.const ctx c (List.map (Expr.var ctx) ty_vars) in
+
+      let c = Expr.new_const ctx ?def_loc (Var.name x_var) ty_vars_l (Var.ty x_var) in
+      let c_e = Expr.const ctx c (List.map (Expr.var ctx) ty_vars_l) in
       let th = make_ ctx Expr.Set.empty (Expr.app_eq ctx c_e rhs) in
       th, c
 
   let new_basic_type_definition ctx
+      ?ty_vars:provided_ty_vars
       ~name ~abs ~repr ~thm_inhabited () : New_ty_def.t =
     wrap_exn (fun k->k"@[<2>in new-basic-ty-def %s `@[%a@]`@]:"
                  name pp thm_inhabited) @@ fun () ->
@@ -1034,8 +1030,24 @@ module Thm = struct
       | exception Not_found -> ()
     end;
 
-    let ty_vars_l = Var.Set.to_list fvars in
-    let ty_vars_expr_l = ty_vars_l |> List.rev_map (Expr.var ctx) in
+    let ty_vars_l = match provided_ty_vars with
+      | None -> Var.Set.to_list fvars (* pick any order *)
+      | Some l ->
+        if not (Var.Set.equal fvars (Var.Set.of_list l)) then (
+          errorf
+            (fun k->k
+                "list of type variables (%a) in new-basic-ty-def@ does not match %a"
+                (Fmt.Dump.list Var.pp) (Var.Set.to_list fvars)
+                (Fmt.Dump.list Var.pp) l);
+        );
+        l
+    in
+    let ty_vars_expr_l = ty_vars_l |> CCList.map (Expr.var ctx) in
+
+    Log.debugf 5
+      (fun k->k"(@[new-basic-ty-def@ :name `%s`@ :phi %a@ \
+                :ty-vars %a@ :repr `%s`@ :abs `%s`@])"
+           name pp_quoted thm_inhabited (Fmt.Dump.list Var.pp) ty_vars_l repr abs);
 
     (* construct new type and mapping functions *)
     let tau = Expr.new_ty_const ctx name (List.length ty_vars_l) in
