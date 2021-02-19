@@ -46,8 +46,9 @@ let u_rec op subst a b : subst =
     | _, E.E_var v when op == O_unif ->
       if occ_check subst v a then raise Fail;
       Su.bind v a subst
-    | E.E_const (c1, _), E.E_const (c2, _) when K.Const.equal c1 c2 ->
-      subst (* types are already unified *)
+    | E.E_const (c1, args1), E.E_const (c2, args2) when K.Const.equal c1 c2 ->
+      assert (List.length args1=List.length args2);
+      List.fold_left2 loop subst args1 args2
     | E.E_bound_var v1, E.E_bound_var v2 when v1.bv_idx = v2.bv_idx ->
       subst (* types are already unified *)
     | E.E_app (f1, arg1), E.E_app (f2, arg2)
