@@ -31,6 +31,9 @@ module Article : sig
   val pp_stats : t Fmt.printer
 end
 
+(** Remove quotes around a string of the form ["foo"] *)
+val unescape : string -> string
+
 (** {2 Virtual Machine} *)
 module VM : sig
   type t
@@ -46,10 +49,10 @@ module VM : sig
 
   val has_empty_stack : t -> bool
 
+  val parse_and_check_art_exn : t -> input -> Article.t
+
   val parse_and_check_art :
-    t ->
-    input ->
-    Article.t or_error
+    t -> input -> Article.t or_error
 end
 
 val parse_and_check_art :

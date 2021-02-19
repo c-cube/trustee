@@ -5,11 +5,13 @@ type sub = {
   sub_name: string;
   imports: string list;
   package: string option;
+  article: string option;
 }
 
 type t = {
   name: string;
   version: string;
+  requires: string list;
   meta: (string * string) list;
   subs: sub list;
   main: sub;
@@ -97,11 +99,14 @@ let parse : t P.t =
     and version =
       find items (function (I_kv ("version",s)) -> Some s | _ -> None)
         ~msg:(fun () -> "no `version` provided")
+
+    and requires =
+      CCList.filter_map (function (I_kv ("requires", s)) -> Some s | _ -> None) items
     in
     let meta =
       CCList.filter_map
         (function
-          | (I_kv (("name" | "version"),_)) -> None
+          | (I_kv (("name" | "version" | "requires"),_)) -> None
           | I_kv (k,v) -> Some (k,v)
           | I_sub _ -> None)
         items
@@ -120,8 +125,11 @@ let parse : t P.t =
             let package =
               CCList.find_map
                 (function (I_kv ("package",s)) -> Some s | _ -> None) l
+            and article =
+              CCList.find_map
+                (function (I_kv ("article",s)) -> Some s | _ -> None) l
             in
-            Some {sub_name; imports; package}
+            Some {sub_name; imports; article; package}
         )
       items
     in
@@ -129,7 +137,7 @@ let parse : t P.t =
         ~msg:(fun() -> "no `main` entry")
     in
     let subs = List.filter (fun s -> s.sub_name <> "main") subs in
-    P.return {name; version; meta; subs; main}
+    P.return {name; version; meta; subs; main; requires}
   with Failure s -> P.fail s
 
 let of_string s =
@@ -137,40 +145,49 @@ let of_string s =
   | Ok x -> Ok x
   | Error e -> Error (Trustee_error.mk e)
 
-module List_dir = struct
+module Idx = struct
   type thy = t
   type path = string
 
   (** Results of listing a directory *)
   type t = {
     theories: (path * thy) list;
+    by_name: thy Str_tbl.t;
+    articles: path Str_tbl.t; (* basename -> path *)
     errors: (path * Trustee_error.t) list;
   }
-
-  (* gen *)
-  module G = struct
-    let rec iter ~f g = match g() with
-      | Some x -> f x; iter ~f g
-      | None -> ()
-  end
-
-  let list_dir dir : t =
-    let errors = ref [] in
-    let theories = ref [] in
-    let g = CCIO.File.walk dir in
-    let module E = Trustee_error in
-    G.iter g
-      ~f:(fun (k,file) ->
-          if k=`File && CCString.suffix ~suf:".thy" file then (
-            try
-              let s = CCIO.File.read_exn file in
-              match of_string s with
-              | Ok thy -> theories := (file,thy) :: !theories
-              | Error e -> errors := (file,e) :: !errors
-            with e ->
-              errors := (file, Trustee_error.mk (Printexc.to_string e)) :: !errors;
-          ));
-    { theories= !theories;
-      errors= !errors;
-    }
 end
+
+(* gen util(s) *)
+module G = struct
+  let rec iter ~f g = match g() with
+    | Some x -> f x; iter ~f g
+    | None -> ()
+end
+
+let list_dir dir : Idx.t =
+  let open Idx in
+  let errors = ref [] in
+  let theories = ref [] in
+  let by_name = Str_tbl.create 32 in
+  let articles = Str_tbl.create 8 in
+  let g = CCIO.File.walk dir in
+  let module E = Trustee_error in
+  G.iter g
+    ~f:(fun (k,file) ->
+        if k=`File && CCString.suffix ~suf:".thy" file then (
+          try
+            let s = CCIO.File.read_exn file in
+            match of_string s with
+            | Ok thy ->
+              Str_tbl.add by_name thy.name thy;
+              Str_tbl.add by_name (versioned_name thy) thy;
+              theories := (file,thy) :: !theories
+            | Error e -> errors := (file,e) :: !errors
+          with e ->
+            errors := (file, Trustee_error.mk (Printexc.to_string e)) :: !errors;
+        ) else if k=`File && CCString.suffix ~suf:".art" file then (
+          let base = Filename.basename file in
+          Str_tbl.add articles base file;
+        ));
+  { theories= !theories; by_name; articles; errors= !errors; }

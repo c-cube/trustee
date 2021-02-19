@@ -20,6 +20,7 @@ depends: [
 ]
 depopts: [
   "camlzip"
+  "mtime"
 ]
 tags: [ "logic" "proof" "HOL" "assistant" ]
 bug-reports: "https://github.com/c-cube/trustee/issues"

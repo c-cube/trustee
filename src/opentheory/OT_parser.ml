@@ -25,29 +25,29 @@ module Input = struct
   (* TODO: camlzip: dezip + of_string *)
 end
 
+let unescape s : string =
+  let n = String.length s in
+  let buf = Buffer.create (String.length s) in
+  let i = ref 0 in
+  while !i < n do
+    let c = s.[!i] in
+    match c with
+    | '\\' when !i + 1 < n ->
+      begin match s.[!i+1] with
+        | 'n' -> Buffer.add_char buf '\n'; i := !i + 2
+        | '"' -> Buffer.add_char buf '"'; i := !i + 2
+        | '\\' -> Buffer.add_char buf '\\'; i := !i + 2
+        | _ -> Buffer.add_char buf c; incr i
+      end;
+    | _ -> Buffer.add_char buf c; incr i
+  done;
+  Buffer.contents buf
+
 module Name = struct
   type t = {
     path: string list;
     name: string;
   }
-
-  let unescape s : string =
-    let n = String.length s in
-    let buf = Buffer.create (String.length s) in
-    let i = ref 0 in
-    while !i < n do
-      let c = s.[!i] in
-      match c with
-      | '\\' when !i + 1 < n ->
-        begin match s.[!i+1] with
-          | 'n' -> Buffer.add_char buf '\n'; i := !i + 2
-          | '"' -> Buffer.add_char buf '"'; i := !i + 2
-          | '\\' -> Buffer.add_char buf '\\'; i := !i + 2
-          | _ -> Buffer.add_char buf c; incr i
-        end;
-      | _ -> Buffer.add_char buf c; incr i
-    done;
-    Buffer.contents buf
 
   let of_string s : t =
     let s = unescape s in
@@ -489,7 +489,7 @@ module VM = struct
   let has_empty_stack self =
     match self.stack with [] -> true | _ -> false
 
-  let parse_and_check_art (self:t) (input:input) : Article.t or_error =
+  let parse_and_check_art_exn (self:t) (input:input) : Article.t =
     Log.debug 5 "(open-theory.parse-and-check-art)";
     let i = ref 0 in
 
@@ -524,11 +524,13 @@ module VM = struct
           end
       end;
     in
-    try
-      input.iter_lines process_line;
-      let art = article self in
-      self.art <- Article.empty; (* clear article for next file, if any *)
-      Ok art
+    input.iter_lines process_line;
+    let art = article self in
+    self.art <- Article.empty; (* clear article for next file, if any *)
+    art
+
+  let parse_and_check_art self i =
+    try Ok (parse_and_check_art_exn self i)
     with Trustee_error.E e -> Error e
 end
 
