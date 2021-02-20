@@ -294,23 +294,6 @@ module VM = struct
       (*Log.debugf 10 (fun k->k"appterm `%a : %a`@ to `%a : %a`"
                         K.Expr.pp f K.Expr.pp (K.Expr.ty_exn f)
                         K.Expr.pp a K.Expr.pp (K.Expr.ty_exn a));*)
-      let f =
-        let ty_f = K.Expr.ty_exn f in
-        let ty_a = K.Expr.ty_exn a in
-        match K.Expr.view ty_f with
-        | K.Expr.E_arrow (ty1, _) when K.Expr.equal ty1 ty_a ->
-          f (* no instantiation needed *)
-        | K.Expr.E_arrow (ty1, _) ->
-          (* instantiate [f] so its argument matches [ty_a] *)
-          let subst =
-            try Unif.match_exn ty1 ty_a
-            with Unif.Fail ->
-              errorf (fun k->k"cannot apply %a@ to %a" K.Expr.pp f K.Expr.pp a)
-          in
-          K.Expr.subst self.ctx f subst
-        | _ ->
-          assert false (* TODO: unify type of [f] with [ty1 -> b] where [b] fresh *)
-      in
       let t = K.Expr.app self.ctx f a in
       self.stack <- O_term t :: st
     | _ -> errorf (fun k->k"cannot apply appTerm@ in state %a" pp_vm self)
