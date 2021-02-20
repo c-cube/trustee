@@ -24,7 +24,7 @@ and expr = {
   e_view: expr_view;
   e_ty: expr option lazy_t;
   mutable e_id: int;
-  mutable e_flags: int; (* ̵contains: [higher DB var | 5:ctx uid] *)
+  mutable e_flags: int; (* ̵contains: [higher DB var | 1:has free vars | 5:ctx uid] *)
 }
 
 and var = {
@@ -56,7 +56,8 @@ and const_args =
 let[@inline] expr_eq (e1:expr) e2 : bool = e1 == e2
 let[@inline] expr_hash (e:expr) = H.int e.e_id
 let[@inline] expr_compare (e1:expr) e2 : int = CCInt.compare e1.e_id e2.e_id
-let[@inline] expr_db_depth e = e.e_flags lsr ctx_id_bits
+let[@inline] expr_db_depth e = e.e_flags lsr (1+ctx_id_bits)
+let[@inline] expr_has_fvars e = ((e.e_flags lsr ctx_id_bits) land 1) == 1
 let[@inline] expr_ctx_uid e : int = e.e_flags land ctx_id_mask
 
 let[@inline] var_eq v1 v2 = v1.v_name = v2.v_name && expr_eq v1.v_ty v2.v_ty
@@ -276,6 +277,124 @@ module Subst = struct
   let size = Var.Map.cardinal
 end
 
+(* first half of {!Expr}, required in {!Unif} *)
+module E0 = struct
+  type t_ = expr
+
+  let[@inline] ty e = Lazy.force e.e_ty
+  let[@inline] view e = e.e_view
+  let[@inline] ty_exn e = match e.e_ty with
+    | lazy None -> assert false
+    | lazy (Some ty) -> ty
+
+  let equal = expr_eq
+  let hash = expr_hash
+  let pp = expr_pp_
+  let to_string = Fmt.to_string pp
+  let compare = expr_compare
+  let db_depth = expr_db_depth
+  let has_fvars = expr_has_fvars
+
+  let[@inline] iter ~f (e:t_) : unit =
+    match view e with
+    | E_kind | E_type | E_const _ -> ()
+    | _ ->
+      CCOpt.iter (f false) (ty e);
+      match view e with
+      | E_kind | E_type | E_const _ -> assert false
+      | E_var v -> f false v.v_ty
+      | E_bound_var v -> f false v.bv_ty
+      | E_app (hd,a) -> f false hd; f false a
+      | E_lam (tyv, bod) -> f false tyv; f true bod
+      | E_arrow (a,b) -> f false a; f false b
+
+  exception E_exit
+
+  let[@inline] exists ~f e : bool =
+    try
+      iter e ~f:(fun b x -> if f b x then raise_notrace E_exit); false
+    with E_exit -> true
+
+  let[@inline] for_all ~f e : bool =
+    try
+      iter e ~f:(fun b x -> if not (f b x) then raise_notrace E_exit); true
+    with E_exit -> false
+end
+
+module Unif = struct
+  exception Fail
+  type subst = Subst.t
+
+  let[@unroll 2] rec deref subst e =
+    match e.e_view with
+    | E_var v ->
+      begin match Subst.find_exn v subst with
+        | exception Not_found -> e
+        | e' -> deref subst e'
+      end
+    | _ -> e
+
+  (* occur check: does [v] occur in [e]? *)
+  let rec occ_check subst v e =
+    let e = deref subst e in
+    match e.e_view with
+    | E_var v' -> Var.equal v v'
+    | _ -> E0.exists e ~f:(fun _ e' -> occ_check subst v e')
+
+  type op = O_unif | O_match
+
+  let u_rec op subst a b : subst =
+    let rec loop subst a b =
+      let a = deref subst a in
+      let b = deref subst b in
+
+      (* unify types first *)
+      let subst = match E0.ty a, E0.ty b with
+        | None, None -> subst
+        | Some ty1, Some ty2 when E0.equal ty1 ty2 -> subst
+        | Some ty1, Some ty2 -> loop subst ty1 ty2
+        | Some _, None | None, Some _ -> raise Fail
+      in
+      match E0.view a, E0.view b with
+      | _ when E0.equal a b -> subst
+      | E_var v1, E_var v2 when Var.equal v1 v2 -> subst
+      | E_var v, _ ->
+        if occ_check subst v b then raise Fail;
+        Subst.bind v b subst
+      | _, E_var v when op == O_unif ->
+        if occ_check subst v a then raise Fail;
+        Subst.bind v a subst
+      | E_const (c1, args1), E_const (c2, args2) when Const.equal c1 c2 ->
+        assert (List.length args1=List.length args2);
+        List.fold_left2 loop subst args1 args2
+      | E_bound_var v1, E_bound_var v2 when v1.bv_idx = v2.bv_idx ->
+        subst (* types are already unified *)
+      | E_app (f1, arg1), E_app (f2, arg2)
+      | E_arrow (f1, arg1), E_arrow (f2, arg2) ->
+        let subst = loop subst f1 f2 in
+        loop subst arg1 arg2
+      | E_lam (ty1, bod1), E_lam (ty2, bod2) ->
+        let subst = loop subst ty1 ty2 in
+        loop subst bod1 bod2
+      | (E_kind | E_type | E_app _ | E_arrow _
+        | E_const _ | E_bound_var _ | E_lam _), _ ->
+        raise Fail
+    in
+    loop subst a b
+
+  let unify_exn ?(subst=Subst.empty) a b = u_rec O_unif subst a b
+
+  let unify ?subst a b =
+    try Some (unify_exn ?subst a b)
+    with Fail -> None
+
+  let match_exn ?(subst=Subst.empty) a b = u_rec O_match subst a b
+
+  let match_ ?subst a b =
+    try Some (match_exn ?subst a b)
+    with Fail -> None
+end
+
 module Expr = struct
   type t = expr
 
@@ -289,17 +408,7 @@ module Expr = struct
     | E_lam of t * t
     | E_arrow of t * t
 
-  let equal = expr_eq
-  let hash = expr_hash
-  let pp = expr_pp_
-  let to_string = Fmt.to_string pp
-  let compare = expr_compare
-  let db_depth = expr_db_depth
-  let[@inline] ty e = Lazy.force e.e_ty
-  let[@inline] view e = e.e_view
-  let[@inline] ty_exn e = match e.e_ty with
-    | lazy None -> assert false
-    | lazy (Some ty) -> ty
+  include E0
 
   let[@inline] is_closed e : bool = db_depth e == 0
 
@@ -317,6 +426,19 @@ module Expr = struct
     in
     max d1 d2
 
+  let compute_has_fvars_ e : bool =
+    begin match ty e with
+      | None -> false
+      | Some d -> has_fvars d
+    end ||
+    begin match view e with
+      | E_var _ -> true
+      | E_kind | E_type | E_bound_var _ -> false
+      | E_const (_, args) -> List.exists has_fvars args
+      | E_app (a,b) | E_arrow (a,b) -> has_fvars a || has_fvars b
+      | E_lam (ty,bod) -> has_fvars ty || has_fvars bod
+    end
+
   (* hashconsing + computing metadata *)
   let make_ (ctx:ctx) view ty : t =
     let e = { e_view=view; e_ty=ty; e_id= -1; e_flags=0 } in
@@ -324,8 +446,10 @@ module Expr = struct
     if e == e_h then (
       (* new term, compute metadata *)
       assert ((ctx.ctx_uid land ctx_id_mask) == ctx.ctx_uid);
+      let has_fvars = compute_has_fvars_ e in
       e_h.e_flags <-
-        ((compute_db_depth_ e) lsl ctx_id_bits)
+        ((compute_db_depth_ e) lsl (1+ctx_id_bits))
+        lor (if has_fvars then 1 lsl ctx_id_bits else 0)
         lor ctx.ctx_uid;
       ctx_check_e_uid ctx e_h;
     );
@@ -354,49 +478,37 @@ module Expr = struct
     make_ ctx (E_bound_var {bv_idx=i; bv_ty=ty}) (Lazy.from_val (Some ty))
 
   (* map immediate subterms *)
-  let[@inline] map ctx ~f (e:t) : t =
+  let[@inline] map ctx ~f (e:t_) : t_ =
     match view e with
     | E_kind | E_type | E_const _ -> e
     | _ ->
       let ty = lazy (
-        match ty e with
-        | None -> None
-        | Some ty -> Some (f false ty)
+        match e.e_ty with
+        | lazy None -> None
+        | lazy (Some ty) -> Some (f false ty)
       ) in
-      let view = match view e with
+      begin match view e with
+        | E_var v ->
+          let v_ty = f false v.v_ty in
+          if v_ty == v.v_ty then e
+          else make_ ctx (E_var {v with v_ty}) ty
+        | E_bound_var v ->
+          make_ ctx (E_bound_var {v with bv_ty=f false v.bv_ty}) ty
+        | E_app (hd,a) ->
+          let hd' =  f false hd in
+          let a' =  f false a in
+          if a==a' && hd==hd' then e
+          else make_ ctx (E_app (f false hd, f false a)) ty
+        | E_lam (tyv, bod) ->
+          (* TODO: fast path *)
+          make_ ctx (E_lam (f false tyv, f true bod)) ty
+        | E_arrow (a,b) ->
+          let a' = f false a in
+          let b' = f false b in
+          if a==a' && b==b' then e
+          else make_ ctx (E_arrow (f false a, f false b)) ty
         | E_kind | E_type | E_const _ -> assert false
-        | E_var v -> E_var {v with v_ty=f false v.v_ty}
-        | E_bound_var v -> E_bound_var {v with bv_ty=f false v.bv_ty}
-        | E_app (hd,a) -> E_app (f false hd, f false a)
-        | E_lam (tyv, bod) -> E_lam (f false tyv, f true bod)
-        | E_arrow (a,b) -> E_arrow (f false a, f false b)
-      in
-      make_ ctx view ty
-
-  let[@inline] iter ~f (e:t) : unit =
-    match view e with
-    | E_kind | E_type | E_const _ -> ()
-    | _ ->
-      CCOpt.iter (f false) (ty e);
-      match view e with
-      | E_kind | E_type | E_const _ -> assert false
-      | E_var v -> f false v.v_ty
-      | E_bound_var v -> f false v.bv_ty
-      | E_app (hd,a) -> f false hd; f false a
-      | E_lam (tyv, bod) -> f false tyv; f true bod
-      | E_arrow (a,b) -> f false a; f false b
-
-  exception E_exit
-
-  let[@inline] exists ~f e : bool =
-    try
-      iter e ~f:(fun b x -> if f b x then raise_notrace E_exit); false
-    with E_exit -> true
-
-  let[@inline] for_all ~f e : bool =
-    try
-      iter e ~f:(fun b x -> if not (f b x) then raise_notrace E_exit); true
-    with E_exit -> false
+      end
 
   exception IsSub
 
@@ -431,6 +543,18 @@ module Expr = struct
     c
 
   let new_const ctx ?def_loc name ty_vars ty : const =
+    let fvars = free_vars ty in
+    let diff = Var.Set.diff fvars (Var.Set.of_list ty_vars) in
+    begin match Var.Set.choose_opt diff with
+      | None -> ()
+      | Some v ->
+        errorf
+          (fun k->k
+              "Kernel.new_const: type variable %a@ \
+               occurs in type of the constant `%s`,@ \
+               but not in the type variables %a"
+              Var.pp v name (Fmt.Dump.list Var.pp) ty_vars);
+    end;
     new_const_ ctx ?def_loc name (C_ty_vars ty_vars) ty
 
   let new_ty_const ctx ?def_loc name n : ty_const =
@@ -464,6 +588,7 @@ module Expr = struct
   let subst ctx e (subst:t Var.Map.t) : t =
     let rec aux k e =
       match view e with
+      | _ when not (has_fvars e) -> e (* nothing to subst in *)
       | E_var v ->
         (* first, subst in type *)
         let v = {v with v_ty=aux k v.v_ty} in
@@ -539,33 +664,59 @@ module Expr = struct
     in
     if is_closed e then e else aux e 0
 
-  let ty_app_ f a =
-    let ty_f = ty_exn f in
-    let tya = ty_exn a in
-    match view ty_f with
-    | E_arrow (ty1, ty2) ->
-      if not (equal tya ty1) then (
-        errorf
-          (fun k->
-             k"@[<2>kernel: cannot apply function@ `@[%a@]`@ \
-               to argument `@[%a@]`@]@];@ \
-               @[function expects argument of type@ `@[%a@]`,@ \
-               but arg has type `@[%a@]`@]"
-          pp f pp a pp ty1 pp tya)
-      );
-      ty2
-    | _ ->
-      errorf
-        (fun k->k
-            "@[kernel: cannot apply `@[%a@]`@ of type %a;@ it is not a function@]"
-            pp f pp ty_f)
+  let arrow ctx a b : t =
+    if not (is_a_type a) || not (is_a_type b) then (
+      errorf (fun k->k"arrow: both arguments must be types");
+    );
+    let ty = Lazy.from_val (Some (type_ ctx)) in
+    make_ ctx (E_arrow (a,b)) ty
 
   let app ctx f a : t =
     ctx_check_e_uid ctx f;
     ctx_check_e_uid ctx a;
-    let ty = lazy (Some (ty_app_ f a)) in
+
+    let ty_f = ty_exn f in
+    let ty_a = ty_exn a in
+
+    let[@inline never] fail () =
+      errorf
+        (fun k->
+          k"@[<2>kernel: cannot apply function@ `@[%a@]`@ \
+           to argument `@[%a@]`@]@];@ \
+           @[function has type@ `@[%a@]`,@ \
+           but arg has type `@[%a@]`@]"
+           pp f pp a pp ty_f pp ty_a)
+    in
+
+    let f, ty =
+      match view ty_f with
+      | E_arrow (ty_arg, ty_ret) when equal ty_arg ty_a ->
+        f, ty_ret (* no instantiation needed *)
+      | E_arrow (ty_arg, ty_ret) ->
+        (* instantiate [f] so its argument matches [ty_a] *)
+        let sigma =
+          try Unif.match_exn ty_arg ty_a
+          with Unif.Fail -> fail()
+        in
+        let f' = subst ctx f sigma in
+        let ty' = subst ctx ty_ret sigma in
+        f', ty'
+      | _ ->
+        (* unify [ty_f] with [ty_a -> v] where [v] is a new type variable *)
+        let v_ty_ret = Var.make " _ret" (type_ ctx) in
+        let ty_ret = var ctx v_ty_ret in
+        let sigma =
+          try Unif.unify_exn ty_f (arrow ctx ty_a ty_ret)
+          with Unif.Fail -> fail()
+        in
+        let f' = subst ctx f sigma in
+        let ty' = subst ctx ty_ret sigma in
+        (* because of the check in {!new_const}, variable should be  *)
+        assert (not (Var.Set.mem v_ty_ret (free_vars ty')));
+        f', ty'
+    in
+    let ty = Lazy.from_val (Some ty) in
     let e = make_ ctx (E_app (f,a)) ty in
-    ignore (Lazy.force e.e_ty);
     e
 
   let rec app_l ctx f l = match l with
@@ -579,13 +730,6 @@ module Expr = struct
     let f = app ctx f a in
     let f = app ctx f b in
     f
-
-  let arrow ctx a b : t =
-    if not (is_a_type a) || not (is_a_type b) then (
-      errorf (fun k->k"arrow: both arguments must be types");
-    );
-    let ty = Lazy.from_val (Some (type_ ctx)) in
-    make_ ctx (E_arrow (a,b)) ty
 
   let arrow_l ctx l ret : t = CCList.fold_right (arrow ctx) l ret
 

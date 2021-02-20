@@ -13,4 +13,9 @@ module Proof = Proof
 module Fixity = Fixity
 module Queryable = Queryable
 module Tok_stream = Tok_stream
-module Unif = Unif
+
+module Expr = Kernel.Expr
+module Thm = Kernel.Thm
+module Subst = Kernel.Subst
+module Var = Kernel.Var
+module Unif = Kernel.Unif
