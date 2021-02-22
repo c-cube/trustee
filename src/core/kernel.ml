@@ -277,9 +277,18 @@ module Subst = struct
   let size = Var.Map.cardinal
 end
 
-(* first half of {!Expr}, required in {!Unif} *)
-module E0 = struct
-  type t_ = expr
+module Expr = struct
+  type t = expr
+
+  type view = expr_view =
+    | E_kind
+    | E_type
+    | E_var of var
+    | E_bound_var of bvar
+    | E_const of const * expr list
+    | E_app of t * t
+    | E_lam of t * t
+    | E_arrow of t * t
 
   let[@inline] ty e = Lazy.force e.e_ty
   let[@inline] view e = e.e_view
@@ -295,7 +304,7 @@ module E0 = struct
   let db_depth = expr_db_depth
   let has_fvars = expr_has_fvars
 
-  let[@inline] iter ~f (e:t_) : unit =
+  let[@inline] iter ~f (e:t) : unit =
     match view e with
     | E_kind | E_type | E_const _ -> ()
     | _ ->
@@ -319,96 +328,6 @@ module E0 = struct
     try
       iter e ~f:(fun b x -> if not (f b x) then raise_notrace E_exit); true
     with E_exit -> false
-end
-
-module Unif = struct
-  exception Fail
-  type subst = Subst.t
-
-  let[@unroll 2] rec deref subst e =
-    match e.e_view with
-    | E_var v ->
-      begin match Subst.find_exn v subst with
-        | exception Not_found -> e
-        | e' -> deref subst e'
-      end
-    | _ -> e
-
-  (* occur check: does [v] occur in [e]? *)
-  let rec occ_check subst v e =
-    let e = deref subst e in
-    match e.e_view with
-    | E_var v' -> Var.equal v v'
-    | _ -> E0.exists e ~f:(fun _ e' -> occ_check subst v e')
-
-  type op = O_unif | O_match
-
-  let u_rec op subst a b : subst =
-    let rec loop subst a b =
-      let a = deref subst a in
-      let b = deref subst b in
-
-      (* unify types first *)
-      let subst = match E0.ty a, E0.ty b with
-        | None, None -> subst
-        | Some ty1, Some ty2 when E0.equal ty1 ty2 -> subst
-        | Some ty1, Some ty2 -> loop subst ty1 ty2
-        | Some _, None | None, Some _ -> raise Fail
-      in
-      match E0.view a, E0.view b with
-      | _ when E0.equal a b -> subst
-      | E_var v1, E_var v2 when Var.equal v1 v2 -> subst
-      | E_var v, _ ->
-        if occ_check subst v b then raise Fail;
-        Subst.bind v b subst
-      | _, E_var v when op == O_unif ->
-        if occ_check subst v a then raise Fail;
-        Subst.bind v a subst
-      | E_const (c1, args1), E_const (c2, args2) when Const.equal c1 c2 ->
-        assert (List.length args1=List.length args2);
-        List.fold_left2 loop subst args1 args2
-      | E_bound_var v1, E_bound_var v2 when v1.bv_idx = v2.bv_idx ->
-        subst (* types are already unified *)
-      | E_app (f1, arg1), E_app (f2, arg2)
-      | E_arrow (f1, arg1), E_arrow (f2, arg2) ->
-        let subst = loop subst f1 f2 in
-        loop subst arg1 arg2
-      | E_lam (ty1, bod1), E_lam (ty2, bod2) ->
-        let subst = loop subst ty1 ty2 in
-        loop subst bod1 bod2
-      | (E_kind | E_type | E_app _ | E_arrow _
-        | E_const _ | E_bound_var _ | E_lam _), _ ->
-        raise Fail
-    in
-    loop subst a b
-
-  let unify_exn ?(subst=Subst.empty) a b = u_rec O_unif subst a b
-
-  let unify ?subst a b =
-    try Some (unify_exn ?subst a b)
-    with Fail -> None
-
-  let match_exn ?(subst=Subst.empty) a b = u_rec O_match subst a b
-
-  let match_ ?subst a b =
-    try Some (match_exn ?subst a b)
-    with Fail -> None
-end
-
-module Expr = struct
-  type t = expr
-
-  type view = expr_view =
-    | E_kind
-    | E_type
-    | E_var of var
-    | E_bound_var of bvar
-    | E_const of const * expr list
-    | E_app of t * t
-    | E_lam of t * t
-    | E_arrow of t * t
-
-  include E0
 
   let[@inline] is_closed e : bool = db_depth e == 0
 
@@ -429,7 +348,7 @@ module Expr = struct
   let compute_has_fvars_ e : bool =
     begin match ty e with
       | None -> false
-      | Some d -> has_fvars d
+      | Some ty -> has_fvars ty
     end ||
     begin match view e with
       | E_var _ -> true
@@ -478,7 +397,7 @@ module Expr = struct
     make_ ctx (E_bound_var {bv_idx=i; bv_ty=ty}) (Lazy.from_val (Some ty))
 
   (* map immediate subterms *)
-  let[@inline] map ctx ~f (e:t_) : t_ =
+  let[@inline] map ctx ~f (e:t) : t =
     match view e with
     | E_kind | E_type | E_const _ -> e
     | _ ->
@@ -585,7 +504,7 @@ module Expr = struct
   let mk_const_ ctx c args ty : t =
     make_ ctx (E_const (c,args)) ty
 
-  let subst ctx e (subst:t Var.Map.t) : t =
+  let subst_ ctx e (subst:t Var.Map.t) : t =
     let rec aux k e =
       match view e with
       | _ when not (has_fvars e) -> e (* nothing to subst in *)
@@ -605,6 +524,9 @@ module Expr = struct
         map ctx e ~f:(fun inb u -> aux (if inb then k+1 else k) u)
     in
     aux 0 e
+
+  let[@inline] subst ctx e subst =
+    subst_ ctx e subst
 
   let const ctx c args : t =
     ctx_check_e_uid ctx c.c_ty;
@@ -671,6 +593,37 @@ module Expr = struct
     let ty = Lazy.from_val (Some (type_ ctx)) in
     make_ ctx (E_arrow (a,b)) ty
 
+  exception Match_fail
+
+  (* matching that only works for types, and separates variables from [a]
+     from variables from [b] (will not follow bindings recursively).
+     Only useful for polymorphic application. *)
+  let match_ty_ a b : Subst.t =
+    let rec aux subst a b =
+      if equal a b then subst
+      else (
+        match view a, view b with
+        | E_var x, _ ->
+          begin match Subst.get x subst with
+            | None -> Subst.bind x b subst
+            | Some b' when equal b b' -> subst
+            | _ -> raise Match_fail (* incompatible binding *)
+          end
+        | E_app (f1,a1), E_app (f2,a2)
+        | E_arrow (f1,a1), E_arrow (f2,a2) ->
+          let subst = aux subst f1 f2 in
+          aux subst a1 a2
+        | E_const (c1, l1), E_const (c2, l2) when Const.equal c1 c2 ->
+          assert (List.length l1=List.length l2);
+          List.fold_left2 aux subst l1 l2
+        | (E_const _ | E_type | E_kind | E_app _
+          | E_bound_var _ | E_arrow _ | E_lam _), _
+          ->
+          raise Match_fail
+      )
+    in
+    aux Subst.empty a b
+
   let app ctx f a : t =
     ctx_check_e_uid ctx f;
     ctx_check_e_uid ctx a;
@@ -695,8 +648,8 @@ module Expr = struct
       | E_arrow (ty_arg, ty_ret) ->
         (* instantiate [f] so its argument matches [ty_a] *)
         let sigma =
-          try Unif.match_exn ty_arg ty_a
-          with Unif.Fail -> fail()
+          try match_ty_ ty_arg ty_a
+          with Match_fail -> fail()
         in
         let f' = subst ctx f sigma in
         let ty' = subst ctx ty_ret sigma in
@@ -706,8 +659,8 @@ module Expr = struct
         let v_ty_ret = Var.make " _ret" (type_ ctx) in
         let ty_ret = var ctx v_ty_ret in
         let sigma =
-          try Unif.unify_exn ty_f (arrow ctx ty_a ty_ret)
-          with Unif.Fail -> fail()
+          try match_ty_ ty_f (arrow ctx ty_a ty_ret)
+          with Match_fail -> fail()
         in
         let f' = subst ctx f sigma in
         let ty' = subst ctx ty_ret sigma in
@@ -1043,7 +996,7 @@ module Thm = struct
     | _, None -> errorf (fun k->k"trans: concl of %a@ should be an equation" pp th2)
     | Some (t,u), Some (u',v) ->
       if not (Expr.equal u u') then (
-        errorf (fun k->k"trans: conclusions of %a@ and %a@ do not match" pp th1 pp th2)
+        errorf (fun k->k"@[<2>kernel: trans: conclusions@ of %a@ and %a@ do not match@]" pp th1 pp th2)
       );
       let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
       make_ ctx hyps (Expr.app_eq ctx t v)

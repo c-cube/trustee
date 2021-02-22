@@ -159,21 +159,6 @@ module Expr : sig
   module Tbl : CCHashtbl.S with type key = t
 end
 
-(** {2 Unification/Matching} *)
-module Unif : sig
-  type subst = Subst.t
-
-  exception Fail
-
-  val unify_exn : ?subst:subst -> expr -> expr -> subst
-
-  val unify : ?subst:subst -> expr -> expr -> subst option
-
-  val match_exn : ?subst:subst -> expr -> expr -> subst
-
-  val match_ : ?subst:subst -> expr -> expr -> subst option
-end
-
 (** {2 Toplevel goals}
 
     A goal is simply a conjecture that does not have been proved yet.
