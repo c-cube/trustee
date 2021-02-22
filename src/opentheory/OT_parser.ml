@@ -418,7 +418,6 @@ module VM = struct
           |> CCPair.map_snd List.split
       in
 
-      Log.debug 10 "COUCOU 3";
       (* instantiate theorem, and cut to remove the constant definition theorems *)
       let th = K.Thm.subst self.ctx th subst in
       let th =
