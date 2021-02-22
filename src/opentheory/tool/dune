@@ -2,5 +2,5 @@
 (executable
   (name trustee_ot)
   (flags :standard -warn-error -a+8 -open Trustee_core.Sigs)
-  (libraries containers containers-data mtime mtime.clock.os
+  (libraries containers containers-data unix
              trustee.core trustee.opentheory))

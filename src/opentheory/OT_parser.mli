@@ -41,6 +41,7 @@ module VM : sig
   val create : K.ctx -> t
 
   include PP with type t := t
+  val pp_stats: t Fmt.printer
 
   val article : t -> Article.t
   val clear_article : t -> unit

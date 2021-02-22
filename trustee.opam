@@ -18,10 +18,6 @@ depends: [
   "qtest" {with-test}
   "odoc" { with-doc }
 ]
-depopts: [
-  "camlzip"
-  "mtime"
-]
 tags: [ "logic" "proof" "HOL" "assistant" ]
 bug-reports: "https://github.com/c-cube/trustee/issues"
 dev-repo: "git+https://github.com/c-cube/trustee.git"

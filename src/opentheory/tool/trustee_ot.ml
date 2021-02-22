@@ -17,9 +17,8 @@ let print_all idx =
     errors;
   ()
 
-let now() = Mtime_clock.now()
-let since_ms t = let t2 = now() in Mtime.Span.to_ms @@ Mtime.span t t2
-let since_s t = let t2 = now() in Mtime.Span.to_s @@ Mtime.span t t2
+let now() = Unix.gettimeofday()
+let since_s t = now() -. t
 
 type edge =
   | E_requires
@@ -142,6 +141,7 @@ let check_ (idx:OT_thy.Idx.t) ~names : unit =
              let art = OT_parser.VM.parse_and_check_art_exn vm input in
              Fmt.printf "@{<green>@<1>✔ checked@} article: %a in %.3fs@."
                OT_parser.Article.pp_stats art (since_s t1);
+             Log.debugf 1 (fun k->k"vm stats: %a" OT_parser.VM.pp_stats vm);
           );
       )
       sub.OT_thy.article;

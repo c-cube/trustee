@@ -136,6 +136,10 @@ module VM = struct
     mutable named_tys: (Name.t, ty_op) Hashtbl.t;
     mutable art: Article.t;
     ind: K.const;
+
+    mutable n_absThm : int;
+    mutable n_appThm : int;
+    mutable n_cut : int
   }
 
   let article (self:t) : Article.t = self.art
@@ -154,6 +158,10 @@ module VM = struct
   let pp out self : unit =
     Fmt.fprintf out "{@[vm:@ %a;@ art: %a@]}"
       pp_vm self Article.pp (article self)
+
+  let pp_stats out self : unit =
+    Fmt.fprintf out "(@[:n-cuts %d :n-absThm %d@ :n-appThm %d@])"
+      self.n_cut self.n_absThm self.n_appThm
 
   let to_string = Fmt.to_string pp
 
@@ -174,6 +182,7 @@ module VM = struct
     | _ -> errorf (fun k->k"cannot apply absTerm@ in state %a" pp_vm self)
 
   let absThm : rule = fun self ->
+    self.n_absThm <- 1 + self.n_absThm;
     match self.stack with
     | O_thm th :: O_var v :: st ->
       let th = K.Thm.abs self.ctx th v in
@@ -467,6 +476,7 @@ module VM = struct
     | _ -> errorf (fun k->k"cannot apply axiom@ in state %a" pp_vm self)
 
   let appThm : rule = fun self ->
+    self.n_appThm <- 1 + self.n_appThm;
     match self.stack with
     | O_thm a :: O_thm f :: st ->
       (* Log.debugf 10 (fun k->k"appThm `%a` `%a`" K.Thm.pp f K.Thm.pp a); *)
@@ -537,6 +547,7 @@ module VM = struct
     | _ -> errorf (fun k->k"cannot apply trans@ in state %a" pp_vm self)
 
   let proveHyp : rule = fun self ->
+    self.n_cut <- 1 + self.n_cut;
     match self.stack with
     | O_thm th2 :: O_thm th1 :: st ->
       let th = K.Thm.cut self.ctx th1 th2 in
@@ -646,6 +657,7 @@ module VM = struct
       ctx; stack=[]; dict=Hashtbl.create 32; named_consts=Hashtbl.create 32;
       named_tys=Hashtbl.create 16;
       art=Article.empty; ind;
+      n_cut=0; n_appThm=0; n_absThm=0;
     } in
     self
 
