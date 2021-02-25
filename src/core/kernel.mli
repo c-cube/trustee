@@ -86,6 +86,7 @@ module Subst : sig
   val is_empty : t -> bool
   val bind : var -> expr -> t -> t
   val size : t -> int
+  val to_iter : t -> (var * expr) Iter.t
 end
 
 (** {2 Expressions and Types} *)

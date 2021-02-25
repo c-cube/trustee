@@ -275,6 +275,7 @@ module Subst = struct
   let[@inline] bind x t s : t = Var.Map.add x t s
   let[@inline] bind' s x t : t = Var.Map.add x t s
   let size = Var.Map.cardinal
+  let to_iter = Var.Map.to_iter
 end
 
 module Expr = struct
@@ -443,6 +444,7 @@ module Expr = struct
       let rec aux e =
         match view e with
         | E_var v -> yield v; aux (Var.ty v)
+        | E_const (_, args) -> List.iter aux args
         | _ -> iter e ~f:(fun _ u -> aux u)
       in
       aux e
@@ -593,37 +595,6 @@ module Expr = struct
     let ty = Lazy.from_val (Some (type_ ctx)) in
     make_ ctx (E_arrow (a,b)) ty
 
-  exception Match_fail
-
-  (* matching that only works for types, and separates variables from [a]
-     from variables from [b] (will not follow bindings recursively).
-     Only useful for polymorphic application. *)
-  let match_ty_ a b : Subst.t =
-    let rec aux subst a b =
-      if equal a b then subst
-      else (
-        match view a, view b with
-        | E_var x, _ ->
-          begin match Subst.get x subst with
-            | None -> Subst.bind x b subst
-            | Some b' when equal b b' -> subst
-            | _ -> raise Match_fail (* incompatible binding *)
-          end
-        | E_app (f1,a1), E_app (f2,a2)
-        | E_arrow (f1,a1), E_arrow (f2,a2) ->
-          let subst = aux subst f1 f2 in
-          aux subst a1 a2
-        | E_const (c1, l1), E_const (c2, l2) when Const.equal c1 c2 ->
-          assert (List.length l1=List.length l2);
-          List.fold_left2 aux subst l1 l2
-        | (E_const _ | E_type | E_kind | E_app _
-          | E_bound_var _ | E_arrow _ | E_lam _), _
-          ->
-          raise Match_fail
-      )
-    in
-    aux Subst.empty a b
-
   let app ctx f a : t =
     ctx_check_e_uid ctx f;
     ctx_check_e_uid ctx a;
@@ -641,32 +612,11 @@ module Expr = struct
            pp f pp a pp ty_f pp ty_a)
     in
 
-    let f, ty =
+    let ty =
       match view ty_f with
       | E_arrow (ty_arg, ty_ret) when equal ty_arg ty_a ->
-        f, ty_ret (* no instantiation needed *)
-      | E_arrow (ty_arg, ty_ret) ->
-        (* instantiate [f] so its argument matches [ty_a] *)
-        let sigma =
-          try match_ty_ ty_arg ty_a
-          with Match_fail -> fail()
-        in
-        let f' = subst ctx f sigma in
-        let ty' = subst ctx ty_ret sigma in
-        f', ty'
-      | _ ->
-        (* unify [ty_f] with [ty_a -> v] where [v] is a new type variable *)
-        let v_ty_ret = Var.make " _ret" (type_ ctx) in
-        let ty_ret = var ctx v_ty_ret in
-        let sigma =
-          try match_ty_ ty_f (arrow ctx ty_a ty_ret)
-          with Match_fail -> fail()
-        in
-        let f' = subst ctx f sigma in
-        let ty' = subst ctx ty_ret sigma in
-        (* because of the check in {!new_const}, variable should be  *)
-        assert (not (Var.Set.mem v_ty_ret (free_vars ty')));
-        f', ty'
+        ty_ret (* no instantiation needed *)
+      | _ -> fail()
     in
     let ty = Lazy.from_val (Some ty) in
     let e = make_ ctx (E_app (f,a)) ty in
