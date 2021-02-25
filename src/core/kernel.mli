@@ -19,10 +19,14 @@ type var = {
 }
 type ty_var = var
 
-type bvar = {
-  bv_idx: int;
-  bv_ty: ty;
-}
+type expr_view =
+  | E_kind
+  | E_type
+  | E_var of var
+  | E_const of const * expr list
+  | E_app of expr * expr
+  | E_lam of var * expr
+  | E_arrow of expr * expr
 
 module Const : sig
   type t = const
@@ -58,6 +62,7 @@ module Var : sig
   val ty : t -> ty
   val make : string -> ty -> t
   val makef : ('a, Format.formatter, unit, t) format4 -> ty -> 'a
+  val map_ty : f:(ty -> ty) -> t -> t
 
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
@@ -70,21 +75,16 @@ module Var : sig
   module Tbl : CCHashtbl.S with type key = t
 end
 
-module BVar : sig
-  type t = bvar
-  val make : int -> ty -> t
-  include Sigs.PP with type t := t
-end
-
 (** {2 Substitutions} *)
 module Subst : sig
-  type t = expr Var.Map.t
+  type t
   include Sigs.PP with type t := t
   val find_exn : var -> t -> expr
   val get : var -> t -> expr option
   val empty : t
   val is_empty : t -> bool
-  val bind : var -> expr -> t -> t
+  val bind : t -> var -> expr -> t
+  val bind' : var -> expr -> t -> t
   val size : t -> int
   val to_iter : t -> (var * expr) Iter.t
 end
@@ -93,14 +93,13 @@ end
 module Expr : sig
   type t = expr
 
-  type view =
+  type view = expr_view =
     | E_kind
     | E_type
     | E_var of var
-    | E_bound_var of bvar
     | E_const of const * t list
     | E_app of t * t
-    | E_lam of t * t
+    | E_lam of var * t
     | E_arrow of expr * expr
 
   include Sigs.EQ with type t := t
@@ -111,14 +110,13 @@ module Expr : sig
   val view : t -> view
   val ty : t -> ty option
   val ty_exn : t -> ty
-  val is_closed : t -> bool
   val is_eq_to_type : t -> bool
   val is_eq_to_bool : t -> bool
   val is_a_bool : t -> bool
   val is_a_type : t -> bool
   (** Is the type of [e] equal to [Type]? *)
 
-  val subst : ctx -> t -> Subst.t -> t
+  val subst : recursive:bool -> ctx -> t -> Subst.t -> t
 
   val type_ : ctx -> t
   val bool : ctx -> t
@@ -129,25 +127,24 @@ module Expr : sig
   val new_const : ctx -> ?def_loc:location -> string -> ty_var list -> ty -> const
   val new_ty_const : ctx -> ?def_loc:location -> string -> int -> const
   val var_name : ctx -> string -> ty -> t
-  val bvar : ctx -> int -> ty -> t
   val app : ctx -> t -> t -> t
   val app_l : ctx -> t -> t list -> t
   val app_eq : ctx -> t -> t -> t
   val lambda : ctx -> var -> t -> t
   val lambda_l : ctx -> var list -> t -> t
-  val lambda_db : ctx -> ty_v:ty -> t -> t
   val arrow : ctx -> t -> t -> t
   val arrow_l : ctx -> t list -> t -> t
 
-  val map : ctx -> f:(bool -> t -> t) -> t -> t
-  val iter : f:(bool -> t -> unit) -> t -> unit
-  val exists : f:(bool -> t -> bool) -> t -> bool
-  val for_all : f:(bool -> t -> bool) -> t -> bool
+  val alpha_equiv : t -> t -> bool
+
+  val map : ctx -> f:('acc -> t -> t) -> bind:('acc -> var -> 'acc) -> 'acc -> t -> t
+  val iter : f:('acc -> t -> unit) -> bind:('acc -> var -> 'acc) -> 'acc -> t -> unit
+  val exists : f:('acc -> t -> bool) -> bind:('acc -> var -> 'acc) -> 'acc -> t -> bool
+  val for_all : f:('acc -> t -> bool) -> bind:('acc -> var -> 'acc) -> 'acc -> t -> bool
 
   val contains : t -> sub:t -> bool
-  val free_vars : t -> Var.Set.t
+  val free_vars : ?init:Var.Set.t -> t -> Var.Set.t
   val free_vars_iter : t -> var Iter.t
-  val db_shift: ctx -> t -> int -> t
 
   val unfold_app : t -> t * t list
   val unfold_eq : t -> (t * t) option
@@ -158,6 +155,9 @@ module Expr : sig
   module Set : CCSet.S with type elt = t
   module Map : CCMap.S with type key = t
   module Tbl : CCHashtbl.S with type key = t
+
+  (** Set where members are compared modulo alpha-equivalence *)
+  module Set_mod_alpha : CCSet.S with type elt = t
 end
 
 (** {2 Toplevel goals}
@@ -166,16 +166,16 @@ end
     It might therefore be invalid. *)
 module Goal : sig
   type t = private {
-    hyps: Expr.Set.t;
+    hyps: Expr.Set_mod_alpha.t;
     concl: Expr.t;
   }
 
-  val make : Expr.Set.t -> Expr.t -> t
+  val make : Expr.Set_mod_alpha.t -> Expr.t -> t
   val make_l : Expr.t list -> Expr.t -> t
   val make_nohyps : Expr.t -> t
 
   val concl : t -> Expr.t
-  val hyps : t -> Expr.Set.t
+  val hyps : t -> Expr.Set_mod_alpha.t
   val hyps_iter : t -> Expr.t iter
 
   include Sigs.PP with type t := t
@@ -245,7 +245,7 @@ module Thm : sig
   val congr : ctx -> t -> t -> t
   (** `congr (|- f=g) (|- t=u)` is `|- (f t) = (g u)` *)
 
-  val subst : ctx -> t -> Subst.t -> t
+  val subst : recursive:bool -> ctx -> t -> Subst.t -> t
   (** `subst (A |- t) \sigma` is `A\sigma |- t\sigma` *)
 
   val sym : ctx -> t -> t

@@ -305,12 +305,6 @@ module Expr = struct
           | None -> var ~loc (Var.make v.v_name (aux env v.v_ty))
           | Some e -> e
         end
-      | K.Expr.E_bound_var v ->
-        begin match List.nth env v.bv_idx with
-          | exception Not_found ->
-            errorf (fun k->k"unbound variable db%d@ in type of %a" v.bv_idx K.Expr.pp e)
-          | t -> t
-        end
       | K.Expr.E_arrow (a, b) ->
         assert (K.Expr.is_a_type a && K.Expr.is_a_type b);
         let a = aux env a in
@@ -517,8 +511,8 @@ module Expr = struct
   let to_k_expr ?(subst=ID.Map.empty) (ctx:K.Ctx.t) (e:expr) : K.Expr.t =
     (* [bs] is the mapping from bound variables to expressions, with their
        binding point DB level. *)
-    let rec aux (bs:_ ID.Map.t) k e : K.Expr.t =
-      let recurse = aux bs k in
+    let rec aux (bs:_ ID.Map.t) e : K.Expr.t =
+      let recurse = aux bs in
       let loc = loc e in
       (*Log.debugf 50 (fun k'->k' "@[<hv>>> conv-expr %a@ k: %d ty: %a@ bs: {@[%a@]}@]"
                        pp e k pp (ty e)
@@ -538,11 +532,9 @@ module Expr = struct
       | Ty_arrow (a, b) ->
         K.Expr.arrow ctx (recurse a) (recurse b)
       | BVar v ->
-        begin match ID.Map.find v.bv_name bs with
-          | (e, k_e) ->
-            assert (k >= k_e);
-            K.Expr.db_shift ctx e (k - k_e)
-          | exception Not_found ->
+        begin
+          try ID.Map.find v.bv_name bs
+          with Not_found ->
             errorf
               (fun k->k"variable %a is not bound@ at %a"
                   pp e Loc.pp loc)
@@ -560,20 +552,19 @@ module Expr = struct
             (fun bs' (v,t) ->
                let t = recurse t in
                (* let does not bind anything in the final term, no need to change k *)
-               ID.Map.add v.bv_name (t,k) bs')
+               ID.Map.add v.bv_name t bs')
             bs bindings
         in
-        aux bs' k body
-      | Lambda (v, bod) ->
-        let ty = recurse v.bv_ty in
-        let bs = ID.Map.add v.bv_name
-            (K.Expr.bvar ctx 0 (K.Expr.db_shift ctx ty 1), k+1) bs in
-        let bod = aux bs (k+1) bod in
-        K.Expr.lambda_db ctx ~ty_v:ty bod
+        aux bs' body
+      | Lambda (bv, bod) ->
+        let ty = recurse bv.bv_ty in
+        let v = K.Var.make (ID.name bv.bv_name) ty in
+        let bs = ID.Map.add bv.bv_name (K.Expr.var ctx v) bs in
+        let bod = aux bs bod in
+        K.Expr.lambda ctx v bod
       | KExpr e -> e
     in
-    let subst = ID.Map.map (fun v -> v, 0) subst in
-    aux subst 0 e
+    aux subst e
 
   let rec as_queryable e = object
     inherit Queryable.t
@@ -625,7 +616,7 @@ module Subst = struct
       (fun s (v,t) ->
          let v = K.Var.make v.v_name (Expr.to_k_expr ~subst ctx v.v_ty) in
          let t = Expr.to_k_expr ~subst ctx t in
-         K.Subst.bind v t s)
+         K.Subst.bind s v t)
       K.Subst.empty self
 end
 

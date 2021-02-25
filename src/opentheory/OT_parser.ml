@@ -123,7 +123,7 @@ module VM = struct
     | O_ty ty -> Fmt.fprintf out "(@[ty: %a@])" K.Expr.pp ty
     | O_ty_op (c,_) -> Fmt.fprintf out "(@[ty-const: %a@])" Name.pp c
     | O_const (c,_) -> Fmt.fprintf out "(@[const: %a@])" Name.pp c
-    | O_var v -> Fmt.fprintf out "(@[var: %a@])" K.Var.pp v
+    | O_var v -> Fmt.fprintf out "(@[var: %a@])" K.Var.pp_with_ty v
     | O_term e -> Fmt.fprintf out "(@[term: %a@])" K.Expr.pp e
     | O_thm th -> Fmt.fprintf out "(@[thm: %a@])" K.Thm.pp_quoted th
     | O_list l -> Fmt.Dump.list pp_obj out l
@@ -330,7 +330,7 @@ module VM = struct
         | None ->
           errorf (fun k->k"type %a@ does not match type of %a"
                      K.Expr.pp ty K.Expr.pp e)
-        | Some subst -> K.Expr.subst ctx e subst
+        | Some subst -> K.Expr.subst ~recursive:false ctx e subst
       )
 
   let define_named_ ctx n t : K.Thm.t * K.const =
@@ -415,7 +415,7 @@ module VM = struct
 
             (* add [v := c] to the substitution *)
             let c_inst = (snd c') self.ctx (K.Var.ty v) in
-            let subst = K.Subst.bind v c_inst subst in
+            let subst = K.Subst.bind subst v c_inst in
 
             subst, (th,c'))
           K.Subst.empty names
@@ -423,7 +423,7 @@ module VM = struct
       in
 
       (* instantiate theorem, and cut to remove the constant definition theorems *)
-      let th = K.Thm.subst self.ctx th subst in
+      let th = K.Thm.subst ~recursive:false self.ctx th subst in
       let th =
         List.fold_left
           (fun th th' -> K.Thm.cut self.ctx th' th) th thms
@@ -504,27 +504,27 @@ module VM = struct
   let subst : rule = fun self ->
     match self.stack with
     | O_thm th :: O_list [O_list tys; O_list terms] :: st ->
-      let subst =
+      (* first instantiate with types *)
+      let ty_subst =
         List.fold_left
           (fun subst p -> match p with
              | O_list [O_name {Name.path=[]; name=s}; O_ty ty] ->
                let var = K.Var.make s (K.Expr.type_ self.ctx) in
-               K.Subst.bind var ty subst
+               K.Subst.bind subst var ty
              | _ -> errorf (fun k->k"expect first list to be a type subst"))
           K.Subst.empty tys
       in
+      let th = K.Thm.subst ~recursive:false self.ctx th ty_subst in
+
+      (* now the term subst *)
       let subst =
         List.fold_left
           (fun subst p -> match p with
-             | O_list [O_var v; O_term e] ->
-               Log.debugf 50 (fun k->k"v=%a; t=`%a`; ty(t)=`%a` same-ty=%B"
-                                 K.Var.pp_with_ty v K.Expr.pp e K.Expr.pp (K.Expr.ty_exn e)
-                                 (K.Expr.equal (K.Var.ty v) (K.Expr.ty_exn e)));
-               K.Subst.bind v e subst
+             | O_list [O_var v; O_term e] -> K.Subst.bind subst v e
              | _ -> errorf (fun k->k"expect second list to be an expr subst"))
-          subst terms
+          K.Subst.empty terms
       in
-      let th = K.Thm.subst self.ctx th subst in
+      let th = K.Thm.subst ~recursive:false self.ctx th subst in
       self.stack <- O_thm th :: st;
     | _ -> errorf (fun k->k"cannot apply subst@ in state %a" pp_vm self)
 
@@ -677,6 +677,8 @@ module VM = struct
 
       let s = String.trim s in
       if s="" then errorf (fun k->k"empty line (at line %d)" !i);
+
+      Fmt.printf "\x1b[2K\r%s%!" s; (* erase line; print current rule *)
 
       Log.debugf 50 (fun k->k"(@[ot: cur VM stack is@ %a@])" pp_stack self);
       Log.debugf 20 (fun k->k"(@[ot: process line: %s@])" s);

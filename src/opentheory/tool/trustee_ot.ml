@@ -127,6 +127,8 @@ let check_ (idx:OT_thy.Idx.t) ~names : unit =
     (* find and check article, if any *)
     CCOpt.iter (fun art_name ->
         let art_name = unquote_str art_name in
+(*         if art_name = "set-thm.art" then Log.set_level 50; (* XXX *) *)
+        if art_name = "pair-thm.art" then Log.set_level 50; (* XXX *)
         let file =
           try Str_tbl.find idx.OT_thy.Idx.articles art_name
           with Not_found ->
