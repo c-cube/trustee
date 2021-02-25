@@ -136,6 +136,12 @@ let expr_alpha_equiv_ e1 e2 : bool =
     if e1 == e2 then true
     else if expr_hash_mod_alpha e1 <> expr_hash_mod_alpha e2 then false
     else (
+    (* compare types first *)
+      begin match e1.e_ty, e2.e_ty with
+        | lazy (Some ty1), lazy (Some ty2) -> expr_eq ty1 ty2
+        | _ -> true
+      end
+      &&
       match e1.e_view, e2.e_view with
       | E_var v1, _ when Var.Map.mem v1 bnd1 ->
         begin match e2.e_view with
@@ -148,8 +154,9 @@ let expr_alpha_equiv_ e1 e2 : bool =
       | E_app (f1,a1), E_app (f2,a2)
       | E_arrow (f1,a1), E_arrow (f2,a2) ->
         loop bnd1 bnd2 f1 f2 && loop bnd1 bnd2 a1 a2
+      | E_const (c1,[]), E_const (c2,[]) when const_equal_ c1 c2 -> true
       | E_const (c1,l1), E_const (c2,l2) when const_equal_ c1 c2 ->
-        (* compare arguments *)
+        (* compare arguments pairwise *)
         assert (List.length l1=List.length l2);
         List.for_all2 (loop bnd1 bnd2) l1 l2
       | E_lam (v1,bod1), E_lam (v2,bod2) ->
@@ -382,7 +389,7 @@ module Expr = struct
   (* map immediate subterms *)
   let[@inline] map ctx ~f ~bind b_acc (e:t) : t =
     match view e with
-    | E_kind | E_type | E_const _ -> e
+    | E_kind | E_type | E_const (_,[]) -> e
     | _ ->
       let ty = lazy (
         match e.e_ty with
@@ -409,9 +416,14 @@ module Expr = struct
         | E_arrow (a,b) ->
           let a' = f b_acc a in
           let b' = f b_acc b in
-          if a==a' && b==b' then e
-          else make_ ctx (E_arrow (f b_acc a, f b_acc b)) ty
-        | E_kind | E_type | E_const _ -> assert false
+          if a==a' && b==b' then e (* fast path *)
+          else make_ ctx (E_arrow (a', b')) ty
+        | E_const (c, l) ->
+          let l' = List.map (f b_acc) l in
+          if List.for_all2 expr_eq l l'
+          then e (* fast path *)
+          else make_ ctx (E_const (c, l')) ty
+        | E_kind | E_type -> assert false
       end
 
   exception IsSub
@@ -492,7 +504,7 @@ module Expr = struct
 
   (* find a new name for [v] that looks like
      [v.name] but is not captured in [set] *)
-  let find_name v set : string =
+  let find_var_name_ v set : string =
     let rec aux i =
       let v_name = Printf.sprintf "%s%d" v.v_name i in
       let v' = {v with v_name} in
@@ -520,7 +532,6 @@ module Expr = struct
       | E_const (_, []) -> e
       | E_const (c, args) ->
         (* subst in args, thus changing the whole term's type *)
-        let ty = lazy (Some (loop subst (ty_exn e))) in
         mk_const_ ctx c (List.map (loop subst) args) ty
       | E_lam (v, body) ->
         (* the tricky case: the binder.
@@ -535,9 +546,10 @@ module Expr = struct
             let body' = loop subst' body in
             v', body'
           ) else if Var.Set.mem v (Lazy.force subst.codom) then (
-            (* captured by substitution *)
+            (* would capture a term of the substitution, we must rename [v]
+               to avoid that. *)
             let v' = {
-              v_name=find_name v (Lazy.force subst.codom);
+              v_name=find_var_name_ v (Lazy.force subst.codom);
               v_ty=loop subst v.v_ty
             } in
             let subst = subst_bind_ subst v (var ctx v') in
