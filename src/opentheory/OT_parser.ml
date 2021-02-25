@@ -310,11 +310,15 @@ module VM = struct
   (* create a defined constant, with local type inference since OT
      gives us only the expected type of the constant *)
   let mk_defined_const_ c =
+    Log.debugf 1 (fun k->k"mk defined const %a@ :args %a" K.Const.pp c
+                 K.Const.pp_args (K.Const.args c));
     match K.Const.args c with
     | K.Const.C_arity _ -> errorf (fun k->k"not a term const: %a" K.Const.pp c)
     | K.Const.C_ty_vars [] ->
       (* non-polymorphic constant *)
-      (fun ctx _ty -> assert (K.Var.Set.is_empty @@ K.Expr.free_vars _ty); K.Expr.const ctx c [])
+      (fun ctx _ty ->
+         assert (K.Var.Set.is_empty @@ K.Expr.free_vars (K.Const.ty c));
+         assert (K.Var.Set.is_empty @@ K.Expr.free_vars _ty); K.Expr.const ctx c [])
     | K.Const.C_ty_vars ty_vars ->
       (* make new variables *)
       let vars =
