@@ -466,6 +466,7 @@ module VM = struct
   let betaConv : rule = fun self ->
     match self.stack with
     | O_term t :: st ->
+      Log.debugf 10 (fun k->k"BETA CONV %a" K.Expr.pp t);
       let th = K.Thm.beta_conv self.ctx t in
       self.stack <- O_thm th :: st;
     | _ -> errorf (fun k->k"cannot apply betaConv@ in state %a" pp_vm self)
@@ -664,12 +665,23 @@ module VM = struct
     } in
     self
 
+  let mk_progress() =
+    let i = ref 0 in
+    let cs ={|-\|/|} in
+    fun s ->
+      let n = !i mod (String.length cs) in
+      incr i;
+      Fmt.printf "\x1b[2K\r[%c] %s%!" cs.[n] s; (* erase line; print current rule *)
+      ()
+
   let has_empty_stack self =
     match self.stack with [] -> true | _ -> false
 
   let parse_and_check_art_exn (self:t) (input:input) : Article.t =
     Log.debug 5 "(open-theory.parse-and-check-art)";
     let i = ref 0 in
+
+    let progr = mk_progress() in
 
     (* how to parse one line *)
     let process_line (s:string) : unit =
@@ -678,7 +690,7 @@ module VM = struct
       let s = String.trim s in
       if s="" then errorf (fun k->k"empty line (at line %d)" !i);
 
-      Fmt.printf "\x1b[2K\r%s%!" s; (* erase line; print current rule *)
+      progr s;
 
       Log.debugf 50 (fun k->k"(@[ot: cur VM stack is@ %a@])" pp_stack self);
       Log.debugf 20 (fun k->k"(@[ot: process line: %s@])" s);
