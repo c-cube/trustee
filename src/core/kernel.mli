@@ -155,9 +155,6 @@ module Expr : sig
   module Set : CCSet.S with type elt = t
   module Map : CCMap.S with type key = t
   module Tbl : CCHashtbl.S with type key = t
-
-  (** Set where members are compared modulo alpha-equivalence *)
-  module Set_mod_alpha : CCSet.S with type elt = t
 end
 
 (** {2 Toplevel goals}
@@ -165,17 +162,19 @@ end
     A goal is simply a conjecture that does not have been proved yet.
     It might therefore be invalid. *)
 module Goal : sig
+  type hyps
+
   type t = private {
-    hyps: Expr.Set_mod_alpha.t;
+    hyps: hyps;
     concl: Expr.t;
   }
 
-  val make : Expr.Set_mod_alpha.t -> Expr.t -> t
+  val make : hyps -> Expr.t -> t
   val make_l : Expr.t list -> Expr.t -> t
   val make_nohyps : Expr.t -> t
 
   val concl : t -> Expr.t
-  val hyps : t -> Expr.Set_mod_alpha.t
+  val hyps : t -> hyps
   val hyps_iter : t -> Expr.t iter
 
   include Sigs.PP with type t := t
