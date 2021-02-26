@@ -80,7 +80,6 @@ module Subst : sig
   type t
   include Sigs.PP with type t := t
   val find_exn : var -> t -> expr
-  val get : var -> t -> expr option
   val empty : t
   val is_empty : t -> bool
   val bind : t -> var -> expr -> t

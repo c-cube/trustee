@@ -408,8 +408,9 @@ module Const = struct
 end
 
 type subst = {
-  m: expr Var.Map.t;
-  codom: Var.Set.t lazy_t;
+  ty: expr Var.Map.t; (* ty subst *)
+  m: expr Var.Map.t; (* term subst *)
+  codom: Var.Set.t lazy_t; (* codomain of [m] *)
 }
 
 module Expr = struct
@@ -589,10 +590,8 @@ module Expr = struct
       aux Var.Set.empty e
 
   let free_vars ?(init=Var.Set.empty) e : Var.Set.t =
-    Fmt.printf "start free vars@.";
     let set = ref init in
     free_vars_iter e (fun v -> set := Var.Set.add v !set);
-    Fmt.printf "end free vars (n=%d)@." (Var.Set.cardinal !set);
     !set
 
   let new_const_ ctx ?def_loc name args ty : const =
@@ -626,24 +625,31 @@ module Expr = struct
     make_ ctx (E_const (c,args)) ty
 
   let subst_empty_ : subst =
-    {m=Var.Map.empty; codom=Lazy.from_val Var.Set.empty}
+    {ty=Var.Map.empty;
+     m=Var.Map.empty;
+     codom=Lazy.from_val Var.Set.empty}
 
   let subst_pp_ out (self:subst) : unit =
-    if Var.Map.is_empty self.m then Fmt.string out "{}"
-    else (
+    if Var.Map.is_empty self.m && Var.Map.is_empty self.ty then (
+      Fmt.string out "{}"
+    ) else (
       let pp_b out (v,t) =
         Fmt.fprintf out "(@[%a := %a@])" Var.pp_with_ty v expr_pp_ t
       in
       Fmt.fprintf out "@[<hv>{@,%a@,}@]"
-        (pp_iter ~sep:" " pp_b) (Var.Map.to_iter self.m)
+        (pp_iter ~sep:" " pp_b)
+        (Iter.append (Var.Map.to_iter self.ty) (Var.Map.to_iter self.m))
     )
 
-  (* bind a variable into a substitution. This computes the codomain. *)
+  (* Bind a variable into a substitution. This computes the
+     updated codomain if the binding is on a term (not a type). *)
   let subst_bind_ (subst:subst) v t : subst =
-    let codom = lazy (
-      free_vars ~init:(Lazy.force subst.codom) t
-    ) in
-    { m=Var.Map.add v t subst.m; codom; }
+    if is_eq_to_type v.v_ty then (
+      { subst with ty=Var.Map.add v t subst.ty }
+    ) else (
+      let codom = lazy (free_vars ~init:(Lazy.force subst.codom) t) in
+      { subst with m=Var.Map.add v t subst.m; codom; }
+    )
 
   (* find a new name for [v] that looks like
      [v.name] but is not captured in [set] *)
@@ -656,18 +662,38 @@ module Expr = struct
     aux 0
 
   let subst_ ~recursive ctx e (subst:subst) : t =
-    let dbg = Var.Map.cardinal subst.m = 1 &&
-              (fst (Var.Map.choose subst.m)).v_name = "r"
-    in
+    (* cache for types *)
+    let ty_tbl = Tbl.create 16 in
 
     let rec loop subst e =
-      if dbg then Log.debugf 10 (fun k->k"  > subst in %a" pp e);
+      if is_a_type e then (
+        (* type subst: can use a cache, and only consider subst.ty *)
+        if Var.Map.is_empty subst.ty then e
+        else (
+          try Tbl.find ty_tbl e
+          with Not_found ->
+            let r = loop_uncached_ subst e in
+            Tbl.add ty_tbl e r;
+            r
+        )
+      ) else (
+        loop_uncached_ subst e
+      )
+
+    and loop_uncached_ subst (e:t) : t =
       let ty = lazy (
         match e.e_ty with
         | lazy None -> None
         | lazy (Some ty) -> Some (loop subst ty)
       ) in
       match view e with
+      | E_var v when is_eq_to_type v.v_ty ->
+        (* type variable *)
+        begin match Var.Map.find v subst.ty with
+          | u ->
+            if recursive then loop subst u else u
+          | exception Not_found -> e
+        end
       | E_var v ->
         begin match Var.Map.find v subst.m with
           | u ->
@@ -716,10 +742,10 @@ module Expr = struct
         map ctx subst e ~f:loop
           ~bind:(fun _ _ -> assert false) (* done in lambda above *)
     in
-    if Var.Map.is_empty subst.m then e else (
-      Fmt.printf "@[start subst %a@]@." subst_pp_ subst;
+    if Var.Map.is_empty subst.m && Var.Map.is_empty subst.ty then (
+      e
+    ) else (
       let r = loop subst e in
-      Fmt.printf "end subst@.";
       r
     )
 
@@ -849,20 +875,25 @@ end
 
 module Subst = struct
   type t = subst = {
+    ty: expr Var.Map.t; (* ty subst *)
     m: expr Var.Map.t;
     codom: Var.Set.t lazy_t;
   }
 
-  let[@inline] is_empty self = Var.Map.is_empty self.m
-  let[@inline] find_exn x s = Var.Map.find x s.m
-  let[@inline] get x s = Var.Map.get x s.m
+  let[@inline] is_empty self =
+    Var.Map.is_empty self.ty &&
+    Var.Map.is_empty self.m
+  let[@inline] find_exn x s =
+    if Expr.is_eq_to_type x.v_ty then Var.Map.find x s.ty
+    else Var.Map.find x s.m
 
   let empty = Expr.subst_empty_
   let bind = Expr.subst_bind_
   let pp = Expr.subst_pp_
   let[@inline] bind' x t s : t = bind s x t
-  let[@inline] size self = Var.Map.cardinal self.m
-  let[@inline] to_iter self = Var.Map.to_iter self.m
+  let[@inline] size self = Var.Map.cardinal self.m + Var.Map.cardinal self.ty
+  let[@inline] to_iter self =
+    Iter.append (Var.Map.to_iter self.m) (Var.Map.to_iter self.ty)
 
   let to_string = Fmt.to_string pp
 end
