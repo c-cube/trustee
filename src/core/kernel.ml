@@ -245,37 +245,16 @@ module Var = struct
   module Tbl = CCHashtbl.Make(AsKey)
 end
 
+type subst = {
+  ty: expr Var.Map.t; (* ty subst *)
+  m: expr Var.Map.t; (* term subst *)
+}
+
 module BVar = struct
   type t = bvar
   let make i ty : t = {bv_idx=i; bv_ty=ty}
   let pp out v = Fmt.fprintf out "db_%d" v.bv_idx
   let to_string = Fmt.to_string pp
-end
-
-module Subst = struct
-  type t = expr Var.Map.t
-
-  let is_empty = Var.Map.is_empty
-  let find_exn = Var.Map.find
-  let get = Var.Map.get
-
-  let pp out (s:t) : unit =
-    if is_empty s then Fmt.string out "{}"
-    else (
-      let pp_b out (v,t) =
-        Fmt.fprintf out "(@[%a := %a@])" Var.pp_with_ty v expr_pp_ t
-      in
-      Fmt.fprintf out "@[<hv>{@,%a@,}@]"
-        (pp_iter ~sep:" " pp_b) (Var.Map.to_iter s)
-    )
-
-  let to_string = Fmt.to_string pp
-
-  let empty = Var.Map.empty
-  let[@inline] bind x t s : t = Var.Map.add x t s
-  let[@inline] bind' s x t : t = Var.Map.add x t s
-  let size = Var.Map.cardinal
-  let to_iter = Var.Map.to_iter
 end
 
 module Expr = struct
@@ -413,7 +392,9 @@ module Expr = struct
           if v_ty == v.v_ty then e
           else make_ ctx (E_var {v with v_ty}) ty
         | E_bound_var v ->
-          make_ ctx (E_bound_var {v with bv_ty=f false v.bv_ty}) ty
+          let ty' = f false v.bv_ty in
+          if v.bv_ty == ty' then e
+          else make_ ctx (E_bound_var {v with bv_ty=ty'}) (Lazy.from_val (Some ty'))
         | E_app (hd,a) ->
           let hd' =  f false hd in
           let a' =  f false a in
@@ -481,54 +462,135 @@ module Expr = struct
   let new_ty_const ctx ?def_loc name n : ty_const =
     new_const_ ctx name ?def_loc (C_arity n) (type_ ctx)
 
-  let db_shift ctx (e:t) (n:int) =
-    ctx_check_e_uid ctx e;
-    let is_closed_ty e = match e.e_ty with
-      | lazy None -> true
-      | lazy (Some ty) -> is_closed ty
-    in
-    let rec aux e k : t =
-      if is_closed e && is_closed_ty e then e
-      else (
-        match view e with
-        | E_bound_var bv ->
-          let ty = aux bv.bv_ty k in
-          if bv.bv_idx >= k
-          then bvar ctx (bv.bv_idx + n) ty
-          else bvar ctx bv.bv_idx ty
-        | _ ->
-          map ctx e ~f:(fun inbind u -> aux u (if inbind then k+1 else k))
-      )
-    in
-    assert (n >= 0);
-    if n = 0 then e else aux e 0
-
   let mk_const_ ctx c args ty : t =
     make_ ctx (E_const (c,args)) ty
 
-  let subst_ ctx e (subst:t Var.Map.t) : t =
-    let rec aux k e =
+  let subst_empty_ : subst =
+    {ty=Var.Map.empty;
+     m=Var.Map.empty;
+    }
+
+  let subst_pp_ out (self:subst) : unit =
+    if Var.Map.is_empty self.m && Var.Map.is_empty self.ty then (
+      Fmt.string out "{}"
+    ) else (
+      let pp_b out (v,t) =
+        Fmt.fprintf out "(@[%a := %a@])" Var.pp_with_ty v expr_pp_ t
+      in
+      Fmt.fprintf out "@[<hv>{@,%a@,}@]"
+        (pp_iter ~sep:" " pp_b)
+        (Iter.append (Var.Map.to_iter self.ty) (Var.Map.to_iter self.m))
+    )
+
+  (* Bind a variable into a substitution. *)
+  let subst_bind_ (subst:subst) v t : subst =
+    if is_eq_to_type v.v_ty then (
+      { subst with ty=Var.Map.add v t subst.ty }
+    ) else (
+      { subst with m=Var.Map.add v t subst.m;  }
+    )
+
+  let db_shift ctx (e:t) (n:int) =
+    ctx_check_e_uid ctx e;
+    assert (CCOpt.for_all is_closed (Lazy.force e.e_ty));
+    let rec loop e k : t =
+      if is_closed e then e
+      else if is_a_type e then e
+      else (
+        match view e with
+        | E_bound_var bv ->
+          if bv.bv_idx >= k
+          then bvar ctx (bv.bv_idx + n) bv.bv_ty
+          else bvar ctx bv.bv_idx bv.bv_ty
+        | _ ->
+          map ctx e ~f:(fun inbind u -> loop u (if inbind then k+1 else k))
+      )
+    in
+    assert (n >= 0);
+    if n = 0 then e else loop e 0
+
+  module E_int_tbl = CCHashtbl.Make(struct
+      type t = expr * int
+      let equal (t1,k1) (t2,k2) = equal t1 t2 && k1==k2
+      let hash (t,k) = H.combine3 27 (hash t) (H.int k)
+    end)
+
+  let subst_ ~recursive ctx e0 (subst:subst) : t =
+    (* cache for types and some terms *)
+    let cache_ = E_int_tbl.create 16 in
+    let ty_subst_empty_ = Var.Map.is_empty subst.ty in
+
+    let rec loop k e =
+      if is_a_type e then (
+        (* type subst: can use a cache, and only consider subst.ty
+           with k=0 since there are no binders *)
+        if ty_subst_empty_ then e
+        else (
+          try E_int_tbl.find cache_ (e,0)
+          with Not_found ->
+            let r = loop_uncached_ 0 e in
+            E_int_tbl.add cache_ (e,0) r;
+            r
+        )
+      ) else (
+        try E_int_tbl.find cache_ (e,k)
+        with Not_found ->
+          let r = loop_uncached_ k e in
+          E_int_tbl.add cache_ (e,k) r;
+          r
+      )
+
+    and loop_uncached_ k (e:t) : t =
+      let ty = lazy (
+        match e.e_ty with
+        | lazy None -> None
+        | lazy (Some ty) -> Some (loop 0 ty)
+      ) in
       match view e with
       | _ when not (has_fvars e) -> e (* nothing to subst in *)
+      | E_var v when is_eq_to_type v.v_ty ->
+        (* type variable substitution *)
+        begin match Var.Map.find v subst.ty with
+          | u ->
+            assert (is_closed u); if recursive then loop 0 u else u
+          | exception Not_found -> var ctx v
+        end
       | E_var v ->
         (* first, subst in type *)
-        let v = {v with v_ty=aux k v.v_ty} in
-        begin match Var.Map.find v subst with
-          | u -> db_shift ctx u k
+        let v = {v with v_ty=loop k v.v_ty} in
+        begin match Var.Map.find v subst.m with
+          | u ->
+            let u = db_shift ctx u k in
+            if recursive then loop 0 u else u
           | exception Not_found -> var ctx v
         end
       | E_const (_, []) -> e
       | E_const (c, args) ->
         (* subst in args, thus changing the whole term's type *)
-        let ty = lazy (Some (aux k (ty_exn e))) in
-        mk_const_ ctx c (List.map (aux k) args) ty
+        let ty = lazy (Some (loop k (ty_exn e))) in
+        mk_const_ ctx c (List.map (loop k) args) ty
+      | E_app (hd, a) ->
+        let hd' = loop k hd in
+        let a' = loop k a in
+        if hd==hd' && a'==a then e
+        else make_ ctx (E_app (hd',a')) ty
+      | E_arrow (a, b) ->
+        let a' = loop k a in
+        let b' = loop k b in
+        if a==a' && b'==b then e
+        else make_ ctx (E_arrow (a',b')) ty
       | _ ->
-        map ctx e ~f:(fun inb u -> aux (if inb then k+1 else k) u)
+        map ctx e ~f:(fun inb u -> loop (if inb then k+1 else k) u)
     in
-    aux 0 e
 
-  let[@inline] subst ctx e subst =
-    subst_ ctx e subst
+    if Var.Map.is_empty subst.m && Var.Map.is_empty subst.ty then (
+      e0
+    ) else (
+      loop 0 e0
+    )
+
+  let[@inline] subst ~recursive ctx e subst =
+    subst_ ~recursive ctx e subst
 
   let const ctx c args : t =
     ctx_check_e_uid ctx c.c_ty;
@@ -550,8 +612,8 @@ module Expr = struct
                 (List.length ty_vars) (List.length args));
         );
         lazy (
-          let sigma = List.fold_left2 Subst.bind' Subst.empty ty_vars args in
-          Some (subst ctx c.c_ty sigma)
+          let sigma = List.fold_left2 subst_bind_ subst_empty_ ty_vars args in
+          Some (subst ~recursive:false ctx c.c_ty sigma)
         )
     in
     mk_const_ ctx c args ty
@@ -572,19 +634,34 @@ module Expr = struct
     );
     let db0 = bvar ctx 0 v.v_ty in
     let body = db_shift ctx e 1 in
-    subst ctx body (Var.Map.singleton v db0)
+    subst ~recursive:false ctx body {m=Var.Map.singleton v db0; ty=Var.Map.empty}
 
   (* replace DB0 in [e] with [u] *)
   let subst_db_0 ctx e ~by:u : t =
     ctx_check_e_uid ctx e;
     ctx_check_e_uid ctx u;
+
+    let cache_ = E_int_tbl.create 8 in
+
     let rec aux e k : t =
-      match view e with
-      | E_bound_var bv when bv.bv_idx = k ->
-        (* replace here *)
-        db_shift ctx u k
-      | _ ->
-        map ctx e ~f:(fun inb u -> aux u (if inb then k+1 else k))
+      if is_a_type e then e
+      else if db_depth e < k then e
+      else (
+        match view e with
+        | E_const _ -> e
+        | E_bound_var bv when bv.bv_idx = k ->
+          (* replace here *)
+          db_shift ctx u k
+        | _ ->
+          (* use the cache *)
+          try E_int_tbl.find cache_ (e,k)
+          with Not_found ->
+            let r =
+              map ctx e ~f:(fun inb u -> aux u (if inb then k+1 else k))
+            in
+            E_int_tbl.add cache_ (e,k) r;
+            r
+      )
     in
     if is_closed e then e else aux e 0
 
@@ -688,6 +765,33 @@ module Expr = struct
   module Map = CCMap.Make(AsKey)
   module Set = Expr_set
   module Tbl = CCHashtbl.Make(AsKey)
+end
+
+module Subst = struct
+  type t = subst = {
+    ty: expr Var.Map.t; (* ty subst *)
+    m: expr Var.Map.t; (* term subst *)
+  }
+
+  let[@inline] is_empty self =
+    Var.Map.is_empty self.ty &&
+    Var.Map.is_empty self.m
+  let[@inline] find_exn x s =
+    if Expr.is_eq_to_type x.v_ty then Var.Map.find x s.ty
+    else Var.Map.find x s.m
+
+  let empty = Expr.subst_empty_
+  let bind = Expr.subst_bind_
+  let pp = Expr.subst_pp_
+  let[@inline] bind' x t s : t = bind s x t
+  let[@inline] size self = Var.Map.cardinal self.m + Var.Map.cardinal self.ty
+  let[@inline] to_iter self =
+    Iter.append (Var.Map.to_iter self.m) (Var.Map.to_iter self.ty)
+  let to_string = Fmt.to_string pp
+
+  let[@inline] bind_uncurry_ s (x,t) = bind s x t
+  let of_list = List.fold_left bind_uncurry_ empty
+  let of_iter = Iter.fold bind_uncurry_ empty
 end
 
 (*$inject
@@ -837,7 +941,7 @@ module Thm = struct
 
   let pp out (th:t) =
     if has_hyps th then (
-      Fmt.fprintf out "@[<hv1>%a@ |-@ %a@]" (pp_list Expr.pp) (hyps_l th)
+      Fmt.fprintf out "@[<hv1>%a@;<1 -1>|-@ %a@]" (pp_list Expr.pp) (hyps_l th)
         Expr.pp (concl th)
     ) else (
       Fmt.fprintf out "@[<1>|-@ %a@]" Expr.pp (concl th)
@@ -915,18 +1019,18 @@ module Thm = struct
 
   exception E_subst_non_closed of var * expr
 
-  let subst ctx th s : t =
+  let subst ~recursive ctx th s : t =
     begin try
         Var.Map.iter (fun v t ->
             if not (Expr.is_closed t) then raise_notrace (E_subst_non_closed (v,t)))
-          s
+          s.m
       with
       | E_subst_non_closed (v,t) ->
         errorf(fun k->k"subst: variable %a@ is bound to non-closed term %a"
                   Var.pp v Expr.pp t)
     end;
-    let hyps = hyps_ th |> Expr.Set.map (fun e -> Expr.subst ctx e s) in
-    let concl = Expr.subst ctx (concl th) s in
+    let hyps = hyps_ th |> Expr.Set.map (fun e -> Expr.subst ~recursive ctx e s) in
+    let concl = Expr.subst ~recursive ctx (concl th) s in
     make_ ctx hyps concl
 
   let sym ctx th : t =
@@ -946,7 +1050,8 @@ module Thm = struct
     | _, None -> errorf (fun k->k"trans: concl of %a@ should be an equation" pp th2)
     | Some (t,u), Some (u',v) ->
       if not (Expr.equal u u') then (
-        errorf (fun k->k"@[<2>kernel: trans: conclusions@ of %a@ and %a@ do not match@]" pp th1 pp th2)
+        errorf (fun k->k"@[<2>kernel: trans: conclusions@ \
+                         of %a@ and %a@ do not match@]" pp th1 pp th2)
       );
       let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
       make_ ctx hyps (Expr.app_eq ctx t v)
@@ -1018,7 +1123,7 @@ module Thm = struct
 
   let new_basic_definition ctx ?def_loc (e:expr) : t * const =
     Log.debugf 5 (fun k->k"(@[new-basic-def@ :eqn `%a`@])" Expr.pp e);
-    wrap_exn (fun k->k"@[<2>in new-basic-def `@[%a@]`@]:" Expr.pp e) @@ fun () ->
+    wrap_exn (fun k->k"@[<2>in new-basic-def@ `@[%a@]`@]:" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.unfold_eq e with
     | None ->
@@ -1054,7 +1159,7 @@ module Thm = struct
   let new_basic_type_definition ctx
       ?ty_vars:provided_ty_vars
       ~name ~abs ~repr ~thm_inhabited () : New_ty_def.t =
-    wrap_exn (fun k->k"@[<2>in new-basic-ty-def %s `@[%a@]`@]:"
+    wrap_exn (fun k->k"@[<2>in new-basic-ty-def :name %s@ :thm `@[%a@]`@]:"
                  name pp thm_inhabited) @@ fun () ->
     ctx_check_th_uid ctx thm_inhabited;
     if has_hyps thm_inhabited then (
@@ -1073,14 +1178,16 @@ module Thm = struct
     begin match
         Var.Set.find_first (fun v -> not (Expr.is_eq_to_type (Var.ty v))) fvars
       with
-      | v -> errorf (fun k->k"free variable %a is not a type variable" Var.pp v)
+      | v ->
+        if false then
+        errorf (fun k->k"free variable %a is not a type variable" Var.pp_with_ty v)
       | exception Not_found -> ()
     end;
 
     let ty_vars_l = match provided_ty_vars with
       | None -> Var.Set.to_list fvars (* pick any order *)
       | Some l ->
-        if not (Var.Set.equal fvars (Var.Set.of_list l)) then (
+        if false && not (Var.Set.equal fvars (Var.Set.of_list l)) then (
           errorf
             (fun k->k
                 "list of type variables (%a) in new-basic-ty-def@ does not match %a"

@@ -625,7 +625,7 @@ module Subst = struct
       (fun s (v,t) ->
          let v = K.Var.make v.v_name (Expr.to_k_expr ~subst ctx v.v_ty) in
          let t = Expr.to_k_expr ~subst ctx t in
-         K.Subst.bind v t s)
+         K.Subst.bind s v t)
       K.Subst.empty self
 end
 

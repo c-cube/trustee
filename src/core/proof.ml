@@ -112,7 +112,7 @@ module Rule = struct
     | [v1;v2] ->
       let th1 = as_th 0 v1 in
       let s2 = as_subst 0 v2 in
-      K.Thm.subst ctx th1 s2
+      K.Thm.subst ~recursive:false ctx th1 s2
     | _ -> assert false
 
   let sym : t =

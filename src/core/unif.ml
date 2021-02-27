@@ -42,10 +42,10 @@ let u_rec op subst a b : subst =
     | E.E_var v1, E.E_var v2 when K.Var.equal v1 v2 -> subst
     | E.E_var v, _ ->
       if occ_check subst v b then raise Fail;
-      Su.bind v b subst
+      Su.bind subst v b
     | _, E.E_var v when op == O_unif ->
       if occ_check subst v a then raise Fail;
-      Su.bind v a subst
+      Su.bind subst v a
     | E.E_const (c1, l1), E.E_const (c2, l2) when K.Const.equal c1 c2 ->
       assert (List.length l1=List.length l2);
       List.fold_left2 loop subst l1 l2

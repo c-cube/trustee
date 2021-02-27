@@ -70,3 +70,4 @@ let pp_iter ?(sep=" ") ppx out iter =
 
 module Str_tbl = CCHashtbl.Make(CCString)
 module Str_map = CCMap.Make(CCString)
+module Str_set = CCSet.Make(CCString)

@@ -78,15 +78,17 @@ end
 
 (** {2 Substitutions} *)
 module Subst : sig
-  type t = expr Var.Map.t
+  type t
   include Sigs.PP with type t := t
   val find_exn : var -> t -> expr
-  val get : var -> t -> expr option
   val empty : t
   val is_empty : t -> bool
-  val bind : var -> expr -> t -> t
+  val bind : t -> var -> expr -> t
+  val bind' : var -> expr -> t -> t
   val size : t -> int
   val to_iter : t -> (var * expr) Iter.t
+  val of_list : (var * expr) list -> t
+  val of_iter : (var * expr) Iter.t -> t
 end
 
 (** {2 Expressions and Types} *)
@@ -118,7 +120,7 @@ module Expr : sig
   val is_a_type : t -> bool
   (** Is the type of [e] equal to [Type]? *)
 
-  val subst : ctx -> t -> Subst.t -> t
+  val subst : recursive:bool -> ctx -> t -> Subst.t -> t
 
   val type_ : ctx -> t
   val bool : ctx -> t
@@ -245,7 +247,7 @@ module Thm : sig
   val congr : ctx -> t -> t -> t
   (** `congr (|- f=g) (|- t=u)` is `|- (f t) = (g u)` *)
 
-  val subst : ctx -> t -> Subst.t -> t
+  val subst : recursive:bool -> ctx -> t -> Subst.t -> t
   (** `subst (A |- t) \sigma` is `A\sigma |- t\sigma` *)
 
   val sym : ctx -> t -> t
