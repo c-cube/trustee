@@ -919,8 +919,11 @@ module Subst = struct
   let[@inline] size self = Var.Map.cardinal self.m + Var.Map.cardinal self.ty
   let[@inline] to_iter self =
     Iter.append (Var.Map.to_iter self.m) (Var.Map.to_iter self.ty)
-
   let to_string = Fmt.to_string pp
+
+  let[@inline] bind_uncurry_ s (x,t) = bind s x t
+  let of_list = List.fold_left bind_uncurry_ empty
+  let of_iter = Iter.fold bind_uncurry_ empty
 end
 
 (*$inject
@@ -1296,6 +1299,7 @@ module Thm = struct
         Var.Set.find_first (fun v -> not (Expr.is_eq_to_type (Var.ty v))) fvars
       with
       | v ->
+        if false then
         errorf (fun k->k"free variable %a is not a type variable" Var.pp_with_ty v)
       | exception Not_found -> ()
     end;
@@ -1303,7 +1307,7 @@ module Thm = struct
     let ty_vars_l = match provided_ty_vars with
       | None -> Var.Set.to_list fvars (* pick any order *)
       | Some l ->
-        if not (Var.Set.equal fvars (Var.Set.of_list l)) then (
+        if false && not (Var.Set.equal fvars (Var.Set.of_list l)) then (
           errorf
             (fun k->k
                 "list of type variables (%a) in new-basic-ty-def@ does not match %a"

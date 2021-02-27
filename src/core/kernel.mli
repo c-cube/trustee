@@ -86,6 +86,8 @@ module Subst : sig
   val bind' : var -> expr -> t -> t
   val size : t -> int
   val to_iter : t -> (var * expr) Iter.t
+  val of_list : (var * expr) list -> t
+  val of_iter : (var * expr) Iter.t -> t
 end
 
 (** {2 Expressions and Types} *)
