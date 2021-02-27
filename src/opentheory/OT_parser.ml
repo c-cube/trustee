@@ -566,6 +566,7 @@ module VM = struct
   (* create a defined constant, with local type inference since OT
      gives us only the expected type of the constant *)
   let mk_defined_ty_ c =
+    Log.debugf 1 (fun k->k"mk type const %a" K.Const.pp c);
     match K.Const.args c with
     | K.Const.C_arity 0 ->
       (* non-polymorphic constant *)

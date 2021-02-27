@@ -127,7 +127,7 @@ let check_ (idx:OT_thy.Idx.t) ~names : unit =
     (* find and check article, if any *)
     CCOpt.iter (fun art_name ->
         let art_name = unquote_str art_name in
-        if art_name = "sum-def.art" then Log.set_level 50; (* XXX *)
+(*         if art_name = "sum-def.art" then Log.set_level 50; (* XXX *) *)
 (*         if art_name = "relation-natural-thm.art" then Log.set_level 10; (* XXX *) *)
         let file =
           try Str_tbl.find idx.OT_thy.Idx.articles art_name
@@ -203,6 +203,7 @@ let () =
     "-check-all", Arg.Set check_all, " check all";
     "-dot", Arg.Set_string dot_file, " print graph into file";
     "-d", Arg.Int Log.set_level, " set debug level";
+    "--bt", Arg.Unit (fun()->Printexc.record_backtrace true), " record backtraces";
   ] |> Arg.align in
   Arg.parse opts (fun _ -> failwith "invalid option") "trustee_ot [option*]";
   Fmt.set_color_default true;
