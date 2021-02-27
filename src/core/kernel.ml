@@ -17,7 +17,7 @@ type expr_view =
   | E_bound_var of bvar
   | E_const of const * expr list
   | E_app of expr * expr
-  | E_lam of expr * expr
+  | E_lam of string * expr * expr
   | E_arrow of expr * expr
 
 and expr = {
@@ -91,9 +91,9 @@ let unfold_app (e:expr) : expr * expr list =
 
 (* debug printer *)
 let expr_pp_ out (e:expr) : unit =
-  let rec aux k out e =
-    let pp = aux k in
-    let pp' = aux' k in
+  let rec aux k names out e =
+    let pp = aux k names in
+    let pp' = aux' k names in
     match e.e_view with
     | E_kind -> Fmt.string out "kind"
     | E_type -> Fmt.string out "type"
@@ -101,8 +101,12 @@ let expr_pp_ out (e:expr) : unit =
     (* | E_var v -> Fmt.fprintf out "(@[%s : %a@])" v.v_name pp v.v_ty *)
     | E_bound_var v ->
       let idx = v.bv_idx in
-      if idx<k then Fmt.fprintf out "x_%d" (k-idx-1)
-      else Fmt.fprintf out "%%db_%d" (idx-k)
+      begin match CCList.nth_opt names idx with
+        | Some n when n<>"" -> Fmt.string out n
+        | _ ->
+          if idx<k then Fmt.fprintf out "x_%d" (k-idx-1)
+          else Fmt.fprintf out "%%db_%d" (idx-k)
+      end
     | E_const (c,[]) -> ID.pp out c.c_name
     | E_const (c,args) ->
       Fmt.fprintf out "(@[%a@ %a@])" ID.pp c.c_name (pp_list pp') args
@@ -114,16 +118,19 @@ let expr_pp_ out (e:expr) : unit =
         | _ ->
           Fmt.fprintf out "@[%a@ %a@]" pp' f (pp_list pp') args
       end
-    | E_lam (_ty, bod) ->
-      Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp' _ty (aux (k+1)) bod
+    | E_lam ("", _ty, bod) ->
+      Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp' _ty
+        (aux (k+1) (""::names)) bod
+    | E_lam (n, _ty, bod) ->
+      Fmt.fprintf out "(@[\\%s:@[%a@].@ %a@])" n pp' _ty (aux (k+1) (n::names)) bod
     | E_arrow(a,b) ->
       Fmt.fprintf out "@[%a@ -> %a@]" pp' a pp b
 
-  and aux' k out e = match e.e_view with
-    | E_kind | E_type | E_var _ | E_const (_, []) -> aux k out e
-    | _ -> Fmt.fprintf out "(%a)" (aux k) e
+  and aux' k names out e = match e.e_view with
+    | E_kind | E_type | E_var _ | E_const (_, []) -> aux k names out e
+    | _ -> Fmt.fprintf out "(%a)" (aux k names) e
   in
-  aux 0 out e
+  aux 0 [] out e
 
 module Expr_hashcons = Hashcons.Make(struct
     type t = expr
@@ -139,7 +146,7 @@ module Expr_hashcons = Hashcons.Make(struct
           v1.bv_idx = v2.bv_idx && expr_eq v1.bv_ty v2.bv_ty
         | E_app (f1,a1), E_app (f2,a2) ->
           expr_eq f1 f2 && expr_eq a1 a2
-        | E_lam (ty1,bod1), E_lam (ty2,bod2) ->
+        | E_lam (_,ty1,bod1), E_lam (_,ty2,bod2) ->
           expr_eq ty1 ty2 && expr_eq bod1 bod2
         | E_arrow(a1,b1), E_arrow(a2,b2) ->
           expr_eq a1 a2 && expr_eq b1 b2
@@ -156,7 +163,7 @@ module Expr_hashcons = Hashcons.Make(struct
       | E_var v -> H.combine2 30 (var_hash v)
       | E_bound_var v -> H.combine3 40 (H.int v.bv_idx) (expr_hash v.bv_ty)
       | E_app (f,a) -> H.combine3 50 (expr_hash f) (expr_hash a)
-      | E_lam (ty,bod) ->
+      | E_lam (_,ty,bod) ->
         H.combine3 60 (expr_hash ty) (expr_hash bod)
       | E_arrow (a,b) -> H.combine3 80 (expr_hash a) (expr_hash b)
 
@@ -267,7 +274,7 @@ module Expr = struct
     | E_bound_var of bvar
     | E_const of const * expr list
     | E_app of t * t
-    | E_lam of t * t
+    | E_lam of string * t * t
     | E_arrow of t * t
 
   let[@inline] ty e = Lazy.force e.e_ty
@@ -294,7 +301,7 @@ module Expr = struct
       | E_var v -> f false v.v_ty
       | E_bound_var v -> f false v.bv_ty
       | E_app (hd,a) -> f false hd; f false a
-      | E_lam (tyv, bod) -> f false tyv; f true bod
+      | E_lam (_, tyv, bod) -> f false tyv; f true bod
       | E_arrow (a,b) -> f false a; f false b
 
   exception E_exit
@@ -320,7 +327,7 @@ module Expr = struct
       | E_kind | E_type | E_const _ | E_var _ -> 0
       | E_bound_var v -> v.bv_idx+1
       | E_app (a,b) | E_arrow (a,b) -> max (db_depth a) (db_depth b)
-      | E_lam (ty,bod) ->
+      | E_lam (_, ty,bod) ->
         max (db_depth ty) (max 0 (db_depth bod - 1))
     in
     max d1 d2
@@ -335,7 +342,7 @@ module Expr = struct
       | E_kind | E_type | E_bound_var _ -> false
       | E_const (_, args) -> List.exists has_fvars args
       | E_app (a,b) | E_arrow (a,b) -> has_fvars a || has_fvars b
-      | E_lam (ty,bod) -> has_fvars ty || has_fvars bod
+      | E_lam (_,ty,bod) -> has_fvars ty || has_fvars bod
     end
 
   (* hashconsing + computing metadata *)
@@ -400,9 +407,9 @@ module Expr = struct
           let a' =  f false a in
           if a==a' && hd==hd' then e
           else make_ ctx (E_app (f false hd, f false a)) ty
-        | E_lam (tyv, bod) ->
+        | E_lam (n, tyv, bod) ->
           (* TODO: fast path *)
-          make_ ctx (E_lam (f false tyv, f true bod)) ty
+          make_ ctx (E_lam (n, f false tyv, f true bod)) ty
         | E_arrow (a,b) ->
           let a' = f false a in
           let b' = f false b in
@@ -713,7 +720,7 @@ module Expr = struct
 
   let arrow_l ctx l ret : t = CCList.fold_right (arrow ctx) l ret
 
-  let lambda_db ctx ~ty_v bod : t =
+  let lambda_db ctx ~name ~ty_v bod : t =
     ctx_check_e_uid ctx ty_v;
     ctx_check_e_uid ctx bod;
     if not (is_a_type ty_v) then (
@@ -724,11 +731,11 @@ module Expr = struct
       (* type of [λx:a. t] is [a -> typeof(t)] if [a] is a type *)
       Some (arrow ctx ty_v (ty_exn bod))
     ) in
-    make_ ctx (E_lam (ty_v, bod)) ty
+    make_ ctx (E_lam (name, ty_v, bod)) ty
 
   let lambda ctx v bod =
     let bod = abs_on_ ctx v bod in
-    lambda_db ctx ~ty_v:v.v_ty bod
+    lambda_db ctx ~name:v.v_name ~ty_v:v.v_ty bod
 
   let lambda_l ctx = CCList.fold_right (lambda ctx)
 
@@ -1097,7 +1104,7 @@ module Thm = struct
     match Expr.view e with
     | E_app (f, a) ->
       (match Expr.view f with
-       | E_lam (ty_v, body) ->
+       | E_lam (_, ty_v, body) ->
          assert (Expr.equal ty_v (Expr.ty_exn a)); (* else `app` would have failed *)
          let rhs = Expr.subst_db_0 ctx body ~by:a in
          make_ ctx Expr.Set.empty (Expr.app_eq ctx e rhs)

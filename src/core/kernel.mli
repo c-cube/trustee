@@ -24,6 +24,16 @@ type bvar = {
   bv_ty: ty;
 }
 
+type expr_view =
+  | E_kind
+  | E_type
+  | E_var of var
+  | E_bound_var of bvar
+  | E_const of const * expr list
+  | E_app of expr * expr
+  | E_lam of string * expr * expr
+  | E_arrow of expr * expr
+
 module Const : sig
   type t = const
   include Sigs.EQ with type t := t
@@ -95,14 +105,14 @@ end
 module Expr : sig
   type t = expr
 
-  type view =
+  type view = expr_view =
     | E_kind
     | E_type
     | E_var of var
     | E_bound_var of bvar
     | E_const of const * t list
     | E_app of t * t
-    | E_lam of t * t
+    | E_lam of string * expr * expr
     | E_arrow of expr * expr
 
   include Sigs.EQ with type t := t
@@ -137,7 +147,7 @@ module Expr : sig
   val app_eq : ctx -> t -> t -> t
   val lambda : ctx -> var -> t -> t
   val lambda_l : ctx -> var list -> t -> t
-  val lambda_db : ctx -> ty_v:ty -> t -> t
+  val lambda_db : ctx -> name:string -> ty_v:ty -> t -> t
   val arrow : ctx -> t -> t -> t
   val arrow_l : ctx -> t list -> t -> t
 

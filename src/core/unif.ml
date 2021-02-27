@@ -55,7 +55,7 @@ let u_rec op subst a b : subst =
     | E.E_arrow (f1, arg1), E.E_arrow (f2, arg2) ->
       let subst = loop subst f1 f2 in
       loop subst arg1 arg2
-    | E.E_lam (ty1, bod1), E.E_lam (ty2, bod2) ->
+    | E.E_lam (_, ty1, bod1), E.E_lam (_, ty2, bod2) ->
       let subst = loop subst ty1 ty2 in
       loop subst bod1 bod2
     | (E.E_kind | E.E_type | E.E_app _ | E.E_arrow _

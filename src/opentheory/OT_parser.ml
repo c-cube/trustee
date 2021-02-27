@@ -347,10 +347,12 @@ module VM = struct
     let th, c = K.Thm.new_basic_definition ctx eqn in
     th, c
 
+  let _ALLOW_REDEF = true (* TODO *)
+
   let defineConst : rule = fun self ->
     match self.stack with
     | O_term t :: O_name n :: st ->
-      if Hashtbl.mem self.named_consts n then (
+      if not _ALLOW_REDEF && Hashtbl.mem self.named_consts n then (
         errorf (fun k->k"a constant %a is already defined" Name.pp n);
       );
       let th, c = define_named_ self.ctx n t in

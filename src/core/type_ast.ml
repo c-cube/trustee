@@ -569,7 +569,7 @@ module Expr = struct
         let bs = ID.Map.add v.bv_name
             (K.Expr.bvar ctx 0 (K.Expr.db_shift ctx ty 1), k+1) bs in
         let bod = aux bs (k+1) bod in
-        K.Expr.lambda_db ctx ~ty_v:ty bod
+        K.Expr.lambda_db ctx ~name:(ID.name v.bv_name) ~ty_v:ty bod
       | KExpr e -> e
     in
     let subst = ID.Map.map (fun v -> v, 0) subst in
