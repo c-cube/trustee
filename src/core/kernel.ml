@@ -68,8 +68,9 @@ let expr_pp_ out (e:expr) : unit =
     match e.e_view with
     | E_kind -> Fmt.string out "kind"
     | E_type -> Fmt.string out "type"
-    | E_var v -> Fmt.string out v.v_name
-    (* | E_var v -> Fmt.fprintf out "(@[%s : %a@])" v.v_name pp v.v_ty *)
+    | E_var v when v.v_ty.e_view==E_type -> Fmt.string out v.v_name
+(*     | E_var v -> Fmt.string out v.v_name *)
+    | E_var v -> Fmt.fprintf out "(@[%s : %a@])" v.v_name pp v.v_ty
     | E_const (c,[]) -> ID.pp out c.c_name
     | E_const (c,args) ->
       Fmt.fprintf out "%a@ %a" ID.pp c.c_name (pp_list pp') args
@@ -77,7 +78,7 @@ let expr_pp_ out (e:expr) : unit =
       let f, args = unfold_app e in
       begin match f.e_view, args with
         | E_const (c, [_]), [a;b] when ID.name c.c_name = "=" ->
-          Fmt.fprintf out "@[%a@ = %a@]" pp' a pp' b
+          Fmt.fprintf out "@[<hv2>=@ %a@ %a@]" pp' a pp' b
         | _ ->
           Fmt.fprintf out "@[%a@ %a@]" pp' f (pp_list pp') args
       end
@@ -410,7 +411,7 @@ end
 type subst = {
   ty: expr Var.Map.t; (* ty subst *)
   m: expr Var.Map.t; (* term subst *)
-  codom: Var.Set.t lazy_t; (* codomain of [m] *)
+  codom: Str_set.t lazy_t; (* names of variables in codomain of [m] *)
 }
 
 module Expr = struct
@@ -577,21 +578,27 @@ module Expr = struct
     loop e
      *)
 
-  let free_vars_iter e : var Iter.t =
+  let free_vars_iter e0 : var Iter.t =
     fun yield ->
       let rec aux bnd e =
         match view e with
         | E_var v when Var.Set.mem v bnd -> () (* captured *)
-        | E_var v -> yield v; aux bnd (Var.ty v)
+        | E_var v ->
+          yield v; aux bnd (Var.ty v)
         | E_const (_, args) -> List.iter (aux bnd) args
         | _ ->
           iter bnd e ~f:aux ~bind:(fun bnd v -> Var.Set.add v bnd)
       in
-      aux Var.Set.empty e
+      aux Var.Set.empty e0
 
   let free_vars ?(init=Var.Set.empty) e : Var.Set.t =
     let set = ref init in
     free_vars_iter e (fun v -> set := Var.Set.add v !set);
+    !set
+
+  let free_vars_names ?(init=Str_set.empty) e : Str_set.t =
+    let set = ref init in
+    free_vars_iter e (fun v -> set := Str_set.add v.v_name !set);
     !set
 
   let new_const_ ctx ?def_loc name args ty : const =
@@ -627,7 +634,7 @@ module Expr = struct
   let subst_empty_ : subst =
     {ty=Var.Map.empty;
      m=Var.Map.empty;
-     codom=Lazy.from_val Var.Set.empty}
+     codom=Lazy.from_val Str_set.empty}
 
   let subst_pp_ out (self:subst) : unit =
     if Var.Map.is_empty self.m && Var.Map.is_empty self.ty then (
@@ -647,33 +654,32 @@ module Expr = struct
     if is_eq_to_type v.v_ty then (
       { subst with ty=Var.Map.add v t subst.ty }
     ) else (
-      let codom = lazy (free_vars ~init:(Lazy.force subst.codom) t) in
+      let codom = lazy (free_vars_names ~init:(Lazy.force subst.codom) t) in
       { subst with m=Var.Map.add v t subst.m; codom; }
     )
 
   (* find a new name for [v] that looks like
      [v.name] but is not captured in [set] *)
-  let find_var_name_ v set : string =
+  let find_var_name_ name set : string =
     let rec aux i =
-      let v_name = Printf.sprintf "%s%d" v.v_name i in
-      let v' = {v with v_name} in
-      if Var.Set.mem v' set then aux (i+1) else v_name
+      let v_name = Printf.sprintf "%s%d" name i in
+      if Str_set.mem v_name set then aux (i+1) else v_name
     in
     aux 0
 
-  let subst_ ~recursive ctx e (subst:subst) : t =
-    (* cache for types *)
-    let ty_tbl = Tbl.create 16 in
+  let subst_ ~recursive ctx e0 (subst:subst) : t =
+    (* cache for types and some terms *)
+    let cache_ = Tbl.create 16 in
 
-    let rec loop subst e =
+    let rec loop subst e : t =
       if is_a_type e then (
         (* type subst: can use a cache, and only consider subst.ty *)
-        if Var.Map.is_empty subst.ty then e
+        if (Var.Map.is_empty[@inlined]) subst.ty then e
         else (
-          try Tbl.find ty_tbl e
+          try Tbl.find cache_ e
           with Not_found ->
             let r = loop_uncached_ subst e in
-            Tbl.add ty_tbl e r;
+            Tbl.add cache_ e r;
             r
         )
       ) else (
@@ -687,6 +693,7 @@ module Expr = struct
         | lazy (Some ty) -> Some (loop subst ty)
       ) in
       match view e with
+      | E_type | E_kind -> e
       | E_var v when is_eq_to_type v.v_ty ->
         (* type variable *)
         begin match Var.Map.find v subst.ty with
@@ -695,19 +702,27 @@ module Expr = struct
           | exception Not_found -> e
         end
       | E_var v ->
-        begin match Var.Map.find v subst.m with
+        let v' = Var.map_ty v ~f:(loop subst) in
+        begin match Var.Map.find v' subst.m with
           | u ->
             if recursive then loop subst u else u
           | exception Not_found ->
-            (* subst in type *)
-            let ty = loop subst v.v_ty in
-            var ctx {v with v_ty=ty}
+            if Var.equal v v' then e (* fast path *)
+            else var ctx v'
         end
       | E_const (_, []) -> e
       | E_const (c, args) ->
-        (* subst in args, thus changing the whole term's type *)
-        mk_const_ ctx c (List.map (loop subst) args) ty
-      | E_lam (v, body) ->
+        begin
+          try Tbl.find cache_ e
+          with Not_found ->
+            (* subst in args, thus changing the whole term's type *)
+            let r = mk_const_ ctx c (List.map (loop subst) args) ty in
+            Tbl.add cache_ e r;
+            r
+        end
+      | E_lam (v0, body) ->
+        (* first, apply type substitution *)
+        let v = Var.map_ty v0 ~f:(loop subst) in
         (* The tricky case: the binder.
            We rename [v] if it occurs in the substitution's codomain (where it
            is normally free, so we don't want to capture it accidentally).
@@ -715,37 +730,47 @@ module Expr = struct
         let v', body' =
           if Var.Map.mem v subst.m then (
             (* remove [v] from [subst] if it occurs in it, as we shadow it *)
-            let v' = Var.map_ty v ~f:(loop subst) in
             let subst' = {subst with m=Var.Map.remove v subst.m} in
             let body' = loop subst' body in
-            v', body'
-          ) else if Var.Set.mem v (Lazy.force subst.codom) then (
+            v, body'
+          ) else if
+            Str_set.mem v.v_name (Lazy.force subst.codom) ||
+            Var.Map.exists (fun v' _ -> v'.v_name = v.v_name) subst.m
+          then (
             (* would capture a term of the substitution, we must rename [v]
                to avoid that. *)
-            let v' = {
-              v_name=find_var_name_ v (Lazy.force subst.codom);
-              v_ty=loop subst v.v_ty
+            (* TODO: separate subst_ty and subst_term entirely. avoids
+               confusing [v] and [v with sigma(ty)] in the codomain *)
+            let v_renamed = {
+              v with
+              v_name=find_var_name_ v.v_name (Lazy.force subst.codom);
             } in
-            let subst = subst_bind_ subst v (var ctx v') in
+            let subst = subst_bind_ subst v (var ctx v_renamed) in
             let body' = loop subst body in
-            v', body'
+            v_renamed, body'
           ) else (
-            let v' = Var.map_ty v ~f:(loop subst) in
             let body' = loop subst body in
-            v', body'
+            v, body'
           )
         in
-        if Var.equal v v' && equal body body'
+        if Var.equal v0 v' && equal body body'
         then e (* fast path *)
         else make_ ctx (E_lam (v', body')) ty
-      | _ ->
-        map ctx subst e ~f:loop
-          ~bind:(fun _ _ -> assert false) (* done in lambda above *)
+      | E_arrow (a,b) ->
+        let a' = loop subst a in
+        let b' = loop subst b in
+        if a==a' && b==b' then e
+        else make_ ctx (E_arrow (a',b')) ty
+      | E_app (a,b) ->
+        let a' = loop subst a in
+        let b' = loop subst b in
+        if a==a' && b==b' then e
+        else make_ ctx (E_app (a',b')) ty
     in
     if Var.Map.is_empty subst.m && Var.Map.is_empty subst.ty then (
-      e
+      e0
     ) else (
-      let r = loop subst e in
+      let r = loop subst e0 in
       r
     )
 
@@ -876,8 +901,8 @@ end
 module Subst = struct
   type t = subst = {
     ty: expr Var.Map.t; (* ty subst *)
-    m: expr Var.Map.t;
-    codom: Var.Set.t lazy_t;
+    m: expr Var.Map.t; (* term subst *)
+    codom: Str_set.t lazy_t; (* freevars(t) for [(x := t) \in m] *)
   }
 
   let[@inline] is_empty self =
@@ -1218,7 +1243,7 @@ module Thm = struct
 
   let new_basic_definition ctx ?def_loc (e:expr) : t * const =
     Log.debugf 5 (fun k->k"(@[new-basic-def@ :eqn `%a`@])" Expr.pp e);
-    wrap_exn (fun k->k"@[<2>in new-basic-def `@[%a@]`@]:" Expr.pp e) @@ fun () ->
+    wrap_exn (fun k->k"@[<2>in new-basic-def@ `@[%a@]`@]:" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.unfold_eq e with
     | None ->
@@ -1251,7 +1276,7 @@ module Thm = struct
   let new_basic_type_definition ctx
       ?ty_vars:provided_ty_vars
       ~name ~abs ~repr ~thm_inhabited () : New_ty_def.t =
-    wrap_exn (fun k->k"@[<2>in new-basic-ty-def %s `@[%a@]`@]:"
+    wrap_exn (fun k->k"@[<2>in new-basic-ty-def :name %s@ :thm `@[%a@]`@]:"
                  name pp thm_inhabited) @@ fun () ->
     ctx_check_th_uid ctx thm_inhabited;
     if has_hyps thm_inhabited then (
@@ -1270,7 +1295,8 @@ module Thm = struct
     begin match
         Var.Set.find_first (fun v -> not (Expr.is_eq_to_type (Var.ty v))) fvars
       with
-      | v -> errorf (fun k->k"free variable %a is not a type variable" Var.pp v)
+      | v ->
+        errorf (fun k->k"free variable %a is not a type variable" Var.pp_with_ty v)
       | exception Not_found -> ()
     end;
 

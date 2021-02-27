@@ -147,8 +147,13 @@ module VM = struct
   let clear_dict self = Hashtbl.clear self.dict
 
   let pp_stack out self =
+    (* limit size of printed stack *)
+    let l, _r = CCList.take_drop 4 self.stack in
+    let trail =
+      if _r=[] then []
+      else [O_name (Name.of_string (Printf.sprintf "…(%d)" (List.length _r)))] in
     Fmt.fprintf out "[@[<hv>%a@]]"
-      Fmt.(list ~sep:(return ";@ ") pp_obj) self.stack
+      Fmt.(list ~sep:(return ";@ ") pp_obj) (l @ trail)
 
   let pp_vm out (self:t) : unit =
     Fmt.fprintf out "{@[stack:@ %a;@ dict={@[<hv>%a@]}@]}"
@@ -690,7 +695,8 @@ module VM = struct
       let s = String.trim s in
       if s="" then errorf (fun k->k"empty line (at line %d)" !i);
 
-      progr s;
+      (* TODO: enable iff param passed *)
+(*       progr s; *)
 
       Log.debugf 50 (fun k->k"(@[ot: cur VM stack is@ %a@])" pp_stack self);
       Log.debugf 20 (fun k->k"(@[ot: process line: %s@])" s);
