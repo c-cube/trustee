@@ -47,6 +47,8 @@ module Make() = struct
   let () = K.Const.set_fixity c_plus (F_right_assoc 20)
 end
 
+(* TODO: basic S-expr based parser+"type inference" to input tests more easily? *)
+
 (* test substitution of terms and types *)
 let t_subst1 _ctx =
   let module M = Make() in
