@@ -1,0 +1,10 @@
+
+(executable
+  (name run_tests)
+  (modes native)
+  (flags :standard  -w -a -warn-error -a+8)
+  (libraries trustee.core ounit2))
+
+(rule
+  (alias runtest)
+  (action (run ./run_tests.exe -ci true -runner sequential)))
