@@ -78,7 +78,7 @@ let expr_pp_ out (e:expr) : unit =
       let f, args = unfold_app e in
       begin match f.e_view, args with
         | E_const (c, [_]), [a;b] when ID.name c.c_name = "=" ->
-          Fmt.fprintf out "@[<hv2>=@ %a@ %a@]" pp' a pp' b
+          Fmt.fprintf out "@[%a@ = %a@]" pp' a pp' b
         | _ ->
           Fmt.fprintf out "@[%a@ %a@]" pp' f (pp_list pp') args
       end
@@ -1299,7 +1299,6 @@ module Thm = struct
         Var.Set.find_first (fun v -> not (Expr.is_eq_to_type (Var.ty v))) fvars
       with
       | v ->
-        if false then
         errorf (fun k->k"free variable %a is not a type variable" Var.pp_with_ty v)
       | exception Not_found -> ()
     end;
@@ -1307,7 +1306,7 @@ module Thm = struct
     let ty_vars_l = match provided_ty_vars with
       | None -> Var.Set.to_list fvars (* pick any order *)
       | Some l ->
-        if false && not (Var.Set.equal fvars (Var.Set.of_list l)) then (
+        if not (Var.Set.equal fvars (Var.Set.of_list l)) then (
           errorf
             (fun k->k
                 "list of type variables (%a) in new-basic-ty-def@ does not match %a"
