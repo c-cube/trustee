@@ -123,7 +123,7 @@ module VM = struct
     | O_ty ty -> Fmt.fprintf out "(@[ty: %a@])" K.Expr.pp ty
     | O_ty_op (c,_) -> Fmt.fprintf out "(@[ty-const: %a@])" Name.pp c
     | O_const (c,_) -> Fmt.fprintf out "(@[const: %a@])" Name.pp c
-    | O_var v -> Fmt.fprintf out "(@[var: %a@])" K.Var.pp v
+    | O_var v -> Fmt.fprintf out "(@[var: %a@])" K.Var.pp_with_ty v
     | O_term e -> Fmt.fprintf out "(@[term: %a@])" K.Expr.pp e
     | O_thm th -> Fmt.fprintf out "(@[thm: %a@])" K.Thm.pp_quoted th
     | O_list l -> Fmt.Dump.list pp_obj out l
@@ -147,8 +147,13 @@ module VM = struct
   let clear_dict self = Hashtbl.clear self.dict
 
   let pp_stack out self =
+    (* limit size of printed stack *)
+    let l, _r = CCList.take_drop 4 self.stack in
+    let trail =
+      if _r=[] then []
+      else [O_name (Name.of_string (Printf.sprintf "…(%d)" (List.length _r)))] in
     Fmt.fprintf out "[@[<hv>%a@]]"
-      Fmt.(list ~sep:(return ";@ ") pp_obj) self.stack
+      Fmt.(list ~sep:(return ";@ ") pp_obj) (l @ trail)
 
   let pp_vm out (self:t) : unit =
     Fmt.fprintf out "{@[stack:@ %a;@ dict={@[<hv>%a@]}@]}"
@@ -330,7 +335,7 @@ module VM = struct
         | None ->
           errorf (fun k->k"type %a@ does not match type of %a"
                      K.Expr.pp ty K.Expr.pp e)
-        | Some subst -> K.Expr.subst ctx e subst
+        | Some subst -> K.Expr.subst ~recursive:false ctx e subst
       )
 
   let define_named_ ctx n t : K.Thm.t * K.const =
@@ -415,7 +420,7 @@ module VM = struct
 
             (* add [v := c] to the substitution *)
             let c_inst = (snd c') self.ctx (K.Var.ty v) in
-            let subst = K.Subst.bind v c_inst subst in
+            let subst = K.Subst.bind subst v c_inst in
 
             subst, (th,c'))
           K.Subst.empty names
@@ -423,7 +428,7 @@ module VM = struct
       in
 
       (* instantiate theorem, and cut to remove the constant definition theorems *)
-      let th = K.Thm.subst self.ctx th subst in
+      let th = K.Thm.subst ~recursive:false self.ctx th subst in
       let th =
         List.fold_left
           (fun th th' -> K.Thm.cut self.ctx th' th) th thms
@@ -524,7 +529,7 @@ module VM = struct
              | _ -> errorf (fun k->k"expect second list to be an expr subst"))
           subst terms
       in
-      let th = K.Thm.subst self.ctx th subst in
+      let th = K.Thm.subst ~recursive:false self.ctx th subst in
       self.stack <- O_thm th :: st;
     | _ -> errorf (fun k->k"cannot apply subst@ in state %a" pp_vm self)
 
@@ -560,6 +565,7 @@ module VM = struct
   (* create a defined constant, with local type inference since OT
      gives us only the expected type of the constant *)
   let mk_defined_ty_ c =
+    Log.debugf 1 (fun k->k"mk type const %a" K.Const.pp c);
     match K.Const.args c with
     | K.Const.C_arity 0 ->
       (* non-polymorphic constant *)
