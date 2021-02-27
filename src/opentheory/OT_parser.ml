@@ -514,7 +514,7 @@ module VM = struct
           (fun subst p -> match p with
              | O_list [O_name {Name.path=[]; name=s}; O_ty ty] ->
                let var = K.Var.make s (K.Expr.type_ self.ctx) in
-               K.Subst.bind var ty subst
+               K.Subst.bind subst var ty
              | _ -> errorf (fun k->k"expect first list to be a type subst"))
           K.Subst.empty tys
       in
@@ -525,7 +525,7 @@ module VM = struct
                Log.debugf 50 (fun k->k"v=%a; t=`%a`; ty(t)=`%a` same-ty=%B"
                                  K.Var.pp_with_ty v K.Expr.pp e K.Expr.pp (K.Expr.ty_exn e)
                                  (K.Expr.equal (K.Var.ty v) (K.Expr.ty_exn e)));
-               K.Subst.bind v e subst
+               K.Subst.bind subst v e
              | _ -> errorf (fun k->k"expect second list to be an expr subst"))
           subst terms
       in
@@ -670,6 +670,15 @@ module VM = struct
     } in
     self
 
+  let mk_progress() =
+    let i = ref 0 in
+    let cs ={|-\|/|} in
+    fun s ->
+      let n = !i mod (String.length cs) in
+      incr i;
+      Fmt.printf "\x1b[2K\r[%c] %s%!" cs.[n] s; (* erase line; print current rule *)
+      ()
+
   let has_empty_stack self =
     match self.stack with [] -> true | _ -> false
 
@@ -677,12 +686,17 @@ module VM = struct
     Log.debug 5 "(open-theory.parse-and-check-art)";
     let i = ref 0 in
 
+    let _progr = mk_progress() in
+
     (* how to parse one line *)
     let process_line (s:string) : unit =
       incr i;
 
       let s = String.trim s in
       if s="" then errorf (fun k->k"empty line (at line %d)" !i);
+
+      (* TODO: enable iff param passed *)
+(*       _progr s; *)
 
       Log.debugf 50 (fun k->k"(@[ot: cur VM stack is@ %a@])" pp_stack self);
       Log.debugf 20 (fun k->k"(@[ot: process line: %s@])" s);
