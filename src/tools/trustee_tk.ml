@@ -71,7 +71,8 @@ module Check = struct
 end
 
 module OT_check = struct
-  module OTP = Trustee_opentheory.OT_parser
+  module Article = Trustee_opentheory.Article
+  module VM = Trustee_opentheory.VM
 
   let cat_ = ref false
 
@@ -83,22 +84,22 @@ module OT_check = struct
   let run args =
     Log.debugf 1 (fun k->k"check opentheory files %a" (Fmt.Dump.(list string)) args);
     let ctx = K.Ctx.create() in
-    let vm = OTP.VM.create ctx in
+    let vm = VM.create ctx in
     try
       List.iter
         (fun file ->
            CCIO.with_in file (fun ic ->
-               let input = OTP.Input.of_chan ic in
-               match OTP.VM.parse_and_check_art vm input with
+               let input = VM.Input.of_chan ic in
+               match VM.parse_and_check_art vm input with
                | Ok art ->
                  Fmt.printf "; parsed and validated '%s'@." file;
                  if !cat_ then (
-                   Fmt.printf "%a@." OTP.Article.pp art;
+                   Fmt.printf "%a@." Article.pp art;
                  );
-                 if not (OTP.VM.has_empty_stack vm) then (
+                 if not (VM.has_empty_stack vm) then (
                    Fmt.eprintf "VM stack is not empty@."; exit 1
                  );
-                 OTP.VM.clear_dict vm; (* not reused *)
+                 VM.clear_dict vm; (* not reused *)
                | Error e ->
                  Fmt.eprintf "error: %a@." Trustee_error.pp e;
                  raise Exit

@@ -37,18 +37,3 @@ module P = CCParse
 val parse : t P.t
 val of_string : string -> t or_error
 
-(** {2 List content of a directory} *)
-module Idx : sig
-  type thy = t
-  type path = string
-
-  (** Results of listing a directory *)
-  type t = {
-    theories: (path * thy) list;
-    by_name: thy Str_tbl.t;
-    articles: path Str_tbl.t; (* basename -> path *)
-    errors: (path * Trustee_error.t) list;
-  }
-end
-
-val list_dir : Idx.path -> Idx.t

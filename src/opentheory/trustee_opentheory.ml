@@ -1,3 +1,12 @@
 
-module OT_parser = OT_parser
-module OT_thy = OT_thy
+(** {1 OpenTheory library}
+
+    Support for parsing {{: http://www.gilith.com/opentheory/} opentheory}
+    articles and theories.
+    *)
+
+module Name = Name
+module Article = Article
+module VM = VM
+module Thy_file = Thy_file
+module Idx = Idx
