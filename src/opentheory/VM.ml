@@ -614,49 +614,46 @@ let has_empty_stack self =
 
 let parse_and_check_art_exn (self:t) (input:input) : Article.t =
   Log.debug 5 "(open-theory.parse-and-check-art)";
-  let i = ref 0 in
-
-  let _progr = mk_progress() in
+  let line_ = ref 0 in
 
   (* how to parse one line *)
   let process_line (s:string) : unit =
-    incr i;
+    incr line_;
 
     let s = String.trim s in
-    if s="" then errorf (fun k->k"empty line (at line %d)" !i);
+    if s="" then errorf (fun k->k"empty line (at line %d)" !line_);
 
-    (* TODO: enable iff param passed *)
-(*       _progr s; *)
+    CCOpt.iter (fun f -> f s ~line:!line_) self.progress_fun;
 
-      Log.debugf 50 (fun k->k"(@[ot: cur VM stack is@ %a@])" pp_stack self);
-      Log.debugf 20 (fun k->k"(@[ot: process line: %s@])" s);
+    Log.debugf 50 (fun k->k"(@[ot: cur VM stack is@ %a@])" pp_stack self);
+    Log.debugf 20 (fun k->k"(@[ot: process line: %s@])" s);
 
-      begin match s.[0] with
-        | '0' .. '9' | '-' ->
-          let n =
-            (try int_of_string s
-             with _ -> errorf (fun k->k"invalid integer at line %d" !i))
-          in
-          self.stack <- O_int n :: self.stack
-        | '"' ->
-          let n = String.length s in
-          if s.[n-1] <> '"' then errorf (fun k->k"expected closing \" at line %d" !i);
-          let s = String.sub s 1 (n-2) in
-          let n = Name.of_string s in
-          self.stack <- O_name n :: self.stack
-        | _ ->
-          begin match Str_map.find s rules with
-            | r -> r self
-            | exception Not_found ->
-              errorf (fun k->k"unknown rule '%s' at line %d" s !i)
-          end
-      end;
-    in
-    input.iter_lines process_line;
-    let art = article self in
-    self.art <- Article.empty; (* clear article for next file, if any *)
-    art
+    begin match s.[0] with
+      | '0' .. '9' | '-' ->
+        let n =
+          (try int_of_string s
+           with _ -> errorf (fun k->k"invalid integer at line %d" !line_))
+        in
+        self.stack <- O_int n :: self.stack
+      | '"' ->
+        let n = String.length s in
+        if s.[n-1] <> '"' then errorf (fun k->k"expected closing \" at line %d" !line_);
+        let s = String.sub s 1 (n-2) in
+        let n = Name.of_string s in
+        self.stack <- O_name n :: self.stack
+      | _ ->
+        begin match Str_map.find s rules with
+          | r -> r self
+          | exception Not_found ->
+            errorf (fun k->k"unknown rule '%s' at line %d" s !line_)
+        end
+    end;
+  in
+  input.iter_lines process_line;
+  let art = article self in
+  self.art <- Article.empty; (* clear article for next file, if any *)
+  art
 
-  let parse_and_check_art self i =
-    try Ok (parse_and_check_art_exn self i)
-    with Trustee_error.E e -> Error e
+let parse_and_check_art self i =
+  try Ok (parse_and_check_art_exn self i)
+  with Trustee_error.E e -> Error e

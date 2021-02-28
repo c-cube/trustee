@@ -86,11 +86,11 @@ let unquote_str s : string =
     String.sub s 1 (n-2)
   ) else s
 
-let check_ (idx:Idx.t) ~names : unit =
+let check_ (idx:Idx.t) ~progress_bar ~names : unit =
   let by_name = idx.Idx.by_name in
   let checked = Str_tbl.create 32 in
   let ctx = K.Ctx.create () in
-  let vm = VM.create ctx in
+  let vm = VM.create ~progress_bar ctx in
 
   let find_by_name n =
     try Str_tbl.find by_name n
@@ -168,6 +168,7 @@ let print = ref false
 let dot_file = ref ""
 let check = ref []
 let check_all = ref false
+let progress_ = ref false
 
 let main ~dir () =
   let idx =
@@ -185,9 +186,11 @@ let main ~dir () =
     print_dot !dot_file theories;
   );
   if !check_all then (
-    check_ idx ~names:(Iter.map Thy_file.name theories);
+    check_ idx
+      ~progress_bar:!progress_ ~names:(Iter.map Thy_file.name theories); 
   ) else if !check <> [] then (
-    check_ idx ~names:(Iter.of_list !check)
+    check_ idx
+      ~progress_bar:!progress_ ~names:(Iter.of_list !check)
   );
   ()
 
@@ -201,6 +204,8 @@ let () =
     "-check-all", Arg.Set check_all, " check all";
     "-dot", Arg.Set_string dot_file, " print graph into file";
     "-d", Arg.Int Log.set_level, " set debug level";
+    "--progress", Arg.Set progress_, " progress bar";
+    "-p", Arg.Set progress_, " progress bar";
     "--bt", Arg.Unit (fun()->Printexc.record_backtrace true), " record backtraces";
   ] |> Arg.align in
   Arg.parse opts (fun _ -> failwith "invalid option") "trustee_ot [option*]";
