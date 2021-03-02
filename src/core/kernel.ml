@@ -437,8 +437,8 @@ module Expr = struct
       in
       aux e
 
-  let free_vars e : Var.Set.t =
-    let set = ref Var.Set.empty in
+  let free_vars ?(init=Var.Set.empty) e : Var.Set.t =
+    let set = ref init in
     free_vars_iter e (fun v -> set := Var.Set.add v !set);
     !set
 
@@ -1180,26 +1180,30 @@ module Thm = struct
     in
     (* the concrete type *)
     let ty = Expr.ty_exn witness in
-    (* check that all free variables are type variables *)
-    let fvars = Expr.free_vars (concl thm_inhabited) in
+    (* check that all free variables in [phi] are type variables *)
+    let fvars_phi = Expr.free_vars phi in
+    let all_ty_fvars =
+      Expr.free_vars_iter witness
+      |> Iter.filter (fun v -> Expr.is_eq_to_type v.v_ty)
+      |> Var.Set.add_iter fvars_phi
+    in
     begin match
-        Var.Set.find_first (fun v -> not (Expr.is_eq_to_type (Var.ty v))) fvars
+        Var.Set.find_first (fun v -> not (Expr.is_eq_to_type (Var.ty v))) fvars_phi
       with
       | v ->
-(*         if false then (* FIXME *) *)
-        errorf (fun k->k"free variable %a is not a type variable" Var.pp_with_ty v)
+        errorf (fun k->k"free variable %a@ occurs in Phi (in `|- Phi t`)@ \
+                         and it is not a type variable" Var.pp_with_ty v)
       | exception Not_found -> ()
     end;
 
     let ty_vars_l = match provided_ty_vars with
-      | None -> Var.Set.to_list fvars (* pick any order *)
+      | None -> Var.Set.to_list all_ty_fvars (* pick any order *)
       | Some l ->
-        (* FIXME *)
-        if (* false && *) not (Var.Set.equal fvars (Var.Set.of_list l)) then (
+        if not (Var.Set.equal all_ty_fvars (Var.Set.of_list l)) then (
           errorf
             (fun k->k
                 "list of type variables (%a) in new-basic-ty-def@ does not match %a"
-                (Fmt.Dump.list Var.pp) (Var.Set.to_list fvars)
+                (Fmt.Dump.list Var.pp) (Var.Set.to_list all_ty_fvars)
                 (Fmt.Dump.list Var.pp) l);
         );
         l

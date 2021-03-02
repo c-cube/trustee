@@ -157,7 +157,7 @@ module Expr : sig
   val for_all : f:(bool -> t -> bool) -> t -> bool
 
   val contains : t -> sub:t -> bool
-  val free_vars : t -> Var.Set.t
+  val free_vars : ?init:Var.Set.t -> t -> Var.Set.t
   val free_vars_iter : t -> var Iter.t
   val db_shift: ctx -> t -> int -> t
 
