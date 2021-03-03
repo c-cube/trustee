@@ -10,6 +10,26 @@ let ctx_id_mask = (1 lsl ctx_id_bits) - 1
 type fixity = Fixity.t
 type location = Loc.t
 
+module Name : sig
+  type t = private string
+  val make : string -> t
+  val equal_str : t -> string -> bool
+  include Sigs.EQ with type t := t
+  include Sigs.COMPARE with type t := t
+  include Sigs.HASH with type t := t
+  include Sigs.PP with type t := t
+end = struct
+  type t = string
+  let equal = String.equal
+  let equal_str = equal
+  let compare = String.compare
+  let hash = H.string
+  let pp = Fmt.string
+  let make s = s
+  let to_string s = s
+end
+
+
 type expr_view =
   | E_kind
   | E_type
@@ -40,8 +60,10 @@ and bvar = {
 
 and ty = expr
 
+and name = Name.t
+
 and const = {
-  c_name: ID.t;
+  c_name: name;
   c_args: const_args;
   c_ty: ty; (* free vars = c_ty_vars *)
   c_def_loc: location option;
@@ -107,13 +129,13 @@ let expr_pp_ out (e:expr) : unit =
           if idx<k then Fmt.fprintf out "x_%d" (k-idx-1)
           else Fmt.fprintf out "%%db_%d" (idx-k)
       end
-    | E_const (c,[]) -> ID.pp out c.c_name
+    | E_const (c,[]) -> Name.pp out c.c_name
     | E_const (c,args) ->
-      Fmt.fprintf out "(@[%a@ %a@])" ID.pp c.c_name (pp_list pp') args
+      Fmt.fprintf out "(@[%a@ %a@])" Name.pp c.c_name (pp_list pp') args
     | E_app _ ->
       let f, args = unfold_app e in
       begin match f.e_view, args with
-        | E_const (c, [_]), [a;b] when ID.name c.c_name = "=" ->
+        | E_const (c, [_]), [a;b] when Name.equal_str c.c_name "=" ->
           Fmt.fprintf out "@[%a@ = %a@]" pp' a pp' b
         | _ ->
           Fmt.fprintf out "@[%a@ %a@]" pp' f (pp_list pp') args
@@ -140,7 +162,7 @@ module Expr_hashcons = Hashcons.Make(struct
         | E_kind, E_kind
         | E_type, E_type -> true
         | E_const (c1,l1), E_const (c2,l2) ->
-          ID.equal c1.c_name c2.c_name && CCList.equal expr_eq l1 l2
+          Name.equal c1.c_name c2.c_name && CCList.equal expr_eq l1 l2
         | E_var v1, E_var v2 -> var_eq v1 v2
         | E_bound_var v1, E_bound_var v2 ->
           v1.bv_idx = v2.bv_idx && expr_eq v1.bv_ty v2.bv_ty
@@ -159,7 +181,7 @@ module Expr_hashcons = Hashcons.Make(struct
       | E_kind -> 11
       | E_type -> 12
       | E_const (c,l) ->
-        H.combine4 20 (ID.hash c.c_name) (expr_hash c.c_ty) (H.list expr_hash l)
+        H.combine4 20 (Name.hash c.c_name) (expr_hash c.c_ty) (H.list expr_hash l)
       | E_var v -> H.combine2 30 (var_hash v)
       | E_bound_var v -> H.combine3 40 (H.int v.bv_idx) (expr_hash v.bv_ty)
       | E_app (f,a) -> H.combine3 50 (expr_hash f) (expr_hash a)
@@ -193,18 +215,18 @@ type ctx = {
 let[@inline] ctx_check_e_uid ctx (e:expr) = assert (ctx.ctx_uid == expr_ctx_uid e)
 let[@inline] ctx_check_th_uid ctx (th:thm) = assert (ctx.ctx_uid == thm_ctx_uid th)
 
-let id_bool = ID.make "bool"
-let id_eq = ID.make "="
-let id_select = ID.make "select"
+let id_bool = Name.make "bool"
+let id_eq = Name.make "="
+let id_select = Name.make "select"
 
 module Const = struct
   type t = const
-  let pp out c = ID.pp out c.c_name
+  let pp out c = Name.pp out c.c_name
   let to_string = Fmt.to_string pp
   let def_loc c = c.c_def_loc
   let[@inline] fixity c = c.c_fixity
   let[@inline] set_fixity c f = c.c_fixity <- f
-  let[@inline] equal c1 c2 = ID.equal c1.c_name c2.c_name
+  let[@inline] equal c1 c2 = Name.equal c1.c_name c2.c_name
 
   type args = const_args =
     | C_ty_vars of ty_var list
@@ -219,8 +241,8 @@ module Const = struct
   let[@inline] eq ctx = Lazy.force ctx.ctx_eq_c
   let[@inline] bool ctx = Lazy.force ctx.ctx_bool_c
   let[@inline] select ctx = Lazy.force ctx.ctx_select_c
-  let is_eq_to_bool c = ID.equal c.c_name id_bool
-  let is_eq_to_eq c = ID.equal c.c_name id_bool
+  let is_eq_to_bool c = Name.equal c.c_name id_bool
+  let is_eq_to_eq c = Name.equal c.c_name id_bool
 end
 
 module Var = struct
@@ -367,7 +389,7 @@ module Expr = struct
   let[@inline] is_eq_to_type e = match view e with | E_type -> true | _ -> false
   let[@inline] is_a_type e = is_eq_to_type (ty_exn e)
   let is_eq_to_bool e =
-    match view e with E_const (c,[]) -> ID.equal c.c_name id_bool | _ -> false
+    match view e with E_const (c,[]) -> Name.equal c.c_name id_bool | _ -> false
   let is_a_bool e = is_eq_to_bool (ty_exn e)
 
   let bool ctx = Lazy.force ctx.ctx_bool
@@ -443,7 +465,7 @@ module Expr = struct
     !set
 
   let new_const_ ctx ?def_loc name args ty : const =
-    let id = ID.make name in
+    let id = Name.make name in
     let c = {
       c_name=id; c_ty=ty; c_args=args;
       c_def_loc=def_loc; c_fixity=F_normal;
@@ -607,7 +629,7 @@ module Expr = struct
         if List.length args <> n then (
           errorf
             (fun k->k"constant %a requires %d arguments, but is applied to %d"
-                ID.pp c.c_name
+                Name.pp c.c_name
                 n (List.length args));
         );
         Lazy.from_val (Some c.c_ty)
@@ -615,7 +637,7 @@ module Expr = struct
         if List.length args <> List.length ty_vars then (
           errorf
             (fun k->k"constant %a requires %d arguments, but is applied to %d"
-                ID.pp c.c_name
+                Name.pp c.c_name
                 (List.length ty_vars) (List.length args));
         );
         lazy (
@@ -744,7 +766,7 @@ module Expr = struct
   let unfold_eq e =
     let f, l = unfold_app e in
     match view f, l with
-    | E_const ({c_name;_}, [_]), [a;b] when ID.equal c_name id_eq -> Some(a,b)
+    | E_const ({c_name;_}, [_]), [a;b] when Name.equal c_name id_eq -> Some(a,b)
     | _ -> None
 
   let rec unfold_arrow e =
