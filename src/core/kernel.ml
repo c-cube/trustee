@@ -91,17 +91,6 @@ module Expr_set = CCSet.Make(struct
     let compare = expr_compare
     end)
 
-type thm = {
-  th_concl: expr;
-  th_hyps: Expr_set.t;
-  mutable th_flags: int; (* [bool flags|ctx uid] *)
-}
-(* TODO:
-   - store set of axioms used
-   *)
-
-let[@inline] thm_ctx_uid th : int = th.th_flags land ctx_id_mask
-
 (* open an application *)
 let unfold_app (e:expr) : expr * expr list =
   let rec aux acc e =
@@ -196,7 +185,27 @@ module Expr_hashcons = Hashcons.Make(struct
     let on_new e = ignore (Lazy.force e.e_ty : _ option)
     end)
 
-type ctx = {
+
+type thm = {
+  th_concl: expr;
+  th_hyps: Expr_set.t;
+  mutable th_flags: int; (* [bool flags|ctx uid] *)
+  mutable th_theory: theory option;
+}
+(* TODO:
+   - store set of axioms used
+   *)
+
+and theory = {
+  name: Name.t;
+  theory_ctx: ctx;
+  mutable in_constants: const Str_map.t;
+  mutable in_theorems: thm list;
+  mutable defined_constants: const Str_map.t;
+  mutable defined_theorems: thm list;
+}
+
+and ctx = {
   ctx_uid: int;
   ctx_exprs: Expr_hashcons.t;
   ctx_named_thm: thm Str_tbl.t;
@@ -211,6 +220,8 @@ type ctx = {
   mutable ctx_axioms_allowed: bool;
 }
 (* TODO: derived rules and named rules/theorems *)
+
+let[@inline] thm_ctx_uid th : int = th.th_flags land ctx_id_mask
 
 let[@inline] ctx_check_e_uid ctx (e:expr) = assert (ctx.ctx_uid == expr_ctx_uid e)
 let[@inline] ctx_check_th_uid ctx (th:thm) = assert (ctx.ctx_uid == thm_ctx_uid th)
@@ -987,7 +998,7 @@ module Thm = struct
 
   let make_ ctx hyps concl : t =
     let th_flags = ctx.ctx_uid in
-    { th_flags; th_concl=concl; th_hyps=hyps; }
+    { th_flags; th_concl=concl; th_hyps=hyps; th_theory=None }
 
   let is_bool_ ctx e : bool =
     let ty = Expr.ty_exn e in
@@ -1279,6 +1290,80 @@ module Thm = struct
       tau; c_repr; c_abs; fvars=ty_vars_l; repr_x;
       repr_thm; abs_x; abs_thm}
 
+end
+
+module Theory = struct
+  type t = theory
+
+  let pp out (self:t) : unit =
+    let {name; theory_ctx=_; in_constants; in_theorems;
+         defined_theorems; defined_constants; } = self in
+    Fmt.fprintf out "(@[<v1>theory %a" Name.pp name;
+    Str_map.iter (fun _ c -> Fmt.fprintf out "(@[in-const@ %a@])" Const.pp c)
+      in_constants;
+    List.iter (fun th -> Fmt.fprintf out "(@[in-thm@ %a@])" Thm.pp th) in_theorems;
+    Str_map.iter (fun _ c -> Fmt.fprintf out "(@[defined-const@ %a@])" Const.pp c)
+      defined_constants;
+    List.iter (fun th -> Fmt.fprintf out "(@[defined-thm@ %a@])" Thm.pp th) defined_theorems;
+    Fmt.fprintf out "@])";
+    ()
+
+  let to_string = Fmt.to_string pp
+
+  let assume self hyps concl : thm =
+    let ctx = self.theory_ctx in
+    Thm.wrap_exn (fun k->k"in theory_assume@ `@[%a@ |- %a@]`:"
+                 (pp_list Expr.pp) hyps Expr.pp concl) @@ fun () ->
+    if not (Thm.is_bool_ ctx concl && List.for_all (Thm.is_bool_ ctx) hyps) then (
+      error "Theory.assume: all terms must be booleans"
+    );
+    let hyps = Expr.Set.of_list hyps in
+    {(Thm.make_ ctx hyps concl) with th_theory=Some self}
+
+  let assume_ty_const self s arity: const =
+    if Str_map.mem s self.in_constants then (
+      errorf (fun k->k"Theory.assume_ty_const: constant `%s` already exists" s);
+    );
+    let c = Expr.new_ty_const self.theory_ctx s arity in
+    self.in_constants <- Str_map.add s c self.in_constants;
+    c
+
+  let assume_const self s ~ty_vars ty : const =
+    if Str_map.mem s self.in_constants then (
+      errorf (fun k->k"Theory.assume_const: constant `%s` already exists" s);
+    );
+    let c = Expr.new_const self.theory_ctx s ty_vars ty in
+    self.in_constants <- Str_map.add s c self.in_constants;
+    c
+
+  let add_const self c : unit =
+    let s = Name.to_string c.c_name in
+    if Str_map.mem s self.defined_constants then (
+      errorf (fun k->k"Theory.add_const: constant `%s` already defined" s);
+    );
+    self.defined_constants <- Str_map.add s c self.defined_constants
+
+  let add_theorem self th : unit =
+    begin match th.th_theory with
+      | None -> th.th_theory <- Some self
+      | Some theory' ->
+        errorf (fun k->k"Theory.add_theorem:@ %a@ already belongs in theory `%a`"
+                   Thm.pp_quoted th Name.pp theory'.name);
+    end;
+    self.defined_theorems <- th :: self.defined_theorems
+
+  let with_ ctx ~name f : t =
+    let name = Name.make name in
+    let self = {
+      name; theory_ctx=ctx;
+      in_constants=Str_map.empty; defined_constants=Str_map.empty;
+      in_theorems=[]; defined_theorems=[]
+    } in
+    f self;
+    self
+
+  let compose l th : t = assert false (* TODO *)
+  let instantiate inst th : t = assert false (* TODO *)
 end
 
 (* ok def *)

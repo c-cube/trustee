@@ -9,6 +9,7 @@ type ty = expr
 type const
 type ty_const = const
 type thm
+type theory
 
 type fixity = Fixity.t
 type location = Loc.t
@@ -317,6 +318,41 @@ module Thm : sig
       @param ty_var if provided, use the type variables in the given order.
       It must be the exact set of free variables of [thm_inhabited].
   *)
+end
+
+(** {2 A theory, similar to OpenTheory's theories}
+
+    A theory bundles input constants/theorems (assumptions),
+    and defined constants/theorems (proved in the theory).
+    It can be composed or interpreted (renaming of constants).
+*)
+module Theory : sig
+  type t = theory
+
+  include Sigs.PP with type t := t
+
+  val with_ :
+    ctx -> name:string ->
+    (t -> unit) -> t
+
+  val assume : t -> expr list -> expr -> thm
+  (** [assume theory hyps concl] creates the theorem
+      [hyps |- concl] as a parameter of the theory [theory]. *)
+
+  val assume_ty_const : t -> string -> int -> ty_const
+
+  val assume_const : t -> string -> ty_vars:Var.t list -> ty -> const
+  (** [assume_const theory s ty] assumes the existence of a constant [s:ty] *)
+
+  val add_const : t -> const -> unit
+
+  val add_theorem : t -> thm -> unit
+
+  (** {3 Composition} *)
+
+  val instantiate : const Str_map.t -> t -> t
+
+  val compose : t list -> t -> t
 end
 
 (** {2 Context}
