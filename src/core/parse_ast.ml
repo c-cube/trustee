@@ -412,10 +412,20 @@ module Env = struct
   }
 
   let create ctx : t =
-    { ctx;
-      consts=Str_map.empty;
+    let consts =
+      Str_map.empty
+        (* FIXME
+      |> Str_map.add "bool" (C_k_const (K.Const.bool ctx))
+      |> Str_map.add "=" (C_k_const (K.Const.eq ctx))
+      |> Str_map.add "select" (C_k_const (K.Const.select ctx))
+           *)
+    in
+    let self = {
+      ctx;
+      consts;
       rules=Str_map.empty;
-    }
+    } in
+    self
 
   let copy e : t = {e with consts=e.consts}
   let ctx e = e.ctx

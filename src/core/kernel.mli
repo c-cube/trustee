@@ -370,7 +370,5 @@ module Ctx : sig
       is frozen. *)
 
   val axioms : t -> thm iter
-
-  val find_const_by_name : t -> string -> const option
 end
 

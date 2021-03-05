@@ -66,10 +66,15 @@ and const = {
   c_name: name;
   c_args: const_args;
   c_ty: ty; (* free vars = c_ty_vars *)
+  c_def_id: const_def_id;
   c_def_loc: location option;
   mutable c_fixity: fixity;
 }
 and ty_const = const
+
+and const_def_id =
+  | C_def_gen of int (* generative *)
+  | C_in_theory of name (* theory name *)
 
 and const_args =
   | C_ty_vars of ty_var list
@@ -85,6 +90,32 @@ let[@inline] expr_ctx_uid e : int = e.e_flags land ctx_id_mask
 let[@inline] var_eq v1 v2 = v1.v_name = v2.v_name && expr_eq v1.v_ty v2.v_ty
 let[@inline] var_hash v1 = H.combine3 5 (H.string v1.v_name) (expr_hash v1.v_ty)
 let[@inline] var_pp out v1 = Fmt.string out v1.v_name
+
+let const_def_eq a b =
+  match a, b with
+  | C_def_gen i, C_def_gen j -> i=j
+  | C_in_theory n1, C_in_theory n2 -> Name.equal n1 n2
+  | (C_def_gen _ | C_in_theory _), _ -> false
+
+let[@inline] const_eq (c1:const) c2 : bool =
+  Name.equal c1.c_name c2.c_name &&
+  const_def_eq c1.c_def_id c2.c_def_id
+
+let const_hash c =
+  let h_def =
+    match c.c_def_id with
+    | C_def_gen id -> H.(combine2 12 (int id))
+    | C_in_theory n -> H.(combine2 25 (Name.hash n))
+  in
+  H.combine3 129 (Name.hash c.c_name) h_def
+
+module Const_hashcons = Hashcons.Make(struct
+    type t = const
+    let equal = const_eq
+    let hash = const_hash
+    let set_id _ _ = ()
+    let on_new _ = ()
+  end)
 
 module Expr_set = CCSet.Make(struct
     type t = expr
@@ -197,19 +228,18 @@ type thm = {
    *)
 
 and theory = {
-  name: Name.t;
+  theory_name: Name.t;
   theory_ctx: ctx;
-  mutable in_constants: const Str_map.t;
-  mutable in_theorems: thm list;
-  mutable defined_constants: const Str_map.t;
-  mutable defined_theorems: thm list;
+  mutable theory_in_constants: const Str_map.t;
+  mutable theory_in_theorems: thm list;
+  mutable theory_defined_constants: const Str_map.t;
+  mutable theory_defined_theorems: thm list;
 }
 
 and ctx = {
   ctx_uid: int;
   ctx_exprs: Expr_hashcons.t;
-  ctx_named_thm: thm Str_tbl.t;
-  ctx_named_const: const Str_tbl.t;
+  ctx_consts: Const_hashcons.t;
   ctx_kind: expr lazy_t;
   ctx_type: expr lazy_t;
   ctx_bool: expr lazy_t;
@@ -475,14 +505,20 @@ module Expr = struct
     free_vars_iter e (fun v -> set := Var.Set.add v !set);
     !set
 
-  let new_const_ ctx ?def_loc name args ty : const =
-    let id = Name.make name in
+  let id_gen_ = ref 0 (* note: updated atomically *)
+
+  let new_const_ ctx ?def_loc ?in_theory ?(fixity=Fixity.F_normal)
+      name args ty : const =
+    let c_def_id = match in_theory with
+      | Some th -> C_in_theory th.theory_name
+      | None -> incr id_gen_; C_def_gen !id_gen_
+    in
     let c = {
-      c_name=id; c_ty=ty; c_args=args;
-      c_def_loc=def_loc; c_fixity=F_normal;
+      c_name=name; c_def_id; c_ty=ty; c_args=args;
+      c_def_loc=def_loc; c_fixity=fixity;
     } in
-    Str_tbl.replace ctx.ctx_named_const name c;
-    c
+    let c' = Const_hashcons.hashcons ctx.ctx_consts c in
+    c'
 
   let new_const ctx ?def_loc name ty_vars ty : const =
     let fvars = free_vars ty in
@@ -497,9 +533,11 @@ module Expr = struct
                but not in the type variables %a"
               Var.pp v name (Fmt.Dump.list Var.pp) ty_vars);
     end;
+    let name = Name.make name in
     new_const_ ctx ?def_loc name (C_ty_vars ty_vars) ty
 
   let new_ty_const ctx ?def_loc name n : ty_const =
+    let name = Name.make name in
     new_const_ ctx name ?def_loc (C_arity n) (type_ ctx)
 
   let mk_const_ ctx c args ty : t =
@@ -901,8 +939,7 @@ module Ctx = struct
     let rec ctx = {
       ctx_uid;
       ctx_exprs=Expr_hashcons.create ~size:2_048 ();
-      ctx_named_thm=Str_tbl.create 32;
-      ctx_named_const=Str_tbl.create 32;
+      ctx_consts=Const_hashcons.create ~size:32 ();
       ctx_axioms=[];
       ctx_axioms_allowed=true;
       ctx_kind=lazy (Expr.make_ ctx E_kind (Lazy.from_val None));
@@ -912,8 +949,7 @@ module Ctx = struct
       );
       ctx_bool_c=lazy (
         let typ = Expr.type_ ctx in
-        {c_name=id_bool; c_ty=typ; c_def_loc=None;
-         c_fixity=F_normal; c_args=C_arity 0; }
+        Expr.new_const_ ctx id_bool (C_arity 0) typ
       );
       ctx_bool=lazy (
         Expr.const ctx (Lazy.force ctx.ctx_bool_c) []
@@ -923,8 +959,8 @@ module Ctx = struct
         let a_ = Var.make "a" type_ in
         let ea = Expr.var ctx a_ in
         let typ = Expr.(arrow ctx ea @@ arrow ctx ea @@ bool ctx) in
-        {c_name=id_eq; c_args=C_ty_vars [a_]; c_ty=typ;
-         c_def_loc=None; c_fixity=F_normal; }
+        Expr.new_const_ ctx id_eq (C_ty_vars [a_]) typ
+          ~fixity:(Fixity.infix 15)
       );
       ctx_select_c=lazy (
         let type_ = Expr.type_ ctx in
@@ -932,8 +968,8 @@ module Ctx = struct
         let a_ = Var.make "a" type_ in
         let ea = Expr.var ctx a_ in
         let typ = Expr.(arrow ctx (arrow ctx ea bool_) ea) in
-        {c_name=id_select; c_args=C_ty_vars[a_]; c_ty=typ;
-         c_def_loc=None; c_fixity=F_binder 10}
+        Expr.new_const_ ctx id_select (C_ty_vars [a_]) typ
+          ~fixity:(Fixity.binder 10)
       );
     } in
     ctx
@@ -945,9 +981,6 @@ module Ctx = struct
     )
 
   let axioms self k = List.iter k self.ctx_axioms
-
-  let find_const_by_name self s : const option =
-    Str_tbl.get self.ctx_named_const s
 end
 
 module New_ty_def = struct
@@ -1296,15 +1329,16 @@ module Theory = struct
   type t = theory
 
   let pp out (self:t) : unit =
-    let {name; theory_ctx=_; in_constants; in_theorems;
-         defined_theorems; defined_constants; } = self in
+    let {theory_name=name; theory_ctx=_; theory_in_constants=inc;
+         theory_in_theorems=inth; theory_defined_theorems=dth;
+         theory_defined_constants=dc; } = self in
     Fmt.fprintf out "(@[<v1>theory %a" Name.pp name;
     Str_map.iter (fun _ c -> Fmt.fprintf out "(@[in-const@ %a@])" Const.pp c)
-      in_constants;
-    List.iter (fun th -> Fmt.fprintf out "(@[in-thm@ %a@])" Thm.pp th) in_theorems;
-    Str_map.iter (fun _ c -> Fmt.fprintf out "(@[defined-const@ %a@])" Const.pp c)
-      defined_constants;
-    List.iter (fun th -> Fmt.fprintf out "(@[defined-thm@ %a@])" Thm.pp th) defined_theorems;
+      inc;
+    List.iter (fun th -> Fmt.fprintf out "(@[in-thm@ %a@])" Thm.pp th) inth;
+    Str_map.iter
+      (fun _ c -> Fmt.fprintf out "(@[defined-const@ %a@])" Const.pp c) dc;
+    List.iter (fun th -> Fmt.fprintf out "(@[defined-thm@ %a@])" Thm.pp th) dth;
     Fmt.fprintf out "@])";
     ()
 
@@ -1321,43 +1355,43 @@ module Theory = struct
     {(Thm.make_ ctx hyps concl) with th_theory=Some self}
 
   let assume_ty_const self s arity: const =
-    if Str_map.mem s self.in_constants then (
+    if Str_map.mem s self.theory_in_constants then (
       errorf (fun k->k"Theory.assume_ty_const: constant `%s` already exists" s);
     );
     let c = Expr.new_ty_const self.theory_ctx s arity in
-    self.in_constants <- Str_map.add s c self.in_constants;
+    self.theory_in_constants <- Str_map.add s c self.theory_in_constants;
     c
 
   let assume_const self s ~ty_vars ty : const =
-    if Str_map.mem s self.in_constants then (
+    if Str_map.mem s self.theory_in_constants then (
       errorf (fun k->k"Theory.assume_const: constant `%s` already exists" s);
     );
     let c = Expr.new_const self.theory_ctx s ty_vars ty in
-    self.in_constants <- Str_map.add s c self.in_constants;
+    self.theory_in_constants <- Str_map.add s c self.theory_in_constants;
     c
 
   let add_const self c : unit =
     let s = Name.to_string c.c_name in
-    if Str_map.mem s self.defined_constants then (
+    if Str_map.mem s self.theory_defined_constants then (
       errorf (fun k->k"Theory.add_const: constant `%s` already defined" s);
     );
-    self.defined_constants <- Str_map.add s c self.defined_constants
+    self.theory_defined_constants <- Str_map.add s c self.theory_defined_constants
 
   let add_theorem self th : unit =
     begin match th.th_theory with
       | None -> th.th_theory <- Some self
       | Some theory' ->
         errorf (fun k->k"Theory.add_theorem:@ %a@ already belongs in theory `%a`"
-                   Thm.pp_quoted th Name.pp theory'.name);
+                   Thm.pp_quoted th Name.pp theory'.theory_name);
     end;
-    self.defined_theorems <- th :: self.defined_theorems
+    self.theory_defined_theorems <- th :: self.theory_defined_theorems
 
   let with_ ctx ~name f : t =
-    let name = Name.make name in
+    let theory_name = Name.make name in
     let self = {
-      name; theory_ctx=ctx;
-      in_constants=Str_map.empty; defined_constants=Str_map.empty;
-      in_theorems=[]; defined_theorems=[]
+      theory_name; theory_ctx=ctx;
+      theory_in_constants=Str_map.empty; theory_defined_constants=Str_map.empty;
+      theory_in_theorems=[]; theory_defined_theorems=[]
     } in
     f self;
     self

@@ -1232,12 +1232,9 @@ module Ty_infer = struct
         | A.C_k_expr e -> Expr.of_k_expr ~loc e
         | A.C_k_const c -> mk_c c
         | A.C_local name ->
-          match K.Ctx.find_const_by_name st.ctx name with
-          | None ->
-            errorf
-              (fun k->k"cannot find constant `@[%a@]`@ at %a"
-                   A.Const.pp c Loc.pp loc)
-          | Some c -> mk_c c
+          errorf
+            (fun k->k"cannot find constant `@[%a@]`@ at %a"
+                 A.Const.pp c Loc.pp loc)
       end
 
     and infer_ty_opt_ ~loc ?default bv ty : ty =
