@@ -1,5 +1,6 @@
 
 module K = Trustee_core.Kernel
+module Notation = Trustee_core.Notation
 module E = K.Expr
 
 open OUnit2
@@ -8,6 +9,7 @@ module Make() = struct
   module E = K.Expr
   module Subst = K.Subst
   module Thm = K.Thm
+
   let ctx = K.Ctx.create ()
   let bool = K.Expr.bool ctx
   let c_bool = K.Const.bool ctx
@@ -39,12 +41,12 @@ module Make() = struct
   let q2 = new_const "q2" (tau @-> tau @-> bool)
   let r2 = new_const "r2" (tau @-> tau @-> bool)
   let forall = new_const "!" ((tau @-> bool) @-> bool)
-  let () = K.Const.set_fixity forall (F_binder 10)
+(*   let () = K.Const.set_fixity forall (F_binder 10) *)
   let c_plus = new_const "+" (tau @-> tau @-> tau)
   let plus a b = K.Expr.app_l ctx (K.Expr.const ctx c_plus []) [a;b]
   let c_eq = K.Const.eq ctx
   let (=) = K.Expr.app_eq ctx
-  let () = K.Const.set_fixity c_plus (F_right_assoc 20)
+(*   let () = K.Const.set_fixity c_plus (F_right_assoc 20) *)
 end
 
 (* test substitution of terms and types *)

@@ -34,6 +34,15 @@ type expr_view =
   | E_lam of string * expr * expr
   | E_arrow of expr * expr
 
+module Name : sig
+  type t
+  val equal_str : t -> string -> bool
+  include Sigs.EQ with type t := t
+  include Sigs.COMPARE with type t := t
+  include Sigs.HASH with type t := t
+  include Sigs.PP with type t := t
+end
+
 module Const : sig
   type t = const
   include Sigs.EQ with type t := t
@@ -45,6 +54,7 @@ module Const : sig
     | C_ty_vars of ty_var list
     | C_arity of int
 
+  val name : t -> Name.t
   val args : t -> args
   val pp_args : args Fmt.printer
   val ty : t -> ty
@@ -117,9 +127,6 @@ module Expr : sig
   include Sigs.HASH with type t := t
   include Sigs.COMPARE with type t := t
   include Sigs.PP with type t := t
-
-  val pp_with : Notation.t -> t Fmt.printer
-  val to_string_with : Notation.t -> t -> string
 
   val view : t -> view
   val ty : t -> ty option
@@ -372,3 +379,7 @@ module Ctx : sig
   val axioms : t -> thm iter
 end
 
+
+(**/**)
+val __pp_ids: bool ref
+(**/**)

@@ -130,12 +130,14 @@ let unfold_app (e:expr) : expr * expr list =
   in
   aux [] e
 
+let __pp_ids = ref false
+
 (* debug printer *)
 let expr_pp_ out (e:expr) : unit =
-  let rec aux k names out e =
-    let pp = aux k names in
-    let pp' = aux' k names in
-    match e.e_view with
+  let rec loop k names out e =
+    let pp = loop k names in
+    let pp' = loop' k names in
+    (match e.e_view with
     | E_kind -> Fmt.string out "kind"
     | E_type -> Fmt.string out "type"
     | E_var v -> Fmt.string out v.v_name
@@ -161,17 +163,19 @@ let expr_pp_ out (e:expr) : unit =
       end
     | E_lam ("", _ty, bod) ->
       Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp' _ty
-        (aux (k+1) (""::names)) bod
+        (loop (k+1) (""::names)) bod
     | E_lam (n, _ty, bod) ->
-      Fmt.fprintf out "(@[\\%s:@[%a@].@ %a@])" n pp' _ty (aux (k+1) (n::names)) bod
+      Fmt.fprintf out "(@[\\%s:@[%a@].@ %a@])" n pp' _ty (loop (k+1) (n::names)) bod
     | E_arrow(a,b) ->
       Fmt.fprintf out "@[%a@ -> %a@]" pp' a pp b
+    );
+    if !__pp_ids then Fmt.fprintf out "/%d" e.e_id;
 
-  and aux' k names out e = match e.e_view with
-    | E_kind | E_type | E_var _ | E_const (_, []) -> aux k names out e
-    | _ -> Fmt.fprintf out "(%a)" (aux k names) e
+  and loop' k names out e = match e.e_view with
+    | E_kind | E_type | E_var _ | E_const (_, []) -> loop k names out e
+    | _ -> Fmt.fprintf out "(%a)" (loop k names) e
   in
-  aux 0 [] out e
+  loop 0 [] out e
 
 module Expr_hashcons = Hashcons.Make(struct
     type t = expr
@@ -261,9 +265,10 @@ let id_select = Name.make "select"
 
 module Const = struct
   type t = const
-  let pp out c = Name.pp out c.c_name
-  let to_string = Fmt.to_string pp
-  let def_loc c = c.c_def_loc
+  let[@inline] pp out c = Name.pp out c.c_name
+  let[@inline] to_string = Fmt.to_string pp
+  let[@inline] def_loc c = c.c_def_loc
+  let[@inline] name c = c.c_name
   let[@inline] equal c1 c2 = Name.equal c1.c_name c2.c_name
 
   type args = const_args =
@@ -349,72 +354,6 @@ module Expr = struct
 
   let pp = expr_pp_
   let to_string = Fmt.to_string pp
-
-  let pp_with (not:Notation.t) out (e:t) : unit =
-    (* @param p current precedence
-       @param k depth of DB indices
-       @param names optional name for each DB index
-    *)
-    let rec loop p k names out e : unit =
-      let pp = loop p k names in
-      let pp0 = loop 0 k names in
-      let pp' p' out e =
-        wrap_ p p' out @@ fun p -> loop p k names out e
-      in
-      match e.e_view with
-      | E_kind -> Fmt.string out "kind"
-      | E_type -> Fmt.string out "type"
-      | E_var v -> Fmt.string out v.v_name
-      (* | E_var v -> Fmt.fprintf out "(@[%s : %a@])" v.v_name pp v.v_ty *)
-      | E_bound_var v ->
-        let idx = v.bv_idx in
-        begin match CCList.nth_opt names idx with
-          | Some n when n<>"" -> Fmt.string out n
-          | _ ->
-            if idx<k then Fmt.fprintf out "x_%d" (k-idx-1)
-            else Fmt.fprintf out "%%db_%d" (idx-k)
-        end
-      | E_const (c,[]) -> Name.pp out c.c_name
-      | E_const (c,args) ->
-        Fmt.fprintf out "(@[%a@ %a@])" Name.pp c.c_name (pp_list (pp' 1)) args
-      | E_app _ ->
-        let f, args = unfold_app e in
-        let default() =
-          Fmt.fprintf out "@[%a@ %a@]" (pp' (p+1)) f (pp_list (pp' (p+1))) args
-        in
-        begin match f.e_view, args with
-          | E_const (c, [_]), [a;b] when Name.equal_str c.c_name "=" ->
-            Fmt.fprintf out "@[%a@ = %a@]" (pp' 16) a (pp' 16) b
-          | E_const (c,_), _::_ ->
-            begin match Notation.find not (c.c_name:>string), args with
-              | Some (Fixity.F_infix p'), [a;b] ->
-                wrap_ p p' out @@ fun p ->
-                Fmt.fprintf out "@[%a@ %a %a@]" (pp' p) a Name.pp c.c_name (pp' p) b
-              | _ -> default()
-            end
-          | _ -> default()
-        end
-      | E_lam ("", _ty, bod) ->
-        Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp0 _ty
-          (loop 0 (k+1) (""::names)) bod
-      | E_lam (n, _ty, bod) ->
-        Fmt.fprintf out "(@[\\%s:@[%a@].@ %a@])" n pp0 _ty
-          (loop 0 (k+1) (n::names)) bod
-      | E_arrow(a,b) ->
-        Fmt.fprintf out "@[%a@ -> %a@]" (pp' (p+1)) a pp b
-    (* wrap in () if [p>p']; call [k (max p p')] to print the expr *)
-    and wrap_ p p' out k =
-      if p>=p' then (
-        Fmt.fprintf out "(@[";
-        k p;
-        Fmt.fprintf out "@])";
-      ) else k p'
-    in
-    loop 0 0 [] out e
-
-
-
-  let to_string_with not e = Fmt.to_string (pp_with not) e
 
   let compare = expr_compare
   let db_depth = expr_db_depth

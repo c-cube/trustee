@@ -7,6 +7,7 @@
 
 open Sigs
 
+module K = Kernel
 type fixity = Fixity.t
 type t
 
@@ -16,7 +17,9 @@ val empty : t
    names like Data.Bool./\ and print as `\land` or `∧` *)
 
 val find : t -> string -> fixity option
+val find_name : t -> K.Name.t -> fixity option
 val find_or_default : t -> string -> fixity
+val find_name_or_default : t -> K.Name.t -> fixity
 
 val declare : string -> fixity -> t -> t
 
@@ -40,3 +43,9 @@ end
 (** ## HOL ## *)
 
 val empty_hol : t
+
+
+(** {3 Print Exprs} *)
+
+val pp_expr : t -> K.Expr.t Fmt.printer
+
