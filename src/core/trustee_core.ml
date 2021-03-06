@@ -14,6 +14,7 @@ module Fixity = Fixity
 module Queryable = Queryable
 module Tok_stream = Tok_stream
 module Unif = Unif
+module Notation = Notation
 
 module Expr = Kernel.Expr
 module Thm = Kernel.Thm

@@ -69,6 +69,7 @@ type subst = (var * expr) list
 type typing_state = {
   ctx: K.Ctx.t;
   mutable fvars: var Str_map.t;
+  mutable notation: Notation.t;
   mutable ty_env: ty_env;
   mutable cur_file: string;
   mutable gensym: int;
@@ -659,6 +660,9 @@ module Ty_env = struct
     | None ->
       None (* TODO: lookup in locally defined rules *)
 
+  let find_const self name : K.const A.with_loc option =
+    Str_map.get name self.env_consts
+
   let find_thm self name : K.Thm.t A.with_loc option =
     Str_map.get name self.env_theorems
 
@@ -733,8 +737,7 @@ end
 
     This environment is (mostly) functional, and is used to handle
     scoping and to map names into constants and expressions and their type.
-    *)
-
+*)
 module Typing_state = struct
   type t = typing_state
 
@@ -782,6 +785,7 @@ module Typing_state = struct
       gensym=0;
       ty_env;
       fvars=Str_map.empty;
+      notation=Notation.empty_hol;
       to_gen=[];
     } in
     env
@@ -1150,9 +1154,8 @@ module Ty_infer = struct
           let b = inf_rec_ bv b in
           unif_exn_ (Expr.ty a) (Expr.ty b);
           Expr.eq a b
-        | A.Const {c} ->
-          (* convert directly into a proper kernel constant *)
-          infer_const_ st c ~loc
+        | A.K_expr e -> Expr.of_k_expr ~loc e
+        | A.K_const c -> infer_const_ ~loc st c
         | A.App (f,a) ->
           let f = inf_rec_ bv f in
           let a = inf_rec_ bv a in
@@ -1177,8 +1180,8 @@ module Ty_infer = struct
           in
           let bod = inf_rec_ bv bod in
           Expr.lambda_l ~loc vars bod
-        | A.Bind { c; c_loc; vars; body } ->
-          let f = infer_const_ st ~loc:c_loc c in
+        | A.Bind { b; b_loc=_; vars; body } ->
+          let f = inf_rec_ bv b in
           Log.debugf 5 (fun k->k"binder: f=%a@ ty=%a" Expr.pp f Expr.pp (Expr.ty f));
           let bv, vars =
             CCList.fold_map
@@ -1213,29 +1216,19 @@ module Ty_infer = struct
 
     and infer_const_ ~loc env c : expr =
       (*Log.debugf 50 (fun k->k"infer-const %a at %a" A.Const.pp c Loc.pp loc);*)
-      let mk_c c =
-        let arity =
-          match K.Const.args c with
-          | K.Const.C_arity n -> n
-          | K.Const.C_ty_vars vs -> List.length vs
-        in
-        let args =
-          CCList.init arity
-            (fun _ ->
-               let ty, m = Expr.ty_meta ~loc env in
-               env.to_gen <- m :: env.to_gen;
-               ty)
-        in
-        Expr.const ~loc c args
+      let arity =
+        match K.Const.args c with
+        | K.Const.C_arity n -> n
+        | K.Const.C_ty_vars vs -> List.length vs
       in
-      begin match c with
-        | A.C_k_expr e -> Expr.of_k_expr ~loc e
-        | A.C_k_const c -> mk_c c
-        | A.C_local name ->
-          errorf
-            (fun k->k"cannot find constant `@[%a@]`@ at %a"
-                 A.Const.pp c Loc.pp loc)
-      end
+      let args =
+        CCList.init arity
+          (fun _ ->
+             let ty, m = Expr.ty_meta ~loc env in
+             env.to_gen <- m :: env.to_gen;
+             ty)
+      in
+      Expr.const ~loc c args
 
     and infer_ty_opt_ ~loc ?default bv ty : ty =
       match ty with
@@ -1628,13 +1621,13 @@ module Process_stmt = struct
           true
         | A.Top_fixity { name; fixity } ->
           let c =
-            match K.Ctx.find_const_by_name self.st.ctx name.A.view with
-            | Some c -> c
+            match Ty_env.find_const self.st.ty_env name.A.view with
+            | Some c -> c.A.view
             | None ->
               errorf (fun k->k"constant `%s` not in scope" name.A.view)
           in
           Index.add_q idx (name_with_def_as_q name.view ~loc:name.loc K.Const.pp c);
-          K.Const.set_fixity c fixity;
+          self.st.notation <- Notation.declare name.A.view fixity self.st.notation;
           true
         | A.Top_axiom {name; thm} ->
           let th = top_axiom_ self name.A.view thm in

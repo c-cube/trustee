@@ -306,17 +306,14 @@ end = struct
   type precedence = int
   type t = P_state.t
 
-  let fixity_ (self:t) (s:string) : K.fixity =
+  let fixity_ (self:t) (s:string) : Fixity.t =
     let module F = Fixity in
     match s with
     | "->" -> F.rassoc 100
     | "with" -> F.binder 1
     | "\\" -> F.binder 50
     | "=" -> F.infix 150
-    | _ ->
-      match A.Env.find_const self.env s with
-      | None -> F.normal
-      | Some (_,f) -> f
+    | _ -> A.Env.fixity self.env s
 
   (* parse an identifier *)
   let p_ident self : string * location =
@@ -327,26 +324,10 @@ end = struct
     | _, loc ->
       errorf (fun k->k"expected identifier at %a" Loc.pp loc)
 
-  let fresh_ =
-    let n = ref 0 in
-    fun ?(pre="a") () -> Printf.sprintf "_%s_%d" pre (incr n; !n)
-
   let expr_of_string_ (self:t) ~loc (s:string) : A.expr =
-    begin match s with
-      | "type" -> AE.type_
-      | "bool" -> AE.const ~loc (A.Env.bool self.env)
-      | "=" -> AE.const ~loc (A.Env.eq self.env)
-      | _ ->
-        match Str_tbl.find self.bindings s with
-        | u -> AE.var ~loc u
-        | exception Not_found ->
-          begin match A.Env.find_const self.env s with
-            | Some (c,_) -> AE.const ~loc c
-            | None ->
-              let ty = AE.ty_meta ~loc (fresh_ ()) in
-              AE.var ~loc (A.Var.make ~loc s (Some ty))
-          end
-    end
+    match Str_tbl.find self.bindings s with
+    | u -> AE.var ~loc u
+    | exception Not_found -> AE.var ~loc (A.Var.make ~loc s None)
 
   (* parse let bindings *)
   let rec p_bindings_ self : (A.var * AE.t) list =
@@ -416,14 +397,11 @@ end = struct
       let loc = AE.loc ty ++ loc in
       AE.var ~loc (A.Var.make ~loc s (Some ty))
     | _ ->
-      match A.Env.find_const self.env s with
-      | Some (c,_) -> AE.const ~loc c
-      | None ->
-        if s<>"" then (
-          expr_of_string_ ~loc self s
-        ) else (
-          errorf (fun k->k"unknown symbol `%s` at %a" s Loc.pp loc)
-        )
+      if s<>"" then (
+        expr_of_string_ ~loc self s
+      ) else (
+        errorf (fun k->k"unknown symbol `%s` at %a" s Loc.pp loc)
+      )
 
   and p_expr_atomic_ ~ty_expect (self:t) : AE.t =
     let t, loc_t = Lexer.S.cur self.lex in
@@ -464,12 +442,8 @@ end = struct
             | "\\" -> AE.lambda ~loc vars body
             | "with" -> AE.with_ ~loc vars body
             | _ ->
-              match A.Env.find_const self.env s with
-              | None ->
-                Log.debugf 5 (fun k->k"const: %s" s);
-                assert false
-              | Some (c,_) ->
-                AE.bind ~c_loc:loc_t ~loc c vars body
+              let b = AE.var ~loc:loc_t (A.Var.make ~loc:loc_t s None) in
+              AE.bind ~b_loc:loc_t ~loc b vars body
           end
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
           errorf (fun k->k
@@ -489,7 +463,7 @@ end = struct
     | QUESTION_MARK ->
       begin match self.q_args with
         | [] -> errorf (fun k->k"no interpolation arg at %a" Loc.pp loc_t)
-        | t :: tl -> self.q_args <- tl; AE.of_expr ~loc:loc_t t
+        | t :: tl -> self.q_args <- tl; AE.of_k_expr ~loc:loc_t t
       end
     | NUM _ ->
       errorf (fun k->k"TODO: parse numbers") (* TODO *)
@@ -824,7 +798,7 @@ module P_top = struct
     let name, loc_name = P_expr.p_ident self in
     eat_eq self EQDEF ~msg:"expect `:=` after the theorem's name";
     let e = P_expr.expr self
-        ~ty_expect:(AE.const ~loc (A.Env.bool self.env))
+        ~ty_expect:(A.Env.bool self.env)
     in
     eat_eq self BY ~msg:"expect `by` after the theorem's statement";
     let pr = P_proof.proof self in
@@ -833,8 +807,7 @@ module P_top = struct
 
   let p_goal ~loc self : _ =
     let e =
-      P_expr.expr self
-        ~ty_expect:(AE.const ~loc (A.Env.bool self.env))
+      P_expr.expr self ~ty_expect:(A.Env.bool self.env)
     in
     eat_eq self BY ~msg:"expect `by` after the goal's statement";
     let pr = P_proof.proof self in
@@ -945,7 +918,8 @@ let parse_top_l_process ?file ~env lex : _ list =
     match parse_top ~env lex with
     | None -> List.rev acc
     | Some st ->
-      A.Env.process env st;
+      (* FIXME: not needed anymore:
+         A.Env.process env st; *)
       aux (st::acc)
   in
   let l = aux [] in
@@ -955,19 +929,21 @@ let parse_top_l_process ?file ~env lex : _ list =
   in
   l
 
-let parse_expr_infer ?q_args ~env lex : Expr.t =
+let parse_expr_infer ?q_args ~ctx ~env lex : Expr.t =
   let e = parse_expr ?q_args ~env lex in
-  let ctx = A.Env.ctx env in
   let st = Type_ast.Typing_state.create ctx in
   let e = TA.Ty_infer.infer_expr st e in
   TA.Typing_state.generalize_ty_vars st;
   TA.Expr.to_k_expr ctx e
 
 (*$inject
+  open Sigs
+  let notation = Notation.Ref.of_notation Notation.empty_hol
+
   module E = K.Expr
   module Make() = struct
     let ctx = K.Ctx.create ()
-    let env = A.Env.create ctx
+    let env = A.Env.create ~fixity:(Notation.Ref.find_or_default notation) ()
     let bool = K.Expr.bool ctx
     let c_bool = K.Const.bool ctx
     let type_ = K.Expr.type_ ctx
@@ -998,10 +974,10 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     let q2 = new_const ctx "q2" (tau @-> tau @-> bool)
     let r2 = new_const ctx "r2" (tau @-> tau @-> bool)
     let forall = K.Expr.new_const ctx "!" [] ((tau @-> bool) @-> bool)
-    let () = K.Const.set_fixity forall (F_binder 10)
+    let() = Notation.Ref.declare notation "!" (F_binder 10)
     let plus = K.Expr.new_const ctx "+" [] (tau @-> tau @-> tau)
     let eq = K.Const.eq ctx
-    let () = K.Const.set_fixity plus (F_right_assoc 20)
+    let() = Notation.Ref.declare notation "+" (F_right_assoc 20)
 
     let of_str s = Syntax.parse_expr_infer ~env (Lexer.create ~file:"" s)
   end
@@ -1018,21 +994,22 @@ let parse_expr_infer ?q_args ~env lex : Expr.t =
     let let_ = let_ ~loc
     let ty_arrow = ty_arrow ~loc
     let eq = eq ~loc
-    let of_expr = of_expr ~loc
+    let of_expr = of_k_expr ~loc
     let b_forall vars (bod:AE.t) : AE.t =
-      AE.bind ~loc ~c_loc:loc (A.Const.of_const M.forall)
+      AE.bind ~loc ~b_loc:loc (AE.of_k_const ~loc M.forall)
         (List.map (fun (x,ty)-> A.Var.make ~loc x ty) vars) bod
-    let c x : t = AE.const ~loc (A.Const.of_const x)
+    let c x : t = AE.of_k_const ~loc x
     let (@->) a b = AE.ty_arrow ~loc a b
     let (@) a b = AE.app_l a b
   end
   open A
 
-  let parse_e s : K.Expr.t = Syntax.parse_expr_infer ~env:M.env (Lexer.create ~file:"" s)
+  let parse_e s : K.Expr.t =
+    Syntax.parse_expr_infer ~ctx:M.ctx ~env:M.env (Lexer.create ~file:"" s)
 *)
 
 (* test printer itself *)
-(*$= & ~printer:A.to_string ~cmp:(fun x y->A.to_string x=A.to_string y)
+(*$= & ~printer:Fmt.(to_string (within "`" "`" A.pp)) ~cmp:(fun x y->A.to_string x=A.to_string y)
   A.(v "f" @ [v "x"]) (A.of_str "(f x)")
   A.(v "f" @ [v "x"]) (A.of_str "f x")
   A.(b_forall ["x", None; "y", None] (c M.p1 @ [v "x"])) \

@@ -55,7 +55,7 @@ class trustee_server =
         ~(notify_back:Lsp_lwt.Jsonrpc2.notify_back) (d:DocumentUri.t) (content:string) =
       (* TODO: use penv/env from dependencies, if any, once we have import *)
 
-      let penv = PA.Env.create _ctx in
+      let penv = PA.Env.create () in
       let stmts =
         T.Syntax.parse_top_l_process
           ~file:d ~env:penv

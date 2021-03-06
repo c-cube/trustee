@@ -15,8 +15,7 @@ module Cat = struct
 
   let run args =
     Log.debugf 1 (fun k->k"cat files %a" (Fmt.Dump.(list string)) args);
-    let ctx = K.Ctx.create() in
-    let env = A.Env.create ctx in
+    let env = A.Env.create () in
     List.iter
       (fun file ->
          match CCIO.File.read file with
@@ -39,8 +38,8 @@ module Check = struct
 
   let run args =
     Log.debugf 1 (fun k->k"check files %a" (Fmt.Dump.(list string)) args);
+    let aenv = A.Env.create () in
     let ctx = K.Ctx.create() in
-    let aenv = A.Env.create ctx in
     let tyst = TA.Typing_state.create ctx in
     List.iter
       (fun file ->

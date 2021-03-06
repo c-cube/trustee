@@ -31,28 +31,22 @@ and var_kind =
 
 and binding = var * expr
 
-and const =
-  | C_local of string (* not resolved yet *)
-  | C_k_const of K.const
-  | C_k_expr of K.expr
-
 and view =
   | Type
   | Ty_arrow of ty * ty
   | Var of var
+  | K_const of K.const
+  | K_expr of K.expr
   | Meta of {
       name: string;
       ty: ty option;
     }
   | Wildcard
-  | Const of {
-      c: const;
-    }
   | App of expr * expr
   | Lambda of var list * expr
   | Bind of {
-      c: const;
-      c_loc: location;
+      b: expr;
+      b_loc: location;
       vars: var list;
       body: expr;
     }
@@ -78,7 +72,8 @@ let rec pp_ (p:_) out (e:expr) : unit =
     if p>1 then Fmt.char out '(';
     Fmt.fprintf out "%a@ -> %a" pp_atom_ a (pp_ p) b;
     if p>1 then Fmt.char out ')';
-  | Const {c;} -> pp_const out c
+  | K_const c -> K.Const.pp out c
+  | K_expr e -> K.Expr.pp out e
   | App _ ->
     let f, args = unfold_app e in
     if p>0 then Fmt.char out '(';
@@ -89,10 +84,10 @@ let rec pp_ (p:_) out (e:expr) : unit =
     if p>0 then Fmt.char out '(';
     Fmt.fprintf out "@[\\%a.@ %a@]" (pp_list pp_var_ty) vars (pp_ 0) bod;
     if p>0 then Fmt.char out ')';
-  | Bind {c; vars; body; c_loc=_} ->
+  | Bind {b; vars; body; b_loc=_} ->
     if p>0 then Fmt.char out '(';
     Fmt.fprintf out "@[%a %a.@ %a@]"
-      pp_const c (pp_list pp_var_ty) vars (pp_ 0) body;
+      (pp_ p) b (pp_list pp_var_ty) vars (pp_ 0) body;
     if p>0 then Fmt.char out ')';
   | With (vars,bod) ->
     if p>0 then Fmt.char out '(';
@@ -111,12 +106,6 @@ let rec pp_ (p:_) out (e:expr) : unit =
     Fmt.fprintf out "@[let %a in@ %a@]" (pp_list ~sep:" and " pp_b) bs (pp_ 0) bod;
     if p>0 then Fmt.char out ')';
 and pp_atom_ out e = pp_ max_int out e
-and pp_var out v = Fmt.string out v.v_name
-and pp_const out c =
-  match c with
-  | C_local s -> Fmt.string out s
-  | C_k_const c -> K.Const.pp out c
-  | C_k_expr e -> K.Expr.pp out e
 and pp_var_ty out (v:var) : unit =
   match v.v_ty with
   | None -> Fmt.string out v.v_name
@@ -134,14 +123,6 @@ module Var = struct
   let pp_with_ty = pp_var_ty
 end
 
-module Const = struct
-  type t = const
-  let pp = pp_const
-  let to_string = Fmt.to_string pp
-  let[@inline] of_const e = C_k_const e
-  let[@inline] of_expr e = C_k_expr e
-end
-
 module Expr = struct
   type t = expr
   let mk_ ?(loc=noloc) view : t = {view; loc}
@@ -157,16 +138,17 @@ module Expr = struct
   let ty_arrow ~loc a b : ty = mk_ ~loc (Ty_arrow (a,b))
 
   let var ~loc (v:var) : t = mk_ ~loc (Var v)
-  let const ~loc c : t = mk_ ~loc (Const {c})
-  let of_expr ~loc e : t = const ~loc (Const.of_expr e)
+  let var' ~loc v ty : t = var ~loc (Var.make ~loc v ty)
+  let of_k_expr ~loc e : t = mk_ ~loc (K_expr e)
+  let of_k_const ~loc c : t = mk_ ~loc (K_const c)
   let meta ~loc (s:string) ty : t = mk_ ~loc (Meta {ty; name=s})
   let app (f:t) (a:t) : t = mk_ ~loc:Loc.(f.loc ++ a.loc) (App (f,a))
   let rec app_l f l = match l with [] -> f | x::xs -> app_l (app f x) xs
   let let_ ~loc bs bod : t = mk_ ~loc (Let (bs, bod))
   let with_ ~loc vs bod : t = mk_ ~loc (With (vs, bod))
   let lambda ~loc vs bod : t = mk_ ~loc (Lambda (vs, bod))
-  let bind ~loc ~c_loc c vars body : t =
-    mk_ ~loc (Bind {c; c_loc; vars; body})
+  let bind ~loc ~b_loc b vars body : t =
+    mk_ ~loc (Bind {b; b_loc; vars; body})
   let eq ~loc a b : t =
     Log.debugf 6 (fun k->k"mk-eq loc=%a" Loc.pp loc);
     mk_ ~loc (Eq (a,b))
@@ -406,67 +388,37 @@ end
 
 module Env = struct
   type t = {
-    ctx: K.Ctx.t;
-    mutable consts: fixity Str_map.t;
+    fixity: (string -> fixity);
     mutable rules: Proof.rule_signature Str_map.t;
+    bool: expr;
+    eq: expr;
+    type_: expr;
   }
 
-  let create ctx : t =
-    let consts =
-      Str_map.empty
-        (* FIXME
-      |> Str_map.add "bool" (C_k_const (K.Const.bool ctx))
-      |> Str_map.add "=" (C_k_const (K.Const.eq ctx))
-      |> Str_map.add "select" (C_k_const (K.Const.select ctx))
-           *)
-    in
+  let create ?(fixity=fun _ -> Fixity.normal) () : t =
+    let type_ = Expr.var' ~loc:Loc.none "type" None in
     let self = {
-      ctx;
-      consts;
+      fixity;
       rules=Str_map.empty;
+      type_;
+      eq=Expr.var' ~loc:Loc.none "eq" None;
+      bool=Expr.var' ~loc:Loc.none "bool" (Some type_)
     } in
     self
 
-  let copy e : t = {e with consts=e.consts}
-  let ctx e = e.ctx
+  let copy e : t = e
+  let bool self = self.bool
+  let eq self = self.eq
+  let type_ self = self.type_
 
-  let declare self s : const =
-    let c = C_local s in
-    self.consts <- Str_map.add s Fixity.normal self.consts;
-    c
-
-  let declare' self s = ignore (declare self s : const)
-
-  let declare_fixity self s f =
-    self.consts <- Str_map.add s f self.consts
+  let fixity self s = self.fixity s
 
   let declare_rule self s r =
     self.rules <- Str_map.add s r self.rules
-
-  let find_const self s : _ option =
-    match Str_map.get s self.consts with
-    | Some f -> Some (C_local s, f)
-    | None ->
-      match K.Ctx.find_const_by_name self.ctx s with
-      | Some c -> Some (C_k_const c, K.Const.fixity c)
-      | None -> None
 
   let find_rule self s : _ option =
     match TyRule.find_builtin s with
     | Some r -> Some (TyRule.signature r)
     | None -> Str_map.get s self.rules
-
-  let process (self:t) (st:top_statement) : unit =
-    match st.view with
-    | Top_def {name; _} -> declare' self name.view
-    | Top_decl {name; _} -> declare' self name.view
-    | Top_fixity {name; fixity} ->
-      declare_fixity self name.view fixity
-    | Top_axiom _ | Top_goal _ | Top_theorem _ | Top_error _
-    | Top_enter_file _
-    | Top_show _ | Top_show_expr _ | Top_show_proof _ -> ()
-
-  let bool self : const = C_k_const (K.Const.bool self.ctx)
-  let eq self : const = C_k_const (K.Const.eq self.ctx)
 end
 

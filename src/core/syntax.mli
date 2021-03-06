@@ -67,6 +67,7 @@ val parse_top_l_process :
 
 val parse_expr_infer :
   ?q_args:K.Expr.t list ->
+  ctx:K.Ctx.t ->
   env:A.Env.t ->
   Lexer.t ->
   K.expr

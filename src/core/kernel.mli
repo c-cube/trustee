@@ -11,7 +11,6 @@ type ty_const = const
 type thm
 type theory
 
-type fixity = Fixity.t
 type location = Loc.t
 
 type var = {
@@ -40,8 +39,6 @@ module Const : sig
   include Sigs.EQ with type t := t
   include PP with type t := t
 
-  val fixity : t -> fixity
-  val set_fixity : t -> fixity -> unit
   val def_loc : t -> location option
 
   type args =
@@ -120,6 +117,9 @@ module Expr : sig
   include Sigs.HASH with type t := t
   include Sigs.COMPARE with type t := t
   include Sigs.PP with type t := t
+
+  val pp_with : Notation.t -> t Fmt.printer
+  val to_string_with : Notation.t -> t -> string
 
   val view : t -> view
   val ty : t -> ty option

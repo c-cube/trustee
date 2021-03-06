@@ -32,28 +32,22 @@ and var = {
   v_loc: location;
 }
 
-and const = private
-  | C_local of string (* not resolved yet *)
-  | C_k_const of K.const
-  | C_k_expr of K.expr
-
 and view =
   | Type
   | Ty_arrow of ty * ty
   | Var of var
+  | K_const of K.const
+  | K_expr of K.expr
   | Meta of {
       name: string;
       ty: ty option;
     }
   | Wildcard
-  | Const of {
-      c: const;
-    }
   | App of expr * expr
   | Lambda of var list * expr
   | Bind of {
-      c: const;
-      c_loc: location;
+      b: expr;
+      b_loc: location;
       vars: var list;
       body: expr;
     }
@@ -68,13 +62,6 @@ module Var : sig
   val make : ?kind:var_kind -> loc:location -> string -> ty option -> var
   include PP with type t := t
   val pp_with_ty : t Fmt.printer
-end
-
-module Const : sig
-  type t = const
-  include PP with type t := t
-  val of_const : K.Const.t -> t
-  val of_expr : K.Expr.t -> t
 end
 
 (** {2 Logical expressions} *)
@@ -93,8 +80,9 @@ module Expr : sig
   val ty_arrow : loc:location -> t -> t -> t
 
   val var : loc:location -> var -> t
-  val const : loc:location -> const -> t
-  val of_expr : loc:location -> K.Expr.t -> t
+  val var' : loc:location -> string -> t option -> t
+  val of_k_expr : loc:location -> K.expr -> t
+  val of_k_const : loc:location -> K.const -> t
   val meta : loc:location -> string -> ty option -> t
   val app : t -> t -> t
   val app_l : t -> t list -> t
@@ -102,8 +90,8 @@ module Expr : sig
   val with_ : loc:location -> var list -> t -> t
   val lambda : loc:location -> var list -> t -> t
   val bind :
-    loc:location -> c_loc:location ->
-    const -> var list -> t -> t
+    loc:location -> b_loc:location ->
+    expr -> var list -> t -> t
   val eq : loc:location -> t -> t -> t
   val wildcard : loc:location -> unit -> t
 end
@@ -305,23 +293,18 @@ end
 module Env : sig
   type t
 
-  val create : K.Ctx.t -> t
+  val create :
+    ?fixity:(string -> fixity) ->
+    unit -> t
+
   val copy : t -> t
-  val ctx : t -> K.Ctx.t
 
-  val declare : t -> string -> const
-  val declare' : t -> string -> unit
-  val declare_fixity : t -> string -> fixity -> unit
-
+  val fixity : t -> string -> fixity
   val declare_rule : t -> string -> Proof.rule_signature -> unit
-
-  val find_const : t -> string -> (const * fixity) option
   val find_rule: t -> string -> Proof.rule_signature option
 
-  val process : t -> Top_stmt.t -> unit
-  (** Process declaration/definition from the statement *)
-
-  val bool : t -> const
-  val eq : t -> const
+  val type_ : t -> expr
+  val bool : t -> expr
+  val eq : t -> expr
 end
 
