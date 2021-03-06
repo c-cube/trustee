@@ -265,7 +265,7 @@ let id_select = Name.make "select"
 module Const = struct
   type t = const
   let[@inline] pp out c = Name.pp out c.c_name
-  let[@inline] to_string = Fmt.to_string pp
+  let[@inline] to_string c = Fmt.to_string pp c
   let[@inline] def_loc c = c.c_def_loc
   let[@inline] name c = c.c_name
   let[@inline] equal c1 c2 = Name.equal c1.c_name c2.c_name
@@ -1330,6 +1330,7 @@ end
 module Theory = struct
   type t = theory
 
+  let pp_name out self = Name.pp out self.theory_name
   let pp out (self:t) : unit =
     let {theory_name=name; theory_ctx=_; theory_in_constants=inc;
          theory_in_theorems=inth; theory_defined_theorems=dth;
@@ -1388,14 +1389,52 @@ module Theory = struct
     end;
     self.theory_defined_theorems <- th :: self.theory_defined_theorems
 
-  let with_ ctx ~name f : t =
+  let mk_ ctx ~name : t = 
     let theory_name = Name.make name in
-    let self = {
-      theory_name; theory_ctx=ctx;
+    { theory_name; theory_ctx=ctx;
       theory_in_constants=Str_map.empty; theory_defined_constants=Str_map.empty;
       theory_in_theorems=[]; theory_defined_theorems=[]
-    } in
+    }
+
+  let with_ ctx ~name f : t =
+    let self = mk_ ctx ~name in
     f self;
+    self
+
+  (* check that all theories in [l] come from context [ctx] *)
+  let check_same_ctx_ ctx l =
+    List.iter
+      (fun th -> if th.theory_ctx != ctx
+        then errorf (fun k->k"theory `%a` comes from a different context" pp_name th))
+      l
+
+  let union_const_map_ ~what m1 m2 =
+    Str_map.union
+      (fun s c1 c2 ->
+         if not (Const.equal c1 c2) then (
+           errorf (fun k->k"incompatible %s constant `%s`: %a vs %a"
+                      what s Const.pp c1 Const.pp c2)
+         );
+         Some c1)
+      m1 m2
+
+  let union ctx ~name l : t =
+    check_same_ctx_ ctx l;
+    let self = mk_ ctx ~name in
+    List.iter
+      (fun th ->
+        self.theory_in_constants <-
+          union_const_map_ ~what:"assumed"
+            self.theory_in_constants th.theory_in_constants;
+        self.theory_defined_constants <-
+          union_const_map_ ~what:"defined"
+            self.theory_defined_constants th.theory_defined_constants;
+        self.theory_in_theorems <-
+          List.rev_append th.theory_in_theorems self.theory_in_theorems;
+        self.theory_defined_theorems <-
+          List.rev_append th.theory_defined_theorems self.theory_defined_theorems;
+      )
+      l;
     self
 
   let compose l th : t = assert false (* TODO *)

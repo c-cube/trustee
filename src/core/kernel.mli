@@ -360,6 +360,8 @@ module Theory : sig
   val instantiate : const Str_map.t -> t -> t
 
   val compose : t list -> t -> t
+
+  val union : ctx -> name:string -> t list -> t
 end
 
 (** {2 Context}
