@@ -7,4 +7,4 @@
 
 (rule
   (alias runtest)
-  (action (run ./run_tests.exe -ci true -runner sequential)))
+  (action (run ./run_tests.exe -ci false -runner sequential)))
