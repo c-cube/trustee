@@ -3,9 +3,10 @@ module T = Trustee_core
 
 module Log = T.Log
 module K = T.Kernel
-module PA = T.Parse_ast
-module TA = T.Type_ast
 module Loc = T.Loc
+module PA = Trustee_syntax.Parse_ast
+module TA = Trustee_syntax.Type_ast
+module Syntax = Trustee_syntax.Syntax
 
 open Lsp_lwt
 open Task.Infix
@@ -27,8 +28,8 @@ type parsed_buffer = {
 }
 
 let ident_under_pos ~file (s:string) (pos:T.Position.t) : (string * Loc.t) option =
-  let open T.Syntax in
-  let module Str = T.Tok_stream in
+  let open Syntax in
+  let module Str = Trustee_syntax.Tok_stream in
   let toks = Lexer.create ~file s in
   let rec find () =
     if Str.is_done toks then None
@@ -57,9 +58,9 @@ class trustee_server =
 
       let penv = PA.Env.create () in
       let stmts =
-        T.Syntax.parse_top_l_process
+        Syntax.parse_top_l_process
           ~file:d ~env:penv
-          (T.Syntax.Lexer.create ~file:d content)
+          (Syntax.Lexer.create ~file:d content)
       in
       Log.debugf 3 (fun k->k "for %s: parsed %d statements" d (List.length stmts));
 

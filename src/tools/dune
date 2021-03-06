@@ -5,5 +5,5 @@
   (public_name trustee_tk)
   (optional)
   (package trustee)
-  (libraries containers trustee.core trustee.opentheory)
+  (libraries containers trustee.core trustee.syntax trustee.opentheory)
   (flags :standard -warn-error -a+8 -open Trustee_core.Sigs))

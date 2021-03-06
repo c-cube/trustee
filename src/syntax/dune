@@ -1,0 +1,6 @@
+
+(library
+  (name trustee_syntax)
+  (public_name trustee.syntax)
+  (libraries trustee.core containers)
+  (flags :standard -warn-error -a+8 -open Trustee_core -open Trustee_core.Sigs))

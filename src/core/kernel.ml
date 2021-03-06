@@ -7,7 +7,6 @@ module H = CCHash
 let ctx_id_bits = 5
 let ctx_id_mask = (1 lsl ctx_id_bits) - 1
 
-type fixity = Fixity.t
 type location = Loc.t
 
 module Name : sig

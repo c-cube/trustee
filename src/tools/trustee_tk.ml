@@ -3,9 +3,9 @@ open Trustee_core.Sigs
 
 module Log = Trustee_core.Log
 module K = Trustee_core.Kernel
-module A = Trustee_core.Parse_ast
-module TA = Trustee_core.Type_ast
-module Syntax = Trustee_core.Syntax
+module A = Trustee_syntax.Parse_ast
+module TA = Trustee_syntax.Type_ast
+module Syntax = Trustee_syntax.Syntax
 module Loc = Trustee_core.Loc
 
 module Cat = struct

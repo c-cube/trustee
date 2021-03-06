@@ -1,6 +1,5 @@
 
 module K = Trustee_core.Kernel
-module Notation = Trustee_core.Notation
 module E = K.Expr
 
 open OUnit2
