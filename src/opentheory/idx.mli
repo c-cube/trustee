@@ -9,8 +9,9 @@ type path = string
 (** Results of listing a directory *)
 type t = {
   theories: (path * Thy_file.t) list;
-  (* TODO: interpretation files *)
-  by_name: Thy_file.t Str_tbl.t;
+  thy_by_name: Thy_file.t Str_tbl.t;
+  interps: (path * Interp_file.t) list;
+  interp_by_name: Interp_file.t Str_tbl.t;
   articles: path Str_tbl.t; (* basename -> path *)
   errors: (path * Trustee_error.t) list;
 }

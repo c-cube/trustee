@@ -6,10 +6,13 @@ module G = CCGraph
 module Log = Trustee_core.Log
 
 let print_all idx =
-  let {Idx.errors; theories; _} = idx in 
+  let {Idx.errors; theories; interps; _} = idx in 
   List.iter
     (fun (s,thy) -> Fmt.printf "%s: %s@." s thy.Thy_file.name)
     theories;
+  List.iter
+    (fun (s,int) -> Fmt.printf "interp %s (%d lines)@." s (Interp_file.size int))
+    interps;
   List.iter
     (fun (s,e) -> Fmt.printf "@{<Red>Error@} for %s: %a@." s Trustee_error.pp e)
     errors;
@@ -87,7 +90,7 @@ let unquote_str s : string =
   ) else s
 
 let check_ (idx:Idx.t) ~progress_bar ~names : unit =
-  let by_name = idx.Idx.by_name in
+  let by_name = idx.Idx.thy_by_name in
   let checked = Str_tbl.create 32 in
   let ctx = K.Ctx.create () in
   let vm = VM.create ~progress_bar ctx in
