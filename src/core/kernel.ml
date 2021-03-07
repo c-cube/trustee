@@ -285,6 +285,9 @@ module Const = struct
   let[@inline] select ctx = Lazy.force ctx.ctx_select_c
   let is_eq_to_bool c = Name.equal c.c_name id_bool
   let is_eq_to_eq c = Name.equal c.c_name id_bool
+
+  let[@inline] make_ ctx (c:t) : t =
+    Const_hashcons.hashcons ctx.ctx_consts c
 end
 
 module Var = struct
@@ -292,6 +295,7 @@ module Var = struct
 
   let[@inline] name v = v.v_name
   let[@inline] ty v = v.v_ty
+  let[@inline] map_ty v ~f = {v with v_ty=f v.v_ty}
   let make v_name v_ty : t = {v_name; v_ty}
   let makef fmt ty = Fmt.kasprintf (fun s->make s ty) fmt
   let equal = var_eq
@@ -453,9 +457,9 @@ module Expr = struct
   (* map immediate subterms *)
   let[@inline] map ctx ~f (e:t) : t =
     match view e with
-    | E_kind | E_type | E_const _ -> e
+    | E_kind | E_type | E_const (_,[]) -> e
     | _ ->
-      let ty = lazy (
+      let ty' = lazy (
         match e.e_ty with
         | lazy None -> None
         | lazy (Some ty) -> Some (f false ty)
@@ -464,7 +468,12 @@ module Expr = struct
         | E_var v ->
           let v_ty = f false v.v_ty in
           if v_ty == v.v_ty then e
-          else make_ ctx (E_var {v with v_ty}) ty
+          else make_ ctx (E_var {v with v_ty}) ty'
+        | E_const (c,args) ->
+          let args' = List.map (f false) args in
+          if List.for_all2 equal args args'
+          then e
+          else make_ ctx (E_const (c,args')) ty'
         | E_bound_var v ->
           let ty' = f false v.bv_ty in
           if v.bv_ty == ty' then e
@@ -473,16 +482,16 @@ module Expr = struct
           let hd' =  f false hd in
           let a' =  f false a in
           if a==a' && hd==hd' then e
-          else make_ ctx (E_app (f false hd, f false a)) ty
+          else make_ ctx (E_app (f false hd, f false a)) ty'
         | E_lam (n, tyv, bod) ->
           (* TODO: fast path *)
-          make_ ctx (E_lam (n, f false tyv, f true bod)) ty
+          make_ ctx (E_lam (n, f false tyv, f true bod)) ty'
         | E_arrow (a,b) ->
           let a' = f false a in
           let b' = f false b in
           if a==a' && b==b' then e
-          else make_ ctx (E_arrow (f false a, f false b)) ty
-        | E_kind | E_type | E_const _ -> assert false
+          else make_ ctx (E_arrow (f false a, f false b)) ty'
+        | E_kind | E_type -> assert false
       end
 
   exception IsSub
@@ -521,8 +530,7 @@ module Expr = struct
       c_name=name; c_def_id; c_ty=ty; c_args=args;
       c_def_loc=def_loc;
     } in
-    let c' = Const_hashcons.hashcons ctx.ctx_consts c in
-    c'
+    Const.make_ ctx c
 
   let new_const ctx ?def_loc name ty_vars ty : const =
     let fvars = free_vars ty in
@@ -1389,15 +1397,18 @@ module Theory = struct
     end;
     self.theory_defined_theorems <- th :: self.theory_defined_theorems
 
-  let mk_ ctx ~name : t = 
-    let theory_name = Name.make name in
-    { theory_name; theory_ctx=ctx;
+  let mk_ ctx ~name : t =
+    { theory_name=name; theory_ctx=ctx;
       theory_in_constants=Str_map.empty; theory_defined_constants=Str_map.empty;
       theory_in_theorems=[]; theory_defined_theorems=[]
     }
 
+  let mk_str_ ctx ~name : t =
+    let name = Name.make name in
+    mk_ ctx ~name
+
   let with_ ctx ~name f : t =
-    let self = mk_ ctx ~name in
+    let self = mk_str_ ctx ~name in
     f self;
     self
 
@@ -1420,7 +1431,7 @@ module Theory = struct
 
   let union ctx ~name l : t =
     check_same_ctx_ ctx l;
-    let self = mk_ ctx ~name in
+    let self = mk_str_ ctx ~name in
     List.iter
       (fun th ->
         self.theory_in_constants <-
@@ -1437,8 +1448,81 @@ module Theory = struct
       l;
     self
 
-  let compose l th : t = assert false (* TODO *)
-  let instantiate inst th : t = assert false (* TODO *)
+  (* interpretation: map some constants to other constants *)
+  type interpretation = const Str_map.t
+
+  (* instantiate one term *)
+  let rec inst_t_ ?(cache=Expr.Tbl.create 16) ctx ~(interp:interpretation) (e:expr) : expr =
+    let rec loop e =
+      match Expr.Tbl.find cache e with
+      | u -> u
+      | exception Not_found ->
+        let u =
+          match Expr.view e with
+          | E_var v -> Expr.var ctx (Var.map_ty v ~f:loop)
+          | E_const (c, args) ->
+            let args' = List.map loop args in
+            let c' =
+              try Str_map.find (c.c_name :> string) interp
+              with Not_found ->
+                (* type of [c] might change *)
+                inst_const_ ~cache ctx ~interp c
+            in
+            if Const.equal c c' && List.for_all2 Expr.equal args args'
+            then e
+            else Expr.const ctx c' args'
+          | _ ->
+            Expr.map ctx e ~f:(fun _ e' -> loop e')
+        in
+        Expr.Tbl.add cache e u;
+        u
+    in
+    loop e
+
+  and inst_const_ ?(cache=Expr.Tbl.create 16) ctx ~interp (c:const) : const =
+    let ty = inst_t_ ~cache ctx ~interp c.c_ty in
+    Const.make_ ctx {c with c_ty=ty}
+
+  let inst_constants_ ?(cache=Expr.Tbl.create 16) ctx ~interp (m:const Str_map.t)
+    : _ Str_map.t =
+    Str_map.to_iter m
+    |> Iter.map
+      (fun (s,c) ->
+         match Str_map.find s interp with
+         | exception Not_found ->
+           let c' = inst_const_ ~cache ctx ~interp c in
+           assert (Name.equal c.c_name c'.c_name);
+           s, c'
+         | c' -> (c'.c_name :> string), c')
+    |> Str_map.of_iter
+
+  (* instantiate a whole theorem *)
+  let inst_thm_ ?(cache=Expr.Tbl.create 16) ctx ~(interp:interpretation) (th:thm) : thm =
+    let hyps =
+      Expr.Set.to_iter th.th_hyps
+      |> Iter.map (inst_t_ ~cache ctx ~interp)
+      |> Expr.Set.of_iter
+    in
+    let concl = inst_t_ ~cache ctx ~interp th.th_concl in
+    Thm.make_ ctx hyps concl
+
+  let instantiate ~(interp:interpretation) th : t =
+    let {
+      theory_ctx=ctx; theory_name; theory_in_constants;
+      theory_in_theorems; theory_defined_constants; theory_defined_theorems} = th in
+    let cache = Expr.Tbl.create 16 in (* cache for instantiating *)
+    let th' = mk_ ctx ~name:theory_name in
+    th'.theory_in_constants <-
+      inst_constants_ ~cache ctx ~interp theory_in_constants;
+    th'.theory_defined_constants <-
+      inst_constants_ ~cache ctx ~interp theory_defined_constants;
+    th'.theory_in_theorems <-
+      List.map (inst_thm_ ~cache ctx ~interp) theory_in_theorems;
+    th'.theory_defined_theorems <-
+      List.map (inst_thm_ ~cache ctx ~interp) theory_defined_theorems;
+    th'
+
+  let compose ?(interp=Str_map.empty) l th : t = assert false (* TODO *)
 end
 
 (* ok def *)

@@ -1,6 +1,8 @@
 
 type path = string
 
+(* TODO: interpretations *)
+
 (** Results of listing a directory *)
 type t = {
   theories: (path * Thy_file.t) list;

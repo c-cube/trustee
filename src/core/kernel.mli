@@ -76,6 +76,7 @@ module Var : sig
   val ty : t -> ty
   val make : string -> ty -> t
   val makef : ('a, Format.formatter, unit, t) format4 -> ty -> 'a
+  val map_ty : t -> f:(ty -> ty) -> t
 
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
@@ -357,11 +358,30 @@ module Theory : sig
 
   (** {3 Composition} *)
 
-  val instantiate : const Str_map.t -> t -> t
+  type interpretation = const Str_map.t
 
-  val compose : t list -> t -> t
+  val instantiate :
+    interp:interpretation ->
+    t -> t
+  (** [instantiate ~interp theory] renames constants according to [interpr].
+      This can change the types of some terms if [interp] renames type constants. *)
+
+  val compose :
+    ?interp:interpretation ->
+    t list -> t -> t
+  (** [compose l theory], where [theory = Gamma |> Delta] proves [Delta]
+      under assumptions [Gamma], and where [l = [Gamma1 |> Delta1, …]]
+      is a list of theories, returns
+      [Gamma1, …, Gamma_n, Gamma \ {Delta1 U … U Delta_n} |> Delta].
+
+      In other words, it uses the theores proved in [l] to discharge some
+      of the assumptions in [theory], and adds assumptions of [l]
+      to the result instead.
+
+      @param interp if provided, instantiate theory with this interpretation first. *)
 
   val union : ctx -> name:string -> t list -> t
+  (** Union of several theories *)
 end
 
 (** {2 Context}
