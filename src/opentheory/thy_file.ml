@@ -6,6 +6,7 @@ type sub = {
   imports: string list;
   package: string option;
   article: string option;
+  interp: Interp_file.t; (* file + individual lines *)
 }
 
 type t = {
@@ -57,7 +58,7 @@ type item =
   | I_kv of string * string
   | I_sub of string * item list
 
-let parse : t P.t =
+let parse ~dir : t P.t =
   let open P.Infix in
 
   let pkey =
@@ -129,7 +130,31 @@ let parse : t P.t =
               CCList.find_map
                 (function (I_kv ("article",s)) -> Some s | _ -> None) l
             in
-            Some {sub_name; imports; article; package}
+            let interp =
+              CCList.flat_map
+                (function
+                  | I_kv ("interpret", s) ->
+                    begin match Interp_file.item_of_string s with
+                      | Error e -> raise (Trustee_error.E e)
+                      | Ok it -> [it]
+                    end
+                  | I_kv ("interpretation", path) ->
+                    let path = Util.unquote_str path in
+                    let path = Filename.concat dir path in
+                    let content =
+                      try CCIO.File.read_exn path
+                      with _ -> errorf (fun k->k"cannot read interp. file '%s'" path)
+                    in
+                    begin match Interp_file.of_string content with
+                      | Ok l -> l
+                      | Error e ->
+                        errorf ~src:(Trustee_error.E e)
+                          (fun k->k"trying to read interp. file '%s'" path)
+                    end
+                  | _ -> [])
+                l
+            in
+            Some {sub_name; imports; interp; article; package}
         )
       items
     in
@@ -140,8 +165,8 @@ let parse : t P.t =
     P.return {name; version; meta; subs; main; requires}
   with Failure s -> P.fail s
 
-let of_string s =
-  match P.parse_string parse s with
+let of_string ~dir s =
+  match P.parse_string (parse ~dir) s with
   | Ok x -> Ok x
   | Error e -> Error (Trustee_error.mk e)
 

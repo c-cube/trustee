@@ -3,18 +3,16 @@ type item =
   | I_ty of string * string
   | I_const of string * string
 
-type t = {
-  items: item list;
-}
+type t = item list
 
-let size self = List.length self.items
+let size self = List.length self
 
 let pp_item out = function
   | I_ty (s,s2) -> Fmt.fprintf out "type %S as %S" s s2
   | I_const (s,s2) -> Fmt.fprintf out "const %S as %S" s s2
 
 let pp out self =
-  Fmt.fprintf out "@[<v>%a@]" (Fmt.list pp_item) self.items
+  Fmt.fprintf out "@[<v>%a@]" (Fmt.list pp_item) self
 
 
 module P = CCParse
@@ -50,7 +48,11 @@ let parse : _ P.t =
   ((try_ eoi *> return [])
    <|>
    (many parse_item <* eoi))
-  >|= fun items -> {items}
+
+let item_of_string s =
+  match P.parse_string parse_item s with
+  | Ok x -> Ok x
+  | Error e -> Error (Trustee_error.mk e)
 
 let of_string s =
   match P.parse_string parse s with

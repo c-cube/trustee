@@ -31,9 +31,10 @@ let list_dir dir : t =
   let module E = Trustee_error in
 
   let parse_thy file =
+    let dir = Filename.dirname file in
     try
       let s = CCIO.File.read_exn file in
-      match Thy_file.of_string s with
+      match Thy_file.of_string ~dir s with
       | Ok thy ->
         Str_tbl.add thy_by_name thy.name thy;
         Str_tbl.add thy_by_name (Thy_file.versioned_name thy) thy;

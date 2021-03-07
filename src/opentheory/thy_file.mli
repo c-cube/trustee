@@ -6,6 +6,7 @@ type sub = {
   imports: string list;
   package: string option;
   article: string option;
+  interp: Interp_file.t; (* file + individual lines *)
 }
 
 type t = {
@@ -34,6 +35,6 @@ val sub_packages : t -> string list
 
 module P = CCParse
 
-val parse : t P.t
-val of_string : string -> t or_error
+val parse : dir:string -> t P.t
+val of_string : dir:string -> string -> t or_error
 
