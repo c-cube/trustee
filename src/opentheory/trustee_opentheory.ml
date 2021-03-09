@@ -12,3 +12,4 @@ module Thy_file = Thy_file
 module Idx = Idx
 module Interp_file = Interp_file
 module Util = Util
+module Eval = Eval

@@ -96,22 +96,22 @@ let pp_stats out self : unit =
 let to_string = Fmt.to_string pp
 
 (* a rule associated with a keyword *)
-type rule = t -> unit
+type rule = K.Theory.t -> t -> unit
 
-let version : rule = fun self ->
+let version : rule = fun _ self ->
   match self.stack with
   | O_int (5 | 6) :: st -> self.stack <- st
   | O_int n :: _ -> errorf (fun k->k"expected version to be '5' or '6', not %d" n)
   | _ -> errorf (fun k->k"version: expected an integer")
 
-let absTerm : rule = fun self ->
+let absTerm : rule = fun _ self ->
   match self.stack with
   | O_term b :: O_var v :: st ->
     let t = K.Expr.lambda self.ctx v b in
     self.stack <- O_term t :: st;
   | _ -> errorf (fun k->k"cannot apply absTerm@ in state %a" pp_vm self)
 
-let absThm : rule = fun self ->
+let absThm : rule = fun _ self ->
   self.n_absThm <- 1 + self.n_absThm;
   match self.stack with
   | O_thm th :: O_var v :: st ->
@@ -119,7 +119,7 @@ let absThm : rule = fun self ->
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply absThm@ in state %a" pp_vm self)
 
-let typeOp : rule = fun self ->
+let typeOp : rule = fun _ self ->
   match self.stack with
   | O_name n :: st ->
     let f_op = match n with
@@ -141,29 +141,29 @@ let typeOp : rule = fun self ->
     self.stack <- O_ty_op op :: st;
   | _ -> errorf (fun k->k"cannot apply typeOp@ in state %a" pp_vm self)
 
-let def : rule = fun self ->
+let def : rule = fun _ self ->
   match self.stack with
   | O_int i :: x :: st ->
     self.stack <- x :: st;
     Hashtbl.replace self.dict i x
   | _ -> errorf (fun k->k"cannot apply def@ in state %a" pp_vm self)
 
-let varType : rule = fun self ->
+let varType : rule = fun _ self ->
   match self.stack with
   | O_name {Name.path=[]; name=s} :: st ->
     let v = K.Var.make s (K.Expr.type_ self.ctx) in
     self.stack <- O_ty (K.Expr.var self.ctx v) :: st;
   | _ -> errorf (fun k->k"cannot apply varType@ in state %a" pp_vm self)
 
-let nil : rule = fun self -> self.stack <- O_list [] :: self.stack
+let nil : rule = fun _ self -> self.stack <- O_list [] :: self.stack
 
-let cons : rule = fun self ->
+let cons : rule = fun _ self ->
   match self.stack with
   | O_list l :: o :: st ->
     self.stack <- O_list (o::l) :: st
   | _ -> errorf (fun k->k"cannot apply cons@ in state %a" pp_vm self)
 
-let opType : rule = fun self ->
+let opType : rule = fun _ self ->
   match self.stack with
   | O_list l :: O_ty_op (_,op) :: st ->
     let args = l |> List.map (function
@@ -174,14 +174,14 @@ let opType : rule = fun self ->
     self.stack <- O_ty ty :: st;
   | _ -> errorf (fun k->k"cannot apply typeOp@ in state %a" pp_vm self)
 
-let var : rule = fun self ->
+let var : rule = fun _ self ->
   match self.stack with
   | O_ty ty :: O_name {Name.path=[];name=n} :: st ->
     let v = K.Var.make n ty in
     self.stack <- O_var v :: st
   | _ -> errorf (fun k->k"cannot apply var@ in state %a" pp_vm self)
 
-let const : rule = fun self ->
+let const : rule = fun _ self ->
   match self.stack with
   | O_name n :: st ->
     let f_op = match n with
@@ -205,21 +205,21 @@ let const : rule = fun self ->
     self.stack <- O_const (n, f_op) :: st
   | _ -> errorf (fun k->k"cannot apply const@ in state %a" pp_vm self)
 
-let ref_ : rule = fun self ->
+let ref_ : rule = fun _ self ->
   match self.stack with
   | O_int i :: st ->
     (try self.stack <- Hashtbl.find self.dict i :: st
      with Not_found -> errorf (fun k->k"undefined ref %d" i))
   | _ -> errorf (fun k->k"cannot apply ref@ in state %a" pp_vm self)
 
-let constTerm : rule = fun self ->
+let constTerm : rule = fun _ self ->
   match self.stack with
   | O_ty ty :: O_const (_,c) :: st ->
     let t = c self.ctx ty in
     self.stack <- O_term t :: st
   | _ -> errorf (fun k->k"cannot apply constTerm@ in state %a" pp_vm self)
 
-let varTerm : rule = fun self ->
+let varTerm : rule = fun _ self ->
   match self.stack with
   | O_var v :: st ->
     let t = K.Expr.var self.ctx v in
@@ -227,7 +227,7 @@ let varTerm : rule = fun self ->
   | _ -> errorf (fun k->k"cannot apply varTerm@ in state %a" pp_vm self)
 
 (* FIXME: move polymorphic apply/congr to the kernel itself? (also implement it for congr) *)
-let appTerm : rule = fun self ->
+let appTerm : rule = fun _ self ->
   match self.stack with
   | O_term a :: O_term f :: st ->
     (*Log.debugf 10 (fun k->k"appterm `%a : %a`@ to `%a : %a`"
@@ -239,9 +239,10 @@ let appTerm : rule = fun self ->
 
 (* create a defined constant, with local type inference since OT
    gives us only the expected type of the constant *)
-let mk_defined_const_ c =
+let mk_defined_const_ ~theory c =
   Log.debugf 1 (fun k->k"mk defined const %a@ :args %a" K.Const.pp c
                K.Const.pp_args (K.Const.args c));
+  K.Theory.add_const theory c;
   match K.Const.args c with
   | K.Const.C_arity _ -> errorf (fun k->k"not a term const: %a" K.Const.pp c)
   | K.Const.C_ty_vars [] ->
@@ -274,7 +275,7 @@ let define_named_ ctx n t : K.Thm.t * K.const =
 
 let _ALLOW_REDEF = true (* FIXME *)
 
-let defineConst : rule = fun self ->
+let defineConst : rule = fun theory self ->
   match self.stack with
   | O_term t :: O_name n :: st ->
     if not _ALLOW_REDEF &&
@@ -283,12 +284,12 @@ let defineConst : rule = fun self ->
     );
     let th, c = define_named_ self.ctx n t in
     self.art <- {self.art with Article.consts=c :: self.art.Article.consts};
-    let c = mk_defined_const_ c in
+    let c = mk_defined_const_ ~theory c in
     Hashtbl.add self.named_consts n (n,c);
     self.stack <- O_thm th :: O_const (n, c) :: st
   | _ -> errorf (fun k->k"cannot apply defineConst@ in state %a" pp_vm self)
 
-let defineConstList : rule = fun self ->
+let defineConstList : rule = fun theory self ->
   match self.stack with
   | O_thm th :: O_list l :: st ->
     let hyps = K.Thm.hyps_l th in
@@ -343,7 +344,7 @@ let defineConstList : rule = fun self ->
 
           let th, c = define_named_ self.ctx n rhs in
           self.art <- {self.art with Article.consts=c :: self.art.Article.consts};
-          let c' = (n,mk_defined_const_ c) in
+          let c' = (n,mk_defined_const_ ~theory c) in
           Hashtbl.add self.named_consts n c';
 
           (* add [v := c] to the substitution *)
@@ -366,12 +367,12 @@ let defineConstList : rule = fun self ->
     self.stack <- O_thm th :: O_list (List.map (fun c->O_const c) consts) :: st
   | _ -> errorf (fun k->k"cannot apply defineConst@ in state %a" pp_vm self)
 
-let pop : rule = fun self ->
+let pop : rule = fun _ self ->
   match self.stack with
   | _ :: st -> self.stack <- st
   | [] -> errorf (fun k->k"cannot apply pop@ in state %a" pp_vm self)
 
-let remove : rule = fun self ->
+let remove : rule = fun _ self ->
   match self.stack with
   | O_int i :: st ->
     let o =
@@ -382,36 +383,38 @@ let remove : rule = fun self ->
     self.stack <- o :: st
   | _ -> errorf (fun k->k"cannot apply pop@ in state %a" pp_vm self)
 
-let thm : rule = fun self ->
+let thm : rule = fun theory self ->
   match self.stack with
   | O_term _ :: O_list _ :: O_thm th :: st ->
     self.stack <- st; (* note: we skip the alpha renaming because of DB indices *)
+    K.Theory.add_theorem theory th;
     self.art <- {self.art with Article.theorems = th :: self.art.Article.theorems};
   | _ -> errorf (fun k->k"cannot apply thm@ in state %a" pp_vm self)
 
-let refl : rule = fun self ->
+let refl : rule = fun _ self ->
   match self.stack with
   | O_term t :: st ->
     let th = K.Thm.refl self.ctx t in
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply refl@ in state %a" pp_vm self)
 
-let betaConv : rule = fun self ->
+let betaConv : rule = fun _ self ->
   match self.stack with
   | O_term t :: st ->
     let th = K.Thm.beta_conv self.ctx t in
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply betaConv@ in state %a" pp_vm self)
 
-let axiom : rule = fun self ->
+let axiom : rule = fun theory self ->
   match self.stack with
   | O_term t :: O_list _ :: st ->
     (* we ignore the renaming list *)
-    let th = K.Thm.axiom self.ctx t in
+    (* assumption of the theory *)
+    let th = K.Theory.assume theory [] t in
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply axiom@ in state %a" pp_vm self)
 
-let appThm : rule = fun self ->
+let appThm : rule = fun _ self ->
   self.n_appThm <- 1 + self.n_appThm;
   match self.stack with
   | O_thm a :: O_thm f :: st ->
@@ -420,21 +423,21 @@ let appThm : rule = fun self ->
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply appThm@ in state %a" pp_vm self)
 
-let eqMp : rule = fun self ->
+let eqMp : rule = fun _ self ->
   match self.stack with
   | O_thm a :: O_thm f :: st ->
     let th = K.Thm.bool_eq self.ctx a f in
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply eqMp@ in state %a" pp_vm self)
 
-let sym : rule = fun self ->
+let sym : rule = fun _ self ->
   match self.stack with
   | O_thm th :: st ->
     let th = K.Thm.sym self.ctx th in
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply sym@ in state %a" pp_vm self)
 
-let subst : rule = fun self ->
+let subst : rule = fun _ self ->
   match self.stack with
   | O_thm th :: O_list [O_list tys; O_list terms] :: st ->
     let subst =
@@ -461,28 +464,28 @@ let subst : rule = fun self ->
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply subst@ in state %a" pp_vm self)
 
-let assume : rule = fun self ->
+let assume : rule = fun _ self ->
   match self.stack with
   | O_term e :: st ->
     let th = K.Thm.assume self.ctx e in
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply assume@ in state %a" pp_vm self)
 
-let deductAntisym : rule = fun self ->
+let deductAntisym : rule = fun _ self ->
   match self.stack with
   | O_thm th1 :: O_thm th2 :: st ->
     let th = K.Thm.bool_eq_intro self.ctx th2 th1 in
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply deductAntisym@ in state %a" pp_vm self)
 
-let trans : rule = fun self ->
+let trans : rule = fun _ self ->
   match self.stack with
   | O_thm th1 :: O_thm th2 :: st ->
     let th = K.Thm.trans self.ctx th2 th1 in
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply trans@ in state %a" pp_vm self)
 
-let proveHyp : rule = fun self ->
+let proveHyp : rule = fun _ self ->
   self.n_cut <- 1 + self.n_cut;
   match self.stack with
   | O_thm th2 :: O_thm th1 :: st ->
@@ -492,8 +495,9 @@ let proveHyp : rule = fun self ->
 
 (* create a defined constant, with local type inference since OT
    gives us only the expected type of the constant *)
-let mk_defined_ty_ c =
+let mk_defined_ty_ ~theory c =
   Log.debugf 1 (fun k->k"mk type const %a" K.Const.pp c);
+  K.Theory.add_const theory c;
   match K.Const.args c with
   | K.Const.C_arity 0 ->
     (* non-polymorphic constant *)
@@ -503,7 +507,7 @@ let mk_defined_ty_ c =
   | K.Const.C_ty_vars _ ->
     errorf (fun k->k"not a type const: %a" K.Const.pp c)
 
-let defineTypeOp : rule = fun self ->
+let defineTypeOp : rule = fun theory self ->
   match self.stack with
   | O_thm th :: O_list names :: O_name rep :: O_name abs :: O_name tau :: st ->
     (* TODO: check names? *)
@@ -521,14 +525,14 @@ let defineTypeOp : rule = fun self ->
         ~repr:(Name.to_string rep) ~thm_inhabited:th
         ()
     in
-    let c_abs = (abs, mk_defined_const_ def.c_abs) in
+    let c_abs = (abs, mk_defined_const_ ~theory def.c_abs) in
     self.art <- {self.art with Article.consts=def.c_abs :: self.art.Article.consts};
     Hashtbl.add self.named_consts abs c_abs;
     self.art <- {self.art with Article.consts=def.c_repr :: self.art.Article.consts};
-    let c_rep = (rep, mk_defined_const_ def.c_repr) in
+    let c_rep = (rep, mk_defined_const_ ~theory def.c_repr) in
     Hashtbl.add self.named_consts rep c_rep;
     self.art <- {self.art with Article.consts=def.tau :: self.art.Article.consts};
-    let c_tau = (tau, mk_defined_ty_ def.tau) in
+    let c_tau = (tau, mk_defined_ty_ ~theory def.tau) in
     Hashtbl.add self.named_tys tau c_tau;
 
     (* need to abstract over the theorems *)
@@ -546,7 +550,7 @@ let defineTypeOp : rule = fun self ->
       st;
   | _ -> errorf (fun k->k"cannot apply defineTypeOp@ in state %a" pp_vm self)
 
-let hdTl : rule = fun self ->
+let hdTl : rule = fun _ self ->
   match self.stack with
   | O_list (x::tl) :: st ->
     self.stack <- O_list tl :: x :: st;
@@ -612,12 +616,12 @@ let create ?(progress_bar=false) ctx : t =
 let has_empty_stack self =
   match self.stack with [] -> true | _ -> false
 
-let parse_and_check_art_exn (self:t) (input:input) : Article.t =
-  Log.debug 5 "(open-theory.parse-and-check-art)";
+let parse_and_check_art_exn ~name (self:t) (input:input) : K.Theory.t * Article.t =
+  Log.debugf 5 (fun k->k"(@[open-theory.parse-and-check-art@ :name %s@])" name);
   let line_ = ref 0 in
 
   (* how to parse one line *)
-  let process_line (s:string) : unit =
+  let process_line (theory:K.Theory.t) (s:string) : unit =
     incr line_;
 
     let s = String.trim s in
@@ -643,17 +647,20 @@ let parse_and_check_art_exn (self:t) (input:input) : Article.t =
         self.stack <- O_name n :: self.stack
       | _ ->
         begin match Str_map.find s rules with
-          | r -> r self
+          | r -> r theory self
           | exception Not_found ->
             errorf (fun k->k"unknown rule '%s' at line %d" s !line_)
         end
     end;
   in
-  input.iter_lines process_line;
+  let th =
+    K.Theory.with_ self.ctx ~name @@ fun th ->
+    input.iter_lines (process_line th);
+  in
   let art = article self in
   self.art <- Article.empty; (* clear article for next file, if any *)
-  art
+  th, art
 
-let parse_and_check_art self i =
-  try Ok (parse_and_check_art_exn self i)
+let parse_and_check_art ~name self i =
+  try Ok (parse_and_check_art_exn ~name self i)
   with Trustee_error.E e -> Error e

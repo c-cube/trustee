@@ -5,7 +5,9 @@ type item =
 
 type t = item list
 
+let is_empty = CCList.is_empty
 let size self = List.length self
+let items_iter self = Iter.of_list self
 
 let pp_item out = function
   | I_ty (s,s2) -> Fmt.fprintf out "type %S as %S" s s2

@@ -11,6 +11,8 @@ type item =
 type t = item list
 
 val size : t -> int
+val items_iter : t -> item Iter.t
+val is_empty : t -> bool
 
 val pp : t Fmt.printer
 

@@ -26,8 +26,10 @@ val clear_dict : t -> unit
 val has_empty_stack : t -> bool
 
 val parse_and_check_art_exn :
-  t -> input -> Article.t
+  name:string ->
+  t -> input -> K.Theory.t * Article.t
 
 val parse_and_check_art :
-  t -> input -> Article.t or_error
+  name:string ->
+  t -> input -> (K.Theory.t * Article.t) or_error
 

@@ -89,8 +89,8 @@ module OT_check = struct
         (fun file ->
            CCIO.with_in file (fun ic ->
                let input = VM.Input.of_chan ic in
-               match VM.parse_and_check_art vm input with
-               | Ok art ->
+               match VM.parse_and_check_art ~name:(Filename.basename file) vm input with
+               | Ok (_, art) ->
                  Fmt.printf "; parsed and validated '%s'@." file;
                  if !cat_ then (
                    Fmt.printf "%a@." Article.pp art;
