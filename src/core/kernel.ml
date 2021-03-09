@@ -1344,12 +1344,12 @@ module Theory = struct
          theory_in_theorems=inth; theory_defined_theorems=dth;
          theory_defined_constants=dc; } = self in
     Fmt.fprintf out "(@[<v1>theory %a" Name.pp name;
-    Str_map.iter (fun _ c -> Fmt.fprintf out "(@[in-const@ %a@])" Const.pp c)
+    Str_map.iter (fun _ c -> Fmt.fprintf out "@,(@[in-const@ `%a`@])" Const.pp c)
       inc;
-    List.iter (fun th -> Fmt.fprintf out "(@[in-thm@ %a@])" Thm.pp th) inth;
+    List.iter (fun th -> Fmt.fprintf out "@,(@[in-thm@ %a@])" Thm.pp_quoted th) inth;
     Str_map.iter
-      (fun _ c -> Fmt.fprintf out "(@[defined-const@ %a@])" Const.pp c) dc;
-    List.iter (fun th -> Fmt.fprintf out "(@[defined-thm@ %a@])" Thm.pp th) dth;
+      (fun _ c -> Fmt.fprintf out "@,(@[defined-const@ `%a`@])" Const.pp c) dc;
+    List.iter (fun th -> Fmt.fprintf out "@,(@[defined-thm@ %a@])" Thm.pp_quoted th) dth;
     Fmt.fprintf out "@])";
     ()
 
@@ -1449,10 +1449,11 @@ module Theory = struct
     self
 
   (* interpretation: map some constants to other constants *)
-  type interpretation = const Str_map.t
+  type interpretation = string Str_map.t
 
   (* instantiate one term *)
-  let rec inst_t_ ?(cache=Expr.Tbl.create 16) ctx ~(interp:interpretation) (e:expr) : expr =
+  let rec inst_t_ ?(cache=Expr.Tbl.create 16)
+      ctx ~(interp:interpretation) (e:expr) : expr =
     let rec loop e =
       match Expr.Tbl.find cache e with
       | u -> u
@@ -1463,7 +1464,9 @@ module Theory = struct
           | E_const (c, args) ->
             let args' = List.map loop args in
             let c' =
-              try Str_map.find (c.c_name :> string) interp
+              try
+                let name' = Str_map.find (c.c_name :> string) interp in
+                Const.make_ ctx {c with c_name=Name.make name'}
               with Not_found ->
                 (* type of [c] might change *)
                 inst_const_ ~cache ctx ~interp c
@@ -1493,7 +1496,10 @@ module Theory = struct
            let c' = inst_const_ ~cache ctx ~interp c in
            assert (Name.equal c.c_name c'.c_name);
            s, c'
-         | c' -> (c'.c_name :> string), c')
+         | name' ->
+           let c' = Const.make_ ctx {c with c_name=Name.make name'} in
+           name', c'
+      )
     |> Str_map.of_iter
 
   (* instantiate a whole theorem *)
@@ -1522,7 +1528,12 @@ module Theory = struct
       List.map (inst_thm_ ~cache ctx ~interp) theory_defined_theorems;
     th'
 
-  let compose ?(interp=Str_map.empty) l th : t = assert false (* TODO *)
+  let compose ?(interp=Str_map.empty) l th : t =
+    Log.debugf 2
+      (fun k->k"(@[theory.compose@ %a@ %a@ :interp {@[%a@]}@])"
+          Fmt.(Dump.list pp_name) l pp_name th
+          (Str_map.pp Fmt.string Fmt.string) interp);
+    assert false (* TODO *)
 end
 
 (* ok def *)

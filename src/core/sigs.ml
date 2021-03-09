@@ -34,7 +34,9 @@ module Trustee_error = struct
 
   let mk ?src msg : t =
     {pp=(fun out () -> Fmt.string out msg); src}
-  let mk_f ?src pp = {pp; src}
+  let mk_f ?src k =
+    let pp out () = k (fun fmt -> Fmt.kfprintf (fun _o -> ()) out fmt) in
+    {pp; src}
 
   let pp out (e:t) =
     let rec pp_err k src out () =

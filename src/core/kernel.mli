@@ -358,7 +358,7 @@ module Theory : sig
 
   (** {3 Composition} *)
 
-  type interpretation = const Str_map.t
+  type interpretation = string Str_map.t
 
   val instantiate :
     interp:interpretation ->
