@@ -484,13 +484,15 @@ module Expr = struct
           if a==a' && hd==hd' then e
           else make_ ctx (E_app (f false hd, f false a)) ty'
         | E_lam (n, tyv, bod) ->
-          (* TODO: fast path *)
-          make_ ctx (E_lam (n, f false tyv, f true bod)) ty'
+          let tyv' = f false tyv in
+          let bod' = f true bod in
+          if tyv==tyv' && bod==bod' then e
+          else make_ ctx (E_lam (n, tyv', bod')) ty'
         | E_arrow (a,b) ->
           let a' = f false a in
           let b' = f false b in
           if a==a' && b==b' then e
-          else make_ ctx (E_arrow (f false a, f false b)) ty'
+          else make_ ctx (E_arrow (a', b')) ty'
         | E_kind | E_type -> assert false
       end
 
