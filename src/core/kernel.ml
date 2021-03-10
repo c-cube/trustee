@@ -1350,11 +1350,14 @@ module Theory = struct
          theory_in_theorems=inth; theory_defined_theorems=dth;
          theory_defined_constants=dc; } = self in
     Fmt.fprintf out "(@[<v1>theory %a" Name.pp name;
-    Str_map.iter (fun _ c -> Fmt.fprintf out "@,(@[in-const@ `%a`@])" Const.pp c)
+    Str_map.iter (fun _ c ->
+        Fmt.fprintf out "@,(@[in-const@ %a@])" Const.pp_with_ty c)
       inc;
     List.iter (fun th -> Fmt.fprintf out "@,(@[in-thm@ %a@])" Thm.pp_quoted th) inth;
     Str_map.iter
-      (fun _ c -> Fmt.fprintf out "@,(@[defined-const@ `%a`@])" Const.pp c) dc;
+      (fun _ c ->
+         Fmt.fprintf out "@,(@[defined-const@ %a@])" Const.pp_with_ty c)
+      dc;
     List.iter (fun th -> Fmt.fprintf out "@,(@[defined-thm@ %a@])" Thm.pp_quoted th) dth;
     Fmt.fprintf out "@])";
     ()
@@ -1435,6 +1438,7 @@ module Theory = struct
          Some c1)
       m1 m2
 
+  (* FIXME: update theorems' theory pointer? *)
   let union ctx ~name l : t =
     check_same_ctx_ ctx l;
     let self = mk_str_ ctx ~name in
@@ -1457,89 +1461,178 @@ module Theory = struct
   (* interpretation: map some constants to other constants *)
   type interpretation = string Str_map.t
 
-  (* instantiate one term *)
-  let rec inst_t_ ?(cache=Expr.Tbl.create 16)
-      ctx ~(interp:interpretation) (e:expr) : expr =
-    let rec loop e =
-      match Expr.Tbl.find cache e with
-      | u -> u
-      | exception Not_found ->
-        let u =
-          match Expr.view e with
-          | E_var v -> Expr.var ctx (Var.map_ty v ~f:loop)
-          | E_const (c, args) ->
-            let args' = List.map loop args in
-            let c' =
-              try
-                let name' = Str_map.find (c.c_name :> string) interp in
-                Const.make_ ctx {c with c_name=Name.make name'}
-              with Not_found ->
-                (* type of [c] might change *)
-                inst_const_ ~cache ctx ~interp c
-            in
-            if Const.equal c c' && List.for_all2 Expr.equal args args'
-            then e
-            else Expr.const ctx c' args'
-          | _ ->
-            Expr.map ctx e ~f:(fun _ e' -> loop e')
-        in
-        Expr.Tbl.add cache e u;
-        u
-    in
-    loop e
+  let pp_interp out (i:interpretation) : unit =
+    let pp_pair out (s,u) = Fmt.fprintf out "(@[`%s` =>@ `%s`@])" s u in
+    Fmt.fprintf out "{@[%a@]}"
+      (Fmt.iter ~sep:(Fmt.return "@ ") pp_pair) (Str_map.to_iter i)
 
-  and inst_const_ ?(cache=Expr.Tbl.create 16) ctx ~interp (c:const) : const =
-    let ty = inst_t_ ~cache ctx ~interp c.c_ty in
-    Const.make_ ctx {c with c_ty=ty}
+  module Instantiate_ = struct
+    type state = {
+      ctx: Ctx.t;
+      cache: expr Expr.Tbl.t;
+      interp: interpretation;
+      find_const: Name.t -> ty:Expr.t -> const option;
+      (* context in which to try to reinterpret constants *)
+    }
 
-  let inst_constants_ ?(cache=Expr.Tbl.create 16) ctx ~interp (m:const Str_map.t)
-    : _ Str_map.t =
-    Str_map.to_iter m
-    |> Iter.map
-      (fun (s,c) ->
-         match Str_map.find s interp with
-         | exception Not_found ->
-           let c' = inst_const_ ~cache ctx ~interp c in
-           assert (Name.equal c.c_name c'.c_name);
-           s, c'
-         | name' ->
-           let c' = Const.make_ ctx {c with c_name=Name.make name'} in
-           name', c'
-      )
-    |> Str_map.of_iter
+    let create
+        ?(find_const=fun _ ~ty:_ -> None)
+        ?(interp=Str_map.empty) ctx : state =
+      { ctx; interp; cache=Expr.Tbl.create 32; find_const; }
 
-  (* instantiate a whole theorem *)
-  let inst_thm_ ?(cache=Expr.Tbl.create 16) ctx ~(interp:interpretation) (th:thm) : thm =
-    let hyps =
-      Expr.Set.to_iter th.th_hyps
-      |> Iter.map (inst_t_ ~cache ctx ~interp)
-      |> Expr.Set.of_iter
-    in
-    let concl = inst_t_ ~cache ctx ~interp th.th_concl in
-    Thm.make_ ctx hyps concl
+    (* instantiate one term *)
+    let rec inst_t_ (self:state) (e:expr) : expr =
+      let rec loop e =
+        match Expr.Tbl.find self.cache e with
+        | u -> u
+        | exception Not_found ->
+          let u =
+            match Expr.view e with
+            | E_var v -> Expr.var self.ctx (Var.map_ty v ~f:loop)
+            | E_const (c, args) ->
+              let args' = List.map loop args in
+              let c' = inst_const_ self c in
+              if Const.equal c c' && List.for_all2 Expr.equal args args'
+              then e
+              else Expr.const self.ctx c' args'
+            | _ ->
+              Expr.map self.ctx e ~f:(fun _ e' -> loop e')
+          in
+          Expr.Tbl.add self.cache e u;
+          u
+      in
+      loop e
+
+    and inst_const_ (self:state) (c:const) : const =
+      let ty' = inst_t_ self c.c_ty in
+      let name' =
+        try
+          Name.make (Str_map.find (c.c_name :> string) self.interp)
+        with Not_found -> c.c_name
+      in
+      (* reinterpret constant? *)
+      begin match self.find_const name' ~ty:ty' with
+        | Some c' when Expr.is_eq_to_type c'.c_ty -> c'
+        | Some c' ->
+          (* reintepret into [c']… whose type might also change *)
+          let ty'' = inst_t_ self c'.c_ty in
+          Const.make_ self.ctx {c' with c_ty=ty''}
+        | None ->
+          Const.make_ self.ctx {c with c_name=name'}
+      end
+
+    let inst_constants_ (self:state) (m:const Str_map.t) : _ Str_map.t =
+      Str_map.to_iter m
+      |> Iter.map
+        (fun (_,c) ->
+           let c' = inst_const_ self c in
+           (c'.c_name :> string), c')
+      |> Str_map.of_iter
+
+    (* instantiate a whole theorem *)
+    let inst_thm_ (self:state) (th:thm) : thm =
+      let hyps =
+        Expr.Set.to_iter th.th_hyps
+        |> Iter.map (inst_t_ self)
+        |> Expr.Set.of_iter
+      in
+      let concl = inst_t_ self th.th_concl in
+      Thm.make_ self.ctx hyps concl
+
+    let inst_theory_ (self:state) (th:theory) : theory =
+      assert (self.ctx == th.theory_ctx);
+      let {
+        theory_ctx=_; theory_name; theory_in_constants;
+        theory_in_theorems; theory_defined_constants;
+        theory_defined_theorems} = th in
+      let th' = mk_ self.ctx ~name:theory_name in
+      th'.theory_in_constants <-
+        inst_constants_ self theory_in_constants;
+      th'.theory_defined_constants <-
+        inst_constants_ self theory_defined_constants;
+      th'.theory_in_theorems <-
+        List.map (inst_thm_ self) theory_in_theorems;
+      th'.theory_defined_theorems <-
+        List.map (inst_thm_ self) theory_defined_theorems;
+      th'
+  end
 
   let instantiate ~(interp:interpretation) th : t =
-    let {
-      theory_ctx=ctx; theory_name; theory_in_constants;
-      theory_in_theorems; theory_defined_constants; theory_defined_theorems} = th in
-    let cache = Expr.Tbl.create 16 in (* cache for instantiating *)
-    let th' = mk_ ctx ~name:theory_name in
-    th'.theory_in_constants <-
-      inst_constants_ ~cache ctx ~interp theory_in_constants;
-    th'.theory_defined_constants <-
-      inst_constants_ ~cache ctx ~interp theory_defined_constants;
-    th'.theory_in_theorems <-
-      List.map (inst_thm_ ~cache ctx ~interp) theory_in_theorems;
-    th'.theory_defined_theorems <-
-      List.map (inst_thm_ ~cache ctx ~interp) theory_defined_theorems;
-    th'
+    if Str_map.is_empty interp then th
+    else (
+      let st = Instantiate_.create ~interp th.theory_ctx in
+      Instantiate_.inst_theory_ st th
+    )
+
+  (* index by name+ty, for constants *)
+  module Name_ty_tbl = CCHashtbl.Make(struct
+      type t = Name.t * Expr.t
+      let equal (n1,ty1) (n2,ty2) = Name.equal n1 n2 && Expr.equal ty1 ty2
+      let hash (n,ty) = H.(combine3 25 (Name.hash n) (Expr.hash ty))
+    end)
+
+  (* index theorems by [hyps |- concl] *)
+  module Thm_tbl = CCHashtbl.Make(struct
+      type t = thm
+      let equal th1 th2 =
+        Expr.equal th1.th_concl th2.th_concl &&
+        Expr.Set.equal th1.th_hyps th2.th_hyps
+      let hash th =
+        H.(combine3 192 (Expr.hash th.th_concl)
+             (iter Expr.hash (Expr.Set.to_iter th.th_hyps)))
+    end)
 
   let compose ?(interp=Str_map.empty) l th : t =
     Log.debugf 2
-      (fun k->k"(@[theory.compose@ %a@ %a@ :interp {@[%a@]}@])"
-          Fmt.(Dump.list pp_name) l pp_name th
-          (Str_map.pp Fmt.string Fmt.string) interp);
-    assert false (* TODO *)
+      (fun k->k"(@[theory.compose@ %a@ %a@ @[:interp %a@]@])"
+          Fmt.(Dump.list pp_name) l pp_name th pp_interp interp);
+
+    if CCList.is_empty l then (
+      instantiate ~interp th
+    ) else (
+      let ctx = th.theory_ctx in
+
+      (* reinterpret constants that are provided by [l]. For that we need
+         to index them by [name,ty].
+         Also gather the set of proved theorems from *)
+      let const_tbl_ = Name_ty_tbl.create 32 in
+      let provided_thms = Thm_tbl.create 32 in
+
+      List.iter
+        (fun th0 ->
+           Str_map.iter (fun _ c -> Name_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
+             th0.theory_in_constants;
+           Str_map.iter (fun _ c -> Name_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
+             th0.theory_defined_constants;
+           List.iter (fun th -> Thm_tbl.replace provided_thms th ())
+             th0.theory_defined_theorems;
+        )
+        l;
+
+      let find_const name ~ty = Name_ty_tbl.get const_tbl_ (name,ty) in
+
+      let st = Instantiate_.create ~find_const ~interp ctx in
+      let th = Instantiate_.inst_theory_ st th in
+
+      (* remove provided constants *)
+      th.theory_in_constants <-
+        Str_map.filter
+          (fun _ c ->
+            not (Name_ty_tbl.mem const_tbl_ (c.c_name,c.c_ty)))
+          th.theory_in_constants;
+      (* remove satisfied assumptions *)
+      th.theory_in_theorems <-
+        CCList.filter
+          (fun th -> not (Thm_tbl.mem provided_thms th))
+          th.theory_in_theorems;
+      (* add assumptions from [l] *)
+      th.theory_in_theorems <-
+        List.fold_left
+          (fun l th' -> List.rev_append th'.theory_in_theorems l)
+          th.theory_in_theorems l;
+
+      th
+    )
 end
 
 (* ok def *)
