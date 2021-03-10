@@ -277,8 +277,12 @@ module Const = struct
   let[@inline] ty c = c.c_ty
 
   let pp_args out = function
-    | C_arity n -> Fmt.fprintf out "arity %d" n
-    | C_ty_vars vs -> Fmt.fprintf out "ty_vars %a" (Fmt.Dump.list var_pp) vs
+    | C_arity n -> Fmt.fprintf out "/%d" n
+    | C_ty_vars vs -> Fmt.fprintf out " %a" (Fmt.Dump.list var_pp) vs
+
+  let pp_with_ty out c =
+    Fmt.fprintf out "`@[%a%a@ : %a@]`"
+      Name.pp c.c_name pp_args c.c_args expr_pp_ c.c_ty
 
   let[@inline] eq ctx = Lazy.force ctx.ctx_eq_c
   let[@inline] bool ctx = Lazy.force ctx.ctx_bool_c

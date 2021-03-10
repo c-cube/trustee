@@ -56,8 +56,10 @@ module Const : sig
 
   val name : t -> Name.t
   val args : t -> args
-  val pp_args : args Fmt.printer
   val ty : t -> ty
+
+  val pp_args : args Fmt.printer
+  val pp_with_ty : t Fmt.printer
 
   val eq : ctx -> t
   val bool : ctx -> t
