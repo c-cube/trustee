@@ -13,7 +13,14 @@ end
 (** {2 Virtual Machine} *)
 type t
 
-val create : ?progress_bar:bool -> K.ctx -> t
+val create : ?progress_bar:bool ->
+  K.ctx ->
+  in_scope:K.Theory.t list -> t
+(** [create ctx ~in_scope] makes a new VM with given context, and
+    the theories [in_scope] to look up external constants from.
+    @param progress_bar if true, a progress bar will be printed on stdout as
+    articles are checked.
+*)
 
 include PP with type t := t
 val pp_stats: t Fmt.printer

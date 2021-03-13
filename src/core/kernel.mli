@@ -349,14 +349,14 @@ module Theory : sig
   (** [assume theory hyps concl] creates the theorem
       [hyps |- concl] as a parameter of the theory [theory]. *)
 
-  val assume_ty_const : t -> string -> int -> ty_const
-
-  val assume_const : t -> string -> ty_vars:Var.t list -> ty -> const
-  (** [assume_const theory s ty] assumes the existence of a constant [s:ty] *)
+  val assume_const : t -> const -> unit
 
   val add_const : t -> const -> unit
 
   val add_theorem : t -> thm -> unit
+
+  val find_defined_const : t -> string -> const option
+  (** Find a constant defined in this theory by its name *)
 
   (** {3 Composition} *)
 

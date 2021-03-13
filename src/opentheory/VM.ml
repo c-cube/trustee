@@ -61,6 +61,8 @@ type t = {
   mutable art: Article.t;
   ind: K.const;
 
+  in_scope: K.Theory.t list;
+
   mutable n_absThm : int;
   mutable n_appThm : int;
   mutable n_cut : int;
@@ -119,7 +121,33 @@ let absThm : rule = fun _ self ->
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply absThm@ in state %a" pp_vm self)
 
-let typeOp : rule = fun _ self ->
+(* create a type constant, with local type inference since OT
+   gives us only the expected type of the constant *)
+let mk_defined_ty_ c =
+  Log.debugf 1 (fun k->k"mk type const %a" K.Const.pp c);
+  match K.Const.args c with
+  | K.Const.C_arity 0 ->
+    (* non-polymorphic constant *)
+    (fun ctx _ty -> assert (_ty=[]); K.Expr.const ctx c [])
+  | K.Const.C_arity n ->
+    (fun ctx _tyargs -> assert (List.length _tyargs=n); K.Expr.const ctx c _tyargs)
+  | K.Const.C_ty_vars _ ->
+    errorf (fun k->k"not a type const: %a" K.Const.pp c)
+
+exception FoundConst of K.const
+
+(* find constant in the theories in scope *)
+let lookup_const_in_scope_ self (s:string) : K.const option =
+  try
+    List.iter (fun th ->
+        match K.Theory.find_defined_const th s with
+        | None -> ()
+        | Some c -> raise_notrace (FoundConst c))
+      self.in_scope;
+    None
+  with FoundConst c -> Some c
+
+let typeOp : rule = fun theory self ->
   match self.stack with
   | O_name n :: st ->
     let f_op = match n with
@@ -135,7 +163,16 @@ let typeOp : rule = fun _ self ->
       | _ ->
         try snd @@ Hashtbl.find self.named_tys n
         with Not_found ->
-          errorf (fun k->k"unknown type operator '%a'" Name.pp n)
+          (* lookup in external theories *)
+          let key = Name.to_string n in
+          let c = match lookup_const_in_scope_ self key with
+            | Some c -> c
+            | None -> errorf (fun k->k"typeOp: unknown typeOp `%a`" Name.pp n)
+          in
+          K.Theory.assume_const theory c;
+          let c' = mk_defined_ty_ c in
+          Hashtbl.add self.named_tys n (n,c');
+          c'
     in
     let op = n, f_op in
     self.stack <- O_ty_op op :: st;
@@ -181,7 +218,33 @@ let var : rule = fun _ self ->
     self.stack <- O_var v :: st
   | _ -> errorf (fun k->k"cannot apply var@ in state %a" pp_vm self)
 
-let const : rule = fun _ self ->
+(* create a defined constant, with local type inference since OT
+   gives us only the expected type of the constant *)
+let mk_defined_const_ c =
+  Log.debugf 1 (fun k->k"mk defined const %a@ :args %a" K.Const.pp c
+               K.Const.pp_args (K.Const.args c));
+  match K.Const.args c with
+  | K.Const.C_arity _ -> errorf (fun k->k"not a term const: %a" K.Const.pp c)
+  | K.Const.C_ty_vars [] ->
+    (* non-polymorphic constant *)
+    (fun ctx _ty ->
+       assert (K.Var.Set.is_empty @@ K.Expr.free_vars (K.Const.ty c));
+       assert (K.Var.Set.is_empty @@ K.Expr.free_vars _ty); K.Expr.const ctx c [])
+  | K.Const.C_ty_vars ty_vars ->
+    (* make new variables *)
+    let vars =
+      List.mapi (fun i v -> K.Var.makef "√%d" (K.Var.ty v) i) ty_vars in
+    (fun ctx ty ->
+      let e = K.Expr.const ctx c (List.map (K.Expr.var ctx) vars) in
+      let ty_e = K.Expr.ty_exn e in
+      match Unif.match_ ty_e ty with
+      | None ->
+        errorf (fun k->k"type %a@ does not match type of %a"
+                   K.Expr.pp ty K.Expr.pp e)
+      | Some subst -> K.Expr.subst ~recursive:false ctx e subst
+    )
+
+let const : rule = fun theory self ->
   match self.stack with
   | O_name n :: st ->
     let f_op = match n with
@@ -199,7 +262,16 @@ let const : rule = fun _ self ->
         begin match Hashtbl.find self.named_consts n with
           | _, c -> c
           | exception Not_found ->
-            errorf (fun k->k"unknown const '%a'" Name.pp n)
+            (* lookup in external theories *)
+            let key = Name.to_string n in
+            let c = match lookup_const_in_scope_ self key with
+              | Some c -> c
+              | None -> errorf (fun k->k"const: unknown constant `%a`" Name.pp n)
+            in
+            K.Theory.assume_const theory c;
+            let c' = mk_defined_const_ c in
+            Hashtbl.add self.named_consts n (n,c');
+            c'
         end
     in
     self.stack <- O_const (n, f_op) :: st
@@ -237,33 +309,6 @@ let appTerm : rule = fun _ self ->
     self.stack <- O_term t :: st
   | _ -> errorf (fun k->k"cannot apply appTerm@ in state %a" pp_vm self)
 
-(* create a defined constant, with local type inference since OT
-   gives us only the expected type of the constant *)
-let mk_defined_const_ ~theory c =
-  Log.debugf 1 (fun k->k"mk defined const %a@ :args %a" K.Const.pp c
-               K.Const.pp_args (K.Const.args c));
-  K.Theory.add_const theory c;
-  match K.Const.args c with
-  | K.Const.C_arity _ -> errorf (fun k->k"not a term const: %a" K.Const.pp c)
-  | K.Const.C_ty_vars [] ->
-    (* non-polymorphic constant *)
-    (fun ctx _ty ->
-       assert (K.Var.Set.is_empty @@ K.Expr.free_vars (K.Const.ty c));
-       assert (K.Var.Set.is_empty @@ K.Expr.free_vars _ty); K.Expr.const ctx c [])
-  | K.Const.C_ty_vars ty_vars ->
-    (* make new variables *)
-    let vars =
-      List.mapi (fun i v -> K.Var.makef "√%d" (K.Var.ty v) i) ty_vars in
-    (fun ctx ty ->
-      let e = K.Expr.const ctx c (List.map (K.Expr.var ctx) vars) in
-      let ty_e = K.Expr.ty_exn e in
-      match Unif.match_ ty_e ty with
-      | None ->
-        errorf (fun k->k"type %a@ does not match type of %a"
-                   K.Expr.pp ty K.Expr.pp e)
-      | Some subst -> K.Expr.subst ~recursive:false ctx e subst
-    )
-
 let define_named_ ctx n t : K.Thm.t * K.const =
   let s = Name.to_string n in
   let eqn =
@@ -284,7 +329,8 @@ let defineConst : rule = fun theory self ->
     );
     let th, c = define_named_ self.ctx n t in
     self.art <- {self.art with Article.consts=c :: self.art.Article.consts};
-    let c = mk_defined_const_ ~theory c in
+    K.Theory.add_const theory c;
+    let c = mk_defined_const_ c in
     Hashtbl.add self.named_consts n (n,c);
     self.stack <- O_thm th :: O_const (n, c) :: st
   | _ -> errorf (fun k->k"cannot apply defineConst@ in state %a" pp_vm self)
@@ -344,7 +390,8 @@ let defineConstList : rule = fun theory self ->
 
           let th, c = define_named_ self.ctx n rhs in
           self.art <- {self.art with Article.consts=c :: self.art.Article.consts};
-          let c' = (n,mk_defined_const_ ~theory c) in
+          K.Theory.add_const theory c;
+          let c' = (n,mk_defined_const_ c) in
           Hashtbl.add self.named_consts n c';
 
           (* add [v := c] to the substitution *)
@@ -493,20 +540,6 @@ let proveHyp : rule = fun _ self ->
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply proveHyp@ in state %a" pp_vm self)
 
-(* create a defined constant, with local type inference since OT
-   gives us only the expected type of the constant *)
-let mk_defined_ty_ ~theory c =
-  Log.debugf 1 (fun k->k"mk type const %a" K.Const.pp c);
-  K.Theory.add_const theory c;
-  match K.Const.args c with
-  | K.Const.C_arity 0 ->
-    (* non-polymorphic constant *)
-    (fun ctx _ty -> assert (_ty=[]); K.Expr.const ctx c [])
-  | K.Const.C_arity n ->
-    (fun ctx _tyargs -> assert (List.length _tyargs=n); K.Expr.const ctx c _tyargs)
-  | K.Const.C_ty_vars _ ->
-    errorf (fun k->k"not a type const: %a" K.Const.pp c)
-
 let defineTypeOp : rule = fun theory self ->
   match self.stack with
   | O_thm th :: O_list names :: O_name rep :: O_name abs :: O_name tau :: st ->
@@ -525,14 +558,20 @@ let defineTypeOp : rule = fun theory self ->
         ~repr:(Name.to_string rep) ~thm_inhabited:th
         ()
     in
-    let c_abs = (abs, mk_defined_const_ ~theory def.c_abs) in
+
+    K.Theory.add_const theory def.c_abs;
+    let c_abs = (abs, mk_defined_const_ def.c_abs) in
     self.art <- {self.art with Article.consts=def.c_abs :: self.art.Article.consts};
     Hashtbl.add self.named_consts abs c_abs;
+
+    K.Theory.add_const theory def.c_repr;
+    let c_rep = (rep, mk_defined_const_ def.c_repr) in
     self.art <- {self.art with Article.consts=def.c_repr :: self.art.Article.consts};
-    let c_rep = (rep, mk_defined_const_ ~theory def.c_repr) in
     Hashtbl.add self.named_consts rep c_rep;
+
+    K.Theory.add_const theory def.tau;
+    let c_tau = (tau, mk_defined_ty_ def.tau) in
     self.art <- {self.art with Article.consts=def.tau :: self.art.Article.consts};
-    let c_tau = (tau, mk_defined_ty_ ~theory def.tau) in
     Hashtbl.add self.named_tys tau c_tau;
 
     (* need to abstract over the theorems *)
@@ -601,7 +640,7 @@ let mk_progress() =
     Fmt.printf "\x1b[2K\r[%c line %d] %s%!" cs.[n] line s; (* erase line; print current rule *)
     ()
 
-let create ?(progress_bar=false) ctx : t =
+let create ?(progress_bar=false) ctx ~in_scope : t =
   let progress_fun = if progress_bar then Some (mk_progress()) else None in
   let ind = K.Expr.new_ty_const ctx "ind" 0 in (* special type *)
   let self = {
@@ -609,6 +648,7 @@ let create ?(progress_bar=false) ctx : t =
     named_tys=Hashtbl.create 16;
     art=Article.empty; ind;
     n_cut=0; n_appThm=0; n_absThm=0;
+    in_scope;
     progress_fun;
   } in
   self

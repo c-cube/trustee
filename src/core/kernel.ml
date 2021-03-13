@@ -171,7 +171,8 @@ let expr_pp_ out (e:expr) : unit =
     if !__pp_ids then Fmt.fprintf out "/%d" e.e_id;
 
   and loop' k names out e = match e.e_view with
-    | E_kind | E_type | E_var _ | E_const (_, []) -> loop k names out e
+    | E_kind | E_type | E_var _ | E_bound_var _ | E_const (_, []) ->
+      loop k names out e (* atomic expr *)
     | _ -> Fmt.fprintf out "(%a)" (loop k names) e
   in
   loop 0 [] out e
@@ -1374,21 +1375,13 @@ module Theory = struct
     let hyps = Expr.Set.of_list hyps in
     {(Thm.make_ ctx hyps concl) with th_theory=Some self}
 
-  let assume_ty_const self s arity: const =
-    if Str_map.mem s self.theory_in_constants then (
-      errorf (fun k->k"Theory.assume_ty_const: constant `%s` already exists" s);
-    );
-    let c = Expr.new_ty_const self.theory_ctx s arity in
-    self.theory_in_constants <- Str_map.add s c self.theory_in_constants;
-    c
-
-  let assume_const self s ~ty_vars ty : const =
+  let assume_const self (c:const) : unit =
+    let s = (c.c_name :> string) in
     if Str_map.mem s self.theory_in_constants then (
       errorf (fun k->k"Theory.assume_const: constant `%s` already exists" s);
     );
-    let c = Expr.new_const self.theory_ctx s ty_vars ty in
     self.theory_in_constants <- Str_map.add s c self.theory_in_constants;
-    c
+    ()
 
   let add_const self c : unit =
     let s = Name.to_string c.c_name in
@@ -1396,6 +1389,10 @@ module Theory = struct
       errorf (fun k->k"Theory.add_const: constant `%s` already defined" s);
     );
     self.theory_defined_constants <- Str_map.add s c self.theory_defined_constants
+
+  let[@inline] find_defined_const self s : _ option =
+    try Some (Str_map.find s self.theory_defined_constants)
+    with Not_found -> Str_map.get s self.theory_in_constants
 
   let add_theorem self th : unit =
     begin match th.th_theory with
@@ -1506,8 +1503,7 @@ module Theory = struct
     and inst_const_ (self:state) (c:const) : const =
       let ty' = inst_t_ self c.c_ty in
       let name' =
-        try
-          Name.make (Str_map.find (c.c_name :> string) self.interp)
+        try Name.make (Str_map.find (c.c_name :> string) self.interp)
         with Not_found -> c.c_name
       in
       (* reinterpret constant? *)
@@ -1518,7 +1514,7 @@ module Theory = struct
           let ty'' = inst_t_ self c'.c_ty in
           Const.make_ self.ctx {c' with c_ty=ty''}
         | None ->
-          Const.make_ self.ctx {c with c_name=name'}
+          Const.make_ self.ctx {c with c_name=name'; c_ty=ty'}
       end
 
     let inst_constants_ (self:state) (m:const Str_map.t) : _ Str_map.t =

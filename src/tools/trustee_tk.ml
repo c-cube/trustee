@@ -83,7 +83,7 @@ module OT_check = struct
   let run args =
     Log.debugf 1 (fun k->k"check opentheory files %a" (Fmt.Dump.(list string)) args);
     let ctx = K.Ctx.create() in
-    let vm = VM.create ctx in
+    let vm = VM.create ~in_scope:[] ctx in
     try
       List.iter
         (fun file ->
