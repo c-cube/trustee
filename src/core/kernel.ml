@@ -219,6 +219,14 @@ module Expr_hashcons = Hashcons.Make(struct
     let on_new e = ignore (Lazy.force e.e_ty : _ option)
     end)
 
+type const_kind = C_ty | C_term
+
+(* special map for indexing constants, differentiating type and term constants *)
+module Str_k_map = CCMap.Make(struct
+    type t = const_kind * string
+    let compare (k1,c1)(k2,c2) =
+      if k1=k2 then String.compare c1 c2 else CCOrd.compare k1 k2
+  end)
 
 type thm = {
   th_concl: expr;
@@ -233,9 +241,9 @@ type thm = {
 and theory = {
   theory_name: Name.t;
   theory_ctx: ctx;
-  mutable theory_in_constants: const Str_map.t;
+  mutable theory_in_constants: const Str_k_map.t;
   mutable theory_in_theorems: thm list;
-  mutable theory_defined_constants: const Str_map.t;
+  mutable theory_defined_constants: const Str_k_map.t;
   mutable theory_defined_theorems: thm list;
 }
 
@@ -1351,11 +1359,11 @@ module Theory = struct
          theory_in_theorems=inth; theory_defined_theorems=dth;
          theory_defined_constants=dc; } = self in
     Fmt.fprintf out "(@[<v1>theory %a" Name.pp name;
-    Str_map.iter (fun _ c ->
+    Str_k_map.iter (fun _ c ->
         Fmt.fprintf out "@,(@[in-const@ %a@])" Const.pp_with_ty c)
       inc;
     List.iter (fun th -> Fmt.fprintf out "@,(@[in-thm@ %a@])" Thm.pp_quoted th) inth;
-    Str_map.iter
+    Str_k_map.iter
       (fun _ c ->
          Fmt.fprintf out "@,(@[defined-const@ %a@])" Const.pp_with_ty c)
       dc;
@@ -1375,24 +1383,40 @@ module Theory = struct
     let hyps = Expr.Set.of_list hyps in
     {(Thm.make_ ctx hyps concl) with th_theory=Some self}
 
-  let assume_const self (c:const) : unit =
+  let assume_const_ self (c:const) : unit =
     let s = (c.c_name :> string) in
-    if Str_map.mem s self.theory_in_constants then (
+    let kind = if Expr.is_eq_to_type c.c_ty then C_ty else C_term in
+    if Str_k_map.mem (kind,s) self.theory_in_constants then (
       errorf (fun k->k"Theory.assume_const: constant `%s` already exists" s);
     );
-    self.theory_in_constants <- Str_map.add s c self.theory_in_constants;
+    self.theory_in_constants <- Str_k_map.add (kind,s) c self.theory_in_constants;
     ()
 
-  let add_const self c : unit =
-    let s = Name.to_string c.c_name in
-    if Str_map.mem s self.theory_defined_constants then (
-      errorf (fun k->k"Theory.add_const: constant `%s` already defined" s);
-    );
-    self.theory_defined_constants <- Str_map.add s c self.theory_defined_constants
+  let assume_const = assume_const_
+  let assume_ty_const = assume_const_
 
-  let[@inline] find_defined_const self s : _ option =
-    try Some (Str_map.find s self.theory_defined_constants)
-    with Not_found -> Str_map.get s self.theory_in_constants
+  let add_const_ self c : unit =
+    let s = Name.to_string c.c_name in
+    let kind = if Expr.is_eq_to_type c.c_ty then C_ty else C_term in
+    begin match Str_k_map.get (kind,s) self.theory_defined_constants with
+      | Some c' when Const.equal c c' ->
+        Log.debugf 2 (fun k->k"redef `%s`" s);
+      | Some _ ->
+        errorf (fun k->k"Theory.add_const: constant `%s` already defined" s);
+      | None -> ()
+    end;
+    self.theory_defined_constants <- Str_k_map.add (kind,s) c self.theory_defined_constants
+
+  let add_const = add_const_
+  let add_ty_const = add_const_
+
+  let[@inline] find_const self s : _ option =
+    try Some (Str_k_map.find (C_term,s) self.theory_defined_constants)
+    with Not_found -> Str_k_map.get (C_term,s) self.theory_in_constants
+
+  let[@inline] find_ty_const self s : _ option =
+    try Some (Str_k_map.find (C_ty,s) self.theory_defined_constants)
+    with Not_found -> Str_k_map.get (C_ty,s) self.theory_in_constants
 
   let add_theorem self th : unit =
     begin match th.th_theory with
@@ -1405,7 +1429,8 @@ module Theory = struct
 
   let mk_ ctx ~name : t =
     { theory_name=name; theory_ctx=ctx;
-      theory_in_constants=Str_map.empty; theory_defined_constants=Str_map.empty;
+      theory_in_constants=Str_k_map.empty;
+      theory_defined_constants=Str_k_map.empty;
       theory_in_theorems=[]; theory_defined_theorems=[]
     }
 
@@ -1426,8 +1451,8 @@ module Theory = struct
       l
 
   let union_const_map_ ~what m1 m2 =
-    Str_map.union
-      (fun s c1 c2 ->
+    Str_k_map.union
+      (fun (_,s) c1 c2 ->
          if not (Const.equal c1 c2) then (
            errorf (fun k->k"incompatible %s constant `%s`: %a vs %a"
                       what s Const.pp c1 Const.pp c2)
@@ -1517,13 +1542,13 @@ module Theory = struct
           Const.make_ self.ctx {c with c_name=name'; c_ty=ty'}
       end
 
-    let inst_constants_ (self:state) (m:const Str_map.t) : _ Str_map.t =
-      Str_map.to_iter m
+    let inst_constants_ (self:state) (m:const Str_k_map.t) : _ Str_k_map.t =
+      Str_k_map.to_iter m
       |> Iter.map
-        (fun (_,c) ->
+        (fun ((k,_),c) ->
            let c' = inst_const_ self c in
-           (c'.c_name :> string), c')
-      |> Str_map.of_iter
+           (k,(c'.c_name :> string)), c')
+      |> Str_k_map.of_iter
 
     (* instantiate a whole theorem *)
     let inst_thm_ (self:state) (th:thm) : thm =
@@ -1596,9 +1621,9 @@ module Theory = struct
 
       List.iter
         (fun th0 ->
-           Str_map.iter (fun _ c -> Name_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
+           Str_k_map.iter (fun _ c -> Name_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
              th0.theory_in_constants;
-           Str_map.iter (fun _ c -> Name_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
+           Str_k_map.iter (fun _ c -> Name_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
              th0.theory_defined_constants;
            List.iter (fun th -> Thm_tbl.replace provided_thms th ())
              th0.theory_defined_theorems;
@@ -1612,7 +1637,7 @@ module Theory = struct
 
       (* remove provided constants *)
       th.theory_in_constants <-
-        Str_map.filter
+        Str_k_map.filter
           (fun _ c ->
             not (Name_ty_tbl.mem const_tbl_ (c.c_name,c.c_ty)))
           th.theory_in_constants;

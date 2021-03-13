@@ -75,6 +75,8 @@ let rec eval_rec_ (self:state) (n:string) : K.Theory.t =
   let th = find_th_by_name_ self n in
   let uv_name = Thy_file.name th in  (* un-versioned name *)
 
+  if uv_name = "group-witness" then Log.set_level 50;
+
   begin match Str_tbl.get self.theories uv_name with
     | Some (Error e) -> raise (Exit e)
     | Some (Ok th) -> th

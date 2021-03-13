@@ -132,15 +132,18 @@ let mk_defined_ty_ c =
   | K.Const.C_arity n ->
     (fun ctx _tyargs -> assert (List.length _tyargs=n); K.Expr.const ctx c _tyargs)
   | K.Const.C_ty_vars _ ->
-    errorf (fun k->k"not a type const: %a" K.Const.pp c)
+    errorf (fun k->k"not a type const: `@[%a : %a@]`" K.Const.pp c K.Expr.pp (K.Const.ty c))
 
 exception FoundConst of K.const
 
 (* find constant in the theories in scope *)
-let lookup_const_in_scope_ self (s:string) : K.const option =
+let lookup_const_in_scope_ self ~is_ty (s:string) : K.const option =
   try
     List.iter (fun th ->
-        match K.Theory.find_defined_const th s with
+        match
+          if is_ty then K.Theory.find_ty_const th s
+          else K.Theory.find_const th s
+        with
         | None -> ()
         | Some c -> raise_notrace (FoundConst c))
       self.in_scope;
@@ -165,7 +168,7 @@ let typeOp : rule = fun theory self ->
         with Not_found ->
           (* lookup in external theories *)
           let key = Name.to_string n in
-          let c = match lookup_const_in_scope_ self key with
+          let c = match lookup_const_in_scope_ self ~is_ty:true key with
             | Some c -> c
             | None -> errorf (fun k->k"typeOp: unknown typeOp `%a`" Name.pp n)
           in
@@ -264,7 +267,7 @@ let const : rule = fun theory self ->
           | exception Not_found ->
             (* lookup in external theories *)
             let key = Name.to_string n in
-            let c = match lookup_const_in_scope_ self key with
+            let c = match lookup_const_in_scope_ self ~is_ty:false key with
               | Some c -> c
               | None -> errorf (fun k->k"const: unknown constant `%a`" Name.pp n)
             in
@@ -500,7 +503,7 @@ let subst : rule = fun _ self ->
       List.fold_left
         (fun subst p -> match p with
            | O_list [O_var v; O_term e] ->
-             Log.debugf 50 (fun k->k"v=%a; t=`%a`; ty(t)=`%a` same-ty=%B"
+             Log.debugf 50 (fun k->k"(@[vm.subst@ v=%a;@ t=`%a`;@ ty(t)=`%a`;@ same-ty=%B@])"
                                K.Var.pp_with_ty v K.Expr.pp e K.Expr.pp (K.Expr.ty_exn e)
                                (K.Expr.equal (K.Var.ty v) (K.Expr.ty_exn e)));
              K.Subst.bind subst v e

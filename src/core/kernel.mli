@@ -351,12 +351,19 @@ module Theory : sig
 
   val assume_const : t -> const -> unit
 
+  val assume_ty_const : t -> ty_const -> unit
+
   val add_const : t -> const -> unit
+
+  val add_ty_const : t -> ty_const -> unit
 
   val add_theorem : t -> thm -> unit
 
-  val find_defined_const : t -> string -> const option
-  (** Find a constant defined in this theory by its name *)
+  val find_const : t -> string -> const option
+  (** Find a constant used or defined in this theory by its name *)
+
+  val find_ty_const : t -> string -> ty_const option
+  (** Find a type constant used or defined in this theory by its name *)
 
   (** {3 Composition} *)
 
