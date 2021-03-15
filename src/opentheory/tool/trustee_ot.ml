@@ -70,16 +70,18 @@ let main ~dir () =
 
 let () =
   let dir = ref "" in
+  let color = ref true in
   let opts = [
     "-dir", Arg.Set_string dir, " set opentheory directory";
     "-print", Arg.Set print, " print the list of theories";
     "-check", Arg.Rest (fun s->check := s :: !check), " check given theories";
     "-check-all", Arg.Set check_all, " check all";
+    "-nc", Arg.Clear color, " disable colors";
     "-d", Arg.Int Log.set_level, " set debug level";
     "--progress", Arg.Set progress_, " progress bar";
     "-p", Arg.Set progress_, " progress bar";
     "--bt", Arg.Unit (fun()->Printexc.record_backtrace true), " record backtraces";
   ] |> Arg.align in
   Arg.parse opts (fun _ -> failwith "invalid option") "trustee_ot [option*]";
-  Fmt.set_color_default true;
+  if !color then Fmt.set_color_default true;
   main ~dir:!dir ()

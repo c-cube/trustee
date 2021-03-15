@@ -75,6 +75,7 @@ let rec eval_rec_ (self:state) (n:string) : K.Theory.t =
   let th = find_th_by_name_ self n in
   let uv_name = Thy_file.name th in  (* un-versioned name *)
 
+  (* FIXME: just skip from there? or handle errors in the theory graph? *)
   if uv_name = "group-witness" then Log.set_level 50;
 
   begin match Str_tbl.get self.theories uv_name with
@@ -177,33 +178,6 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
         )
   end
 
-(*
-  (* find package, if any *)
-  CCOpt.iter (fun p -> check_ p) sub.Thy_file.package;
-  (* find and check article, if any *)
-  CCOpt.iter (fun art_name ->
-      let art_name = unquote_str art_name in
-      let file =
-        try Str_tbl.find idx.Idx.articles art_name
-        with Not_found ->
-          errorf(fun k->k"cannot find article `%s`" art_name)
-      in
-
-      let t1 = now () in
-      Fmt.printf "@{<blue>> checking@} article '%s'@." art_name;
-      CCIO.with_in file
-        (fun ic ->
-           let input = VM.Input.of_chan ic in
-           let art = VM.parse_and_check_art_exn vm input in
-           Fmt.printf "@{<green>@<1>✔ checked@} article: %a in %.3fs@."
-             Article.pp_stats art (since_s t1);
-           Log.debugf 1 (fun k->k"vm stats: %a" VM.pp_stats vm);
-        );
-    )
-    sub.Thy_file.article;
-  ()
-   *)
-
 (* process an import of a sub, by checking it recursively now *)
 and process_import_ (self:state) ~requires th (name:string) : K.Theory.t =
   let name = unquote_str name in
@@ -216,78 +190,6 @@ and process_import_ (self:state) ~requires th (name:string) : K.Theory.t =
 (* process a require, looking for a theory with that name *)
 and process_requires_ self _th (name:string) : K.Theory.t =
   eval_rec_ self name
-
-(*
-  let by_name = idx.Idx.thy_by_name in
-  let checked = Str_tbl.create 32 in
-  let ctx = K.Ctx.create () in
-
-  let find_by_name n =
-    try Str_tbl.find by_name n
-    with Not_found -> errorf (fun k->k"cannot find theory `%s`" n)
-  in
-
-  (* check a theory *)
-  let rec check_ (n:string) =
-    let th = find_by_name n in
-    let uv_name = Thy_file.name th in  (* un-versioned name *)
-
-    if not (Str_tbl.mem checked uv_name) then (
-      Str_tbl.add checked uv_name ();
-      Fmt.printf "@{<blue>> check@} theory `%s`@." uv_name;
-
-      (* process requires *)
-      List.iter (process_requires_ th) th.requires;
-
-      let t1 = now() in
-
-      let main = th.Thy_file.main in (* start with `main` sub-package *)
-      check_sub_ th main;
-
-      Fmt.printf "@{<green>@<1>✔ checked@} theory `%s` in %.3fs@." uv_name (since_s t1);
-    )
-  (* check a sub-entry of a theory *)
-  and check_sub_ th (sub:Thy_file.sub) : unit =
-    (* process imports *)
-    List.iter (process_import_ th) sub.Thy_file.imports;
-    (* find package, if any *)
-    CCOpt.iter (fun p -> check_ p) sub.Thy_file.package;
-    (* find and check article, if any *)
-    CCOpt.iter (fun art_name ->
-        let art_name = unquote_str art_name in
-        let file =
-          try Str_tbl.find idx.Idx.articles art_name
-          with Not_found ->
-            errorf(fun k->k"cannot find article `%s`" art_name)
-        in
-
-        let t1 = now () in
-        Fmt.printf "@{<blue>> checking@} article '%s'@." art_name;
-        CCIO.with_in file
-          (fun ic ->
-             let input = VM.Input.of_chan ic in
-             let art = VM.parse_and_check_art_exn vm input in
-             Fmt.printf "@{<green>@<1>✔ checked@} article: %a in %.3fs@."
-               Article.pp_stats art (since_s t1);
-             Log.debugf 1 (fun k->k"vm stats: %a" VM.pp_stats vm);
-          );
-      )
-      sub.Thy_file.article;
-    ()
-
-  (* process an import of a sub, by checking it recursively now *)
-  and process_import_ th (name:string) : unit =
-    let name = unquote_str name in
-    let sub =
-      try List.find (fun sub -> sub.Thy_file.sub_name=name) th.Thy_file.subs
-      with Not_found -> errorf(fun k->k"cannot find sub-theory `%s`" name)
-    in
-    check_sub_ th sub
-  in
-  Iter.iter check_ names;
-  ()
-
-   *)
 
 let eval_theory (self:state) name0 : K.Theory.t or_error =
   try Ok (eval_rec_ self name0)

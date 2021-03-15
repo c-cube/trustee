@@ -33,6 +33,9 @@ let list_dir dir : t =
   let parse_thy file =
     let dir = Filename.dirname file in
     try
+      if CCString.prefix ~pre:"group" (Filename.basename file)
+      then failwith "SKIP GROUP"; (* FIXME *)
+
       let s = CCIO.File.read_exn file in
       match Thy_file.of_string ~dir s with
       | Ok thy ->
