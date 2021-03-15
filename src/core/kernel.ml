@@ -1421,6 +1421,7 @@ module Theory = struct
   let add_theorem self th : unit =
     begin match th.th_theory with
       | None -> th.th_theory <- Some self
+      | Some theory' when theory' == self -> ()
       | Some theory' ->
         errorf (fun k->k"Theory.add_theorem:@ %a@ already belongs in theory `%a`"
                    Thm.pp_quoted th Name.pp theory'.theory_name);
