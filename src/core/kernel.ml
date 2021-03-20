@@ -839,13 +839,13 @@ module Expr = struct
 
   let unfold_app = unfold_app
 
-  let unfold_eq e =
+  let[@inline] unfold_eq e =
     let f, l = unfold_app e in
     match view f, l with
     | E_const ({c_name;_}, [_]), [a;b] when Name.equal c_name id_eq -> Some(a,b)
     | _ -> None
 
-  let rec unfold_arrow e =
+  let[@unroll 1] rec unfold_arrow e =
     match view e with
     | E_arrow (a,b) ->
       let args, ret = unfold_arrow b in
