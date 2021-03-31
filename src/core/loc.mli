@@ -12,7 +12,11 @@ type t = {
   end_: Position.t;
 }
 
+val mk : string -> int -> int -> int -> int -> t
+val mk_pair : string -> int*int -> int*int -> t
+
 include PP with type t := t
+val pp_opt : t option Fmt.printer
 val none : t
 
 val single : ?file:string -> Position.t -> t
@@ -24,3 +28,8 @@ module Infix : sig
   (** Short for merge *)
 end
 include module type of Infix
+
+(**/**)
+val set_file : Lexing.lexbuf -> string -> unit
+val of_lexbuf : Lexing.lexbuf -> t
+(**/**)
