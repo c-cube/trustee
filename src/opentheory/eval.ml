@@ -76,7 +76,7 @@ let rec eval_rec_ (self:state) (n:string) : K.Theory.t =
   let uv_name = Thy_file.name th in  (* un-versioned name *)
 
   (* FIXME: just skip from there? or handle errors in the theory graph? *)
-  if uv_name = "group-witness" then Log.set_level 50;
+(*   if uv_name = "group-witness" then Log.set_level 50; *)
 
   begin match Str_tbl.get self.theories uv_name with
     | Some (Error e) -> raise (Exit e)

@@ -66,6 +66,7 @@ type t = {
   mutable n_absThm : int;
   mutable n_appThm : int;
   mutable n_cut : int;
+  mutable n_subst : int;
   progress_fun: (string -> line:int -> unit) option;
 }
 
@@ -92,8 +93,8 @@ let pp out self : unit =
     pp_vm self Article.pp (article self)
 
 let pp_stats out self : unit =
-  Fmt.fprintf out "(@[:n-cuts %d :n-absThm %d@ :n-appThm %d@])"
-    self.n_cut self.n_absThm self.n_appThm
+  Fmt.fprintf out "(@[:n-cuts %d :n-absThm %d@ :n-appThm %d@ :n-subst %d@])"
+    self.n_cut self.n_absThm self.n_appThm self.n_subst
 
 let to_string = Fmt.to_string pp
 
@@ -511,6 +512,7 @@ let subst : rule = fun _ self ->
         subst terms
     in
     let th = K.Thm.subst ~recursive:false self.ctx th subst in
+    self.n_subst <- 1 + self.n_subst;
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply subst@ in state %a" pp_vm self)
 
@@ -650,7 +652,7 @@ let create ?(progress_bar=false) ctx ~in_scope : t =
     ctx; stack=[]; dict=Hashtbl.create 32; named_consts=Hashtbl.create 32;
     named_tys=Hashtbl.create 16;
     art=Article.empty; ind;
-    n_cut=0; n_appThm=0; n_absThm=0;
+    n_cut=0; n_appThm=0; n_absThm=0; n_subst=0;
     in_scope;
     progress_fun;
   } in

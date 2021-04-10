@@ -40,8 +40,6 @@ module Infix = struct
 end
 include Infix
 
-
-
 let set_file buf filename =
   let open Lexing in
   buf.lex_curr_p <- {buf.lex_curr_p with pos_fname=filename;};
