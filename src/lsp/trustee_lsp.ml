@@ -70,7 +70,7 @@ let trustee_server _ctx = object (self)
              TA.process_stmt idx tyst
                ~on_show:(fun loc msg ->
                    let range = lsp_range_of_loc loc in
-                   let message = Fmt.asprintf "@[info: %a@]" msg() in
+                   let message = Fmt.asprintf "@[%a@]" msg() in
                    Log.debugf 5 (fun k->k"LSP info loc: %a"
                                     Yojson.Safe.pp (Range.yojson_of_t range));
                    let d = LP.Diagnostic.create
@@ -80,7 +80,7 @@ let trustee_server _ctx = object (self)
                  )
                ~on_error:(fun loc e ->
                    let range = lsp_range_of_loc loc in
-                   let message = Fmt.asprintf "@[err: %a@]" e() in
+                   let message = Fmt.asprintf "@[%a@]" e() in
                    let d = LP.Diagnostic.create
                        ~severity:LP.DiagnosticSeverity.Error ~range ~message () in
                    diags := d :: !diags
@@ -214,6 +214,7 @@ let trustee_server _ctx = object (self)
 let setup_logger_ () =
   if true || Sys.getenv_opt "LSPLOG"=Some"1" then (
     let oc = open_out "/tmp/lsp.log" in
+    Log.mutex_ := Some (Mutex.create());
     at_exit (fun () -> flush oc; close_out_noerr oc);
     let out = Format.formatter_of_out_channel oc in
     Log.set_debug_out out;

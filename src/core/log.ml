@@ -10,14 +10,17 @@ let get_level () = !debug_level_
 let debug_fmt_ = ref Format.err_formatter
 
 let set_debug_out f = debug_fmt_ := f
+let mutex_ = ref None
 
 (* does the printing, inconditionally *)
 let debug_real_ l k =
+  let mut = !mutex_ in
   k (fun fmt ->
+    CCOpt.iter Mutex.lock mut;
     Format.fprintf !debug_fmt_ "@[<2>@{<Blue>[%d|%.3f]@}@ "
       l (Unix.gettimeofday() -. start_);
     Format.kfprintf
-      (fun fmt -> Format.fprintf fmt "@]@.")
+      (fun fmt -> Format.fprintf fmt "@]@."; CCOpt.iter Mutex.unlock mut)
       !debug_fmt_ fmt)
 
 let[@inline] debugf l k =
