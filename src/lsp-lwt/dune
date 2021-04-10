@@ -1,6 +1,0 @@
-
-(library
-  (name lsp_lwt)
-  (public_name lsp-lwt)
-  (flags :standard -warn-error -a+8)
-  (libraries containers lwt lwt.unix lsp))
