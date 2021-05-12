@@ -2,4 +2,4 @@
 (executable
   (name trustee_ot)
   (flags :standard -warn-error -a+8 -open Trustee_core.Sigs)
-  (libraries containers unix trustee.core trustee.opentheory))
+  (libraries containers unix trustee.core trustee-opentheory))

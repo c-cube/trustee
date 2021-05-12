@@ -14,5 +14,6 @@
 
 (rule
  (alias    runtest)
+ (package trustee)
  (action  (run ./run_qtest.exe)))
 
