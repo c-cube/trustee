@@ -4,6 +4,10 @@
 
 (name trustee)
 (authors "Simon Cruanes")
+(maintainers "Simon Cruanes")
+(homepage "https://github.com/c-cube/trustee/")
+(source (github "c-cube/trustee"))
+(bug_reports "https://github.com/c-cube/trustee/issues")
 
 (package
   (name trustee)
