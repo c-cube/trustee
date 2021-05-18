@@ -1,7 +1,0 @@
-
-(executable
-  (package trustee-lsp)
-  (name trustee_lsp)
-  (public_name trustee-lsp)
-  (flags :standard -warn-error -a+8 -open Trustee_core.Sigs)
-  (libraries containers trustee.core trustee.syntax lsp linol))

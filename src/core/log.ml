@@ -1,4 +1,7 @@
 
+(* TODO: make this a super basic function reference;
+   use [Logs] in applications *)
+
 let enabled = true (* NOTE: change here for 0-overhead *)
 
 let start_ = Unix.gettimeofday()

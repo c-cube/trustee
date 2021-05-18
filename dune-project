@@ -31,14 +31,3 @@
     (dune (>= "2.0"))
     (containers (and (>= 3.0) (< 4.0)))
     (trustee (= :version))))
-
-(package
-  (name trustee-lsp)
-  (license MIT)
-  (synopsis "LSP server for trustee")
-  (depends
-    (dune (>= "2.0"))
-    (containers (and (>= 3.0) (< 4.0)))
-    (trustee (= :version))
-    (iter (>= 1.0))
-    (linol (and (>= 0.2) (< 0.3)))))
