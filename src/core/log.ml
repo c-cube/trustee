@@ -1,34 +1,43 @@
 
-(* TODO: make this a super basic function reference;
-   use [Logs] in applications *)
-
-let enabled = true (* NOTE: change here for 0-overhead *)
-
-let start_ = Unix.gettimeofday()
+let enabled = true (* change here to get 0 overhead *)
 
 let debug_level_ = ref 0
 let set_level l = debug_level_ := l
 let get_level () = !debug_level_
 
-let debug_fmt_ = ref Format.err_formatter
+type logger = {
+  log: 'a. int -> ((('a, Format.formatter, unit, unit) format4 -> 'a) -> unit) -> unit;
+}
 
-let set_debug_out f = debug_fmt_ := f
-let mutex_ = ref None
+let void_logger : logger = {
+  log=fun _ _ -> ();
+}
 
-(* does the printing, inconditionally *)
-let debug_real_ l k =
-  let mut = !mutex_ in
-  k (fun fmt ->
-    CCOpt.iter Mutex.lock mut;
-    Format.fprintf !debug_fmt_ "@[<2>@{<Blue>[%d|%.3f]@}@ "
-      l (Unix.gettimeofday() -. start_);
-    Format.kfprintf
-      (fun fmt -> Format.fprintf fmt "@]@."; CCOpt.iter Mutex.unlock mut)
-      !debug_fmt_ fmt)
+let formatter_logger out : logger =
+  let start = Unix.gettimeofday() in
+  { log=fun l k ->
+    k (fun fmt ->
+      Format.fprintf out "@[<2>@{<Blue>[%d|%.3f]@}@ "
+        l (Unix.gettimeofday() -. start);
+      Format.kfprintf
+        (fun fmt -> Format.fprintf fmt "@]@.")
+        out fmt)
+  }
+
+let logger_ = ref (formatter_logger Format.err_formatter)
+let set_logger l = logger_ := l
+
+let log_to_file ~filename : unit =
+  let oc = open_out filename in
+  let fmt = Format.formatter_of_out_channel oc in
+  set_logger (formatter_logger fmt);
+  at_exit (fun () ->
+      Format.fprintf fmt "@?"; (* flush *)
+      flush oc; close_out_noerr oc)
 
 let[@inline] debugf l k =
   if enabled && l <= !debug_level_ then (
-    debug_real_ l k;
+    (!logger_).log l k
   )
 
 let[@inline] debug l msg = debugf l (fun k->k "%s" msg)
