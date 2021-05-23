@@ -9,7 +9,6 @@ Brief list of features, current or being developed:
   Terms use De Bruijn indices for bound variables, are hashconsed, and polymorphism
   is semi-explicit (i.e. polymorphic constants are applied to types explicitly,
   but type quantifiers are still implicit).
-- a small LSP server for the meta-language, in `src/lsp/`
 - an OpenTheory library with a parser and a verifier based on trustee,
   in `src/opentheory/`
 
