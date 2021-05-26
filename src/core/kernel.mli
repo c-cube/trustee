@@ -240,10 +240,21 @@ module Thm : sig
   val pp_quoted : t Fmt.printer
 
   val concl : t -> expr
+
   val hyps_iter : t -> expr iter
+
   val hyps_l : t -> expr list
-  val has_hyps : t -> bool
+
+  val hyps_sorted_l : t -> expr list
+  (** List of hypothesis of this theorem, sorted, and deduplicated. *)
+  
   val n_hyps : t -> int
+  (** Number of hypothesis of this theorem *)
+
+  val has_hyps : t -> bool
+  (** Does this theorem have any hypothesis? Similar to [n_hyps th > 0]
+      but faster *)
+
   (* TODO: store proofs optionally *)
 
   val is_proof_of : t -> Goal.t -> bool
