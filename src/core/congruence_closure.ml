@@ -215,6 +215,8 @@ let update (self:t) : unit =
            n1.expl <- Some (n2, e_12);
          ))
       self.to_merge;
+    Vec.clear self.to_merge;
+
     Vec.iter
       (fun (Update_sig n) ->
          begin match n.sigt with
@@ -227,6 +229,7 @@ let update (self:t) : unit =
              | Some n' -> Vec.push self.to_merge (Merge (n,n',Exp_cong))
          end)
       self.to_update_sig;
+    Vec.clear self.to_update_sig;
   done;
   ()
 
