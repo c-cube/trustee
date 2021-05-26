@@ -1040,7 +1040,7 @@ module Thm = struct
 
   let pp out (th:t) =
     if has_hyps th then (
-      Fmt.fprintf out "@[<hv1>%a@;<1 -1>|-@ %a@]" (pp_list Expr.pp) (hyps_l th)
+      Fmt.fprintf out "@[<hv1>%a@;<1 -1>|-@ %a@]" (pp_list ~sep:", " Expr.pp) (hyps_l th)
         Expr.pp (concl th)
     ) else (
       Fmt.fprintf out "@[<1>|-@ %a@]" Expr.pp (concl th)
