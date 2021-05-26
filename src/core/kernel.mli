@@ -265,8 +265,8 @@ module Thm : sig
   val assume : ctx -> expr -> t
   (** `assume e` returns `e |- e`. *)
 
-  val axiom : ctx -> expr -> t
-  (** `axiom e` is `|- e`. Fails if [pledge_no_more_axioms] was called *)
+  val axiom : ctx -> expr list -> expr -> t
+  (** `axiom hyps e` is `hyps |- e`. Fails if [pledge_no_more_axioms] was called *)
 
   val cut : ctx -> t -> t -> t
   (** `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`.

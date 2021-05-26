@@ -1076,16 +1076,19 @@ module Thm = struct
     );
     make_ ctx (Expr.Set.singleton e) e
 
-  let axiom ctx e : t =
-    wrap_exn (fun k->k"in axiom `@[%a@]`:" Expr.pp e) @@ fun () ->
+  let axiom ctx hyps e : t =
+    wrap_exn (fun k->
+        let g = Goal.make_l hyps e in
+        k"in axiom `@[%a@]`:" Goal.pp g)
+    @@ fun () ->
     ctx_check_e_uid ctx e;
     if not ctx.ctx_axioms_allowed then (
       error "the context does not accept new axioms, see `pledge_no_more_axioms`"
     );
-    if not (is_bool_ ctx e) then (
+    if not (is_bool_ ctx e && List.for_all (is_bool_ ctx) hyps) then (
       error "axiom takes a boolean"
     );
-    make_ ctx Expr.Set.empty e
+    make_ ctx (Expr.Set.of_list hyps) e
 
   let merge_hyps_ = Expr.Set.union
 

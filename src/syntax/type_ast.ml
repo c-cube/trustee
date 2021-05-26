@@ -1532,7 +1532,7 @@ module Process_stmt = struct
         (fun () -> Ty_infer.infer_expr_with_ty self.st thm Expr.bool)
     in
     let ke = Expr.to_k_expr self.st.ctx e in
-    let th = K.Thm.axiom self.st.ctx ke in
+    let th = K.Thm.axiom self.st.ctx [] ke in
     Typing_state.define_thm self.st name {A.view=th;loc=e.loc};
     e
 

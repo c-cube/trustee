@@ -57,7 +57,7 @@ let t_subst1 _ctx =
   let c_foo = new_const "foo" tau in
   let foo = const c_foo in
   let th =
-    Thm.axiom ctx (v x = (lambda x (v x) @@ v x))
+    Thm.axiom ctx [] (v x = (lambda x (v x) @@ v x))
   in
   let x_tau = v' "x" tau in
   let subst =
