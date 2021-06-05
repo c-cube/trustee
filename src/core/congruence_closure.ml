@@ -186,11 +186,12 @@ let iter_class_ (n0:node) f : unit =
 (* make sure [n1] is the root of its proof forest *)
 let[@unroll 2] rec reroot_at (n1:node) : unit =
   match n1.expl with
-  | None -> ()
+  | None -> assert (n1.root == n1); ()
   | Some (n2, e_12) ->
     reroot_at n2;
     assert (n2.expl == None);
     n2.expl <- Some (n1, e_12);
+    n1.expl <- None;
     ()
 
 (* main repair loop *)
@@ -201,6 +202,10 @@ let update (self:t) : unit =
          let r1 = find n1 in
          let r2 = find n2 in
          if r1 != r2 then (
+           (* add explanation for the merge *)
+           reroot_at n1;
+           assert (n1.expl == None);
+           n1.expl <- Some (n2, e_12);
            (* merge r1 into r2 *)
            iter_class_ r1
              (fun n1' ->
@@ -209,10 +214,6 @@ let update (self:t) : unit =
                 List.iter
                   (fun n1'_p -> Vec.push self.to_update_sig (Update_sig n1'_p))
                   n1'.parents);
-           (* add explanation for the merge *)
-           reroot_at n1;
-           assert (n1.expl == None);
-           n1.expl <- Some (n2, e_12);
          ))
       self.to_merge;
     Vec.clear self.to_merge;
