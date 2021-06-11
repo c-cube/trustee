@@ -243,7 +243,7 @@ let add_thm (self:t) (th:K.thm) : unit =
   | None ->
     errorf (fun k->k"cannot add non-equational theorem %a" K.Thm.pp_quoted th)
 
-let prove_cc (ctx:K.ctx) (hyps:K.thm list) (t:E.t) (u:E.t) : _ option =
+let prove_cc_eqn (ctx:K.ctx) (hyps:K.thm list) (t:E.t) (u:E.t) : _ option =
   let self = create ctx in
   List.iter (add_thm self) hyps;
   let n_t = add_ self t in
@@ -256,3 +256,21 @@ let prove_cc (ctx:K.ctx) (hyps:K.thm list) (t:E.t) (u:E.t) : _ option =
   ) else (
     None
   )
+
+let prove_cc_bool (ctx:K.ctx) (hyps:K.thm list) (concl: E.t) : _ option =
+  match E.unfold_eq concl with
+  | Some (t,u) -> prove_cc_eqn ctx hyps t u
+  | None ->
+    match List.partition (fun u -> CCOpt.is_none (E.unfold_eq (K.Thm.concl u))) hyps with
+    | [hyp_p], hyp_eqns ->
+      begin match prove_cc_eqn ctx hyp_eqns (K.Thm.concl hyp_p) concl with
+        | None -> None
+        | Some cc_lemma ->
+          (* by bool_eq on [… |- p], [eqns |- p=concl], we get
+             [p, eqns |- concl] *)
+          Some (K.Thm.bool_eq ctx hyp_p cc_lemma)
+      end
+    | _ ->
+      Log.debugf 5 (fun k->k"prove_cc_bool: cannot pick a predicate hypothesis");
+      None
+
