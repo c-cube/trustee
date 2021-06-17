@@ -7,7 +7,6 @@ module CC = Trustee_core.Congruence_closure
 module Make() = struct
   include Make()
 
-  let (===) = app_eq
   let a = const a []
   let b = const b []
   let c = const c []
@@ -60,7 +59,7 @@ let reg2 _ctx =
   let open M in
 
   let hyps = [
-    ((f2 c_1 c_0) = c_2);
+    ((f2 c_1 c_0) === c_2);
     (c_1 === (f2 c_0 c_2));
     (c_1 === (f2 c_1 c_1));
     (c_1 === (f2 c_2 c_0));
@@ -99,11 +98,37 @@ let reg3 _ctx =
   assert_bool "is-res" (CCOpt.is_some res);
   ()
 
+let reg3' _ctx =
+  let module M = Make() in
+  let open M in
+
+  (* like reg3, but reverse order *)
+  let hyps = [
+    ((f2 c_2 (f2 c_1 c_2)) === (f2 (f2 c_2 c_1) c_2));
+    ((f2 c_2 (f2 c_0 c_2)) === (f2 (f2 c_2 c_0) c_2));
+    ((f2 c_1 (f2 c_2 c_2)) === (f2 (f2 c_1 c_2) c_2));
+    (c_0 === c9);
+    (c_2 === c8);
+    (c_1 === c7);
+    (c_2 === c6);
+    (c_0 === (f2 c_2 c_2));
+    (c_2 === (f2 c_2 c_1));
+    (c_1 === (f2 c_2 c_0));
+    (c_0 === (f2 c_1 c_0));
+    (c_1 === (f2 c_0 c_2));
+  ] |> List.map Thm.assume in
+  let goal = ((f2 c6 c8) === (f2 c7 c9)) in
+  let res = CC.prove_cc_bool ctx hyps goal in
+  if !debug_ then Format.printf "reg3': %a@." (Fmt.Dump.option Thm.pp) res;
+  assert_bool "is-res" (CCOpt.is_some res);
+  ()
+
 
 let suite =
   "cc" >::: [
     "reg1" >:: reg1;
     "reg2" >:: reg2;
     "reg3" >:: reg3;
+    "reg3'" >:: reg3';
   ]
 

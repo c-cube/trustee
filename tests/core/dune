@@ -7,4 +7,5 @@
 
 (rule
   (alias runtest)
+  (locks /test)
   (action (run ./run_tests.exe -ci false -runner sequential)))

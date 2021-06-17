@@ -41,6 +41,6 @@ module Make() = struct
   let c_plus = new_const "+" (tau @-> tau @-> tau)
   let plus a b = app_l (const' c_plus) [a;b]
   let c_eq = K.Const.eq ctx
-  let (=) = E.app_eq
+  let (===) = app_eq
   (*   let () = K.Const.set_fixity c_plus (F_right_assoc 20) *)
 end
