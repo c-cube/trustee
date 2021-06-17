@@ -346,6 +346,80 @@ module BVar = struct
   let to_string = Fmt.to_string pp
 end
 
+module type EXPR = sig
+  type t = expr
+
+  type view = expr_view =
+    | E_kind
+    | E_type
+    | E_var of var
+    | E_bound_var of bvar
+    | E_const of const * t list
+    | E_app of t * t
+    | E_lam of string * expr * expr
+    | E_arrow of expr * expr
+
+  include Sigs.EQ with type t := t
+  include Sigs.HASH with type t := t
+  include Sigs.COMPARE with type t := t
+  include Sigs.PP with type t := t
+
+  val view : t -> view
+  val ty : t -> ty option
+  val ty_exn : t -> ty
+  val is_closed : t -> bool
+  val is_eq_to_type : t -> bool
+  val is_eq_to_bool : t -> bool
+  val is_a_bool : t -> bool
+  val is_a_type : t -> bool
+  (** Is the type of [e] equal to [Type]? *)
+
+  val iter : f:(bool -> t -> unit) -> t -> unit
+  val exists : f:(bool -> t -> bool) -> t -> bool
+  val for_all : f:(bool -> t -> bool) -> t -> bool
+
+  val contains : t -> sub:t -> bool
+  val free_vars : ?init:Var.Set.t -> t -> Var.Set.t
+  val free_vars_iter : t -> var Iter.t
+
+  val unfold_app : t -> t * t list
+  val unfold_eq : t -> (t * t) option
+  val unfold_arrow : t -> t list * t
+  val as_const : t -> (Const.t * ty list) option
+  val as_const_exn : t -> Const.t * ty list
+
+  module Set : CCSet.S with type elt = t
+  module Map : CCMap.S with type key = t
+  module Tbl : CCHashtbl.S with type key = t
+
+  type 'a with_ctx
+
+  val subst : (recursive:bool -> t -> subst -> t) with_ctx
+
+  val type_ : (t) with_ctx
+  val bool : (t) with_ctx
+  val eq : (ty -> t) with_ctx
+  val select : (ty -> t) with_ctx
+  val var : (var -> t) with_ctx
+  val const : (const -> ty list -> t) with_ctx
+  val new_const : (?def_loc:location -> string -> ty_var list -> ty -> const) with_ctx
+  val new_ty_const : (?def_loc:location -> string -> int -> const) with_ctx
+  val var_name : (string -> ty -> t) with_ctx
+  val bvar : (int -> ty -> t) with_ctx
+  val app : (t -> t -> t) with_ctx
+  val app_l : (t -> t list -> t) with_ctx
+  val app_eq : (t -> t -> t) with_ctx
+  val lambda : (var -> t -> t) with_ctx
+  val lambda_l : (var list -> t -> t) with_ctx
+  val lambda_db : (name:string -> ty_v:ty -> t -> t) with_ctx
+  val arrow : (t -> t -> t) with_ctx
+  val arrow_l : (t list -> t -> t) with_ctx
+
+  val map : (f:(bool -> t -> t) -> t -> t) with_ctx
+
+  val db_shift: (t -> int -> t) with_ctx
+end
+
 module Expr = struct
   type t = expr
 
@@ -620,7 +694,7 @@ module Expr = struct
       let hash (t,k) = H.combine3 27 (hash t) (H.int k)
     end)
 
-  let subst_ ~recursive ctx e0 (subst:subst) : t =
+  let subst_ ctx ~recursive e0 (subst:subst) : t =
     (* cache for types and some terms *)
     let cache_ = E_int_tbl.create 16 in
     let ty_subst_empty_ = Var.Map.is_empty subst.ty in
@@ -694,8 +768,8 @@ module Expr = struct
       loop 0 e0
     )
 
-  let[@inline] subst ~recursive ctx e subst =
-    subst_ ~recursive ctx e subst
+  let[@inline] subst ctx ~recursive e subst =
+    subst_ ctx ~recursive e subst
 
   let const ctx c args : t =
     ctx_check_e_uid ctx c.c_ty;
@@ -872,6 +946,41 @@ module Expr = struct
   module Tbl = CCHashtbl.Make(AsKey)
 end
 
+module type EXPR_FOR_CTX = EXPR
+  with type 'a with_ctx := 'a
+   and module Tbl = Expr.Tbl
+     and module Set = Expr.Set
+     and module Map = Expr.Map
+
+let make_expr (ctx: ctx) : (module EXPR_FOR_CTX) =
+  let module M = struct
+    include Expr
+    let subst = subst ctx
+    let type_ = type_ ctx
+    let bool = bool ctx
+    let eq = eq ctx
+    let select = select ctx
+    let var = var ctx
+    let const = const ctx
+    let new_const = new_const ctx
+    let new_ty_const = new_ty_const ctx
+    let bvar = bvar ctx
+    let var_name = var_name ctx
+    let app = app ctx
+    let app_l = app_l ctx
+    let app_eq = app_eq ctx
+    let lambda = lambda ctx
+    let lambda_l = lambda_l ctx
+    let lambda_db = lambda_db ctx
+    let arrow = arrow ctx
+    let arrow_l = arrow_l ctx
+    let map = map ctx
+    let db_shift = db_shift ctx
+  end in
+  (module M)
+
+(* TODO: write Expr_for_ctx; then use it in tests *)
+
 module Subst = struct
   type t = subst = {
     ty: expr Var.Map.t; (* ty subst *)
@@ -1027,6 +1136,45 @@ module New_ty_def = struct
 end
 
 (** {2 Theorems and Deduction Rules} *)
+
+module type THM = sig
+  type 'a with_ctx
+
+  type t = thm
+
+  include Sigs.PP with type t := t
+  val pp_quoted : t Fmt.printer
+  val concl : t -> expr
+  val hyps_iter : t -> expr iter
+  val hyps_l : t -> expr list
+  val hyps_sorted_l : t -> expr list
+  val n_hyps : t -> int
+  val has_hyps : t -> bool
+  val is_proof_of : t -> Goal.t -> bool
+  val assume : (expr -> t) with_ctx
+  val axiom : (expr list -> expr -> t) with_ctx
+  val cut : (t -> t -> t) with_ctx
+  val refl : (expr -> t) with_ctx
+  val congr : (t -> t -> t) with_ctx
+  val subst : recursive:bool -> (t -> Subst.t -> t) with_ctx
+  val sym : (t -> t) with_ctx
+  val trans : (t -> t -> t) with_ctx
+  val bool_eq : (t -> t -> t) with_ctx
+  val bool_eq_intro : (t -> t -> t) with_ctx
+  val beta_conv : (expr -> t) with_ctx
+  val abs : (t -> var -> t) with_ctx
+  val new_basic_definition :
+    (?def_loc:location -> expr -> t * const) with_ctx
+  val new_basic_type_definition :
+    (?ty_vars:ty_var list ->
+    name:string ->
+    abs:string ->
+    repr:string ->
+    thm_inhabited:thm ->
+    unit ->
+    New_ty_def.t) with_ctx
+end
+
 module Thm = struct
   type t = thm
 
@@ -1351,8 +1499,30 @@ module Thm = struct
     {New_ty_def.
       tau; c_repr; c_abs; fvars=ty_vars_l; repr_x;
       repr_thm; abs_x; abs_thm}
-
 end
+
+module type THM_FOR_CTX = THM with type 'a with_ctx := 'a
+
+let make_thm (ctx:ctx) : (module THM_FOR_CTX) =
+  let module M = struct
+    include Thm
+
+    let assume = assume ctx
+    let axiom = axiom ctx
+    let cut = cut ctx
+    let refl = refl ctx
+    let congr = congr ctx
+    let subst = subst ctx
+    let sym = sym ctx
+    let trans = trans ctx
+    let bool_eq = bool_eq ctx
+    let bool_eq_intro = bool_eq_intro ctx
+    let beta_conv = beta_conv ctx
+    let abs = abs ctx
+    let new_basic_definition = new_basic_definition ctx
+    let new_basic_type_definition = new_basic_type_definition ctx
+  end in
+  (module M)
 
 module Theory = struct
   type t = theory
