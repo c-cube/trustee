@@ -1,4 +1,5 @@
 
+module Fmt = CCFormat
 module K = Trustee_core.Kernel
 module E = K.Expr
 
