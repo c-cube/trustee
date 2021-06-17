@@ -3,6 +3,7 @@ open OUnit2
 
 let test = "trustee" >::: [
   Test_kernel.suite;
+  Test_cc.suite;
 ]
 
 let () =
