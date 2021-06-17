@@ -1,5 +1,5 @@
 
-# Trustee [![build](https://github.com/c-cube/trustee/workflows/build/badge.svg)](https://github.com/c-cube/trustee/actions)
+# Trustee [![build](https://github.com/c-cube/trustee/workflows/main/badge.svg)](https://github.com/c-cube/trustee/actions)
 
 A LCF-style kernel of trust intended for certified ATP and proof checking for FOL/HOL.
 
