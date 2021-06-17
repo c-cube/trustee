@@ -93,7 +93,7 @@ let find_common_ancestor (self:t) (n1:node) (n2:node) : node =
   in
 
   let res = find n2 in
-  E.Tbl.reset tbl; (* be sure to reset *)
+  E.Tbl.clear tbl; (* be sure to reset temporary table *)
   res
 
 let rec prove_eq (self:t) (n1:node) (n2:node) : K.thm =
@@ -165,7 +165,7 @@ and add_uncached_ self e =
   E.Tbl.add self.nodes e node;
   List.iter (fun sub -> sub.parents <- node :: sub.parents) subs;
   if CCOpt.is_some sigt then (
-    Vec.push self.to_update_sig (Update_sig node)
+    Vec.push self.to_update_sig @@ Update_sig node;
   );
   node
 
@@ -197,40 +197,43 @@ let[@unroll 2] rec reroot_at (n1:node) : unit =
 (* main repair loop *)
 let update (self:t) : unit =
   while not (Vec.is_empty self.to_merge && Vec.is_empty self.to_update_sig) do
-    Vec.iter
-      (fun (Merge (n1,n2,e_12)) ->
-         let r1 = find n1 in
-         let r2 = find n2 in
-         if r1 != r2 then (
-           (* add explanation for the merge *)
-           reroot_at n1;
-           assert (n1.expl == None);
-           n1.expl <- Some (n2, e_12);
-           (* merge r1 into r2 *)
-           iter_class_ r1
-             (fun n1' ->
-                n1'.root <- r2;
-                (* update signature of [parents(n1')] *)
-                List.iter
-                  (fun n1'_p -> Vec.push self.to_update_sig (Update_sig n1'_p))
-                  n1'.parents);
-         ))
-      self.to_merge;
-    Vec.clear self.to_merge;
+    while not (Vec.is_empty self.to_update_sig) do
+      let Update_sig n = Vec.pop_exn self.to_update_sig in
+      begin match n.sigt with
+        | None -> ()
+        | Some s ->
+          let s' = canon_sig s in
+          match Sig_tbl.get self.sigs s' with
+          | None -> Sig_tbl.add self.sigs s' n
+          | Some n' when are_eq n n' -> ()
+          | Some n' ->
+            Vec.push self.to_merge @@ Merge (n,n',Exp_cong);
+      end
+    done;
 
-    Vec.iter
-      (fun (Update_sig n) ->
-         begin match n.sigt with
-           | None -> ()
-           | Some s ->
-             let s' = canon_sig s in
-             match Sig_tbl.get self.sigs s' with
-             | None -> Sig_tbl.add self.sigs s' n
-             | Some n' when are_eq n n' -> ()
-             | Some n' -> Vec.push self.to_merge (Merge (n,n',Exp_cong))
-         end)
-      self.to_update_sig;
-    Vec.clear self.to_update_sig;
+    while not (Vec.is_empty self.to_merge) do
+      let Merge (n1,n2,e_12) = Vec.pop_exn self.to_merge in
+      let r1 = find n1 in
+      let r2 = find n2 in
+      if r1 != r2 then (
+        (* add explanation for the merge *)
+        reroot_at n1;
+        assert (n1.expl == None);
+        n1.expl <- Some (n2, e_12);
+        (* merge r1 into r2 *)
+        iter_class_ r1
+          (fun n1' ->
+             n1'.root <- r2;
+             (* update signature of [parents(n1')] *)
+             List.iter
+               (fun n1'_p -> Vec.push self.to_update_sig @@ Update_sig n1'_p)
+               n1'.parents);
+        (* merge the equiv classes *)
+        let n1_next = n1.next in
+        n1.next <- n2.next;
+        n2.next <- n1_next;
+      )
+    done
   done;
   ()
 
@@ -239,7 +242,9 @@ let add_thm (self:t) (th:K.thm) : unit =
   | Some (a,b) ->
     let a = add_ self a in
     let b = add_ self b in
-    Vec.push self.to_merge (Merge (a,b,Exp_merge th));
+    if not (are_eq a b) then (
+      Vec.push self.to_merge (Merge (a,b,Exp_merge th));
+    );
   | None ->
     errorf (fun k->k"cannot add non-equational theorem %a" K.Thm.pp_quoted th)
 
