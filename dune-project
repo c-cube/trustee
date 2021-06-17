@@ -18,6 +18,7 @@
     (dune (>= "2.0"))
     (containers (and (>= 3.0) (< 4.0)))
     (iter (>= 1.0))
+    (ocaml (>= 4.06.0))
     (qtest :with-test)
     (ounit2 :with-test)
     (qcheck :with-test)
