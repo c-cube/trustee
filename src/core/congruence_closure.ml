@@ -146,6 +146,18 @@ and explain_along_ (self:t) (n0:node) (parent:node) : K.Thm.t =
   in
   loop (K.Thm.refl self.ctx n0.e) n0
 
+(* TODO: add signature for lambdas and handle congruence on lambdas.
+
+   When adding `\x. t`, look at the DB depth of `t`. Lambda terms of distinct DB depths
+    can never be merged, so we can just allocate a distinct fresh variable for each
+   DB depth and add `t[x_db / x]` to the congruence with signature `Lam(t[x_db/x])`.
+   When merging two such classes, the proof is [Thm.abs] which re-abstracts
+   over `x_db`.
+
+   TODO: also add some tests, like [(a=b), (\x. f(a,x)) c = f(a,c) |- (\x. f(b,x)) =b]
+*)
+
+
 let rec add_ (self:t) (e:E.t) : node =
   try E.Tbl.find self.nodes e
   with Not_found ->
