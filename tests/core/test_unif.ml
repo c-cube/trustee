@@ -43,7 +43,7 @@ let reg1 _ctxt =
   let t1 = f2 x y in
   let t2 = f2 a x in
   let subst = Unif.match_ t1 t2 |> assert_is_some "must match" in
-  Format.eprintf "subst %a@." K.Subst.pp subst;
+  (*   Format.eprintf "subst %a@." K.Subst.pp subst; *)
   assert_eq_expr (E.subst ~recursive:false t1 subst) t2
 
 let reg2 _ctxt =
@@ -53,7 +53,7 @@ let reg2 _ctxt =
   let t2 = f2 (f2 x y) z in
   let t2' = f2 z (f2 x y) in
   let subst = Unif.match_ lhs t2 |> assert_is_some "must match" in
-  Format.eprintf "subst %a@." K.Subst.pp subst;
+  (*   Format.eprintf "subst %a@." K.Subst.pp subst; *)
   assert_eq_expr (E.subst ~recursive:false rhs subst) t2'
 
 let suite =

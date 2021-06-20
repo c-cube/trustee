@@ -6,18 +6,41 @@ module E = K.Expr
 type conv = Conv.t
 type rw_step = Conv.rw_step = Same | Rw_step of K.thm
 
-let thm_res_eqn thm : E.t * E.t =
-  match E.unfold_eq (K.Thm.concl thm) with
-  | None -> errorf (fun k->k"rw: theorem %a should be an equation" K.Thm.pp thm)
+let unfold_eqn_ e =
+  match E.unfold_eq e with
+  | None -> errorf (fun k->k"rw: %a should be an equation" K.Expr.pp e)
   | Some pair -> pair
+let thm_res_eqn thm : E.t * E.t =
+  unfold_eqn_ (K.Thm.concl thm)
 
+let[@inline] arg_n i e =
+  let _, args = K.Expr.unfold_app e in
+  if i<List.length args then List.nth args i
+  else errorf (fun k->k"`%a` does not have %d args" K.Expr.pp e (i+1))
+let arg0 = arg_n 0
+let arg1 = arg_n 1
+let[@inline] eq_lhs e = fst (unfold_eqn_ e)
+let[@inline] eq_rhs e = snd (unfold_eqn_ e)
 let[@inline] thm_res_rhs th : E.t = snd (thm_res_eqn th)
 let[@inline] thm_res_lhs th : E.t = fst (thm_res_eqn th)
 
 let bottom_up (conv:conv) : conv =
   fun ctx (e0 : E.t) : rw_step ->
+  (* cache, to normalize as a DAG *)
+  let tbl = E.Tbl.create 8 in
   (* normalize [e] *)
   let rec loop e : Conv.rw_step =
+    match E.view e with
+    | E.E_kind | E.E_type | E.E_arrow _ -> Same
+    | _ ->
+      match E.Tbl.get tbl e with
+      | Some step -> step
+      | None ->
+        let step = loop_uncached e in
+        E.Tbl.add tbl e step;
+        step
+
+  and loop_uncached e : rw_step =
     match E.view e with
     | E.E_kind | E.E_type | E.E_arrow _ -> Same
     | E.E_app (f, x) ->
@@ -46,19 +69,80 @@ let bottom_up (conv:conv) : conv =
     match conv ctx e with
     | Same -> step1
     | Rw_step th2 as step2 ->
-      let step, e' =
-        match step1 with
-        | Same -> step2, thm_res_rhs th2
-        | Rw_step th1 ->
-          let th = K.Thm.trans ctx th1 th2 in
-          Rw_step th, thm_res_rhs th
-      in
-      try_conv step e' (* fixpoint here *)
+      (* call [loop] again, to get to a fixpoint *)
+      let step' = loop (thm_res_rhs th2) in
+      Conv.(chain_res ctx step1 (chain_res ctx step2 step'))
   in
   loop e0
 
-module Conv = struct
+let bottom_up_apply conv ctx e =
+  Conv.apply (bottom_up conv) ctx e
+
+module Pos = struct
+  type t =
+    | Root
+    | App0 of t
+    | App1 of t
+    (* | App_n of int * t *)
+    | Lam_body of t
+
+  let rec pp out = function
+    | Root -> Fmt.fprintf out "@<1>ε"
+    | App0 p -> Fmt.fprintf out "left.%a" pp p
+    | App1 p -> Fmt.fprintf out "right.%a" pp p
+    (*     | App_n (i,p) -> Fmt.fprintf out "%d.%a" i pp p *)
+    | Lam_body p -> Fmt.fprintf out "body.%a" pp p
+
+  let root = Root
+  let app0 p = App0 p
+  let app1 p = App1 p
+(*   let app_n i p = App_n (i,p) *)
+  let eqn0 p = app0 @@ app1 p
+  let eqn1 p = app1 p
+  let lam_body p = Lam_body p
 end
+
+let under (p:Pos.t) (conv:Conv.t) : Conv.t =
+  fun ctx e ->
+  let module Th = (val K.make_thm ctx) in
+  let rec loop_ p e =
+    match p, E.view e with
+    | Pos.Root, _ -> conv ctx e
+    | Pos.App0 p, E.E_app (f, a) ->
+      begin match loop_ p f with
+        | Same -> Same
+        | Rw_step th -> Rw_step (Th.congr th (Th.refl a))
+      end
+    | Pos.App1 p, E.E_app (f, a) ->
+      begin match loop_ p a with
+        | Same -> Same
+        | Rw_step th -> Rw_step (Th.congr (Th.refl f) th)
+      end
+    | Lam_body p, E.E_lam _ ->
+      let v, bod = E.open_lambda_exn ctx e in
+      begin match loop_ p bod with
+        | Same -> Same
+        | Rw_step th ->
+          Rw_step (Th.abs v th)
+      end
+      (*TODO
+    | Pos.App_n (i, p), _ ->
+      let f, args = E.unfold_app e in
+      if i < List.length args then (
+        begin match loop_ p bod with
+          | Same -> Same
+          | Rw_step th ->
+            Rw_step (Th.abs v th)
+        end
+
+      ) else Same
+        *)
+    | _ -> Same
+  in
+  loop_ p e
+
+let under_apply p conv ctx e =
+  Conv.apply (under p conv) ctx e
 
 module Rule = struct
   type t = {
@@ -73,7 +157,9 @@ module Rule = struct
         mk_rhs: (K.ctx -> K.expr -> K.Subst.t -> K.thm option);
       }
 
-  let mk_rule lhs th : t = {lhs; rhs=Basic {th}}
+  let mk_rule th : t =
+    let lhs = thm_res_lhs th in
+    {lhs; rhs=Basic {th}}
   let mk_dynamic lhs mk_rhs : t = {lhs; rhs=Dynamic {mk_rhs}}
 
   let pp out (self:t) =
@@ -129,6 +215,7 @@ module RuleSet = struct
 end
 
 module AC_rule = struct
+  type ordered = bool
   type t = {
     f: K.expr;
     (** A binary AC function *)
@@ -139,27 +226,103 @@ module AC_rule = struct
     comm: K.thm;
     (** Theorem [|- f x y = f y x] *)
 
-    rw_assoc: Rule.t; (* built from assoc *)
-    rw_comm: Rule.t; (* built from comm *)
+    rules: (Rule.t * ordered) list;
+    (** List of rules, with a flag stating whether they are already
+        oriented left-to-right or not. *)
   }
 
-  let make ~f ~assoc ~comm () : t =
-    (* TODO: check the shape of assoc/comm? *)
+  let make ctx ~f ~assoc ~comm () : t =
+    let module E = (val K.make_expr ctx) in
+    let module Th = (val K.make_thm ctx) in
     (* TODO: polymorphism? *)
-    let rw_assoc = Rule.mk_rule (thm_res_lhs assoc) assoc in
-    let rw_comm = Rule.mk_rule (thm_res_lhs comm) comm in
-    {f; assoc; comm; rw_assoc; rw_comm}
+
+    let tau = E.ty_exn f |> E.return_ty in
+    let x = E.var_name "x" tau in
+    let y = E.var_name "y" tau in
+    let z = E.var_name "z" tau in
+    let assoc_shape =
+      E.(app_eq (app_l f [app_l f [x; y]; z]) (app_l f [x; app_l f [y;z]]))
+    and comm_shape =
+      E.(app_eq (app_l f [x; y]) (app_l f [y; x]))
+    in
+
+    if not (Unif.is_alpha_equiv assoc_shape (Th.concl assoc)) then (
+      errorf (fun k->k"wrong shape for associativity theorem:@ expected `%a`@ got %a"
+                 E.pp assoc_shape E.pp (Th.concl assoc))
+    );
+    if not (Unif.is_alpha_equiv comm_shape (Th.concl comm)) then (
+      errorf (fun k->k"wrong shape for commutativity theorem:@ expected `%a`@ got %a"
+                 E.pp comm_shape E.pp (Th.concl comm))
+    );
+
+    let rule_assoc = Rule.mk_rule assoc in
+    let rule_comm = Rule.mk_rule comm in
+
+    let rw_with rule e : Th.t =
+      Conv.apply (Rule.to_conv rule) ctx e
+    in
+    let rw_at pos rule e : Th.t =
+      under_apply pos (Rule.to_conv rule) ctx e
+    in
+
+    let assoc' = Th.sym assoc in
+
+    (* from "E: a brainiac theorem prover", the ground complete system
+       is an extension of AC:
+       [f (f x y) z = f x (f y z)] (assoc)
+       [f x y = f y x] (comm)
+       [f x (f y z) = f z (f x y)] (r1)
+       [f x (f y z) = f y (f x z)] (r2)
+       [f x (f y z) = f z (f y x)] (r3)
+    *)
+    let r1 =
+      let r1' = rw_at Pos.(eqn1 root) rule_comm (Th.concl assoc') in
+      Th.bool_eq assoc' r1'
+    and r2 =
+      (*
+         [f x (f y z) = f (f x y) z] (assoc')
+         have: [f (f x y) z = f (f y x) z]
+         trans: [f x (f y z) = f (f y x) z]
+         assoc: [f x (f y z) = f y (f x z)]
+      *)
+      let r1 = rw_at Pos.(eqn1 @@ app0 @@ app1 @@ root) rule_comm
+          (Th.concl assoc') in
+      let r2 = Th.bool_eq assoc' r1 in
+      let r3 = rw_with rule_assoc (thm_res_rhs r2) in
+      Th.trans r2 r3
+    and r3 =
+      (*
+         [f x (f y z) = f (f x y) z] (assoc')
+         comm: [f (f x y) z = f z (f x y)]
+         comm: [f x (f y z) = f z (f y x)]
+      *)
+      let r1 = rw_at Pos.(eqn1 root) rule_comm (Th.concl assoc') in
+      let r2 = Th.bool_eq assoc' r1 in
+      let r3 = rw_at Pos.(eqn1 @@ app1 root) rule_comm (Th.concl r2) in
+      Th.bool_eq r2 r3
+    in
+    let rules = [
+      rule_assoc, true;
+      rule_comm, false;
+      Rule.mk_rule r1, false;
+      Rule.mk_rule r2, false;
+      Rule.mk_rule r3, false;
+    ] in
+    {f; assoc; comm; rules; }
 
   let pp out self = Fmt.fprintf out "(@[ac-rw@ :f %a@])" K.Expr.pp self.f
 
   let to_conv self : conv = fun ctx e ->
-    match Rule.to_conv self.rw_assoc ctx e with
-    | Rw_step _ as r -> r
-    | Same ->
-      match Rule.to_conv self.rw_comm ctx e with
-      | Rw_step th as r when KBO.gt (thm_res_lhs th) (thm_res_rhs th) ->
-        (* rewrite, but only in a decreasing way *)
-        r
-      | _ -> Same
-
+    (* try rules one by one *)
+    let rec loop_ = function
+      | [] -> Same
+      | (rule, ordered) :: tl ->
+        match Rule.to_conv rule ctx e with
+        | Rw_step _ as r when ordered -> r
+        | Rw_step th as r when KBO.gt (thm_res_lhs th) (thm_res_rhs th) ->
+          (* rewrite, but only in a decreasing way *)
+          r
+        | _ -> loop_ tl
+    in
+    loop_ self.rules
 end

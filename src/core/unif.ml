@@ -105,3 +105,19 @@ let match_exn ?(subst=Su.empty) a b = match_rec_ subst a b
 let match_ ?subst a b =
   try Some (match_exn ?subst a b)
   with Fail -> None
+
+let alpha_equiv_exn ?subst a b =
+  let subst = match_exn ?subst a b in
+  if K.Subst.is_renaming subst then subst
+  else raise Fail
+
+let alpha_equiv ?subst a b =
+  try Some (alpha_equiv_exn ?subst a b)
+  with Fail -> None
+
+let is_alpha_equiv ?subst a b : bool =
+  CCOpt.is_some (alpha_equiv ?subst a b)
+
+
+
+

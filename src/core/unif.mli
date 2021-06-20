@@ -14,3 +14,10 @@ val unify : ?subst:subst -> K.expr -> K.expr -> subst option
 val match_exn : ?subst:subst -> K.expr -> K.expr -> subst
 
 val match_ : ?subst:subst -> K.expr -> K.expr -> subst option
+
+val alpha_equiv_exn : ?subst:subst -> K.expr -> K.expr -> subst
+
+val alpha_equiv : ?subst:subst -> K.expr -> K.expr -> subst option
+
+val is_alpha_equiv : ?subst:subst -> K.expr -> K.expr -> bool
+

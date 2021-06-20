@@ -158,8 +158,8 @@ module KBO_ = struct
             Incomparable
         in
 
-        let l_or_none = if st.neg_counter = 0 then Gt else Incomparable in
-        let g_or_none = if st.pos_counter = 0 then Lt else Incomparable in
+        let l_or_none = if st.neg_counter = 0 then Lt else Incomparable in
+        let g_or_none = if st.pos_counter = 0 then Gt else Incomparable in
 
         (* now consider: weight, then precedence *)
         if st.wb > 0 then g_or_none
@@ -212,4 +212,4 @@ let compare ?(params=default_params()) (e1:E.t) (e2:E.t) : result =
 
 
 let lt ?params a b : bool = compare ?params a b = Lt
-let gt ?params a b : bool = compare ?params a b = Lt
+let gt ?params a b : bool = compare ?params a b = Gt
