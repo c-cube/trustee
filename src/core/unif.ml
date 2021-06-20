@@ -28,7 +28,7 @@ type op = O_unif | O_match
 let u_rec op subst a b : subst =
   let rec loop subst a b =
     let a = deref subst a in
-    let b = deref subst b in
+    let b = if op == O_unif then deref subst b else b in
 
     (* unify types first *)
     let subst = match E.ty a, E.ty b with
