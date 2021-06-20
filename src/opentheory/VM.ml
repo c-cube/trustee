@@ -118,7 +118,7 @@ let absThm : rule = fun _ self ->
   self.n_absThm <- 1 + self.n_absThm;
   match self.stack with
   | O_thm th :: O_var v :: st ->
-    let th = K.Thm.abs self.ctx th v in
+    let th = K.Thm.abs self.ctx v th in
     self.stack <- O_thm th :: st;
   | _ -> errorf (fun k->k"cannot apply absThm@ in state %a" pp_vm self)
 
@@ -582,8 +582,8 @@ let defineTypeOp : rule = fun theory self ->
     (* need to abstract over the theorems *)
     let repr_thm =
       let th = K.Thm.sym self.ctx def.repr_thm in (* flip first *)
-      K.Thm.abs self.ctx th def.repr_x in
-    let abs_thm = K.Thm.abs self.ctx def.abs_thm def.abs_x in
+      K.Thm.abs self.ctx def.repr_x th in
+    let abs_thm = K.Thm.abs self.ctx def.abs_x def.abs_thm in
 
     self.stack <-
       O_thm repr_thm ::

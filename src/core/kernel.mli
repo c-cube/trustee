@@ -105,6 +105,7 @@ module Subst : sig
   val find_exn : var -> t -> expr
   val empty : t
   val is_empty : t -> bool
+  val is_renaming : t -> bool
   val bind : t -> var -> expr -> t
   val bind' : var -> expr -> t -> t
   val size : t -> int
@@ -160,6 +161,8 @@ module type EXPR = sig
   val unfold_app : t -> t * t list
   val unfold_eq : t -> (t * t) option
   val unfold_arrow : t -> t list * t
+
+  val return_ty : t -> t
   val as_const : t -> (Const.t * ty list) option
   val as_const_exn : t -> Const.t * ty list
 
@@ -193,6 +196,14 @@ module type EXPR = sig
   val map : (f:(bool -> t -> t) -> t -> t) with_ctx
 
   val db_shift: (t -> int -> t) with_ctx
+
+  val open_lambda : (t -> (var * t) option) with_ctx
+  (** [open_lambda (\x. t)] introduces a new free variable [y],
+      and returns [Some (y, t[x := y])]. Otherwise it returns [None] *)
+
+  val open_lambda_exn : (t -> var * t) with_ctx
+  (** Unsafe version of {!open_lambda}.
+      @raise Error.Error if the term is not a lambda. *)
 end
 
 (** Explicit expression API with context *)
@@ -342,7 +353,7 @@ module type THM = sig
   (** `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
       Fails if the term is not a beta-redex. *)
 
-  val abs : (t -> var -> t) with_ctx
+  val abs : (var -> t -> t) with_ctx
   (** `abs (F |- a=b) x` is `F |- (\x. a) = (\x. b)`
       fails if `x` occurs in `F`. *)
 

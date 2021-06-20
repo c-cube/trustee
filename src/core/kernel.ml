@@ -385,6 +385,7 @@ module type EXPR = sig
   val unfold_app : t -> t * t list
   val unfold_eq : t -> (t * t) option
   val unfold_arrow : t -> t list * t
+  val return_ty : t -> t
   val as_const : t -> (Const.t * ty list) option
   val as_const_exn : t -> Const.t * ty list
 
@@ -418,6 +419,8 @@ module type EXPR = sig
   val map : (f:(bool -> t -> t) -> t -> t) with_ctx
 
   val db_shift: (t -> int -> t) with_ctx
+  val open_lambda : (t -> (var * t) option) with_ctx
+  val open_lambda_exn : (t -> var * t) with_ctx
 end
 
 module Expr = struct
@@ -844,6 +847,29 @@ module Expr = struct
     in
     if is_closed e then e else aux e 0
 
+  (* find a name that doesn't capture a variable of [e] *)
+  let pick_name_ (name0:string) (e:t) : string =
+    let rec loop i =
+      let name = if i= 0 then name0 else Printf.sprintf "%s%d" name0 i in
+      if free_vars_iter e |> Iter.exists (fun v -> v.v_name = name)
+      then loop (i+1)
+      else name
+    in
+    loop 0
+
+  let open_lambda ctx e : _ option =
+    match view e with
+    | E_lam (name, ty, bod) ->
+      let name = pick_name_ name bod in
+      let v = Var.make name ty in
+      let bod' = subst_db_0 ctx bod ~by:(var ctx v) in
+      Some (v, bod')
+    | _ -> None
+
+  let open_lambda_exn ctx e = match open_lambda ctx e with
+    | Some tup -> tup
+    | None -> errorf (fun k->k"open-lambda: term is not a lambda:@ %a" pp e)
+
   let arrow ctx a b : t =
     if not (is_a_type a) || not (is_a_type b) then (
       errorf (fun k->k"arrow: both arguments must be types");
@@ -926,6 +952,11 @@ module Expr = struct
       a::args, ret
     | _ -> [], e
 
+  let[@unroll 1] rec return_ty e =
+    match view e with
+    | E_arrow (_,b) -> return_ty b
+    | _ -> e
+
   let[@inline] as_const e = match e.e_view with
     | E_const (c,args) -> Some (c,args)
     | _ -> None
@@ -976,6 +1007,8 @@ let make_expr (ctx: ctx) : (module EXPR_FOR_CTX) =
     let arrow_l = arrow_l ctx
     let map = map ctx
     let db_shift = db_shift ctx
+    let open_lambda = open_lambda ctx
+    let open_lambda_exn = open_lambda_exn ctx
   end in
   (module M)
 
@@ -1002,6 +1035,20 @@ module Subst = struct
   let[@inline] to_iter self =
     Iter.append (Var.Map.to_iter self.m) (Var.Map.to_iter self.ty)
   let to_string = Fmt.to_string pp
+
+  let is_renaming (self:t) : bool =
+    let is_renaming_ m =
+      try
+        let codom =
+          Var.Map.fold
+            (fun _v e acc -> match Expr.view e with
+               | E_var u -> Var.Set.add u acc
+               | _ -> raise_notrace Exit) m Var.Set.empty
+        in
+        Var.Set.cardinal codom = Var.Map.cardinal m
+      with Exit -> false
+    in
+    is_renaming_ self.ty && is_renaming_ self.m
 
   let[@inline] bind_uncurry_ s (x,t) = bind s x t
   let of_list = List.fold_left bind_uncurry_ empty
@@ -1162,7 +1209,7 @@ module type THM = sig
   val bool_eq : (t -> t -> t) with_ctx
   val bool_eq_intro : (t -> t -> t) with_ctx
   val beta_conv : (expr -> t) with_ctx
-  val abs : (t -> var -> t) with_ctx
+  val abs : (var -> t -> t) with_ctx
   val new_basic_definition :
     (?def_loc:location -> expr -> t * const) with_ctx
   val new_basic_type_definition :
@@ -1357,8 +1404,8 @@ module Thm = struct
     | _ ->
       errorf (fun k->k"not a redex: %a not an application" Expr.pp e)
 
-  let abs ctx th v : t =
-    wrap_exn (fun k->k"@[<2>in abs `@[%a@]` var %a:" pp th Var.pp v) @@ fun () ->
+  let abs ctx v th : t =
+    wrap_exn (fun k->k"@[<2>in abs :var %a `@[%a@]`:" Var.pp v pp th) @@ fun () ->
     ctx_check_th_uid ctx th;
     ctx_check_e_uid ctx v.v_ty;
     match Expr.unfold_eq th.th_concl with
