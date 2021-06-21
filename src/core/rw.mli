@@ -70,6 +70,10 @@ module Rule : sig
       to rewrite instances of [lhs] into instances of [rhs].
   *)
 
+  val mk_non_oriented : K.thm -> t
+  (** [mk_non_oriented [|- t=u] rewrites [t] into [u], but only
+      if [t\sigma >_kbo u\sigma]. *)
+
   val mk_dynamic :
     K.expr ->
     (K.ctx -> K.expr -> K.Subst.t -> K.thm option) ->

@@ -160,7 +160,16 @@ module Rule = struct
   let mk_rule th : t =
     let lhs = thm_res_lhs th in
     {lhs; rhs=Basic {th}}
+
   let mk_dynamic lhs mk_rhs : t = {lhs; rhs=Dynamic {mk_rhs}}
+
+  let mk_non_oriented th : t =
+    let lhs = thm_res_lhs th in
+    mk_dynamic lhs
+      (fun ctx _lhs subst ->
+         let th = K.Thm.subst ctx ~recursive:false th subst in
+         let lhs, rhs = thm_res_eqn th in
+         if KBO.gt lhs rhs then Some th else None)
 
   let pp out (self:t) =
     match self.rhs with
