@@ -314,8 +314,11 @@ module AC_rule = struct
       rule_assoc, true;
       rule_comm, false;
       Rule.mk_rule r1, false;
+      Rule.mk_rule (Th.sym r1), false;
       Rule.mk_rule r2, false;
+      Rule.mk_rule (Th.sym r2), false;
       Rule.mk_rule r3, false;
+      Rule.mk_rule (Th.sym r3), false;
     ] in
     {f; assoc; comm; rules; }
 
