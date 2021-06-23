@@ -70,7 +70,6 @@ let unify ?subst a b =
 
 let match_rec_ subst a b : subst =
   let rec loop subst a b =
-    let a = deref subst a in
     (* match types first *)
     let subst = match E.ty a, E.ty b with
       | None, None -> subst
@@ -79,7 +78,10 @@ let match_rec_ subst a b : subst =
       | Some _, None | None, Some _ -> raise Fail
     in
     match E.view a, E.view b with
-    | _ when E.equal a b -> subst
+    | E.E_var v1, _ when Su.mem v1 subst ->
+      (* follow substitution but only once *)
+      let t = Su.find_exn v1 subst in
+      if E.equal t b then subst else raise Fail
     | E.E_var v1, E.E_var v2 when K.Var.equal v1 v2 -> subst
     | E.E_var v, _ -> Su.bind subst v b
     | E.E_const (c1, l1), E.E_const (c2, l2) when K.Const.equal c1 c2 ->
