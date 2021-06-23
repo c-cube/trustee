@@ -393,6 +393,8 @@ module type EXPR = sig
   module Map : CCMap.S with type key = t
   module Tbl : CCHashtbl.S with type key = t
 
+  val iter_dag : f:(t -> unit) -> t -> unit
+
   type 'a with_ctx
 
   val subst : (recursive:bool -> t -> subst -> t) with_ctx
@@ -975,6 +977,17 @@ module Expr = struct
   module Map = CCMap.Make(AsKey)
   module Set = Expr_set
   module Tbl = CCHashtbl.Make(AsKey)
+
+  let iter_dag ~f e : unit =
+    let tbl = Tbl.create 8 in
+    let rec loop e =
+      if not (Tbl.mem tbl e) then (
+        Tbl.add tbl e ();
+        f e;
+        iter e ~f:(fun _ u -> loop u)
+      )
+    in
+    loop e
 end
 
 module type EXPR_FOR_CTX = EXPR
@@ -1027,6 +1040,9 @@ module Subst = struct
     if Expr.is_eq_to_type x.v_ty then Var.Map.find x s.ty
     else Var.Map.find x s.m
 
+  let[@inline] mem x s =
+    if Expr.is_eq_to_type x.v_ty then Var.Map.mem x s.ty
+    else Var.Map.mem x s.m
   let empty = Expr.subst_empty_
   let bind = Expr.subst_bind_
   let pp = Expr.subst_pp_

@@ -106,6 +106,7 @@ module Subst : sig
   val empty : t
   val is_empty : t -> bool
   val is_renaming : t -> bool
+  val mem : var -> t -> bool
   val bind : t -> var -> expr -> t
   val bind' : var -> expr -> t -> t
   val size : t -> int
@@ -151,6 +152,10 @@ module type EXPR = sig
   (** Is the type of [e] equal to [Type]? *)
 
   val iter : f:(bool -> t -> unit) -> t -> unit
+  (** [iter ~f e] calls [f] on immediate subterms of [e].
+      It calls [f true u] if [u] is an immediate subterm under a binder,
+      and [f false u] otherwise. *)
+
   val exists : f:(bool -> t -> bool) -> t -> bool
   val for_all : f:(bool -> t -> bool) -> t -> bool
 
@@ -169,6 +174,9 @@ module type EXPR = sig
   module Set : CCSet.S with type elt = t
   module Map : CCMap.S with type key = t
   module Tbl : CCHashtbl.S with type key = t
+
+  val iter_dag : f:(t -> unit) -> t -> unit
+  (** [iter_dag ~f e] calls [f] once on each unique subterm of [e]. *)
 
   type 'a with_ctx
 
