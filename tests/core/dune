@@ -3,7 +3,7 @@
   (name run_tests)
   (modes native)
   (flags :standard  -w -a -warn-error -a+8)
-  (libraries trustee.core ounit2))
+  (libraries trustee.core ounit2 qcheck-core qcheck-ounit))
 
 (rule
   (alias runtest)

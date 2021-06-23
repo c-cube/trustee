@@ -56,9 +56,20 @@ let reg2 _ctxt =
   (*   Format.eprintf "subst %a@." K.Subst.pp subst; *)
   assert_eq_expr (E.subst ~recursive:false rhs subst) t2'
 
+let reg3 _ctx =
+  let module M = Make() in let open M in
+  let lhs = g2 x x in
+  let rhs = g2 (f1 y) (f1 x) in
+  match Unif.match_ lhs rhs with
+  | None -> ()
+  | Some subst ->
+    assert_bool (Fmt.asprintf "bad unif: %a@ for :lhs `%a`@ :rhs `%a`"
+                   K.Subst.pp subst E.pp lhs E.pp rhs) false
+
 let suite =
   "unif" >::: [
     "reg1" >:: reg1;
     "reg2" >:: reg2;
+    "reg3" >:: reg3;
   ]
 
