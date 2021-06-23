@@ -61,8 +61,14 @@ let bottom_up (conv:conv) : conv =
       in
       try_conv res e'
     | E.E_lam _ ->
-      (* TODO: introduce variable, apply it, rewrite body *)
-      try_conv Same e
+      (* rewrite under lambda *)
+      let v, bod = E.open_lambda_exn ctx e in
+      begin match loop bod with
+        | Same -> Same
+        | Rw_step th_bod ->
+          let th = K.Thm.abs ctx v th_bod in
+          Rw_step th
+      end
     | E.E_var _ | E.E_bound_var _ | E.E_const _ -> try_conv Same e
 
   and try_conv step1 e : rw_step =
