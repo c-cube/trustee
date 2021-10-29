@@ -158,7 +158,7 @@ let expr_pp_ out (e:expr) : unit =
         | E_const (c, [_]), [a;b] when Name.equal_str c.c_name "=" ->
           Fmt.fprintf out "@[%a@ = %a@]" pp' a pp' b
         | _ ->
-          Fmt.fprintf out "@[%a@ %a@]" pp' f (pp_list pp') args
+          Fmt.fprintf out "%a@ %a" pp' f (pp_list pp') args
       end
     | E_lam ("", _ty, bod) ->
       Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp' _ty
@@ -175,7 +175,7 @@ let expr_pp_ out (e:expr) : unit =
       loop k names out e (* atomic expr *)
     | _ -> Fmt.fprintf out "(%a)" (loop k names) e
   in
-  loop 0 [] out e
+  Fmt.fprintf out "@[%a@]" (loop 0 []) e
 
 module Expr_hashcons = Hashcons.Make(struct
     type t = expr
