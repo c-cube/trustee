@@ -141,6 +141,10 @@ module type EXPR = sig
   include Sigs.COMPARE with type t := t
   include Sigs.PP with type t := t
 
+  val pp_depth : max_depth:int -> t Fmt.printer
+  (** Print the term and insert ellipsis in subterms above given depth.
+      Useful to print very deep terms *)
+
   val view : t -> view
   val ty : t -> ty option
   val ty_exn : t -> ty

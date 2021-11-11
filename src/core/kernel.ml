@@ -132,10 +132,10 @@ let unfold_app (e:expr) : expr * expr list =
 let __pp_ids = ref false
 
 (* debug printer *)
-let expr_pp_ out (e:expr) : unit =
-  let rec loop k names out e =
-    let pp = loop k names in
-    let pp' = loop' k names in
+let expr_pp_with_ ~max_depth out (e:expr) : unit =
+  let rec loop k ~depth names out e =
+    let pp = loop k ~depth:(depth+1) names in
+    let pp' = loop' k ~depth:(depth+1) names in
     (match e.e_view with
     | E_kind -> Fmt.string out "kind"
     | E_type -> Fmt.string out "type"
@@ -152,6 +152,8 @@ let expr_pp_ out (e:expr) : unit =
     | E_const (c,[]) -> Name.pp out c.c_name
     | E_const (c,args) ->
       Fmt.fprintf out "(@[%a@ %a@])" Name.pp c.c_name (pp_list pp') args
+    | (E_app _ | E_lam _ | E_arrow _) when depth > max_depth ->
+      Fmt.fprintf out "@<1>…/%d" e.e_id
     | E_app _ ->
       let f, args = unfold_app e in
       begin match f.e_view, args with
@@ -162,20 +164,23 @@ let expr_pp_ out (e:expr) : unit =
       end
     | E_lam ("", _ty, bod) ->
       Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp' _ty
-        (loop (k+1) (""::names)) bod
+        (loop (k+1) ~depth:(depth+1) (""::names)) bod
     | E_lam (n, _ty, bod) ->
-      Fmt.fprintf out "(@[\\%s:@[%a@].@ %a@])" n pp' _ty (loop (k+1) (n::names)) bod
+      Fmt.fprintf out "(@[\\%s:@[%a@].@ %a@])" n pp' _ty
+        (loop (k+1) ~depth:(depth+1) (n::names)) bod
     | E_arrow(a,b) ->
       Fmt.fprintf out "@[@[%a@]@ -> %a@]" pp' a pp b
     );
     if !__pp_ids then Fmt.fprintf out "/%d" e.e_id;
 
-  and loop' k names out e = match e.e_view with
+  and loop' k ~depth names out e = match e.e_view with
     | E_kind | E_type | E_var _ | E_bound_var _ | E_const (_, []) ->
-      loop k names out e (* atomic expr *)
-    | _ -> Fmt.fprintf out "(%a)" (loop k names) e
+      loop k ~depth names out e (* atomic expr *)
+    | _ -> Fmt.fprintf out "(%a)" (loop k ~depth names) e
   in
-  Fmt.fprintf out "@[%a@]" (loop 0 []) e
+  Fmt.fprintf out "@[%a@]" (loop 0 ~depth:0 []) e
+
+let expr_pp_ = expr_pp_with_ ~max_depth:max_int
 
 module Expr_hashcons = Hashcons.Make(struct
     type t = expr
@@ -364,6 +369,10 @@ module type EXPR = sig
   include Sigs.COMPARE with type t := t
   include Sigs.PP with type t := t
 
+  val pp_depth : max_depth:int -> t Fmt.printer
+  (** Print the term and insert ellipsis in subterms above given depth.
+      Useful to print very deep terms *)
+
   val view : t -> view
   val ty : t -> ty option
   val ty_exn : t -> ty
@@ -449,6 +458,7 @@ module Expr = struct
 
   let pp = expr_pp_
   let to_string = Fmt.to_string pp
+  let pp_depth = expr_pp_with_
 
   let compare = expr_compare
   let db_depth = expr_db_depth
