@@ -1216,6 +1216,7 @@ module type THM = sig
   type t = thm
 
   include Sigs.PP with type t := t
+  val pp_depth : max_depth:int -> t Fmt.printer
   val pp_quoted : t Fmt.printer
   val concl : t -> expr
   val hyps_iter : t -> expr iter
@@ -1259,13 +1260,16 @@ module Thm = struct
   let[@inline] has_hyps self = not (Expr_set.is_empty self.th_hyps)
   let n_hyps self = Expr_set.cardinal self.th_hyps
 
-  let pp out (th:t) =
+  let pp_depth ~max_depth out (th:t) =
+    let pp_t = Expr.pp_depth ~max_depth in
     if has_hyps th then (
-      Fmt.fprintf out "@[<hv1>%a@;<1 -1>|-@ %a@]" (pp_list ~sep:", " Expr.pp) (hyps_l th)
-        Expr.pp (concl th)
+      Fmt.fprintf out "@[<hv1>%a@;<1 -1>|-@ %a@]" (pp_list ~sep:", " pp_t)  (hyps_l th)
+        pp_t (concl th)
     ) else (
-      Fmt.fprintf out "@[<1>|-@ %a@]" Expr.pp (concl th)
+      Fmt.fprintf out "@[<1>|-@ %a@]" pp_t (concl th)
     )
+
+  let pp = pp_depth ~max_depth:max_int
 
   let to_string = Fmt.to_string pp
   let pp_quoted = Fmt.within "`" "`" pp

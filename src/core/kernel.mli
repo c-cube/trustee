@@ -298,6 +298,7 @@ module type THM = sig
   type t = thm
 
   include Sigs.PP with type t := t
+  val pp_depth : max_depth:int -> t Fmt.printer
   val pp_quoted : t Fmt.printer
 
   val concl : t -> expr
@@ -308,7 +309,7 @@ module type THM = sig
 
   val hyps_sorted_l : t -> expr list
   (** List of hypothesis of this theorem, sorted, and deduplicated. *)
-  
+
   val n_hyps : t -> int
   (** Number of hypothesis of this theorem *)
 
