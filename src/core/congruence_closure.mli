@@ -19,3 +19,14 @@ val prove_cc_bool : K.ctx -> K.thm list -> K.expr -> K.thm option
 *)
 
 
+val prove_cc_false :
+  K.ctx ->
+  prove_false:(K.ctx -> K.thm -> K.thm -> K.thm) ->
+  not_e:K.expr ->
+  K.thm list -> K.thm option
+(** [prove_cc_false ctx ~prove_false ~not_e hyps]
+    tries to prove [false] from the theorems in [hyps].
+    @param prove_false a function such that [prove_false ctx (|- a) (|- ¬ a)]
+    returns [|- false]
+    @param not_e the constant [¬]
+*)

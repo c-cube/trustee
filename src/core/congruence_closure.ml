@@ -249,7 +249,7 @@ let update (self:t) : unit =
   done;
   ()
 
-let add_thm (self:t) (th:K.thm) : unit =
+let add_thm_ (self:t) (th:K.thm) : bool =
   match E.unfold_eq (K.Thm.concl th) with
   | Some (a,b) ->
     let a = add_ self a in
@@ -257,8 +257,16 @@ let add_thm (self:t) (th:K.thm) : unit =
     if not (are_eq a b) then (
       Vec.push self.to_merge (Merge (a,b,Exp_merge th));
     );
+    true
   | None ->
+    false
+
+let add_thm' self th = ignore (add_thm_ self th : bool)
+let add_thm self th : unit =
+  let ok = add_thm_ self th in
+  if not ok then (
     errorf (fun k->k"cannot add non-equational theorem %a" K.Thm.pp_quoted th)
+  )
 
 let prove_cc_eqn (ctx:K.ctx) (hyps:K.thm list) (t:E.t) (u:E.t) : _ option =
   let self = create ctx in
@@ -291,3 +299,47 @@ let prove_cc_bool (ctx:K.ctx) (hyps:K.thm list) (concl: E.t) : _ option =
       Log.debugf 5 (fun k->k"prove_cc_bool: cannot pick a predicate hypothesis");
       None
 
+
+let prove_cc_false
+    (ctx:K.ctx) ~prove_false ~not_e
+    (hyps:K.thm list) : _ option =
+  let as_not e = match E.unfold_app e with
+    | f, [u] when E.equal not_e f -> Some u
+    | _ -> None
+  in
+
+  let pos, neg =
+    hyps
+    |> CCList.partition_filter_map
+      (fun th ->
+         let concl = K.Thm.concl th in
+         match as_not concl with
+         | None -> `Left (concl, th)
+         | Some e' -> `Right (concl, e', th))
+  in
+
+  (* add all positive and negative terms to a CC *)
+  let self = create ctx in
+  let pos = pos |> List.map (fun (e,th) -> add_thm' self th; add_ self e, th) in
+  let neg = neg |> List.map (fun (c,e,th) -> add_thm' self th; c, add_ self e, th) in
+
+  update self;
+
+  begin
+    Iter.product (Iter.of_list pos) (Iter.of_list neg)
+    |> Iter.find_map
+      (fun ((n_pos, th_pos), (_concl_neg, n_neg, th_neg)) ->
+         if find n_pos == find n_neg then (
+           (* th1: [|- e_pos = e_neg] *)
+           let th1 = prove_eq self n_pos n_neg in
+
+           (* th2: [|- e_neg] via [th_pos] which is [|- e_pos] and [|- e_pos=e_neg] *)
+           let th2 = K.Thm.bool_eq ctx th_pos th1 in
+
+           (* th3: [|- false] from [|- e_neg] and [|- ¬ e_neg] (ie. th_neg) *)
+           let th3 = prove_false ctx th2 th_neg in
+           Some th3
+         ) else (
+           None
+         ))
+  end
