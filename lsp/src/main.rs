@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Result};
-use lsp_types::{self as lsp};
+use anyhow::Result;
+use lsp_types as lsp;
 use trustee::{
     self, kernel as k, meta,
     meta::{Location, Position},
@@ -9,7 +9,10 @@ pub mod server;
 pub mod utils;
 pub use server::{Doc, DocID, Server, State};
 
-struct TrusteeSt;
+#[derive(Debug, Default)]
+struct TrusteeSt {
+    display_proofs: bool,
+}
 
 /// Translate a position to a LSP position
 fn pos_to_lsp(p: Position) -> lsp::Position {
@@ -107,7 +110,7 @@ impl server::Handler for TrusteeSt {
                     Ok(v) => {
                         // print proof, if available
                         let pr = match v {
-                            meta::Value::Thm(th) => {
+                            meta::Value::Thm(th) if self.display_proofs => {
                                 trustee::proof::print_proof::proof_to_string(&th)
                                     .unwrap_or_else(|| String::new())
                             }
@@ -214,14 +217,9 @@ impl server::Handler for TrusteeSt {
 }
 
 fn main() -> Result<()> {
-    use {simplelog::*, std::fs::File};
-    WriteLogger::init(
-        LevelFilter::Warn,
-        Config::default(),
-        File::create("/tmp/trustee_lsp.log")?,
-    )
-    .map_err(|e| anyhow!("failed to init logger: {}", e))?;
-    let factory = server::HandlerFactory(Box::new(|| Box::new(TrusteeSt)));
+    env_logger::init();
+    log::info!("starting LSP server…");
+    let factory = server::HandlerFactory(Box::new(|| Box::new(TrusteeSt::default())));
     let server = Server::new(factory);
     server.serve()?;
     Ok(())

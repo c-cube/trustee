@@ -25,6 +25,8 @@ pub struct State(Arc<Mutex<StateImpl>>);
 /// Content of the state.
 #[derive(Debug)]
 pub struct StateImpl {
+    pub shutdown: bool,
+    pub exit: bool,
     pub docs: HashMap<lsp_types::Url, Doc>,
 }
 
@@ -89,6 +91,8 @@ impl State {
     /// New state.
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(StateImpl {
+            shutdown: false,
+            exit: false,
             docs: Default::default(),
         })))
     }
@@ -97,6 +101,7 @@ impl State {
 impl StateImpl {
     /// Access document by URI.
     pub fn get_doc(&self, id: &DocID) -> Option<&Doc> {
+        log::debug!("get doc by URI {:?}", id.uri);
         self.docs.get(&id.uri)
     }
 }
@@ -216,8 +221,8 @@ mod server {
             // require incremental updates
             capabilities.text_document_sync = Some(lsp::TextDocumentSyncCapability::Options(
                 lsp::TextDocumentSyncOptions {
-                    open_close: Some(false),
-                    change: Some(lsp::TextDocumentSyncKind::Incremental),
+                    open_close: Some(true),
+                    change: Some(lsp::TextDocumentSyncKind::Full), // FIXME
                     will_save: Some(false),
                     will_save_wait_until: Some(false),
                     save: None,
@@ -237,6 +242,20 @@ mod server {
             };
 
             Ok(Some(mk_reply!(reply)))
+        } else if msg.m == lsp::notification::Initialized::METHOD {
+            log::info!("LSP initialized!");
+            Ok(None)
+        } else if msg.m == lsp::request::Shutdown::METHOD {
+            log::info!("shutting down");
+            {
+                let mut st = st.lock().unwrap();
+                st.shutdown = true;
+            }
+            Ok(Some(mk_reply!(JsonValue::Null)))
+        } else if msg.m == lsp::notification::Exit::METHOD {
+            let mut st = st.lock().unwrap();
+            st.exit = true;
+            Ok(None)
         } else if msg.m == lsp::notification::DidOpenTextDocument::METHOD {
             log::debug!("got text open {:?}", msg.params);
             let d: DidOpenTextDocumentParams = serde_json::from_str(&params)?;
@@ -449,6 +468,13 @@ mod server {
             let mut s = String::new();
             let mut buf = vec![];
             loop {
+                {
+                    let st = self.st.lock().unwrap();
+                    if st.exit {
+                        break;
+                    }
+                }
+
                 // read headers until we get length
                 let mut len = 0;
                 loop {
@@ -497,6 +523,9 @@ mod server {
                     thread::spawn(move || handle_msg(st, h, raw_msg));
                 }
             }
+
+            log::info!("server exiting now…");
+            Ok(())
         }
 
         /// Serve on stdin/stdout.

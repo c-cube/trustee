@@ -15,7 +15,9 @@ default-members = [
 debug=1
 opt-level=2
 lto="thin"
+incremental=true
 
 [profile.dev]
 opt-level=1
 lto="thin"
+incremental=true

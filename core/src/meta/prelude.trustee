@@ -341,13 +341,6 @@
 ; $a==>b$, $b==>c$, gives $a==>c$
 (defn RImplyTrans [th1 th2]
   (doc "takes $|- a==>b$ and $|- b==>c$ to return $|- a==>c")
-  (def a (e_app_rhs (e_app_lhs (concl th1))))
-  (def b (e_app_rhs (concl th1)))
-  (RImplyIntro (MP th2 (RImplyElim th1)) a))
-
-; $a==>b$, $b==>c$, gives $a==>c$
-(defn RImplyTrans [th1 th2]
-  (doc "takes $|- a==>b$ and $|- b==>c$ to return $|- a==>c")
   (match (concl th1)
    (case $==> ?a _$
     (RImplyIntro (MP th2 (RImplyElim th1)) a))

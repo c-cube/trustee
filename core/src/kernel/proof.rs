@@ -8,6 +8,9 @@ use {
     std::fmt,
 };
 
+// TODO: use a struct of arrays instead, with one array of ProofView,
+// and auxiliary arrays to store Thm/Expr
+
 /// The proof step for a theorem, if proof recording is enabled.
 #[derive(Clone, Eq, PartialEq, Hash)]
 pub struct Proof(RPtr<ProofView>);
