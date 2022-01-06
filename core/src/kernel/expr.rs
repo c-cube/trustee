@@ -29,7 +29,7 @@ pub type Type = Expr;
 pub enum ExprView {
     EType,
     EKind,
-    EConst(Box<ConstContent>),
+    EConst(ConstContent),
     EVar(Var),
     EBoundVar(BoundVarContent),
     EApp(Expr, Expr),
@@ -50,12 +50,12 @@ pub struct Var {
 
 /// The content of an expression.
 pub(super) struct ExprImpl {
-    /// The view of the expression.
-    view: ExprView,
-    /// Number of DB indices missing. 0 means the term is closed.
-    db_depth: DbIndex,
     /// Unique ID of the expr manager responsible for creating this expr.
     ctx_uid: u32,
+    /// The view of the expression.
+    view: ExprView,
+    /// Maximum DB index in expr. 0 means the term is closed.
+    db_depth: DbIndex,
     /// Type of the expression. Always present except for `Kind`.
     ty: Option<Expr>,
 }
@@ -180,14 +180,14 @@ impl ExprView {
     {
         let r = match self {
             EType | EKind => self.clone(),
-            EConst(c) => EConst(Box::new(ConstContent {
+            EConst(c) => EConst(ConstContent {
                 ty: f(&c.ty, k)?,
                 name: c.name.clone(),
                 gen: c.gen,
                 tag: c.tag,
                 fix: c.fix.clone(),
                 proof: c.proof.clone(),
-            })),
+            }),
             EVar(v) => EVar(Var {
                 ty: f(&v.ty, k)?,
                 name: v.name.clone(),
@@ -653,5 +653,24 @@ mod impls {
         fn borrow(&self) -> &ExprView {
             &self.0.view
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn test_sizeof_expr() {
+        let sz = std::mem::size_of::<Expr>();
+        assert_eq!(8, sz);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn test_sizeof_view() {
+        let sz = std::mem::size_of::<ExprImpl>();
+        assert_eq!(64, sz);
     }
 }

@@ -111,19 +111,19 @@ impl Ctx {
         // insert initial builtins
         let kind = ctx.hashcons_builtin_(EKind, None);
         ctx.0.tbl.insert(kind.view().clone(), kind.weak());
-        let ty = ctx.hashcons_builtin_(EType, Some(kind.clone()));
+        let ty = ctx.hashcons_builtin_(EType, Some(kind));
         ctx.0.tbl.insert(ty.view().clone(), ty.weak());
         let bool = {
             let name = Symbol::from_str(bs.bool);
             ctx.hashcons_builtin_(
-                EConst(Box::new(ConstContent {
+                EConst(ConstContent {
                     name,
                     ty: ty.clone(),
                     gen: 0,
                     tag: ConstTag::Bool,
                     fix: std::cell::Cell::new(Fixity::Nullary),
                     proof: None,
-                })),
+                }),
                 Some(ty.clone()),
             )
         };
@@ -136,9 +136,9 @@ impl Ctx {
             let ty = ctx.mk_ty();
             let bool = ctx.mk_bool();
             let db0 = ctx.mk_bound_var(0, ty.clone());
-            let arr = ctx.mk_arrow(db0.clone(), bool.clone()).unwrap();
-            let arr = ctx.mk_arrow(db0.clone(), arr).unwrap();
-            let ty_eq = ctx.mk_pi_(ty.clone(), arr).unwrap();
+            let arr = ctx.mk_arrow(db0.clone(), bool).unwrap();
+            let arr = ctx.mk_arrow(db0, arr).unwrap();
+            let ty_eq = ctx.mk_pi_(ty, arr).unwrap();
             let fix = super::FIXITY_EQ;
             ctx.mk_const_with_(name, ty_eq, ConstTag::Eq, fix, None)
                 .unwrap()
@@ -163,15 +163,11 @@ impl Ctx {
         let CtxImpl {
             tbl, next_cleanup, ..
         } = &mut *self.0;
-        match tbl.get(&ev) {
-            Some(v) => match WeakRef::upgrade(&v.0) {
-                Some(t) => return Ok(Expr(t)), // still alive!
-                None => (),
-            },
-            None => (),
+        if let Some(v) = tbl.get(&ev) {
+            if let Some(t) = WeakRef::upgrade(&v.0) {
+                return Ok(Expr(t)); // still alive!
+            }
         }
-        // need to use `self` to build the type, so drop `tbl` first.
-        drop(tbl);
 
         // every n new terms, do a `cleanup`
         // TODO: maybe if last cleanups were ineffective, increase n,
@@ -236,14 +232,14 @@ impl Ctx {
         }
         self.0.c_gen += 1;
         let gen = self.0.c_gen;
-        let c = self.hashcons_(EConst(Box::new(ConstContent {
-            name: s.clone(),
+        let c = self.hashcons_(EConst(ConstContent {
+            name: s,
             ty,
             gen,
             tag,
             fix: std::cell::Cell::new(f),
             proof: pr,
-        })))?;
+        }))?;
         self.add_const_(c.clone());
         Ok(c)
     }
@@ -262,7 +258,7 @@ impl Ctx {
     fn builtins_(&self) -> &ExprBuiltins {
         match self.0.builtins {
             None => panic!("term manager should have builtins"),
-            Some(ref b) => &b,
+            Some(ref b) => b,
         }
     }
 
@@ -432,7 +428,7 @@ impl Ctx {
         let v_ty = v_ty.clone();
         // replace `v` with `db0` in `body`. This should also take
         // care of shifting the DB by 1 as appropriate.
-        let db0 = self.mk_bound_var(0, v_ty.clone());
+        let db0 = self.mk_bound_var(0, v_ty);
         let body = self.shift_(&body, 1, 0)?;
         self.subst(&body, &[(v, db0)])
     }
@@ -469,7 +465,7 @@ impl Ctx {
     /// For each pair `(x,u)` in `subst`, replace instances of the free
     /// variable `x` by `u` in `t`.
     pub fn subst(&mut self, t: &Expr, subst: &[(Var, Expr)]) -> Result<Expr> {
-        self.check_uid_(&t);
+        self.check_uid_(t);
         struct Replace<'a> {
             // cache, relative to depth
             ctx: &'a mut Ctx,
@@ -660,12 +656,9 @@ impl Ctx {
     /// Does nothing if the constant is not defined.
     pub fn set_fixity(&mut self, s: &str, f: Fixity) -> Result<()> {
         if let Some(meta::Value::Expr(t)) = self.0.meta_values.get_mut(s) {
-            match t.view() {
-                EConst(c) => {
-                    c.fix.set(f);
-                    return Ok(());
-                }
-                _ => (),
+            if let EConst(c) = t.view() {
+                c.fix.set(f);
+                return Ok(());
             }
         }
         Err(Error::new("expected constant"))
@@ -737,7 +730,7 @@ impl Ctx {
             None
         };
 
-        let th = Thm::make_(e.clone(), self.0.uid, smallvec![e.clone()], pr);
+        let th = Thm::make_(e.clone(), self.0.uid, smallvec![e], pr);
         Ok(th)
     }
 
@@ -949,7 +942,7 @@ impl Ctx {
         let mut v1 = smallvec![];
         let mut v2 = smallvec![];
 
-        if th1.0.hyps.len() == 0 {
+        if th1.0.hyps.is_empty() {
             // take or copy th2.hyps
             match Ref::get_mut(&mut th2.0) {
                 None => th2.0.hyps.clone(),
@@ -958,7 +951,7 @@ impl Ctx {
                     v2
                 }
             }
-        } else if th2.0.hyps.len() == 0 {
+        } else if th2.0.hyps.is_empty() {
             // take or copy th1.hyps
             match Ref::get_mut(&mut th1.0) {
                 None => th1.0.hyps.clone(),
@@ -1284,6 +1277,12 @@ impl Ctx {
 
 mod impls {
     use super::*;
+
+    impl std::default::Default for Ctx {
+        fn default() -> Self {
+            Ctx::new()
+        }
+    }
 
     impl fmt::Debug for Ctx {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
