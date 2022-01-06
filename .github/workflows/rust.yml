@@ -1,6 +1,13 @@
 name: Rust
 
-on: [push, pull_request]
+
+on:
+  push:
+    branches:
+      - rust2
+  pull_request:
+    branches:
+      - rust2
 
 jobs:
   build:
