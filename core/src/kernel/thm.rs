@@ -3,18 +3,21 @@
 //! Theorems are proved correct by construction.
 
 use super::{Expr, Proof, Ref};
+use smallvec::SmallVec;
 use std::fmt;
 
 /// A theorem.
 #[derive(Clone)]
 pub struct Thm(pub(super) Ref<ThmImpl>);
 
+pub type Exprs = SmallVec<[Expr; 3]>;
+
 #[derive(Clone)]
 pub(super) struct ThmImpl {
     /// Conclusion of the theorem.
     pub concl: Expr,
     /// Hypothesis of the theorem.
-    pub hyps: Vec<Expr>,
+    pub hyps: Exprs,
     /// Unique ID of the `Ctx`
     pub ctx_uid: u32,
     /// Proof of the theorem, if any.
@@ -22,7 +25,7 @@ pub(super) struct ThmImpl {
 }
 
 impl Thm {
-    pub(super) fn make_(concl: Expr, em_uid: u32, hyps: Vec<Expr>, proof: Option<Proof>) -> Self {
+    pub(super) fn make_(concl: Expr, em_uid: u32, hyps: Exprs, proof: Option<Proof>) -> Self {
         // TODO: remove
         //if hyps.len() >= 2 {
         //    hyps.sort_unstable();
@@ -58,7 +61,7 @@ impl Thm {
     }
 
     #[inline]
-    pub fn hyps_vec(&self) -> &Vec<Expr> {
+    pub fn hyps_vec(&self) -> &Exprs {
         &self.0.hyps
     }
 
@@ -95,7 +98,7 @@ mod impls {
                 let mut first = true;
                 for h in self.hyps() {
                     if out.alternate() {
-                        write!(out, "    {}\n", h)?;
+                        writeln!(out, "    {}", h)?;
                     } else {
                         if first {
                             first = false;
@@ -117,7 +120,7 @@ mod impls {
                 write!(out, "|- {:?}", self.concl())
             } else {
                 for h in self.hyps() {
-                    write!(out, "    {:?}\n", h)?;
+                    writeln!(out, "    {:?}", h)?;
                 }
                 write!(out, " |- {:?}", self.concl())
             }

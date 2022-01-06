@@ -6,6 +6,7 @@
 use super::{
     expr::{self, BoundVarContent, ConstContent, ConstTag, DbIndex, Var, WExpr},
     symbol::{BuiltinSymbol, Symbol},
+    thm::Exprs,
     Expr, ExprView, Proof, ProofView, Ref, Subst, Thm, Type, WeakRef,
 };
 use crate::{
@@ -13,6 +14,7 @@ use crate::{
     fnv, meta,
     rstr::RStr,
 };
+use smallvec::{smallvec, SmallVec};
 use std::{fmt, sync::atomic};
 
 use ExprView::*;
@@ -22,7 +24,9 @@ pub type Fixity = crate::syntax::Fixity;
 
 /// Global manager for expressions, used to implement perfect sharing, allocating
 /// new terms, etc.
-pub struct Ctx {
+pub struct Ctx(Box<CtxImpl>);
+
+struct CtxImpl {
     /// Hashconsing table, with weak semantics.
     tbl: fnv::FnvHashMap<ExprView, WExpr>,
     /// The equality symbol, lazily initialized.
@@ -30,10 +34,9 @@ pub struct Ctx {
     /// Some builtins, lazily initialized.
     builtins: Option<ExprBuiltins>,
     /// Temporary used to merge sets of hypotheses
-    tmp_hyps: Vec<Expr>,
+    tmp_hyps: Exprs, // (smallvec)
     /// The defined chunks of code. These comprise some user defined tactics,
     /// derived rules, etc.
-    // TODO: remove and replace with LLProof::StackValue?
     meta_values: fnv::FnvHashMap<RStr, meta::Value>,
     next_cleanup: usize,
     /// All the axioms created so far.
@@ -54,7 +57,7 @@ pub struct Ctx {
 pub struct NewTypeDef {
     /// the new type constructor
     pub tau: Expr,
-    pub fvars: Vec<Var>,
+    pub fvars: SmallVec<[Var; 3]>,
     /// Function from the general type to `tau`
     pub c_abs: Expr,
     /// Function from `tau` back to the general type
@@ -92,10 +95,10 @@ impl Ctx {
         if uid > std::u32::MAX as usize {
             panic!("allocated more than u32::MAX ExprManager, cannot allocate more");
         }
-        let mut ctx = Ctx {
+        let mut ctx = Ctx(Box::new(CtxImpl {
             tbl,
             builtins: None,
-            tmp_hyps: vec![],
+            tmp_hyps: smallvec![],
             c_gen: 0,
             meta_values: fnv::new_table_with_cap(16),
             next_cleanup: CLEANUP_PERIOD,
@@ -104,12 +107,12 @@ impl Ctx {
             eq: None,
             allow_new_axioms: true,
             proof_gen: false,
-        };
+        }));
         // insert initial builtins
         let kind = ctx.hashcons_builtin_(EKind, None);
-        ctx.tbl.insert(kind.view().clone(), kind.weak());
+        ctx.0.tbl.insert(kind.view().clone(), kind.weak());
         let ty = ctx.hashcons_builtin_(EType, Some(kind.clone()));
-        ctx.tbl.insert(ty.view().clone(), ty.weak());
+        ctx.0.tbl.insert(ty.view().clone(), ty.weak());
         let bool = {
             let name = Symbol::from_str(bs.bool);
             ctx.hashcons_builtin_(
@@ -126,7 +129,7 @@ impl Ctx {
         };
         ctx.add_const_(bool.clone());
         let builtins = ExprBuiltins { bool, ty };
-        ctx.builtins = Some(builtins);
+        ctx.0.builtins = Some(builtins);
         // build `=`. It needs `builtins` to be set.
         let eq = {
             let name = Symbol::from_str(bs.eq);
@@ -140,7 +143,7 @@ impl Ctx {
             ctx.mk_const_with_(name, ty_eq, ConstTag::Eq, fix, None)
                 .unwrap()
         };
-        ctx.eq = Some(eq);
+        ctx.0.eq = Some(eq);
 
         ctx
     }
@@ -152,12 +155,14 @@ impl Ctx {
 
     /// Enable or disable proofs.
     pub fn enable_proof_recording(&mut self, b: bool) {
-        self.proof_gen = b;
+        self.0.proof_gen = b;
     }
 
     /// Add to the internal table, return the canonical representant.
     fn hashcons_(&mut self, ev: ExprView) -> Result<Expr> {
-        let tbl = &mut self.tbl; // lock tbl
+        let CtxImpl {
+            tbl, next_cleanup, ..
+        } = &mut *self.0;
         match tbl.get(&ev) {
             Some(v) => match WeakRef::upgrade(&v.0) {
                 Some(t) => return Ok(Expr(t)), // still alive!
@@ -171,17 +176,17 @@ impl Ctx {
         // every n new terms, do a `cleanup`
         // TODO: maybe if last cleanups were ineffective, increase n,
         // otherwise decrease n (down to some min value)
-        if self.next_cleanup == 0 {
+        if *next_cleanup == 0 {
             // eprintln!("expr.hashcons: cleanup");
             self.cleanup();
         } else {
-            self.next_cleanup -= 1;
+            *next_cleanup -= 1;
         }
 
         // need to insert the term, so first we need to compute its type.
         let ty = self.compute_ty_(&ev)?;
         let key = ev.clone();
-        let e = Expr::make_(ev, self.uid, ty);
+        let e = Expr::make_(ev, self.0.uid, ty);
         //#[rustfmt::skip]
         //eprintln!("insert.expr.hashcons {:?} at {:?}", &e, e.0.as_ref() as *const _);
         //eprintln!("ev mem: {}", self.tbl.contains_key(&ev2));
@@ -189,7 +194,7 @@ impl Ctx {
 
         // lock table, again, but this time we'll write to it.
         // invariant: computing the type doesn't insert `e` in the table.
-        let tbl = &mut self.tbl;
+        let tbl = &mut self.0.tbl;
         tbl.insert(key, e.weak());
         //eprintln!("e.ev mem: {}", self.tbl.contains_key(&e.0.view));
         Ok(e)
@@ -201,14 +206,14 @@ impl Ctx {
         } else {
             unreachable!("not a constant: {:?}", e);
         };
-        self.tbl.insert(e.view().clone(), e.weak());
-        self.meta_values.insert(name.to_rstr(), e.into());
+        self.0.tbl.insert(e.view().clone(), e.weak());
+        self.0.meta_values.insert(name.to_rstr(), e.into());
     }
 
     fn hashcons_builtin_(&mut self, ev: ExprView, ty: Option<Expr>) -> Expr {
-        let tbl = &mut self.tbl;
+        let CtxImpl { tbl, uid, .. } = &mut *self.0;
         debug_assert!(!tbl.contains_key(&ev));
-        let e = Expr::make_(ev, self.uid, ty);
+        let e = Expr::make_(ev, *uid, ty);
         tbl.insert(e.view().clone(), e.weak());
         e
     }
@@ -225,12 +230,12 @@ impl Ctx {
         if !ty.is_closed() || ty.free_vars().next().is_some() {
             return Err(Error::new("cannot create constant with non-closed type"));
         }
-        if self.c_gen == u32::MAX {
+        if self.0.c_gen == u32::MAX {
             // cannot allocate more than u32::MAX constants!
             return Err(Error::new("reached maximum number of constants"));
         }
-        self.c_gen += 1;
-        let gen = self.c_gen;
+        self.0.c_gen += 1;
+        let gen = self.0.c_gen;
         let c = self.hashcons_(EConst(Box::new(ConstContent {
             name: s.clone(),
             ty,
@@ -245,17 +250,17 @@ impl Ctx {
 
     #[inline]
     fn check_uid_(&self, e: &Expr) {
-        assert!(self.uid == e.ctx_uid()); // term should belong to this ctx
+        assert!(self.0.uid == e.ctx_uid()); // term should belong to this ctx
     }
 
     #[inline]
     fn check_thm_uid_(&self, th: &Thm) {
-        assert!(self.uid == th.0.ctx_uid); // theorem should belong to this ctx
+        assert!(self.0.uid == th.0.ctx_uid); // theorem should belong to this ctx
     }
 
     #[inline]
     fn builtins_(&self) -> &ExprBuiltins {
-        match self.builtins {
+        match self.0.builtins {
             None => panic!("term manager should have builtins"),
             Some(ref b) => &b,
         }
@@ -396,9 +401,9 @@ impl Ctx {
     /// This is done regularly when new terms are created, but one can
     /// also call `cleanup` manually.
     pub fn cleanup(&mut self) {
-        self.next_cleanup = CLEANUP_PERIOD;
+        self.0.next_cleanup = CLEANUP_PERIOD;
 
-        self.tbl.retain(|_, v| {
+        self.0.tbl.retain(|_, v| {
             // if `v` is not used anywhere else, it's the only
             // references and should have a strong count of 1.
             // This is thread safe as the only way this is 1 is if it's already
@@ -442,7 +447,7 @@ impl Ctx {
 impl Ctx {
     /// Get the `=` constant
     pub fn mk_eq(&mut self) -> Expr {
-        match self.eq {
+        match self.0.eq {
             Some(ref c) => c.clone(),
             None => panic!("equality is not defined in this context"),
         }
@@ -654,7 +659,7 @@ impl Ctx {
     ///
     /// Does nothing if the constant is not defined.
     pub fn set_fixity(&mut self, s: &str, f: Fixity) -> Result<()> {
-        if let Some(meta::Value::Expr(t)) = self.meta_values.get_mut(s) {
+        if let Some(meta::Value::Expr(t)) = self.0.meta_values.get_mut(s) {
             match t.view() {
                 EConst(c) => {
                     c.fix.set(f);
@@ -669,25 +674,25 @@ impl Ctx {
     /// Find a meta value by name. Returns `None` if the binding is absent.
     #[inline]
     pub fn find_meta_value(&self, s: &str) -> Option<&meta::Value> {
-        self.meta_values.get(s)
+        self.0.meta_values.get(s)
     }
 
     /// Set a meta value by name.
     #[inline]
     pub fn set_meta_value(&mut self, s: impl Into<RStr>, v: meta::Value) {
-        self.meta_values.insert(s.into(), v);
+        self.0.meta_values.insert(s.into(), v);
     }
 
     /// Iterate over all meta values.
     pub fn iter_meta_values(&self) -> impl Iterator<Item = (&str, &meta::Value)> {
-        self.meta_values.iter().map(|(s, v)| (s.get(), v))
+        self.0.meta_values.iter().map(|(s, v)| (s.get(), v))
     }
 
     /// Find a constant by name. Returns `None` if no such constant exists.
     ///
     /// Use `as_const` on the expression to get its content.
     pub fn find_const(&self, s: &str) -> Option<(&Expr, Fixity)> {
-        if let Some(meta::Value::Expr(t)) = self.meta_values.get(s) {
+        if let Some(meta::Value::Expr(t)) = self.0.meta_values.get(s) {
             if let Some(c) = t.as_const() {
                 return Some((t, c.fixity()));
             }
@@ -704,12 +709,12 @@ impl Ctx {
     ///
     /// If another lemma with the same name exists, it will be replaced.
     pub fn define_lemma(&mut self, name: impl Into<RStr>, th: Thm) {
-        self.meta_values.insert(name.into(), meta::Value::Thm(th));
+        self.0.meta_values.insert(name.into(), meta::Value::Thm(th));
     }
 
     /// Find a lemma by name. Returns `None` if no such theorem exists.
     pub fn find_lemma(&self, s: &str) -> Option<&Thm> {
-        self.meta_values.get(s).and_then(|v| v.as_thm())
+        self.0.meta_values.get(s).and_then(|v| v.as_thm())
     }
 
     /// Iterate over all lemmas.
@@ -726,13 +731,13 @@ impl Ctx {
         if e.ty() != &self.builtins_().bool {
             return Err(Error::new("cannot assume non-boolean expression"));
         }
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::Assume(e.clone())))
         } else {
             None
         };
 
-        let th = Thm::make_(e.clone(), self.uid, vec![e.clone()], pr);
+        let th = Thm::make_(e.clone(), self.0.uid, smallvec![e.clone()], pr);
         Ok(th)
     }
 
@@ -740,12 +745,12 @@ impl Ctx {
     pub fn thm_refl(&mut self, e: Expr) -> Thm {
         self.check_uid_(&e);
         let t = self.mk_eq_app(e.clone(), e.clone()).expect("refl");
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::Refl(e)))
         } else {
             None
         };
-        Thm::make_(t, self.uid, vec![], pr)
+        Thm::make_(t, self.0.uid, smallvec![], pr)
     }
 
     /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
@@ -767,13 +772,13 @@ impl Ctx {
         }
 
         let eq_a_c = self.mk_eq_app(a.clone(), c.clone())?;
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::Trans(th1.clone(), th2.clone())))
         } else {
             None
         };
         let hyps = self.merge_hyps_th(th1, th2);
-        let th = Thm::make_(eq_a_c, self.uid, hyps, pr);
+        let th = Thm::make_(eq_a_c, self.0.uid, hyps, pr);
         Ok(th)
     }
 
@@ -792,13 +797,13 @@ impl Ctx {
         let ft = self.mk_app(f.clone(), t.clone())?;
         let gu = self.mk_app(g.clone(), u.clone())?;
         let eq = self.mk_eq_app(ft, gu)?;
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::Congr(th1.clone(), th2.clone())))
         } else {
             None
         };
         let hyps = self.merge_hyps_th(th1, th2);
-        Ok(Thm::make_(eq, self.uid, hyps, pr))
+        Ok(Thm::make_(eq, self.0.uid, hyps, pr))
     }
 
     /// `congr_ty (F1 |- f=g) ty` is `F1 |- f ty=g ty`
@@ -814,7 +819,7 @@ impl Ctx {
         }
         let ft = self.mk_app(f.clone(), ty.clone())?;
         let gu = self.mk_app(g.clone(), ty.clone())?;
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::CongrTy(th.clone(), ty.clone())))
         } else {
             None
@@ -839,7 +844,7 @@ impl Ctx {
             ));
         }
 
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::Instantiate(
                 th.clone(),
                 subst.clone(),
@@ -877,7 +882,7 @@ impl Ctx {
 
         let lam_t = self.mk_lambda(v.clone(), t.clone())?;
         let lam_u = self.mk_lambda(v.clone(), u.clone())?;
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::Abs(v.clone(), thm.clone())))
         } else {
             None
@@ -892,12 +897,13 @@ impl Ctx {
     }
 
     /// Merge sets of hypothesis in a sorted fashion.
-    fn merge_hyps_iter_<I1, I2>(&mut self, mut i1: I1, mut i2: I2) -> Vec<Expr>
+    fn merge_hyps_iter_<I1, I2>(&mut self, mut i1: I1, mut i2: I2) -> Exprs
     where
         I1: Iterator<Item = Expr>,
         I2: Iterator<Item = Expr>,
     {
-        self.tmp_hyps.clear();
+        let tmp_hyps = &mut self.0.tmp_hyps;
+        tmp_hyps.clear();
 
         let mut cur1 = i1.next();
         let mut cur2 = i2.next();
@@ -906,42 +912,42 @@ impl Ctx {
             match (cur1, cur2) {
                 (None, None) => break,
                 (Some(x), None) => {
-                    self.tmp_hyps.push(x);
+                    tmp_hyps.push(x);
                     cur1 = i1.next();
                     cur2 = None;
                 }
                 (None, Some(x)) => {
-                    self.tmp_hyps.push(x);
+                    tmp_hyps.push(x);
                     cur1 = None;
                     cur2 = i2.next();
                 }
                 (Some(x1), Some(x2)) => {
                     if x1 == x2 {
                         // deduplication
-                        self.tmp_hyps.push(x1);
+                        tmp_hyps.push(x1);
                         cur1 = i1.next();
                         cur2 = i2.next();
                     } else if x1 < x2 {
-                        self.tmp_hyps.push(x1);
+                        tmp_hyps.push(x1);
                         cur1 = i1.next();
                         cur2 = Some(x2);
                     } else {
-                        self.tmp_hyps.push(x2);
+                        tmp_hyps.push(x2);
                         cur1 = Some(x1);
                         cur2 = i2.next();
                     }
                 }
             }
         }
-        self.tmp_hyps.clone()
+        tmp_hyps.clone()
     }
 
     /// Merge sets of hypothesis of the two theorems.
-    fn merge_hyps_th(&mut self, mut th1: Thm, mut th2: Thm) -> Vec<Expr> {
+    fn merge_hyps_th(&mut self, mut th1: Thm, mut th2: Thm) -> Exprs {
         use std::mem::swap;
 
-        let mut v1 = vec![];
-        let mut v2 = vec![];
+        let mut v1 = smallvec![];
+        let mut v2 = smallvec![];
 
         if th1.0.hyps.len() == 0 {
             // take or copy th2.hyps
@@ -1002,7 +1008,7 @@ impl Ctx {
         }
         let th2_c = th2.0.concl.clone();
 
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::Cut(th1.clone(), th2.clone())))
         } else {
             None
@@ -1014,7 +1020,7 @@ impl Ctx {
                 th2.0.hyps.iter().filter(|u| **u != th1_c).cloned(),
             )
         };
-        let th_res = Thm::make_(th2_c, self.uid, hyps, pr);
+        let th_res = Thm::make_(th2_c, self.0.uid, hyps, pr);
         Ok(th_res)
     }
 
@@ -1032,7 +1038,7 @@ impl Ctx {
                 Error::new("bool-eq: th2 should have a boleean equality as conclusion")
             })?;
 
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::BoolEq(th1.clone(), th2.clone())))
         } else {
             None
@@ -1047,7 +1053,7 @@ impl Ctx {
         let b = b.clone();
 
         let hyps = self.merge_hyps_th(th1, th2);
-        Ok(Thm::make_(b, self.uid, hyps, pr))
+        Ok(Thm::make_(b, self.0.uid, hyps, pr))
     }
 
     /// `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
@@ -1058,7 +1064,7 @@ impl Ctx {
         self.check_thm_uid_(&th2);
         let eq = self.mk_eq_app(th2.0.concl.clone(), th1.0.concl.clone())?;
 
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::BoolEqIntro(th1.clone(), th2.clone())))
         } else {
             None
@@ -1068,7 +1074,7 @@ impl Ctx {
             th1.0.hyps.iter().filter(|x| *x != &th2.0.concl).cloned(),
             th2.0.hyps.iter().filter(|x| *x != &th1.0.concl).cloned(),
         );
-        let th = Thm::make_(eq, self.uid, hyps, pr);
+        let th = Thm::make_(eq, self.0.uid, hyps, pr);
         Ok(th)
     }
 
@@ -1084,7 +1090,7 @@ impl Ctx {
             .ok_or_else(|| Error::new("beta-conv: expect a lambda in the application"))?;
         debug_assert_eq!(ty, arg.ty()); // should already be enforced by typing.
 
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::BetaConv(e.clone())))
         } else {
             None
@@ -1093,7 +1099,7 @@ impl Ctx {
         let lhs = e.clone();
         let rhs = self.subst1_(bod, 0, arg)?;
         let eq = self.mk_eq_app(lhs, rhs)?;
-        Ok(Thm::make_(eq, self.uid, vec![], pr))
+        Ok(Thm::make_(eq, self.0.uid, smallvec![], pr))
     }
 
     /// `new_basic_definition (x=t)` where `x` is a variable and `t` a term
@@ -1116,7 +1122,7 @@ impl Ctx {
             return Err(Error::new("LHS of equation should have a closed type"));
         }
 
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::NewDef(e.clone())))
         } else {
             None
@@ -1124,7 +1130,7 @@ impl Ctx {
 
         let c = self.mk_new_const_(x.name.clone(), x.ty.clone(), pr.clone())?;
         let eqn = self.mk_eq_app(c.clone(), rhs.clone())?;
-        let thm = Thm::make_(eqn, self.uid, vec![], pr);
+        let thm = Thm::make_(eqn, self.0.uid, smallvec![], pr);
         Ok((thm, c))
     }
 
@@ -1133,21 +1139,21 @@ impl Ctx {
     ///
     /// Fails if `pledge_no_new_axiom` was called earlier on this context.
     pub fn thm_axiom(&mut self, concl: Expr) -> Result<Thm> {
-        if !self.allow_new_axioms {
+        if !self.0.allow_new_axioms {
             return Err(Error::new(
                 "this context has pledged to not take new axioms",
             ));
         }
         self.check_uid_(&concl);
 
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::Axiom(concl.clone())))
         } else {
             None
         };
 
-        let thm = Thm::make_(concl, self.uid, vec![], pr);
-        self.axioms.push(thm.clone());
+        let thm = Thm::make_(concl, self.0.uid, smallvec![], pr);
+        self.0.axioms.push(thm.clone());
         Ok(thm)
     }
 
@@ -1156,7 +1162,7 @@ impl Ctx {
     /// This freezes the logical theory to the consequences of the builtin
     /// rules and the already created axioms.
     pub fn pledge_no_new_axiom(&mut self) {
-        self.allow_new_axioms = false;
+        self.0.allow_new_axioms = false;
     }
 
     /// Introduce a new type operator.
@@ -1191,7 +1197,7 @@ impl Ctx {
         // the concrete type
         let ty = witness.ty().clone();
         // check that all free variables are type variables
-        let mut fvars: Vec<Var> = thm_inhabited.concl().free_vars().cloned().collect();
+        let mut fvars: SmallVec<[Var; 3]> = thm_inhabited.concl().free_vars().cloned().collect();
         fvars.sort_unstable();
         fvars.dedup();
 
@@ -1205,7 +1211,7 @@ impl Ctx {
         // free vars, as expressions
         let fvars_exprs: Vec<_> = fvars.iter().map(|v| self.mk_var(v.clone())).collect();
 
-        let pr = if self.proof_gen {
+        let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::NewTyDef(
                 ty.clone(),
                 thm_inhabited.clone(),
@@ -1243,7 +1249,7 @@ impl Ctx {
             let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
             let abs_t = self.mk_app(abs, t)?;
             let eqn = self.mk_eq_app(abs_t.clone(), abs_x.clone())?;
-            Thm::make_(eqn, self.uid, vec![], pr.clone())
+            Thm::make_(eqn, self.0.uid, smallvec![], pr.clone())
         };
         let repr_x = self.mk_var_str("x", ty.clone());
         let repr_thm = {
@@ -1256,8 +1262,8 @@ impl Ctx {
             let phi_x = self.mk_app(phi.clone(), repr_x.clone())?;
             Thm::make_(
                 self.mk_eq_app(phi_x, eq_t2_x)?,
-                self.uid,
-                vec![],
+                self.0.uid,
+                smallvec![],
                 pr.clone(),
             )
         };
@@ -1281,7 +1287,7 @@ mod impls {
 
     impl fmt::Debug for Ctx {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "<expr manager>")
+            write!(f, "<logical context>")
         }
     }
 }

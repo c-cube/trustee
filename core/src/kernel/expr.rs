@@ -2,6 +2,7 @@
 
 use super::{symbol::Symbol, Proof, Ref, WeakRef};
 use crate::{error::Result, fnv, rstr::RStr};
+use smallvec::{smallvec, SmallVec};
 use std::{fmt, ops::Deref};
 
 /// De Buijn indices.
@@ -250,7 +251,7 @@ where
 /// Iterator over free variables of an expr.
 struct FreeVars<'a> {
     seen: fnv::FnvHashSet<&'a Expr>,
-    st: Vec<&'a Expr>,
+    st: Vec<&'a Expr>, // stack for traversal
 }
 
 mod free_vars_impl {
@@ -380,9 +381,9 @@ impl Expr {
 
     /// `e.unfold_app()` returns a tuple `(f, args)` where `args`
     /// iterates over arguments.
-    pub fn unfold_app(&self) -> (&Expr, Vec<&Expr>) {
+    pub fn unfold_app(&self) -> (&Expr, SmallVec<[&Expr; 3]>) {
         let mut e = self;
-        let mut v = vec![];
+        let mut v = smallvec![];
         while let EApp(f, a) = e.view() {
             e = f;
             v.push(a);
