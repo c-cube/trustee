@@ -38,27 +38,63 @@ pub use kernel::{Ctx, Expr, ExprView, Symbol, Thm, Var};
 pub use syntax::{parse_expr, parse_expr_with_args, parse_pattern, parse_pattern_with_args};
 
 pub(crate) mod macros {
+    #[allow(unused_macros)]
+    #[macro_export]
+    macro_rules! ignore{
+        () => { () };
+        ($t :expr) => {{
+            #[allow(unused_value)]
+            let _ = $t;
+        } };
+        ($t0: expr, $($t:expr),*) => {{
+            #[allow(unused_value)]
+            let _ = $t0;
+            crate::ignore!($($t),*)
+        }}
+    }
+
     #[macro_export]
     macro_rules! logtrace{
-        ($($t:expr),*) => {
-            #[cfg(feature="logging")]
-            log::trace!($($t),*)
-        }
+        ($($t:expr),*) => {{
+            {
+                #[cfg(feature="logging")]
+                log::trace!($($t),*)
+            }
+
+            {
+                #[cfg(not(feature="logging"))]
+                crate::ignore!($($t),*)
+            }
+        }}
     }
 
     #[macro_export]
     macro_rules! logdebug{
-        ($($t:expr),*) => {
-            #[cfg(feature="logging")]
-            log::debug!($($t),*)
-        }
+        ($($t:expr),*) => {{
+            {
+                #[cfg(feature="logging")]
+                log::debug!($($t),*)
+            }
+
+            {
+                #[cfg(not(feature="logging"))]
+                crate::ignore!($($t),*)
+            }
+        }}
     }
 
     #[macro_export]
     macro_rules! logerr{
-        ($($t:expr),*) => {
-            #[cfg(feature="logging")]
-            log::error!($($t),*)
-        }
+        ($($t:expr),*) => {{
+            {
+                #[cfg(feature="logging")]
+                log::error!($($t),*);
+            }
+
+            {
+                #[cfg(not(feature="logging"))]
+                crate::ignore!($($t),*);
+            }
+        }}
     }
 }

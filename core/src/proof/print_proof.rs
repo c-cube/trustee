@@ -1,6 +1,6 @@
 //! # Proof Printing
 
-use {crate::fnv::FnvHashMap as HM, crate::kernel::*, crate::*, std::io::Write};
+use {crate::fnv::FnvHashMap as HM, crate::kernel::*, std::io::Write};
 
 pub struct Printer<'a> {
     out: &'a mut dyn Write,

@@ -17,14 +17,14 @@ struct TrusteeSt {
 /// Translate a position to a LSP position
 fn pos_to_lsp(p: Position) -> lsp::Position {
     lsp::Position {
-        line: p.line as u64 - 1,
-        character: p.col as u64 - 1,
+        line: p.line - 1,
+        character: p.col - 1,
     }
 }
 
 /// Translate back.
 fn pos_of_lsp(p: lsp::Position) -> Position {
-    if p.line > u32::MAX as u64 || p.character > u32::MAX as u64 {
+    if p.line > u32::MAX || p.character > u32::MAX {
         panic!("cannot handle position outside the u32 range")
     }
     Position {
@@ -59,6 +59,8 @@ impl server::Handler for TrusteeSt {
                     message: $msg,
                     related_information: None,
                     tags: None,
+                    data: None,
+                    code_description: None,
                 }
             };
         }
@@ -72,7 +74,7 @@ impl server::Handler for TrusteeSt {
 
             // stdout
             if let Some(s) = r.stdout {
-                diags.push(mk_diag!(lsp::DiagnosticSeverity::Hint, range, s.clone()));
+                diags.push(mk_diag!(lsp::DiagnosticSeverity::HINT, range, s.clone()));
             }
 
             // tracing events
@@ -82,15 +84,15 @@ impl server::Handler for TrusteeSt {
                     end: pos_to_lsp(pos),
                 };
                 let s = format!("trace: {}", v);
-                diags.push(mk_diag!(lsp::DiagnosticSeverity::Hint, range, s));
+                diags.push(mk_diag!(lsp::DiagnosticSeverity::HINT, range, s));
             }
 
             // main result
             {
                 let severity = if r.res.is_ok() {
-                    lsp::DiagnosticSeverity::Information
+                    lsp::DiagnosticSeverity::INFORMATION
                 } else {
-                    lsp::DiagnosticSeverity::Error
+                    lsp::DiagnosticSeverity::ERROR
                 };
 
                 let (msg, range) = match &r.res {

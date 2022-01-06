@@ -31,7 +31,7 @@ pub fn rewrite_bottom_up(ctx: &mut Ctx, conv: &dyn Converter, e0: Expr) -> Resul
                 }
             }
         };
-    };
+    }
 
     loop {
         match e.view() {

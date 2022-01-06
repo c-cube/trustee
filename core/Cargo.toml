@@ -18,5 +18,3 @@ trustee = {path=".", features=["logging"]}
 [features]
 logging=["log"]
 
-[[example]]
-name = "parse_proof"

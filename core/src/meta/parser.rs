@@ -1184,12 +1184,12 @@ fn binary_op_(
         ($i: expr, $a: expr) => {
             Some(((&|s1, s2, s3| $i(s1, s2, s3)), $a))
         };
-    };
+    }
     macro_rules! ret_swap {
         ($i: expr, $a: expr) => {
             Some(((&|s1, s2, s3| $i(s2, s1, s3)), $a))
         };
-    };
+    }
     if s == "+" {
         ret!(I::Add, BinOpAssoc::LAssoc)
     } else if s == "-" {
@@ -1225,7 +1225,7 @@ fn unary_op_(s: &str) -> Option<&'static dyn Fn(SlotIdx, SlotIdx) -> Instr> {
         ($i: expr) => {
             Some(&|s1, s2| $i(s1, s2))
         };
-    };
+    }
     if s == "not" {
         ret!(I::Not)
     } else if s == "nil?" {

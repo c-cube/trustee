@@ -14,7 +14,7 @@ use std::{
 #[derive(Debug)]
 pub struct Doc {
     pub id: DocID,
-    pub version: i64,
+    pub version: i32,
     pub content: String,
 }
 
@@ -222,7 +222,7 @@ mod server {
             capabilities.text_document_sync = Some(lsp::TextDocumentSyncCapability::Options(
                 lsp::TextDocumentSyncOptions {
                     open_close: Some(true),
-                    change: Some(lsp::TextDocumentSyncKind::Full), // FIXME
+                    change: Some(lsp::TextDocumentSyncKind::FULL), // FIXME
                     will_save: Some(false),
                     will_save_wait_until: Some(false),
                     save: None,
@@ -230,7 +230,7 @@ mod server {
             ));
             capabilities.completion_provider = Some(lsp::CompletionOptions::default());
             capabilities.hover_provider = Some(lsp::HoverProviderCapability::Simple(true));
-            capabilities.definition_provider = Some(true);
+            capabilities.definition_provider = Some(OneOf::Left(true));
 
             // TODO: declare more actual capabilities
             let reply = InitializeResult {
@@ -314,9 +314,7 @@ mod server {
                 .ok_or_else(|| anyhow!("unknown document"))?;
 
             // update version
-            if let Some(v) = td.version {
-                doc.version = v;
-            }
+            doc.version = td.version;
             let version = doc.version.clone();
 
             // update content

@@ -1,7 +1,6 @@
 //! # Parse proofs
 
 use {
-    crate::fnv::FnvHashMap as HM,
     crate::{
         kernel::{self as k, Ctx, Expr, Thm},
         Error, Result,
