@@ -8,6 +8,9 @@ lsp:
 	@cargo build --release -p trustee_lsp
 .PHONY: lsp
 
+install_lsp:
+	@make -C lsp install
+
 clean:
 	@cargo clean
 

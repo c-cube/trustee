@@ -223,6 +223,9 @@ mod server {
                     save: None,
                 },
             ));
+            capabilities.completion_provider = Some(lsp::CompletionOptions::default());
+            capabilities.hover_provider = Some(lsp::HoverProviderCapability::Simple(true));
+            capabilities.definition_provider = Some(true);
 
             // TODO: declare more actual capabilities
             let reply = InitializeResult {
