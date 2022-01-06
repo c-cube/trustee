@@ -194,7 +194,7 @@ mod server {
                     "result": $j,
                 }))?
             }
-        };
+        }
         macro_rules! mk_notif {
             ($m: expr, $params: expr) => {{
                 serde_json::to_string(&json!({
@@ -203,7 +203,7 @@ mod server {
                     "params": $params,
                 }))?
             }}
-        };
+        }
 
         // NOTE: ugh. we need to reserialize before we can deserialize from Value?
         let params = msg.params.to_string();

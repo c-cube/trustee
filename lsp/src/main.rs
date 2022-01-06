@@ -4,9 +4,9 @@ use trustee::{
     self, kernel as k, meta,
     meta::{Location, Position},
 };
-use trustee_utils as utils;
 
 pub mod server;
+pub mod utils;
 pub use server::{Doc, DocID, Server, State};
 
 struct TrusteeSt;

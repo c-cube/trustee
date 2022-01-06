@@ -119,18 +119,18 @@ fn init_() {
 /// This is computed once, based on the environment variable "TEF".
 #[inline(always)]
 pub fn enabled() -> bool {
-    START.call_once(|| init_());
+    START.call_once(init_);
     ENABLED.load(Ordering::Acquire)
 }
 
 /// Initialize TEF, if needed.
 pub fn init() {
-    START.call_once(|| init_());
+    START.call_once(init_);
 }
 
 /// Send an event explicitly.
 pub fn send_event(case: Case, name: &'static str) {
-    let ts0 = START_TS.with(|ts0| ts0.clone());
+    let ts0 = START_TS.with(|ts0| *ts0);
     let dur = Instant::now().duration_since(ts0);
 
     let ev = Event {

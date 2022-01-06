@@ -4,6 +4,10 @@ build:
 
 all: build test
 
+lsp:
+	@cargo build --release -p trustee_lsp
+.PHONY: lsp
+
 clean:
 	@cargo clean
 

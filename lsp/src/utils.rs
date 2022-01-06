@@ -265,6 +265,7 @@ pub fn inspect(
     None
 }
 
+#[deny(dead_code)]
 /// Is this code sufficient for evaluation, or is more needed?
 pub fn code_is_complete(code: &str) -> Option<bool> {
     let mut lex = meta::lexer::Lexer::new(code, None);
