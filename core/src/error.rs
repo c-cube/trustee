@@ -95,13 +95,24 @@ impl Error {
         }
     }
 
+    /// Change or set the source of the error.
     pub fn with_source(mut self, src: Self) -> Self {
         self.set_source(src);
         self
     }
 
+    /// Turn the error into a readable string. This allocates.
     pub fn to_string(&self) -> String {
         format!("{}", self)
+    }
+
+    /// Access the error message.
+    pub fn msg(&self) -> &str {
+        match self.msg {
+            ErrorMsg::EStatic(s) => s,
+            ErrorMsg::EDyn(s) => &*s,
+            ErrorMsg::EMeta { loc: _, msg } => &*msg,
+        }
     }
 
     /// Display the error, along with its source if any.
@@ -121,6 +132,20 @@ impl Error {
         }
         s
     }
+}
+
+/// Macro to make dynamic-string errors easily.
+///
+/// ```rust
+/// let s = errorstr!("hello {}", "world");
+/// assert_eq!(s.msg(), "hello world");
+/// ```
+#[macro_export]
+macro_rules! errorstr {
+    ($t: expr, $($args:expr),+) => {{
+        let msg = format!($t, $($args),+);
+        Error::new_string(msg)
+    }}
 }
 
 #[cfg(test)]

@@ -196,13 +196,17 @@ impl<'a> Printer<'a> {
                             writeln!(self.out, "ty {}", id)?;
                         }
                         EKind => return Err(Error::new("cannot print kind")),
-                        EConst(_) if e.is_bool() => {
+                        EConst(..) if e.is_bool() => {
                             writeln!(self.out, "bool {}", id)?;
                         }
-                        EConst(c) => {
+                        EConst(c, args) => {
                             // FIXME: see if `c` has a proof, in which case use a get
-                            let tyid = self.get_term_id(&c.ty)?;
-                            writeln!(self.out, "c {} {} {}", id, c.name.name(), tyid)?;
+                            write!(self.out, "c {} {}", id, c.name.name())?;
+                            for a in &args[..] {
+                                let aid = self.get_term_id(&a)?;
+                                write!(self.out, " {}", aid)?;
+                            }
+                            writeln!(self.out)?;
                         }
                         EVar(v) => {
                             let tyid = self.get_term_id(&v.ty)?;
@@ -223,10 +227,10 @@ impl<'a> Printer<'a> {
                             let idbod = self.get_term_id(&bod)?;
                             writeln!(self.out, "\\ {} {} {}", id, idty, idbod)?;
                         }
-                        EPi(tyv, bod) => {
-                            let idty = self.get_term_id(&tyv)?;
-                            let idbod = self.get_term_id(&bod)?;
-                            writeln!(self.out, "P {} {} {}", id, idty, idbod)?;
+                        EArrow(a, ret) => {
+                            let ida = self.get_term_id(&a)?;
+                            let idret = self.get_term_id(&ret)?;
+                            writeln!(self.out, "-> {} {} {}", id, ida, idret)?;
                         }
                     }
                 }
@@ -329,7 +333,7 @@ impl<'a> Printer<'a> {
                                 let eid = self.get_term_id(e)?;
                                 write!(self.out, " {} {}", v.name.name(), eid)?;
                             }
-                            writeln!(self.out, "")?;
+                            writeln!(self.out)?;
                         }
                         ProofView::Abs(v, th1) => {
                             let ty = self.get_term_id(&v.ty)?;
@@ -386,7 +390,7 @@ impl<'a> Printer<'a> {
                                 let id = self.get_thm_id(th)?;
                                 write!(self.out, " {}", id)?;
                             }
-                            writeln!(self.out, "")?;
+                            writeln!(self.out)?;
                         }
                     }
                 }

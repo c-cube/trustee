@@ -133,7 +133,7 @@ impl<'a> CC<'a> {
                     }
                     // TODO: handle lambda? need a rule for `abs` with DB index
                     ELambda(..) => (),
-                    EVar(..) | EBoundVar(..) | EConst(..) | EPi(..) | EKind | EType => (),
+                    EVar(..) | EBoundVar(..) | EConst(..) | EArrow(..) | EKind | EType => (),
                 }
                 idx
             }

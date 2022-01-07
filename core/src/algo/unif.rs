@@ -167,7 +167,8 @@ impl<'a> UnifySt<'a> {
             EVar(v2) => v == v2,
             EBoundVar(_) => false,
             EApp(f, arg) => self.occur_check(v, f) || self.occur_check(v, arg),
-            ELambda(_, body) | EPi(_, body) => self.occur_check(v, body),
+            EArrow(a, b) => self.occur_check(v, a) || self.occur_check(v, b),
+            ELambda(_, body) | => self.occur_check(v, body),
         }
     }
 
@@ -224,9 +225,9 @@ impl<'a> UnifySt<'a> {
                     self.add_pair(f1, f2);
                     self.add_pair(a1, a2);
                 }
-                (EPi(tyv1, body1), EPi(tyv2, body2)) => {
-                    self.add_pair(tyv1, tyv2);
-                    self.add_pair(body1, body2);
+                (EArrow(f1, a1), EArrow(f2, a2)) => {
+                    self.add_pair(f1, f2);
+                    self.add_pair(a1, a2);
                 }
                 (ELambda(tyv1, body1), ELambda(tyv2, body2)) => {
                     self.add_pair(tyv1, tyv2);
@@ -235,7 +236,7 @@ impl<'a> UnifySt<'a> {
                 (EBoundVar(..), _) => break false,
                 (EApp(..), _) => break false,
                 (ELambda(..), _) => break false,
-                (EPi(..), _) => break false,
+                (EArrow(..), _) => break false,
             }
         };
         if sat {

@@ -27,7 +27,10 @@ pub enum Value {
     /// A raw string literal. Obtained by parsing a source file or using
     /// an embedded rust string literal.
     Str(RStr),
+    /// Logical expression
     Expr(k::Expr),
+    /// Logical constant
+    Const(k::Const),
     /// Cons: a pair of values. This is the basis for lists.
     Cons(RPtr<(Value, Value)>),
     /// A theorem.
@@ -405,27 +408,25 @@ mod impls {
             let mut v = vec![];
             let out = &mut v;
             if full {
-                write!(out, "chunk [\n")?;
-                write!(out, "  name: {:?}\n", &self.0.name)?;
-                write!(out, "  n-slots: {}\n", self.0.n_slots)?;
-                write!(out, "  ================================\n")?;
+                writeln!(out, "chunk [")?;
+                writeln!(out, "  name: {:?}", &self.0.name)?;
+                writeln!(out, "  n-slots: {}", self.0.n_slots)?;
+                writeln!(out, "  ================================\n")?;
                 for (i, v) in self.0.locals.iter().enumerate() {
-                    write!(out, "  local[{:6}]: {}\n", i, &v)?;
+                    writeln!(out, "  local[{:6}]: {}", i, &v)?;
                 }
-                write!(out, "  ================================\n")?;
+                writeln!(out, "  ================================")?;
                 for (i, c) in self.0.instrs.iter().enumerate() {
                     // account for ic being current instr+1.
                     let active = ic.filter(|x| *x == i + 1).is_some();
                     let prefix = if active { ">" } else { " " };
-                    write!(out, "  instr[{}{:5}]: {:?}\n", prefix, i, &c)?;
+                    writeln!(out, "  instr[{}{:5}]: {:?}", prefix, i, &c)?;
                 }
-                write!(out, "]\n")?;
+                writeln!(out, "]")?;
+            } else if self.0.name.is_none() {
+                write!(out, "<anon chunk>")?;
             } else {
-                if self.0.name.is_none() {
-                    write!(out, "<anon chunk>")?;
-                } else {
-                    write!(out, "<chunk {:?}>", &self.0.name.as_ref().unwrap())?;
-                }
+                write!(out, "<chunk {:?}>", &self.0.name.as_ref().unwrap())?;
             }
             Ok(String::from_utf8(v).unwrap())
         }
@@ -471,12 +472,12 @@ mod impls {
             let mut v = vec![];
             let out = &mut v;
 
-            write!(out, "closure [\n")?;
+            writeln!(out, "closure [")?;
             for (i, x) in self.upvalues().iter().enumerate() {
-                write!(out, "  up[{:5}] = {}\n", i, x)?;
+                writeln!(out, "  up[{:5}] = {}", i, x)?;
             }
             write!(out, "{}", self.0.c.print(full, ic)?)?;
-            write!(out, "]\n")?;
+            writeln!(out, "]")?;
             Ok(String::from_utf8(v).unwrap())
         }
     }
@@ -504,7 +505,7 @@ mod impls {
                         write!(out, "[")?;
                         for (i, x) in args.into_iter().enumerate() {
                             if out.alternate() {
-                                writeln!(out, "")?;
+                                writeln!(out)?;
                             }
                             if i > 0 {
                                 write!(out, " ")?
@@ -527,6 +528,7 @@ mod impls {
                 }
                 Value::Str(s) => write!(out, "{:?}", s),
                 Value::Expr(e) => write!(out, "${}$", e),
+                Value::Const(c) => write!(out, "${}$", c.name.name()),
                 Value::Thm(th) => write!(out, "{}", th),
                 Value::Closure(cl) => {
                     let nup = cl.upvalues().len();
@@ -597,6 +599,12 @@ mod impls {
         }
     }
 
+    impl From<k::Const> for Value {
+        fn from(c: k::Const) -> Self {
+            Value::Const(c)
+        }
+    }
+
     impl From<k::Thm> for Value {
         fn from(th: k::Thm) -> Self {
             Value::Thm(th)
@@ -629,6 +637,7 @@ mod test {
         assert_eq!(std::mem::size_of::<Instr>(), 4);
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn test_sizeof_value() {
         // make sure values are at most 2 words
@@ -642,6 +651,6 @@ mod test {
         println!("sizeof(rstr) is {}", sz);
         let sz = std::mem::size_of::<Value>();
         println!("sizeof(value) is {}", sz);
-        assert!(sz <= 16);
+        assert_eq!(16, sz);
     }
 }

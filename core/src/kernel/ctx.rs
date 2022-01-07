@@ -4,18 +4,23 @@
 //!  in a way that ensures theorems are valid.
 
 use super::{
-    expr::{self, BoundVarContent, ConstContent, ConstTag, DbIndex, Var, WExpr},
+    expr::{
+        self, BoundVarContent, Const, ConstArgs, ConstImpl, ConstKind, ConstTag, DbIndex, Var,
+        WExpr,
+    },
     symbol::{BuiltinSymbol, Symbol},
     thm::Exprs,
     Expr, ExprView, Proof, ProofView, Ref, Subst, Thm, Type, WeakRef,
 };
 use crate::{
     error::{Error, Result},
-    fnv, meta,
+    errorstr,
+    fnv::{self, FnvHashMap as HM},
+    meta,
     rstr::RStr,
 };
 use smallvec::{smallvec, SmallVec};
-use std::{fmt, sync::atomic};
+use std::{fmt, rc::Rc, sync::atomic};
 
 use ExprView::*;
 
@@ -28,16 +33,20 @@ pub struct Ctx(Box<CtxImpl>);
 
 struct CtxImpl {
     /// Hashconsing table, with weak semantics.
-    tbl: fnv::FnvHashMap<ExprView, WExpr>,
+    tbl: HM<ExprView, WExpr>,
     /// The equality symbol, lazily initialized.
-    eq: Option<Expr>,
-    /// Some builtins, lazily initialized.
-    builtins: Option<ExprBuiltins>,
+    c_eq: Option<Const>,
+    /// The type of types, lazily initialized
+    e_ty: Option<Expr>,
+    /// The boolean type, lazily initialized.
+    e_bool: Option<Expr>,
+    /// Pretty printing of constants
+    fixities: HM<Const, Fixity>,
     /// Temporary used to merge sets of hypotheses
     tmp_hyps: Exprs, // (smallvec)
     /// The defined chunks of code. These comprise some user defined tactics,
     /// derived rules, etc.
-    meta_values: fnv::FnvHashMap<RStr, meta::Value>,
+    meta_values: HM<RStr, meta::Value>,
     next_cleanup: usize,
     /// All the axioms created so far.
     axioms: Vec<Thm>,
@@ -56,12 +65,12 @@ struct CtxImpl {
 #[derive(Debug, Clone)]
 pub struct NewTypeDef {
     /// the new type constructor
-    pub tau: Expr,
+    pub tau: Const,
     pub fvars: SmallVec<[Var; 3]>,
     /// Function from the general type to `tau`
-    pub c_abs: Expr,
+    pub c_abs: Const,
     /// Function from `tau` back to the general type
-    pub c_repr: Expr,
+    pub c_repr: Const,
     /// `abs_thm` is `|- abs (repr x) = x`
     pub abs_thm: Thm,
     pub abs_x: Var,
@@ -75,12 +84,6 @@ pub struct NewTypeDef {
 /// The cleanup of dead entries from the hashconsing table is done
 /// every time `CLEANUP_PERIOD` new terms are added.
 const CLEANUP_PERIOD: usize = 5_000;
-
-/// A set of builtin symbols.
-struct ExprBuiltins {
-    ty: Expr,
-    bool: Expr,
-}
 
 // used to allocate unique ExprManager IDs
 static EM_ID: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
@@ -97,53 +100,63 @@ impl Ctx {
         }
         let mut ctx = Ctx(Box::new(CtxImpl {
             tbl,
-            builtins: None,
             tmp_hyps: smallvec![],
             c_gen: 0,
             meta_values: fnv::new_table_with_cap(16),
             next_cleanup: CLEANUP_PERIOD,
             axioms: vec![],
             uid: uid as u32,
-            eq: None,
+            c_eq: None,
+            e_ty: None,
+            e_bool: None,
             allow_new_axioms: true,
             proof_gen: false,
+            fixities: HM::default(),
         }));
+
         // insert initial builtins
         let kind = ctx.hashcons_builtin_(EKind, None);
         ctx.0.tbl.insert(kind.view().clone(), kind.weak());
         let ty = ctx.hashcons_builtin_(EType, Some(kind));
         ctx.0.tbl.insert(ty.view().clone(), ty.weak());
-        let bool = {
+        ctx.0.e_ty = Some(ty);
+
+        // define bool
+        let e_bool = {
             let name = Symbol::from_str(bs.bool);
-            ctx.hashcons_builtin_(
-                EConst(ConstContent {
-                    name,
-                    ty: ty.clone(),
-                    gen: 0,
-                    tag: ConstTag::Bool,
-                    fix: std::cell::Cell::new(Fixity::Nullary),
-                    proof: None,
-                }),
-                Some(ty.clone()),
-            )
+            let c_bool = Const(Rc::new(ConstImpl {
+                name,
+                kind: ConstKind::TyConst,
+                arity: 0,
+                gen: 0,
+                tag: ConstTag::Bool,
+                proof: None,
+            }));
+            ctx.add_const_(c_bool.clone());
+            ctx.mk_const_(c_bool, smallvec![]).unwrap()
         };
-        ctx.add_const_(bool.clone());
-        let builtins = ExprBuiltins { bool, ty };
-        ctx.0.builtins = Some(builtins);
+        ctx.0.e_bool = Some(e_bool.clone());
+
         // build `=`. It needs `builtins` to be set.
-        let eq = {
+        let c_eq = {
             let name = Symbol::from_str(bs.eq);
-            let ty = ctx.mk_ty();
-            let bool = ctx.mk_bool();
+
+            // db0 -> (db0 -> bool)
             let db0 = ctx.mk_bound_var(0, ty.clone());
-            let arr = ctx.mk_arrow(db0.clone(), bool).unwrap();
-            let arr = ctx.mk_arrow(db0, arr).unwrap();
-            let ty_eq = ctx.mk_pi_(ty, arr).unwrap();
-            let fix = super::FIXITY_EQ;
-            ctx.mk_const_with_(name, ty_eq, ConstTag::Eq, fix, None)
-                .unwrap()
+            let ty = ctx.mk_arrow(db0.clone(), e_bool).unwrap();
+            let ty = ctx.mk_arrow(db0, ty).unwrap();
+
+            Const(Rc::new(ConstImpl {
+                name,
+                kind: ConstKind::ExprConst { ty },
+                arity: 1,
+                gen: 0,
+                tag: ConstTag::Eq,
+                proof: None,
+            }))
         };
-        ctx.0.eq = Some(eq);
+        ctx.add_const_(c_eq.clone());
+        ctx.0.c_eq = Some(c_eq);
 
         ctx
     }
@@ -196,14 +209,10 @@ impl Ctx {
         Ok(e)
     }
 
-    fn add_const_(&mut self, e: Expr) {
-        let name = if let EConst(c) = e.view() {
-            c.name.clone()
-        } else {
-            unreachable!("not a constant: {:?}", e);
-        };
-        self.0.tbl.insert(e.view().clone(), e.weak());
-        self.0.meta_values.insert(name.to_rstr(), e.into());
+    /// Define a constant.
+    fn add_const_(&mut self, c: Const) {
+        let name = c.name.clone();
+        self.0.meta_values.insert(name.to_rstr(), c.into());
     }
 
     fn hashcons_builtin_(&mut self, ev: ExprView, ty: Option<Expr>) -> Expr {
@@ -214,34 +223,66 @@ impl Ctx {
         e
     }
 
+    #[inline]
+    fn get_eq_(&self) -> &Const {
+        self.0.c_eq.as_ref().expect("`eq` not initialized")
+    }
+
+    #[inline]
+    fn get_ty_(&self) -> &Expr {
+        self.0.e_ty.as_ref().expect("`ty` not initialized")
+    }
+
+    #[inline]
+    fn get_bool_(&self) -> &Expr {
+        self.0.e_bool.as_ref().expect("`bool` not initialized")
+    }
+
     fn mk_const_with_(
         &mut self,
         s: Symbol,
-        ty: Type,
         tag: ConstTag,
-        f: Fixity,
+        arity: u8,
+        kind: ConstKind,
         pr: Option<Proof>,
-    ) -> Result<Expr> {
-        self.check_uid_(&ty);
-        if !ty.is_closed() || ty.free_vars().next().is_some() {
-            return Err(Error::new("cannot create constant with non-closed type"));
+    ) -> Result<Const> {
+        if let ConstKind::ExprConst { ty } = kind {
+            self.check_uid_(&ty);
+            if ty.db_depth() > arity as u32 {
+                return Err(errorstr!("cannot create constant with type {}", ty));
+            }
+            if ty.free_vars().next().is_some() {
+                return Err(Error::new("cannot create constant with non-ground type"));
+            }
         }
-        if self.0.c_gen == u32::MAX {
-            // cannot allocate more than u32::MAX constants!
-            return Err(Error::new("reached maximum number of constants"));
-        }
-        self.0.c_gen += 1;
+
+        self.0.c_gen = self.0.c_gen.wrapping_add(1); // next gen
         let gen = self.0.c_gen;
-        let c = self.hashcons_(EConst(ConstContent {
+        let c = Const(Rc::new(ConstImpl {
             name: s,
-            ty,
             gen,
             tag,
-            fix: std::cell::Cell::new(f),
             proof: pr,
-        }))?;
+            arity,
+            kind,
+        }));
         self.add_const_(c.clone());
         Ok(c)
+    }
+
+    // helper to create type constants
+    fn mk_new_ty_const_(
+        &mut self,
+        s: impl Into<Symbol>,
+        arity: impl Into<usize>,
+        pr: Option<Proof>,
+    ) -> Result<Const> {
+        let arity = arity.into();
+        if arity > u8::MAX as usize {
+            return Err(Error::new("arity for type constant is too high"));
+        }
+        let arity = arity as u8;
+        self.mk_const_with_(s.into(), ConstTag::None, arity, ConstKind::TyConst, pr)
     }
 
     #[inline]
@@ -254,116 +295,136 @@ impl Ctx {
         assert!(self.0.uid == th.0.ctx_uid); // theorem should belong to this ctx
     }
 
-    #[inline]
-    fn builtins_(&self) -> &ExprBuiltins {
-        match self.0.builtins {
-            None => panic!("term manager should have builtins"),
-            Some(ref b) => b,
-        }
-    }
-
-    // compute the type for this expression
+    // compute the type for this expression. This is done at hashconsing time.
     fn compute_ty_(&mut self, e: &ExprView) -> Result<Option<Expr>> {
         Ok(match e {
             EKind => None,
-            EType => Some(self.builtins_().ty.clone()),
-            EConst(c) => Some(c.ty.clone()),
+            EType => Some(self.get_ty_().clone()),
+            EConst(c, args) => match c.kind {
+                ConstKind::TyConst => Some(self.get_ty_().clone()),
+                ConstKind::ExprConst { ty } => {
+                    // check arity
+                    let n_args = args.len();
+                    if n_args != c.arity as usize {
+                        return Err(errorstr!(
+                            "constant {} requires {} arguments, got {}",
+                            c.name.name(),
+                            c.arity,
+                            n_args
+                        ));
+                    }
+                    // substitute arguments in `ty`
+                    let ty_res = self.subst_db_(&ty, 0, &args[..])?;
+                    assert!(ty_res.is_closed());
+                    Some(ty_res)
+                }
+            },
             EVar(v) => Some(v.ty.clone()),
             EBoundVar(v) => Some(v.ty.clone()),
             ELambda(v_ty, body) => {
-                // type of `λx:a. t` is `Πx:a. typeof(b)`.
-                let ty_body = body.ty().clone();
-                Some(self.hashcons_(EPi(v_ty.clone(), ty_body))?)
+                // type of `λx:a. t` is `a-> typeof(b)`.
+                Some(self.hashcons_(EArrow(v_ty.clone(), body.ty().clone()))?)
             }
-            EPi(v_ty, e) => {
-                if !v_ty.is_type() && !v_ty.ty().is_type() {
-                    return Err(Error::new(
-                        "pi: variable must be a type or be of type `type`",
-                    ));
-                };
-                if !e.ty().is_type() && !e.ty().is_kind() {
-                    return Err(Error::new("pi: body must have type `type` or `kind`"));
-                };
-                Some(self.builtins_().ty.clone())
-            }
+            EArrow(..) => Some(self.get_ty_().clone()),
             EApp(f, arg) => match f.ty().view() {
-                EPi(ty_var_f, ref ty_body_f) => {
-                    // rule: `f: Πx:tya. b`, `arg: tya` ==> `f arg : b[arg/x]`
-                    if ty_var_f != arg.ty() {
+                EArrow(ty_arg_f, ty_body_f) => {
+                    // rule: `f: a -> b`, `arg: a` ==> `f arg : b`
+                    if ty_arg_f != arg.ty() {
                         return Err(Error::new("apply: incompatible types"));
                     }
-                    Some(self.subst1_(ty_body_f, 0, arg)?)
+                    Some(ty_body_f.clone())
                 }
-                _ => return Err(Error::new("cannot apply term with a non-pi type")),
+                _ => return Err(Error::new("cannot apply term with a non-arrow type")),
             },
         })
     }
 
-    // TODO(perf): have a (dense) stack of substitutions to do? could be useful
-    // for type inference in `f t1…tn`, instantiating `n` Π types at once.
-
-    /// Replace DB0 in `t` by `u`, under `k` intermediate binders.
-    fn subst1_(&mut self, t: &Expr, k: u32, u: &Expr) -> Result<Expr> {
-        if t.is_closed() {
+    /// Replace `DB_i` in `t` by `args[i]`, under `k` intermediate binders.
+    fn subst_db_(&mut self, t: &Expr, k: u32, args: &[Expr]) -> Result<Expr> {
+        if t.is_closed() || args.len() == 0 {
             return Ok(t.clone()); // shortcut
         }
 
         Ok(match t.view() {
             EKind | EType | EConst(..) => t.clone(),
             EApp(a, b) => {
-                let a2 = self.subst1_(a, k, u)?;
-                let b2 = self.subst1_(b, k, u)?;
+                let a2 = self.subst_db_(a, k, args)?;
+                let b2 = self.subst_db_(b, k, args)?;
                 if a == &a2 && b == &b2 {
                     t.clone() // no need to do hashconsing
                 } else {
                     self.hashcons_(EApp(a2, b2))?
                 }
             }
+            EArrow(a, b) => {
+                let a2 = self.subst_db_(a, k, args)?;
+                let b2 = self.subst_db_(b, k, args)?;
+                if a == &a2 && b == &b2 {
+                    t.clone() // no need to do hashconsing
+                } else {
+                    self.hashcons_(EArrow(a2, b2))?
+                }
+            }
             ELambda(v_ty, body) => {
-                let v_ty2 = self.subst1_(v_ty, k, u)?;
-                let body2 = self.subst1_(body, k + 1, u)?;
+                let v_ty2 = self.subst_db_(v_ty, k, args)?;
+                let body2 = self.subst_db_(body, k + 1, args)?;
                 if v_ty == &v_ty2 && body == &body2 {
-                    t.clone()
+                    t.clone() // no need to do hashconsing
                 } else {
                     self.hashcons_(ELambda(v_ty2, body2))?
                 }
             }
-            EPi(v_ty, body) => {
-                let v_ty2 = self.subst1_(v_ty, k, u)?;
-                let body2 = self.subst1_(body, k + 1, u)?;
-                self.hashcons_(EPi(v_ty2, body2))?
-            }
             EVar(v) => {
                 let v2 = Var {
-                    ty: self.subst1_(&v.ty, k, u)?,
+                    ty: self.subst_db_(&v.ty, k, args)?,
                     name: v.name().clone(),
                 };
-                self.hashcons_(EVar(v2))?
+                if v2.ty == v.ty {
+                    t.clone() // no need to do hashconsing
+                } else {
+                    self.hashcons_(EVar(v2))?
+                }
             }
-            EBoundVar(v) if v.idx == k => {
-                // substitute here, but shifting `u` by `k` to
-                // account for the `k` intermediate binders
+            EBoundVar(v) if v.idx >= k && v.idx < k + (args.len() as u32) => {
+                // `v` refers to a variable in `args.
+                // substitute `v` for this variable's mapping `u`,
+                // but shifting `u` by `k` to
+                // account for the `k` intermediate binders we just traversed.
+                let u = &args[(v.idx - k) as usize];
                 self.shift_(u, k, 0)?
             }
-            EBoundVar(v) if v.idx > k => {
-                // need to unshift by 1, since we remove a binder and this is open
+            EBoundVar(v) if v.idx > k + (args.len() as u32) => {
+                // need to unshift by `args.len()`, since we remove that many
+                // binders and this is a free variable
+                let shift_by = args.len() as u32;
                 let v2 = BoundVarContent {
-                    idx: v.idx - 1,
-                    ty: self.subst1_(&v.ty, k, u)?,
+                    idx: v.idx - shift_by,
+                    ty: self.subst_db_(&v.ty, k, args)?,
                 };
                 self.hashcons_(EBoundVar(v2))?
             }
             EBoundVar(v) => {
+                // variable bound within the `k` binders we traversed, only
+                // modify the type.
+                debug_assert!(v.idx < k);
                 let v2 = BoundVarContent {
                     idx: v.idx,
-                    ty: self.subst1_(&v.ty, k, u)?,
+                    ty: self.subst_db_(&v.ty, k, args)?,
                 };
-                self.hashcons_(EBoundVar(v2))?
+                if v2.ty == v.ty {
+                    t.clone() // no need to do hashconsing
+                } else {
+                    self.hashcons_(EBoundVar(v2))?
+                }
             }
         })
     }
 
-    /// Shift free DB vars by `n` under `k` intermediate binders
+    /// Shift free DB vars by `n` under `k` intermediate binders.
+    ///
+    /// examples:
+    /// - `shift (lambda. db0 db1 = db2) 5 1` is `lambda. db0 db1 = db7`,
+    /// - `shift (lambda. f db3 db1) 5 1` is `lambda. f db8 db1`.
     fn shift_(&mut self, t: &Expr, n: DbIndex, k: DbIndex) -> Result<Expr> {
         if n == 0 || t.is_closed() {
             return Ok(t.clone()); // shortcut for identity
@@ -372,7 +433,7 @@ impl Ctx {
         let ev = t.view();
         Ok(match ev {
             EKind | EType | EConst(..) => t.clone(),
-            EApp(..) | ELambda(..) | EPi(..) | EVar(..) => {
+            EApp(..) | ELambda(..) | EArrow(..) | EVar(..) => {
                 let ev2 = ev.map(|u, k| self.shift_(u, n, k), k)?;
                 self.hashcons_(ev2)?
             }
@@ -392,10 +453,12 @@ impl Ctx {
         })
     }
 
-    /// Cleanup terms that are only referenced by this table.
+    /// Cleanup terms that are only referenced by the hashconsing table.
     ///
     /// This is done regularly when new terms are created, but one can
     /// also call `cleanup` manually.
+    ///
+    /// We also cleanup the fixity table.
     pub fn cleanup(&mut self) {
         self.0.next_cleanup = CLEANUP_PERIOD;
 
@@ -407,7 +470,14 @@ impl Ctx {
             // a weak ref.
             let n = WeakRef::strong_count(&v.0);
             n > 0
-        })
+        });
+
+        self.0.fixities.retain(|c, _| {
+            let n = Rc::strong_count(&c.0);
+            // we have this one strong ref. If it's the only one (ie. n==1)
+            // then we can drop it safely.
+            n > 1
+        });
     }
 
     /// Make a lambda term.
@@ -417,36 +487,56 @@ impl Ctx {
         self.hashcons_(ELambda(ty_var, body))
     }
 
-    /// Substitute `v` with db0 in `body`.
-    fn abs_on_(&mut self, v: Var, body: Expr) -> Result<Expr> {
-        self.check_uid_(&v.ty);
+    /// Substitute `v[i]` with `db_i` in `body`.
+    fn abs_on_(&mut self, vars: &[Var], body: Expr) -> Result<Expr> {
         self.check_uid_(&body);
-        let v_ty = &v.ty;
-        if !v_ty.is_closed() {
-            return Err(Error::new("mk_abs: var has non-closed type"));
+
+        let n_vars = vars.len();
+        if n_vars == 0 {
+            return Ok(body.clone());
+        } else if n_vars > u32::MAX as usize {
+            return Err(Error::new("abs_on_: far too many variables"));
         }
-        let v_ty = v_ty.clone();
-        // replace `v` with `db0` in `body`. This should also take
-        // care of shifting the DB by 1 as appropriate.
-        let db0 = self.mk_bound_var(0, v_ty);
-        let body = self.shift_(&body, 1, 0)?;
-        self.subst(&body, &[(v, db0)])
+
+        let mut subst: SmallVec<[(Var, Expr); 3]> = SmallVec::with_capacity(n_vars);
+        for (i, v_i) in vars.iter().enumerate() {
+            let v_i_ty = &v_i.ty;
+            self.check_uid_(&v_i_ty);
+            if !v_i_ty.is_closed() {
+                return Err(Error::new("mk_abs: var has non-closed type"));
+            }
+
+            // replace `v_i` with `db_i` in `body`. This should also take
+            // care of shifting the DB by `n_vars` as appropriate.
+            let db_i = self.mk_bound_var(i as u32, v_i_ty.clone());
+            subst.push((v_i.clone(), db_i));
+        }
+        let body = self.shift_(&body, n_vars as u32, 0)?;
+        self.subst(&body, &subst[..])
     }
 
-    /// Make a pi term.
-    fn mk_pi_(&mut self, ty_var: Expr, body: Expr) -> Result<Expr> {
-        self.hashcons_(EPi(ty_var, body))
+    /// Make a constant term.
+    fn mk_const_(&mut self, c: Const, args: ConstArgs) -> Result<Expr> {
+        for a in &args[..] {
+            self.check_uid_(a);
+        }
+        self.hashcons_(EConst(c, args))
     }
 }
 
 // public interface
 impl Ctx {
-    /// Get the `=` constant
-    pub fn mk_eq(&mut self) -> Expr {
-        match self.0.eq {
-            Some(ref c) => c.clone(),
-            None => panic!("equality is not defined in this context"),
-        }
+    /// Get the `=` constant. It has arity 1.
+    #[inline]
+    pub fn mk_c_eq(&mut self) -> Const {
+        self.get_eq_().clone()
+    }
+
+    /// Make the `=_α` expression for equality of type α.
+    pub fn mk_eq(&mut self, ty: &Type) -> Expr {
+        let c = self.mk_c_eq();
+        debug_assert_eq!(1, c.arity);
+        self.mk_const_(c, smallvec![ty.clone()]).unwrap()
     }
 
     /// Make `a = b`.
@@ -458,8 +548,8 @@ impl Ctx {
         if a.ty() != b.ty() {
             return Err(Error::new("mk_eq: incompatible_types"));
         }
-        let eq = self.mk_eq();
-        self.mk_app_l(eq, &[a.ty().clone(), a, b])
+        let eq = self.mk_eq(a.ty());
+        self.mk_app_l(eq, &[a, b])
     }
 
     /// For each pair `(x,u)` in `subst`, replace instances of the free
@@ -521,13 +611,15 @@ impl Ctx {
     }
 
     /// The type of types. This has type `self.mk_kind()`.
+    #[inline]
     pub fn mk_ty(&self) -> Expr {
-        self.builtins_().ty.clone()
+        self.get_ty_().clone()
     }
 
     /// The type of booleans.
+    #[inline]
     pub fn mk_bool(&self) -> Expr {
-        self.builtins_().bool.clone()
+        self.get_bool_().clone()
     }
 
     /// Apply `a` to `b`.
@@ -551,6 +643,15 @@ impl Ctx {
     pub fn mk_var(&mut self, v: Var) -> Expr {
         self.check_uid_(&v.ty);
         self.hashcons_(EVar(v)).expect("mk_var can't fail")
+    }
+
+    /// Make a constant expression.
+    ///
+    /// This takes a constant (possibly polymorphic) and turns it into a term
+    /// of a given type.
+    #[inline]
+    pub fn mk_const(&mut self, c: Const, args: SmallVec<[Expr; 3]>) -> Result<Expr> {
+        self.mk_const_(c, args)
     }
 
     /// Make a free variable.
@@ -577,8 +678,20 @@ impl Ctx {
         self.check_uid_(&v.ty);
         self.check_uid_(&body);
         let v_ty = v.ty.clone();
-        let body = self.abs_on_(v, body)?;
+        let body = self.abs_on_(&[v], body)?;
         self.mk_lambda_(v_ty, body)
+    }
+
+    /// Make a lambda term by abstracting on `vars`.
+    pub fn mk_lambda_l(&mut self, vars: &[Var], body: Expr) -> Result<Expr> {
+        self.check_uid_(&body);
+        // do the shifting only once!
+        let mut body = self.abs_on_(vars, body)?;
+        for v in vars.iter().rev() {
+            self.check_uid_(&v.ty);
+            body = self.mk_lambda_(v.ty.clone(), body)?;
+        }
+        Ok(body)
     }
 
     /// Make a lambda term, where `body` already contains the DB index 0.
@@ -588,17 +701,7 @@ impl Ctx {
         self.mk_lambda_(ty_v, body)
     }
 
-    /// Bind several variables at once.
-    pub fn mk_lambda_l(&mut self, vars: &[Var], body: Expr) -> Result<Expr> {
-        let mut e = body;
-        // TODO: substitute more efficiently (with a stack, rather than one by one)?
-        // right-assoc
-        for v in vars.iter().rev() {
-            e = self.mk_lambda(v.clone(), e)?;
-        }
-        Ok(e)
-    }
-
+    /*
     /// Make a pi term by abstracting on `v`.
     pub fn mk_pi(&mut self, v: Var, body: Expr) -> Result<Expr> {
         self.check_uid_(&v.ty);
@@ -618,50 +721,50 @@ impl Ctx {
         }
         Ok(e)
     }
-
-    /// Make a pi term, where `body` is a type already containing DB 0.
-    pub fn mk_pi_db(&mut self, ty_v: Expr, body: Expr) -> Result<Expr> {
-        self.check_uid_(&ty_v);
-        self.check_uid_(&body);
-        self.mk_pi_(ty_v, body)
-    }
+        */
 
     /// Make an arrow `a -> b` term.
-    ///
-    /// This builds `Π_:a. b`.
     pub fn mk_arrow(&mut self, ty1: Expr, ty2: Expr) -> Result<Expr> {
         // need to shift ty2 by 1 to account for the Π binder.
         self.check_uid_(&ty1);
         self.check_uid_(&ty2);
-        let ty2 = self.shift_(&ty2, 1, 0)?;
-        self.mk_pi_(ty1, ty2)
-    }
-
-    fn mk_new_const_(&mut self, s: impl Into<Symbol>, ty: Type, pr: Option<Proof>) -> Result<Expr> {
-        self.mk_const_with_(s.into(), ty, ConstTag::None, Fixity::Nullary, pr)
+        self.hashcons_(EArrow(ty1, ty2))
     }
 
     /// Declare a new constant with given name and type.
     ///
-    /// Fails if some constant with the same name exists, or if
-    /// the type is not closed.
+    /// Fails if the type is not ground.
     /// This constant has no axiom associated to it, it is entirely opaque.
-    pub fn mk_new_const(&mut self, s: impl Into<Symbol>, ty: Type) -> Result<Expr> {
-        self.mk_const_with_(s.into(), ty, ConstTag::None, Fixity::Nullary, None)
+    pub fn mk_new_const(
+        &mut self,
+        s: impl Into<Symbol>,
+        ty: Type,
+        pr: Option<Proof>,
+    ) -> Result<Const> {
+        let arity = ty.db_depth();
+        if arity > u8::MAX as u32 {
+            return Err(Error::new("mk_new_const: arity is too high"));
+        }
+        let arity = arity as u8;
+        self.mk_const_with_(
+            s.into(),
+            ConstTag::None,
+            arity,
+            ConstKind::ExprConst { ty },
+            pr,
+        )
     }
 
-    // TODO: return a result, and only allow infix/binder if type is inferrable
+    // TODO: return a result, and only allow infix/binder if type is inferrable?
     /// Change the fixity of a given constant.
     ///
     /// Does nothing if the constant is not defined.
     pub fn set_fixity(&mut self, s: &str, f: Fixity) -> Result<()> {
-        if let Some(meta::Value::Expr(t)) = self.0.meta_values.get_mut(s) {
-            if let EConst(c) = t.view() {
-                c.fix.set(f);
-                return Ok(());
-            }
+        if let Some(meta::Value::Const(c)) = self.0.meta_values.get(s) {
+            self.0.fixities.insert(c.clone(), f);
+            return Ok(());
         }
-        Err(Error::new("expected constant"))
+        Err(errorstr!("set_fixity: unknown constant `{}`", s))
     }
 
     /// Find a meta value by name. Returns `None` if the binding is absent.
@@ -682,15 +785,16 @@ impl Ctx {
     }
 
     /// Find a constant by name. Returns `None` if no such constant exists.
-    ///
-    /// Use `as_const` on the expression to get its content.
-    pub fn find_const(&self, s: &str) -> Option<(&Expr, Fixity)> {
-        if let Some(meta::Value::Expr(t)) = self.0.meta_values.get(s) {
-            if let Some(c) = t.as_const() {
-                return Some((t, c.fixity()));
-            }
+    pub fn find_const(&self, s: &str) -> Option<&Const> {
+        if let Some(meta::Value::Const(c)) = self.0.meta_values.get(s) {
+            Some(c)
+        } else {
+            None
         }
-        None
+    }
+
+    pub fn find_fixity(&self, c: &Const) -> Option<&Fixity> {
+        self.0.fixities.get(c)
     }
 
     pub fn iter_consts(&self) -> impl Iterator<Item = (&str, &Expr)> {
@@ -721,7 +825,7 @@ impl Ctx {
     /// This fails if `F` is not a boolean.
     pub fn thm_assume(&mut self, e: Expr) -> Result<Thm> {
         self.check_uid_(&e);
-        if e.ty() != &self.builtins_().bool {
+        if e.ty() != self.get_bool_() {
             return Err(Error::new("cannot assume non-boolean expression"));
         }
         let pr = if self.0.proof_gen {
@@ -1025,7 +1129,7 @@ impl Ctx {
         let th2_c = &th2.0.concl;
         let (a, b) = th2_c
             .unfold_eq()
-            .filter(|(a, _)| a.ty() == &self.builtins_().bool)
+            .filter(|(a, _)| a.ty() == self.get_bool_())
             .ok_or_else(|| {
                 //Some((a, b)) if a.ty() == &self.builtins_().bool => (a, b),
                 Error::new("bool-eq: th2 should have a boleean equality as conclusion")
@@ -1090,7 +1194,7 @@ impl Ctx {
         };
 
         let lhs = e.clone();
-        let rhs = self.subst1_(bod, 0, arg)?;
+        let rhs = self.subst_db_(bod, 0, &[arg.clone()])?;
         let eq = self.mk_eq_app(lhs, rhs)?;
         Ok(Thm::make_(eq, self.0.uid, smallvec![], pr))
     }
@@ -1099,7 +1203,7 @@ impl Ctx {
     /// with a closed type,
     /// returns a theorem `|- x=t` where `x` is now a constant, along with
     /// the constant `x`.
-    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Expr)> {
+    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Const)> {
         self.check_uid_(&e);
         let (x, rhs) = e
             .unfold_eq()
@@ -1121,8 +1225,9 @@ impl Ctx {
             None
         };
 
-        let c = self.mk_new_const_(x.name.clone(), x.ty.clone(), pr.clone())?;
-        let eqn = self.mk_eq_app(c.clone(), rhs.clone())?;
+        let c = self.mk_new_const(x.name.clone(), x.ty.clone(), pr.clone())?;
+        let lhs = self.mk_const(c, smallvec![])?;
+        let eqn = self.mk_eq_app(lhs, rhs.clone())?;
         let thm = Thm::make_(eqn, self.0.uid, smallvec![], pr);
         Ok((thm, c))
     }
@@ -1202,7 +1307,7 @@ impl Ctx {
         }
 
         // free vars, as expressions
-        let fvars_exprs: Vec<_> = fvars.iter().map(|v| self.mk_var(v.clone())).collect();
+        let fvars_exprs: SmallVec<_> = fvars.iter().map(|v| self.mk_var(v.clone())).collect();
 
         let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::NewTyDef(
@@ -1214,32 +1319,34 @@ impl Ctx {
         };
 
         // construct new type and mapping functions
-        let tau = {
+        let tau: Const = {
             let ttype = self.mk_ty();
-            let ty_tau = self.mk_pi_l(&fvars, ttype)?;
-            self.mk_new_const_(name_tau, ty_tau, pr.clone())?
+            let ty_tau = self.abs_on_(&fvars, ttype)?;
+            self.mk_new_ty_const_(name_tau, fvars.len(), pr.clone())?
         };
 
         // `tau` applied to `fvars`
-        let tau_vars = self.mk_app_l(tau.clone(), &fvars_exprs)?;
+        let tau_vars = self.mk_const(tau.clone(), fvars_exprs.clone())?;
 
         let c_abs = {
             let ty = self.mk_arrow(ty.clone(), tau_vars.clone())?;
-            let ty = self.mk_pi_l(&fvars, ty)?;
-            self.mk_new_const_(abs, ty, pr.clone())?
+            let ty = self.abs_on_(&fvars, ty)?;
+            self.mk_new_const(abs, ty, pr.clone())?
         };
+        assert_eq!(fvars.len(), c_abs.arity as usize);
         let c_repr = {
             let ty = self.mk_arrow(tau_vars.clone(), ty.clone())?;
-            let ty = self.mk_pi_l(&fvars, ty)?;
-            self.mk_new_const_(repr, ty, pr.clone())?
+            let ty = self.abs_on_(&fvars, ty)?;
+            self.mk_new_const(repr, ty, pr.clone())?
         };
+        assert_eq!(fvars.len(), c_repr.arity as usize);
 
         let abs_x = self.mk_var_str("x", tau_vars.clone());
         let abs_thm = {
             // `|- abs (repr x) = x`
-            let repr = self.mk_app_l(c_repr.clone(), &fvars_exprs)?;
+            let repr = self.mk_const(c_repr.clone(), fvars_exprs.clone())?;
             let t = self.mk_app(repr, abs_x.clone())?;
-            let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
+            let abs = self.mk_const(c_abs.clone(), fvars_exprs.clone())?;
             let abs_t = self.mk_app(abs, t)?;
             let eqn = self.mk_eq_app(abs_t.clone(), abs_x.clone())?;
             Thm::make_(eqn, self.0.uid, smallvec![], pr.clone())
@@ -1247,9 +1354,9 @@ impl Ctx {
         let repr_x = self.mk_var_str("x", ty.clone());
         let repr_thm = {
             // `|- Phi x <=> repr (abs x) = x`
-            let abs = self.mk_app_l(c_abs.clone(), &fvars_exprs)?;
+            let abs = self.mk_const(c_abs.clone(), fvars_exprs.clone())?;
             let t1 = self.mk_app(abs, repr_x.clone())?;
-            let repr = self.mk_app_l(c_repr.clone(), &fvars_exprs)?;
+            let repr = self.mk_const(c_repr.clone(), fvars_exprs.clone())?;
             let t2 = self.mk_app(repr, t1)?;
             let eq_t2_x = self.mk_eq_app(t2, repr_x.clone())?;
             let phi_x = self.mk_app(phi.clone(), repr_x.clone())?;

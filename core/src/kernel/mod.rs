@@ -13,18 +13,12 @@ pub mod symbol;
 pub mod thm;
 
 pub use ctx::{Ctx, NewTypeDef};
-pub use expr::{Expr, ExprView, Type, Var};
+pub use expr::{Const, Expr, ExprView, Type, Var};
 pub use proof::{Proof, ProofView};
 pub use subst::Subst;
 pub use symbol::Symbol;
 pub use thm::Thm;
 pub use ExprView::*;
-
-pub type Fixity = crate::syntax::Fixity;
-pub(crate) const FIXITY_EQ: Fixity = Fixity::Infix((30, 31));
-pub(crate) const FIXITY_LAM: Fixity = Fixity::Binder((10, 11));
-pub(crate) const FIXITY_PI: Fixity = Fixity::Binder((24, 25));
-pub(crate) const FIXITY_ARROW: Fixity = Fixity::Infix((81, 80));
 
 #[cfg(test)]
 mod test {

@@ -35,7 +35,7 @@ pub fn rewrite_bottom_up(ctx: &mut Ctx, conv: &dyn Converter, e0: Expr) -> Resul
 
     loop {
         match e.view() {
-            EType | EKind | EVar(..) | EBoundVar(..) | EPi(..) => break,
+            EType | EKind | EVar(..) | EBoundVar(..) | EArrow(..) => break,
             _ if e.ty().is_type() => break,
             EConst(..) => {
                 let r = conv.try_conv(ctx, &e)?;

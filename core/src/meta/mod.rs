@@ -23,7 +23,7 @@ use types::*;
 //  This enables: `run_with_args("(mp ? some_def)", &[my_thm])`
 
 /// Standard prelude for HOL logic
-pub const SRC_PRELUDE_HOL: &'static str = include_str!("prelude.trustee");
+pub const SRC_PRELUDE_HOL: &str = include_str!("prelude.trustee");
 
 /// Run the given code in a fresh VM.
 ///

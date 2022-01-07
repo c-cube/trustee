@@ -1,7 +1,7 @@
 //! # Expressions, types, variables
 
 use super::{symbol::Symbol, Proof, Ref, WeakRef};
-use crate::{error::Result, fnv, rstr::RStr};
+use crate::{error::Result, fnv, rptr::RPtr, rstr::RStr};
 use smallvec::{smallvec, SmallVec};
 use std::{fmt, ops::Deref};
 
@@ -24,17 +24,20 @@ pub(super) struct WExpr(pub(super) WeakRef<ExprImpl>);
 /// Types and Terms are the same, but this is helpful for documentation.
 pub type Type = Expr;
 
+/// Type arguments to a constant
+pub type ConstArgs = SmallVec<[Type; 3]>;
+
 /// The public view of an expression's root.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum ExprView {
     EType,
     EKind,
-    EConst(ConstContent),
+    EConst(Const, ConstArgs),
     EVar(Var),
     EBoundVar(BoundVarContent),
     EApp(Expr, Expr),
     ELambda(Type, Expr),
-    EPi(Type, Expr),
+    EArrow(Expr, Expr),
 }
 
 pub use ExprView::*;
@@ -60,18 +63,35 @@ pub(super) struct ExprImpl {
     ty: Option<Expr>,
 }
 
-/// For infix/prefix/postfix constants.
-pub type Fixity = crate::syntax::Fixity;
-
+/// A constant.
+///
+/// Constants are symbols with a type declaration ("opaque constant")
+/// or a definition ("defined constants"). A defined constant can become
+/// opaque if we just forget its definition.
 #[derive(Clone, Debug)]
-pub struct ConstContent {
+pub struct Const(pub(super) Ref<ConstImpl>);
+
+#[derive(Debug)]
+pub struct ConstImpl {
     pub name: Symbol,
-    pub ty: Expr,
-    pub(super) tag: ConstTag,
     /// Generation of this constant, incremented to handle shadowing.
     pub(super) gen: u32,
-    pub(super) fix: std::cell::Cell<Fixity>, // TODO: remvoe and store in ctx?
+    pub arity: u8,
+    pub kind: ConstKind,
+    pub(super) tag: ConstTag,
     pub(super) proof: Option<Proof>,
+}
+
+/// The kind of constant. We deal with type constants and expr constants
+/// in mostly the same way.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ConstKind {
+    TyConst,
+    ExprConst {
+        /// Type of the constant when applied to type arguments.
+        /// It is implicitly parametrized by `arity` arguments.
+        ty: Expr,
+    },
 }
 
 /// Tag for special constants.
@@ -134,13 +154,6 @@ impl BoundVarContent {
     }
 }
 
-impl ConstContent {
-    #[inline]
-    pub fn fixity(&self) -> Fixity {
-        self.fix.get()
-    }
-}
-
 #[inline]
 fn pred_db_idx(n: DbIndex) -> DbIndex {
     if n == 0 {
@@ -154,15 +167,22 @@ fn pred_db_idx(n: DbIndex) -> DbIndex {
 fn compute_db_depth(e: &ExprView) -> DbIndex {
     match e {
         EKind | EType => 0u32,
-        EConst(c) => {
-            let d = c.ty.db_depth();
-            debug_assert_eq!(d, 0); // constants should be closed
+        EConst(c, args) => {
+            let arity = c.0.arity;
+            if let ConstKind::ExprConst { ty } = c.0.kind {
+                let d = ty.db_depth();
+                assert!(d <= arity as u32);
+            }
+            let mut d = 0;
+            for a in &args[..] {
+                d = d.max(a.db_depth())
+            }
             d
         }
         EVar(v) => v.ty.db_depth(),
         EBoundVar(v) => u32::max(v.idx + 1, v.ty.db_depth()),
-        EApp(a, b) => a.db_depth().max(b.db_depth()),
-        ELambda(v_ty, e) | EPi(v_ty, e) => {
+        EApp(a, b) | EArrow(a, b) => a.db_depth().max(b.db_depth()),
+        ELambda(v_ty, e) => {
             // `e`'s depth is decremented here
             v_ty.db_depth().max(pred_db_idx(e.db_depth()))
         }
@@ -180,14 +200,13 @@ impl ExprView {
     {
         let r = match self {
             EType | EKind => self.clone(),
-            EConst(c) => EConst(ConstContent {
-                ty: f(&c.ty, k)?,
-                name: c.name.clone(),
-                gen: c.gen,
-                tag: c.tag,
-                fix: c.fix.clone(),
-                proof: c.proof.clone(),
-            }),
+            EConst(c, args) => {
+                let args = args
+                    .iter()
+                    .map(|x| f(x, k))
+                    .collect::<Result<SmallVec<[Expr; 3]>>>()?;
+                EConst(c.clone(), args)
+            }
             EVar(v) => EVar(Var {
                 ty: f(&v.ty, k)?,
                 name: v.name.clone(),
@@ -197,7 +216,7 @@ impl ExprView {
                 idx: v.idx,
             }),
             EApp(a, b) => EApp(f(a, k)?, f(b, k)?),
-            EPi(ty_a, b) => EPi(f(ty_a, k)?, f(b, k + 1)?),
+            EArrow(a, b) => EArrow(f(a, k)?, f(b, k)?),
             ELambda(ty_a, b) => ELambda(f(ty_a, k)?, f(b, k + 1)?),
         };
         Ok(r)
@@ -210,8 +229,10 @@ impl ExprView {
     {
         match self {
             EType | EKind => {}
-            EConst(c) => {
-                f(&c.ty, k)?;
+            EConst(_c, args) => {
+                for a in &args[..] {
+                    f(a, k)?;
+                }
             }
             EVar(v) => {
                 f(&v.ty, k)?;
@@ -219,13 +240,9 @@ impl ExprView {
             EBoundVar(v) => {
                 f(&v.ty, k)?;
             }
-            EApp(a, b) => {
+            EApp(a, b) | EArrow(a, b) => {
                 f(a, k)?;
                 f(b, k)?;
-            }
-            EPi(ty_a, b) => {
-                f(ty_a, k)?;
-                f(b, k + 1)?;
             }
             ELambda(ty_a, b) => {
                 f(ty_a, k)?;
@@ -272,15 +289,15 @@ mod free_vars_impl {
                         return Some(v);
                     }
                     EType | EKind => (),
-                    EConst(c) => self.st.push(&c.ty),
+                    EConst(_c, args) => {
+                        for a in &args[..] {
+                            self.st.push(a)
+                        }
+                    }
                     EBoundVar(v) => self.st.push(&v.ty),
-                    EApp(a, b) => {
+                    EApp(a, b) | EArrow(a, b) => {
                         self.st.push(a);
                         self.st.push(b);
-                    }
-                    EPi(ty, body) | ELambda(ty, body) => {
-                        self.st.push(ty);
-                        self.st.push(body);
                     }
                 }
             }
@@ -335,7 +352,7 @@ impl Expr {
     /// Is this a functional type?
     pub fn is_fun_type(&self) -> bool {
         match self.0.view {
-            EPi(..) => true,
+            EArrow(..) => true,
             _ => false,
         }
     }
@@ -343,7 +360,7 @@ impl Expr {
     /// Is this the representation of `=`?
     pub fn is_eq(&self) -> bool {
         match &self.0.view {
-            EConst(c) => c.tag == ConstTag::Eq,
+            EConst(c, _) => c.0.tag == ConstTag::Eq,
             _ => false,
         }
     }
@@ -351,7 +368,7 @@ impl Expr {
     /// Is this the representation of `bool`?
     pub fn is_bool(&self) -> bool {
         match &self.0.view {
-            EConst(c) => c.tag == ConstTag::Bool,
+            EConst(c, _) => c.0.tag == ConstTag::Bool,
             _ => false,
         }
     }
@@ -396,10 +413,10 @@ impl Expr {
     /// that `e == pi 0:a1. pi 1:a2. …. body` with `ty_args = (a1,a2,…)`.
     ///
     /// The length of `ty_args` indicates how many pi abstractions have been done.
-    pub fn unfold_pi(&self) -> (Vec<&Type>, &Expr) {
+    pub fn unfold_arrow(&self) -> (SmallVec<[&Type; 4]>, &Expr) {
         let mut e = self;
-        let mut v = vec![];
-        while let EPi(ty_arg, body) = e.view() {
+        let mut v = smallvec![];
+        while let EArrow(ty_arg, body) = e.view() {
             e = body;
             v.push(ty_arg);
         }
@@ -416,9 +433,9 @@ impl Expr {
     }
 
     /// View as constant.
-    pub fn as_const(&self) -> Option<&ConstContent> {
-        if let EConst(ref c) = self.0.view {
-            Some(&c)
+    pub fn as_const(&self) -> Option<(&Const, &ConstArgs)> {
+        if let EConst(ref c, ref args) = self.0.view {
+            Some((c, args))
         } else {
             None
         }
@@ -427,6 +444,15 @@ impl Expr {
     /// View as application.
     pub fn as_app(&self) -> Option<(&Expr, &Expr)> {
         if let EApp(ref a, ref b) = self.0.view {
+            Some((&a, &b))
+        } else {
+            None
+        }
+    }
+
+    /// View as application.
+    pub fn as_arrow(&self) -> Option<(&Expr, &Expr)> {
+        if let EArrow(ref a, ref b) = self.0.view {
             Some((&a, &b))
         } else {
             None
@@ -442,21 +468,11 @@ impl Expr {
         }
     }
 
-    /// View as a pi-expression.
-    pub fn as_pi(&self) -> Option<(&Type, &Expr)> {
-        if let EPi(ref ty, ref bod) = self.0.view {
-            Some((&ty, &bod))
-        } else {
-            None
-        }
-    }
-
     /// `(a=b).unfold_eq()` returns `Some((a,b))`.
     pub fn unfold_eq(&self) -> Option<(&Expr, &Expr)> {
         let (hd1, b) = self.as_app()?;
         let (hd2, a) = hd1.as_app()?;
-        let (c, _alpha) = hd2.as_app()?;
-        if c.as_const()?.name.name() == "=" {
+        if hd2.is_eq() {
             Some((a, b))
         } else {
             None
@@ -474,7 +490,7 @@ impl Expr {
     ///
     /// 0 means it's a closed term.
     #[inline]
-    fn db_depth(&self) -> DbIndex {
+    pub(super) fn db_depth(&self) -> DbIndex {
         self.0.db_depth
     }
 
@@ -505,7 +521,18 @@ impl Expr {
         match self.view() {
             EKind => write!(out, "kind"),
             EType => write!(out, "type"),
-            EConst(c) => write!(out, "{}", c.name.name()),
+            EConst(c, args) => {
+                if args.is_empty() {
+                    write!(out, "{}", c.0.name.name())
+                } else {
+                    write!(out, "({}", c.0.name.name());
+                    for a in &args[..] {
+                        write!(out, " ");
+                        a.pp_(k, out, full)?;
+                    }
+                    write!(out, ")")
+                }
+            }
             EVar(v) => write!(out, "{}", v.name.name()),
             EBoundVar(v) => {
                 // we may want to print non closed terms, so we need isize
@@ -539,27 +566,11 @@ impl Expr {
                 body.pp_(k + 1, out, full)?;
                 write!(out, ")")
             }
-            // TODO: disable
-            EPi(x, body) if false && !x.is_type() && body.is_closed() => {
-                // TODO: precedence to know whether to print "()"
-                write!(out, "(")?;
-                x.pp_(k, out, full)?;
-                if full {
-                    write!(out, ":")?;
-                    x.ty().pp_(k, out, full)?;
-                }
-                write!(out, " -> ")?;
-                body.pp_(k + 1, out, full)?;
-                write!(out, ")")
-            }
-            EPi(x, body) => {
-                write!(out, "(Πx{}", k)?;
-                if full && !x.is_type() {
-                    write!(out, " : ")?;
-                    x.pp_(k, out, full)?;
-                }
-                write!(out, ". ")?;
-                body.pp_(k + 1, out, full)?;
+            EArrow(a, b) => {
+                write!(out, "(-> ")?;
+                a.pp_(k, out, full)?;
+                write!(out, " ")?;
+                b.pp_(k, out, full)?;
                 write!(out, ")")
             }
         }?;
@@ -590,17 +601,25 @@ mod impls {
         }
     }
 
-    impl Eq for ConstContent {}
-    impl PartialEq for ConstContent {
+    impl Eq for Const {}
+    impl PartialEq for Const {
         fn eq(&self, other: &Self) -> bool {
-            self.name == other.name && self.ty == other.ty
+            self.0.name == other.0.name && self.0.gen == other.0.gen && self.0.kind == other.0.kind
         }
     }
 
-    impl std::hash::Hash for ConstContent {
+    impl std::hash::Hash for Const {
         fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-            self.name.hash(state);
-            self.ty.hash(state)
+            self.0.name.hash(state);
+            self.0.gen.hash(state);
+            self.0.kind.hash(state)
+        }
+    }
+
+    impl Deref for Const {
+        type Target = ConstImpl;
+        fn deref(&self) -> &Self::Target {
+            &*self.0
         }
     }
 

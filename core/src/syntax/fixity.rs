@@ -33,3 +33,8 @@ impl Fixity {
         }
     }
 }
+
+pub(crate) const FIXITY_EQ: Fixity = Fixity::Infix((30, 31));
+pub(crate) const FIXITY_LAM: Fixity = Fixity::Binder((10, 11));
+pub(crate) const FIXITY_PI: Fixity = Fixity::Binder((24, 25));
+pub(crate) const FIXITY_ARROW: Fixity = Fixity::Infix((81, 80));

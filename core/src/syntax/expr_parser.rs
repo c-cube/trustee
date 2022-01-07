@@ -6,6 +6,7 @@
 //! We follow https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
 //! quite closely :-)
 
+use super::fixity;
 use crate::syntax::{lexer::Position, Lexer, Tok};
 use crate::{kernel as k, syntax::Fixity, Ctx, Error, Result};
 
@@ -94,15 +95,15 @@ impl<'a> Parser<'a> {
     #[inline]
     fn fixity_(&self, s: &str) -> Fixity {
         match s {
-            "=" => k::FIXITY_EQ,
-            "->" => k::FIXITY_ARROW,
+            "=" => fixity::FIXITY_EQ,
+            "->" => fixity::FIXITY_ARROW,
             "with" => Fixity::Binder((1, 2)),
-            "\\" => k::FIXITY_LAM,
-            "pi" => k::FIXITY_PI,
+            "\\" => fixity::FIXITY_LAM,
+            "pi" => fixity::FIXITY_PI,
             _ => {
                 // lookup in context
-                if let Some((_, f)) = self.ctx.find_const(s) {
-                    f
+                if let Some(f) = self.ctx.find_const(s).and_then(|c| self.ctx.find_fixity(c)) {
+                    *f
                 } else {
                     Fixity::Nullary
                 }
