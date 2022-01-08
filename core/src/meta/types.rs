@@ -230,6 +230,8 @@ pub(super) struct ChunkImpl {
 /// Opaque printer to stdout.
 pub struct BuiltinPrinter<'a, 'b>(pub &'a mut Option<&'b mut dyn FnMut(&str)>);
 
+// TODO: make this able to evaluate code in the same VM that called
+// the builtin, so that the builtin can call other functions.
 /// Context passed to a builtin function.
 pub struct BuiltinEvalCtx<'a, 'b> {
     pub out: BuiltinPrinter<'a, 'b>,

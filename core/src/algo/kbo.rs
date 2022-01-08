@@ -106,7 +106,7 @@ mod kbo_cmp {
                 }
                 false
             }
-            EV::EConst(c) => {
+            EV::EConst(c, _args) => {
                 let wc = kbo.weight(&c.name);
                 assert!(wc > 0);
                 if pos {
@@ -146,7 +146,7 @@ mod kbo_cmp {
                 }
                 balance_weight(kbo, st, wb, bod, s, pos)
             }
-            EV::EPi(..) | EV::EType | EV::EKind => false, // ignore types
+            EV::EType | EV::EKind => false, // ignore types
         }
     }
 
@@ -210,7 +210,9 @@ mod kbo_cmp {
                 // precedences for heads
                 let cmp_p = {
                     match (f1.view(), f2.view()) {
-                        (EV::EConst(c1), EV::EConst(c2)) => Some(kbo.prec(&c1.name, &c2.name)),
+                        (EV::EConst(c1, _), EV::EConst(c2, _)) => {
+                            Some(kbo.prec(&c1.name, &c2.name))
+                        }
                         _ => None,
                     }
                 };

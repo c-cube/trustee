@@ -168,7 +168,7 @@ impl<'a> UnifySt<'a> {
             EBoundVar(_) => false,
             EApp(f, arg) => self.occur_check(v, f) || self.occur_check(v, arg),
             EArrow(a, b) => self.occur_check(v, a) || self.occur_check(v, b),
-            ELambda(_, body) | => self.occur_check(v, body),
+            ELambda(_, body) => self.occur_check(v, body),
         }
     }
 

@@ -99,7 +99,7 @@ pub(super) mod basic_primitives {
     use super::*;
 
     /// Builtin functions.
-    pub(crate) const BUILTINS: &'static [&'static InstrBuiltin] = &[
+    pub(crate) const BUILTINS: &[&InstrBuiltin] = &[
         &defbuiltin!("print", "print value(s).", |mut ctx,
                                                   args: &[Value]|
          -> Result<Value> {
@@ -184,7 +184,7 @@ pub(super) mod logic_builtins {
     use super::*;
 
     /// Builtin functions for manipulating expressions and theorems.
-    pub(crate) const BUILTINS: &'static [&'static InstrBuiltin] = &[
+    pub(crate) const BUILTINS: &[&InstrBuiltin] = &[
         &defbuiltin!(
             "set_glob",
             "`(set_glob \"x\" v)` binds `v` in the toplevel table.\n\
@@ -221,7 +221,7 @@ pub(super) mod logic_builtins {
                 let rhs = get_arg_expr!(args, 2);
                 let def = algo::thm_new_poly_definition(ctx.ctx, &nc.name(), rhs.clone())?;
                 ctx.ctx.define_lemma(nthm.clone(), def.thm.clone());
-                Ok(Value::cons(Value::Expr(def.c), Value::Thm(def.thm)))
+                Ok(Value::cons(Value::Const(def.c), Value::Thm(def.thm)))
             }
         ),
         &defbuiltin!(
@@ -249,13 +249,12 @@ pub(super) mod logic_builtins {
             |ctx, args| {
                 check_arity!("findconst", args, 1);
                 let name = get_arg_str!(args, 0);
-                let e = ctx
+                let c = ctx
                     .ctx
                     .find_const(&name)
                     .ok_or_else(|| Error::new("unknown constant"))?
-                    .0
                     .clone();
-                Ok(Value::Expr(e))
+                Ok(Value::Const(c))
             }
         ),
         &defbuiltin!("findthm", "looks up a theorem by name", |ctx, args| {
@@ -339,10 +338,8 @@ pub(super) mod logic_builtins {
                 check_arity!("decl", args, 2);
                 let name = get_arg_str!(args, 0);
                 let ty = get_arg_expr!(args, 1);
-                let e = ctx
-                    .ctx
-                    .mk_new_const(k::Symbol::from_str(name), ty.clone())?;
-                Ok(Value::Expr(e))
+                let c = ctx.ctx.mk_new_const(name, ty.clone(), None)?.0;
+                Ok(Value::Const(c))
             }
         ),
         &defbuiltin!(

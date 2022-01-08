@@ -2,9 +2,11 @@
 
 use {
     crate::{
+        errorstr,
         kernel::{self as k, Ctx, Expr, Thm},
         Error, Result,
     },
+    smallvec::smallvec,
     std::io::{BufRead, Read},
 };
 
@@ -27,14 +29,18 @@ macro_rules! read_str {
     };
 }
 
+macro_rules! parse_id {
+    ($e: expr) => {
+        $e.parse()
+            .map_err(|_| Error::new("expected ID to be an int"))
+    };
+}
+
 macro_rules! read_id {
     ($tok: expr) => {
         $tok.next()
             .ok_or_else(|| Error::new("expected ID"))
-            .and_then(|s| {
-                s.parse()
-                    .map_err(|_| Error::new("expected ID to be an int"))
-            })
+            .and_then(|s| parse_id!(s))
     };
 }
 
@@ -114,19 +120,21 @@ impl<'a> Parser<'a> {
                     let e = self.ctx.mk_lambda_db(ty_v, bod)?;
                     self.set_(n, e);
                 }
-                Some("P") => {
-                    let n = read_id!(tok)?;
-                    let ty_v = self.get_expr(read_id!(tok)?)?;
-                    let bod = self.get_expr(read_id!(tok)?)?;
-                    let e = self.ctx.mk_pi_db(ty_v, bod)?;
-                    self.set_(n, e);
-                }
                 Some("c") => {
                     // FIXME: need to be able to define constants, too
                     let n = read_id!(tok)?;
                     let name = read_str!(tok)?;
-                    let ty = self.get_expr(read_id!(tok)?)?;
-                    let e = self.ctx.mk_new_const(name, ty)?;
+                    let c = self
+                        .ctx
+                        .find_const(name)
+                        .cloned()
+                        .ok_or_else(|| errorstr!("finding constant `{}` from proof", name))?;
+                    let mut args = smallvec![];
+                    while let Some(id) = tok.next() {
+                        let e = self.get_expr(parse_id!(id)?)?;
+                        args.push(e)
+                    }
+                    let e = self.ctx.mk_const(c, args)?;
                     self.set_(n, e);
                 }
                 Some("@") => {

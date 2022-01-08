@@ -1,26 +1,33 @@
 //! Pretty-printing terms.
 
 use {
-    crate::{kernel as k, syntax::Fixity},
+    crate::{
+        kernel::{Expr, ExprView, FixityTbl, Var},
+        syntax::{fixity, Fixity},
+    },
     std::fmt,
 };
 
-struct Printer {
-    scope: Vec<k::Var>, // variable in scope
+struct Printer<'a> {
+    fixities: &'a FixityTbl,
+    scope: Vec<Var>, // variable in scope
 }
 
 /// Pretty print this expression according to the existing precedence rules.
-pub fn print_expr(e: &k::Expr, out: &mut fmt::Formatter) -> fmt::Result {
-    let mut pp = Printer::new();
+pub fn print_expr(ftbl: &FixityTbl, e: &Expr, out: &mut fmt::Formatter) -> fmt::Result {
+    let mut pp = Printer::new(ftbl);
     pp.pp_expr_top(e, out)
 }
 
-impl Printer {
-    fn new() -> Self {
-        Self { scope: vec![] }
+impl<'a> Printer<'a> {
+    fn new(fixities: &'a FixityTbl) -> Self {
+        Self {
+            scope: vec![],
+            fixities,
+        }
     }
 
-    fn pp_var_ty_(&self, v: &k::Var, k: isize, out: &mut fmt::Formatter) -> fmt::Result {
+    fn pp_var_ty_(&self, v: &Var, k: isize, out: &mut fmt::Formatter) -> fmt::Result {
         write!(out, "({} : ", v.name.name())?;
         self.pp_expr(&v.ty, k, 0, 0, out)?;
         write!(out, ")")
@@ -34,13 +41,13 @@ impl Printer {
     /// - `pr` is the surrounding precedence on the right.
     fn pp_expr(
         &self,
-        e: &k::Expr,
+        e: &Expr,
         k: isize,
         pl: u16,
         pr: u16,
         out: &mut fmt::Formatter,
     ) -> fmt::Result {
-        use k::ExprView as EV;
+        use ExprView as EV;
         const P_MAX: u16 = u16::MAX;
 
         match e.view() {
@@ -54,17 +61,24 @@ impl Printer {
                 }
             }
             EV::EBoundVar(v) => write!(out, "x{}", k - v.idx() as isize - 1)?,
-            EV::EConst(c) => match c.fixity() {
-                Fixity::Infix(..) | Fixity::Prefix(..) | Fixity::Binder(..) => {
-                    // must escape that.
-                    write!(out, "@{}", c.name.name())?
+            EV::EConst(c, _args) => {
+                let f = self
+                    .fixities
+                    .find_fixity(c)
+                    .cloned()
+                    .unwrap_or(Fixity::Nullary);
+                match f {
+                    Fixity::Infix(..) | Fixity::Prefix(..) | Fixity::Binder(..) => {
+                        // must escape that.
+                        write!(out, "@{}", c.name.name())?
+                    }
+                    _ => write!(out, "{}", c.name.name())?,
                 }
-                _ => write!(out, "{}", c.name.name())?,
-            },
+            }
             EV::EApp(_, _) => {
                 let (f, args) = e.unfold_app();
                 let fv = match f.as_const() {
-                    Some(fv) => fv,
+                    Some((fv, _)) => fv,
                     _ => {
                         // prefix. Print sub-members with maximum binding power.
                         if pl > 0 || pr > 0 {
@@ -79,7 +93,12 @@ impl Printer {
                     }
                 };
                 let f_name = fv.name.name();
-                match fv.fixity() {
+                let fv_fixity = self
+                    .fixities
+                    .find_fixity(&fv)
+                    .cloned()
+                    .unwrap_or(Fixity::Nullary);
+                match fv_fixity {
                     Fixity::Infix((l, r)) if args.len() >= 2 && !e.ty().is_fun_type() => {
                         let n = args.len();
                         if (pl > 0 && pl >= l) || (pr > 0 && pr >= r) {
@@ -140,7 +159,7 @@ impl Printer {
                 }
             }
             EV::ELambda(ty_v, body) => {
-                let p_lam = k::FIXITY_LAM.bp().1;
+                let p_lam = fixity::FIXITY_LAM.bp().1;
                 if (pr > 0 && pl >= p_lam) || (pr > 0 && pr >= p_lam) {
                     return self.pp_expr_paren_(e, k, out);
                 }
@@ -150,39 +169,31 @@ impl Printer {
                 // no binding power on the left because of '.'
                 self.pp_expr(&body, k + 1, 0, p_lam, out)?;
             }
-            EV::EPi(ty_v, body) => {
-                let is_arrow = body.is_closed();
-                let (mypl, mypr) = if is_arrow {
-                    let p = k::FIXITY_ARROW.bp();
+            EV::EArrow(a, b) => {
+                let (mypl, mypr) = {
+                    let p = fixity::FIXITY_ARROW.bp();
                     (p.0, p.1)
-                } else {
-                    (0, k::FIXITY_PI.bp().1)
                 };
                 if (pl > 0 && pl >= mypl) || (pr > 0 && pr >= mypr) {
                     return self.pp_expr_paren_(e, k, out);
                 }
-                if is_arrow {
-                    // just print an arrow
-                    self.pp_expr(&ty_v, k, pl, mypl, out)?;
-                    write!(out, " -> ")?;
-                    self.pp_expr(&body, k + 1, mypr, pr, out)?;
-                } else {
-                    write!(out, r#"pi x{}."#, k)?;
-                    self.pp_expr(&body, k + 1, 0, mypr, out)?;
-                }
+                // just print an arrow
+                self.pp_expr(&a, k, pl, mypl, out)?;
+                write!(out, " -> ")?;
+                self.pp_expr(&b, k + 1, mypr, pr, out)?;
             }
         }
         Ok(())
     }
 
     /// Same as `pp_expr` but between "()".
-    fn pp_expr_paren_(&self, e: &k::Expr, k: isize, out: &mut fmt::Formatter) -> fmt::Result {
+    fn pp_expr_paren_(&self, e: &Expr, k: isize, out: &mut fmt::Formatter) -> fmt::Result {
         write!(out, "(")?;
         self.pp_expr(e, k, 0, 0, out)?;
         write!(out, ")")
     }
 
-    fn pp_expr_top(&mut self, e: &k::Expr, out: &mut fmt::Formatter) -> fmt::Result {
+    fn pp_expr_top(&mut self, e: &Expr, out: &mut fmt::Formatter) -> fmt::Result {
         // to print a self-contained expression, we declare all free
         // variables using `with a b:ty1. with c: ty2. <the expr>`.
         let mut fvars: Vec<_> = e.free_vars().collect();

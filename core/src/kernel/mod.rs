@@ -7,6 +7,7 @@ pub use crate::error::{Error, Result};
 
 pub mod ctx;
 pub mod expr;
+pub(crate) mod fixity_tbl;
 pub mod proof;
 pub mod subst;
 pub mod symbol;
@@ -14,6 +15,7 @@ pub mod thm;
 
 pub use ctx::{Ctx, NewTypeDef};
 pub use expr::{Const, Expr, ExprView, Type, Var};
+pub(crate) use fixity_tbl::FixityTbl;
 pub use proof::{Proof, ProofView};
 pub use subst::Subst;
 pub use symbol::Symbol;

@@ -14,6 +14,10 @@ pub mod unif;
 pub use ac_rw::{ACConv, ACConvList};
 pub use cc::{prove_cc, CC};
 pub use conv::{thm_conv_concl, BetaReduce, BetaReduceRepeat, Converter};
+use k::{
+    expr::{Exprs, Vars},
+    Const,
+};
 pub use pattern::{Pattern, PatternIdx, PatternSubst, PatternView};
 pub use rw::rewrite_bottom_up;
 pub use rw_rule::{RewriteRule, RewriteRuleSet};
@@ -23,18 +27,16 @@ pub use unif::{match_, unify, RenamingData, UnifySubst};
 #[derive(Debug, Clone)]
 pub struct NewPolyDef {
     /// Constant being defined
-    pub c: Expr,
-    /// Theorem defining `c` (as `c = …`)
+    pub c: Const,
+    /// Theorem defining `c` (as `|- c = rhs`)
     pub thm: Thm,
     /// Type variables, in the order they are abstracted on
-    pub ty_vars: Vec<Var>,
+    pub ty_vars: Vars,
     /// `c` applied to `ty_vars`
     pub c_applied: Expr,
-    /// `thm_c` applied to `ty_vars`
-    pub thm_applied: Thm,
 }
 
-/// Make a definition from a polymorphic term, by closing it first.
+/// Make a definition from a polymorphic term.
 ///
 /// `ExprManager::thm_new_basic_definition` requires the term to be closed,
 /// so we must gather type variables and close over them.
@@ -43,54 +45,37 @@ pub struct NewPolyDef {
 /// defining the new constant `c`, and `vars` is the set of type variables
 /// closed over.
 pub fn thm_new_poly_definition(ctx: &mut Ctx, c: &str, rhs: Expr) -> Result<NewPolyDef> {
+    /*
     let mut vars_ty_rhs: Vec<Var> = rhs.ty().free_vars().cloned().collect();
     //eprintln!("vars_of_ty({:?}) = {:?}", &rhs, &vars_ty_rhs);
     vars_ty_rhs.sort_unstable();
     vars_ty_rhs.dedup();
+    */
 
-    if vars_ty_rhs.iter().any(|v| !v.ty.is_type()) {
-        return Err(Error::new_string(format!(
+    if rhs.ty().free_vars().any(|v| !v.ty.is_type()) {
+        return Err(errorstr!(
             "thm_new_poly_definition: cannot make a polymorphic \
         definition for {}\nusing rhs = {:?}\nrhs contains non-type free variables",
-            c, rhs
-        )));
+            c,
+            rhs
+        ));
     }
 
-    let ty_closed = ctx.mk_pi_l(&vars_ty_rhs, rhs.ty().clone())?;
     let eqn = {
-        let rhs_closed = ctx.mk_lambda_l(&vars_ty_rhs, rhs.clone())?;
-        let v = ctx.mk_var_str(c, ty_closed);
-        ctx.mk_eq_app(v, rhs_closed)?
+        let v = ctx.mk_var_str(c, rhs.ty().clone());
+        ctx.mk_eq_app(v, rhs.clone())?
     };
-    let (thm, c) = ctx.thm_new_basic_definition(eqn)?;
+    let (thm, c, ty_vars) = ctx.thm_new_basic_definition(eqn)?;
 
-    // type variables as expressions
-    let e_vars: Vec<_> = vars_ty_rhs.iter().cloned().map(|v| ctx.mk_var(v)).collect();
-
-    let c_applied = ctx.mk_app_l(c.clone(), &e_vars)?;
-
-    // apply `thm` to the type variables
-    let thm_applied = {
-        let mut thm = thm.clone();
-        for v in e_vars.iter() {
-            thm = ctx.thm_congr_ty(thm, &v)?;
-            // now replace `(λa:type. …) v` with its beta reduced version
-            let thm_rhs = thm
-                .concl()
-                .unfold_eq()
-                .ok_or_else(|| Error::new("rhs must be an equality"))?
-                .1;
-            let thm_beta = ctx.thm_beta_conv(thm_rhs)?;
-            thm = ctx.thm_trans(thm, thm_beta)?;
-        }
-        thm
+    let c_applied = {
+        let ty_vars_as_exprs: Exprs = ty_vars.iter().map(|v| ctx.mk_var(v.clone())).collect();
+        ctx.mk_const(c.clone(), ty_vars_as_exprs)?
     };
 
     Ok(NewPolyDef {
         thm,
         c,
-        ty_vars: vars_ty_rhs,
-        thm_applied,
+        ty_vars,
         c_applied,
     })
 }
@@ -110,7 +95,7 @@ pub fn thm_sym(em: &mut Ctx, th: Thm) -> Result<Thm> {
         .ok_or_else(|| Error::new("sym: expect an equation"))?;
     let refl_t = em.thm_refl(t.clone());
     let th_tequ_eq_ueqt = {
-        let eq = em.mk_eq();
+        let eq = em.mk_eq(t.ty());
         let eq_u = em.mk_app(eq, u.ty().clone())?;
         let th_r = em.thm_refl(eq_u);
         let th_c_r = em.thm_congr(th_r, th)?;

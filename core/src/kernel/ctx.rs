@@ -6,8 +6,9 @@
 use super::{
     expr::{
         self, BoundVarContent, Const, ConstArgs, ConstImpl, ConstKind, ConstTag, DbIndex, Var,
-        WExpr,
+        Vars, WExpr,
     },
+    fixity_tbl::FixityTbl,
     symbol::{BuiltinSymbol, Symbol},
     thm::Exprs,
     Expr, ExprView, Proof, ProofView, Ref, Subst, Thm, Type, WeakRef,
@@ -41,7 +42,7 @@ struct CtxImpl {
     /// The boolean type, lazily initialized.
     e_bool: Option<Expr>,
     /// Pretty printing of constants
-    fixities: HM<Const, Fixity>,
+    fixities: FixityTbl,
     /// Temporary used to merge sets of hypotheses
     tmp_hyps: Exprs, // (smallvec)
     /// The defined chunks of code. These comprise some user defined tactics,
@@ -66,7 +67,8 @@ struct CtxImpl {
 pub struct NewTypeDef {
     /// the new type constructor
     pub tau: Const,
-    pub fvars: SmallVec<[Var; 3]>,
+    /// Type variables, in the order they are abstracted on.
+    pub ty_vars: Vars,
     /// Function from the general type to `tau`
     pub c_abs: Const,
     /// Function from `tau` back to the general type
@@ -111,7 +113,7 @@ impl Ctx {
             e_bool: None,
             allow_new_axioms: true,
             proof_gen: false,
-            fixities: HM::default(),
+            fixities: FixityTbl::default(),
         }));
 
         // insert initial builtins
@@ -249,7 +251,10 @@ impl Ctx {
         if let ConstKind::ExprConst { ty } = kind {
             self.check_uid_(&ty);
             if ty.db_depth() > arity as u32 {
-                return Err(errorstr!("cannot create constant with type {}", ty));
+                return Err(errorstr!(
+                    "cannot create constant with type {}",
+                    self.pp_expr(&ty)
+                ));
             }
             if ty.free_vars().next().is_some() {
                 return Err(Error::new("cannot create constant with non-ground type"));
@@ -472,12 +477,7 @@ impl Ctx {
             n > 0
         });
 
-        self.0.fixities.retain(|c, _| {
-            let n = Rc::strong_count(&c.0);
-            // we have this one strong ref. If it's the only one (ie. n==1)
-            // then we can drop it safely.
-            n > 1
-        });
+        self.0.fixities.cleanup();
     }
 
     /// Make a lambda term.
@@ -487,7 +487,10 @@ impl Ctx {
         self.hashcons_(ELambda(ty_var, body))
     }
 
-    /// Substitute `v[i]` with `db_i` in `body`.
+    /// `abs_on_(vars, e)` replaces each free variable `vars[i]` by `db_i` in `e`.
+    ///
+    /// The de Bruijn indices are shifted as needed when the free
+    /// variable occurs under a binder.
     fn abs_on_(&mut self, vars: &[Var], body: Expr) -> Result<Expr> {
         self.check_uid_(&body);
 
@@ -526,6 +529,11 @@ impl Ctx {
 
 // public interface
 impl Ctx {
+    /// Return a pretty printable object for this expression.
+    pub fn pp_expr<'a>(&'a self, e: &Expr) -> impl fmt::Display + 'a {
+        ExprWithCtx(e.clone(), self)
+    }
+
     /// Get the `=` constant. It has arity 1.
     #[inline]
     pub fn mk_c_eq(&mut self) -> Const {
@@ -701,6 +709,11 @@ impl Ctx {
         self.mk_lambda_(ty_v, body)
     }
 
+    #[inline]
+    pub fn abs_on_fvars(&mut self, vars: &[Var], body: Expr) -> Result<Expr> {
+        self.abs_on_(vars, body)
+    }
+
     /*
     /// Make a pi term by abstracting on `v`.
     pub fn mk_pi(&mut self, v: Var, body: Expr) -> Result<Expr> {
@@ -735,24 +748,35 @@ impl Ctx {
     ///
     /// Fails if the type is not ground.
     /// This constant has no axiom associated to it, it is entirely opaque.
+    ///
+    /// Also returns the list of free variables abstracted upon,
+    /// in the right order.
     pub fn mk_new_const(
         &mut self,
         s: impl Into<Symbol>,
         ty: Type,
         pr: Option<Proof>,
-    ) -> Result<Const> {
+    ) -> Result<(Const, Vars)> {
         let arity = ty.db_depth();
         if arity > u8::MAX as u32 {
             return Err(Error::new("mk_new_const: arity is too high"));
         }
         let arity = arity as u8;
-        self.mk_const_with_(
+
+        let mut fvars: Vars = ty.free_vars().cloned().collect();
+        fvars.sort_unstable();
+        fvars.dedup();
+
+        let ty = self.abs_on_(&fvars[..], ty)?;
+
+        let c = self.mk_const_with_(
             s.into(),
             ConstTag::None,
             arity,
             ConstKind::ExprConst { ty },
             pr,
-        )
+        )?;
+        Ok((c, fvars))
     }
 
     // TODO: return a result, and only allow infix/binder if type is inferrable?
@@ -761,7 +785,7 @@ impl Ctx {
     /// Does nothing if the constant is not defined.
     pub fn set_fixity(&mut self, s: &str, f: Fixity) -> Result<()> {
         if let Some(meta::Value::Const(c)) = self.0.meta_values.get(s) {
-            self.0.fixities.insert(c.clone(), f);
+            self.0.fixities.set_fixity(c.clone(), f);
             return Ok(());
         }
         Err(errorstr!("set_fixity: unknown constant `{}`", s))
@@ -793,8 +817,9 @@ impl Ctx {
         }
     }
 
+    #[inline]
     pub fn find_fixity(&self, c: &Const) -> Option<&Fixity> {
-        self.0.fixities.get(c)
+        self.0.fixities.find_fixity(c)
     }
 
     pub fn iter_consts(&self) -> impl Iterator<Item = (&str, &Expr)> {
@@ -1144,7 +1169,8 @@ impl Ctx {
         if a != &th1.0.concl {
             return Err(Error::new_string(format!(
                 "bool-eq: the conclusion of th1, `{}` is not compatible with th2's concl LHS `{}`",
-                th1.0.concl, a
+                self.pp_expr(&th1.0.concl),
+                self.pp_expr(a)
             )));
         }
         let b = b.clone();
@@ -1202,8 +1228,9 @@ impl Ctx {
     /// `new_basic_definition (x=t)` where `x` is a variable and `t` a term
     /// with a closed type,
     /// returns a theorem `|- x=t` where `x` is now a constant, along with
-    /// the constant `x`.
-    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Const)> {
+    /// the constant `x`, and the set of free variables of the type of `t`
+    /// that the constant is parametrized with.
+    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Const, Vars)> {
         self.check_uid_(&e);
         let (x, rhs) = e
             .unfold_eq()
@@ -1211,12 +1238,10 @@ impl Ctx {
             .ok_or_else(|| {
                 Error::new("new definition: expr should be an equation `x = rhs` with rhs closed")
             })?;
-        if !rhs.is_closed() || rhs.has_free_vars() {
-            return Err(Error::new("RHS of equation should be closed"));
-        }
+        assert_eq!(x.ty(), rhs.ty());
         // checks that the type of `x` is closed
-        if !x.ty.is_closed() || x.ty.has_free_vars() {
-            return Err(Error::new("LHS of equation should have a closed type"));
+        if !rhs.is_closed() {
+            return Err(Error::new("RHS of equation should be closed"));
         }
 
         let pr = if self.0.proof_gen {
@@ -1225,11 +1250,12 @@ impl Ctx {
             None
         };
 
-        let c = self.mk_new_const(x.name.clone(), x.ty.clone(), pr.clone())?;
-        let lhs = self.mk_const(c, smallvec![])?;
+        let (c, ty_vars) = self.mk_new_const(x.name.clone(), x.ty.clone(), pr.clone())?;
+        let ty_vars_as_exprs: Exprs = ty_vars.iter().map(|v| self.mk_var(v.clone())).collect();
+        let lhs = self.mk_const(c, ty_vars_as_exprs)?;
         let eqn = self.mk_eq_app(lhs, rhs.clone())?;
         let thm = Thm::make_(eqn, self.0.uid, smallvec![], pr);
-        Ok((thm, c))
+        Ok((thm, c, ty_vars))
     }
 
     /// Create a new axiom `|- concl`.
@@ -1295,7 +1321,7 @@ impl Ctx {
         // the concrete type
         let ty = witness.ty().clone();
         // check that all free variables are type variables
-        let mut fvars: SmallVec<[Var; 3]> = thm_inhabited.concl().free_vars().cloned().collect();
+        let mut fvars: Vars = thm_inhabited.concl().free_vars().cloned().collect();
         fvars.sort_unstable();
         fvars.dedup();
 
@@ -1305,9 +1331,10 @@ impl Ctx {
                 a free variable that does not have type `type`",
             ));
         }
+        let ty_vars = fvars;
 
         // free vars, as expressions
-        let fvars_exprs: SmallVec<_> = fvars.iter().map(|v| self.mk_var(v.clone())).collect();
+        let ty_vars_as_exprs: SmallVec<_> = fvars.iter().map(|v| self.mk_var(v.clone())).collect();
 
         let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::NewTyDef(
@@ -1326,27 +1353,27 @@ impl Ctx {
         };
 
         // `tau` applied to `fvars`
-        let tau_vars = self.mk_const(tau.clone(), fvars_exprs.clone())?;
+        let tau_vars = self.mk_const(tau.clone(), ty_vars_as_exprs.clone())?;
 
         let c_abs = {
             let ty = self.mk_arrow(ty.clone(), tau_vars.clone())?;
             let ty = self.abs_on_(&fvars, ty)?;
-            self.mk_new_const(abs, ty, pr.clone())?
+            self.mk_new_const(abs, ty, pr.clone())?.0
         };
         assert_eq!(fvars.len(), c_abs.arity as usize);
         let c_repr = {
             let ty = self.mk_arrow(tau_vars.clone(), ty.clone())?;
             let ty = self.abs_on_(&fvars, ty)?;
-            self.mk_new_const(repr, ty, pr.clone())?
+            self.mk_new_const(repr, ty, pr.clone())?.0
         };
         assert_eq!(fvars.len(), c_repr.arity as usize);
 
         let abs_x = self.mk_var_str("x", tau_vars.clone());
         let abs_thm = {
             // `|- abs (repr x) = x`
-            let repr = self.mk_const(c_repr.clone(), fvars_exprs.clone())?;
+            let repr = self.mk_const(c_repr.clone(), ty_vars_as_exprs.clone())?;
             let t = self.mk_app(repr, abs_x.clone())?;
-            let abs = self.mk_const(c_abs.clone(), fvars_exprs.clone())?;
+            let abs = self.mk_const(c_abs.clone(), ty_vars_as_exprs.clone())?;
             let abs_t = self.mk_app(abs, t)?;
             let eqn = self.mk_eq_app(abs_t.clone(), abs_x.clone())?;
             Thm::make_(eqn, self.0.uid, smallvec![], pr.clone())
@@ -1354,9 +1381,9 @@ impl Ctx {
         let repr_x = self.mk_var_str("x", ty.clone());
         let repr_thm = {
             // `|- Phi x <=> repr (abs x) = x`
-            let abs = self.mk_const(c_abs.clone(), fvars_exprs.clone())?;
+            let abs = self.mk_const(c_abs.clone(), ty_vars_as_exprs.clone())?;
             let t1 = self.mk_app(abs, repr_x.clone())?;
-            let repr = self.mk_const(c_repr.clone(), fvars_exprs.clone())?;
+            let repr = self.mk_const(c_repr.clone(), ty_vars_as_exprs.clone())?;
             let t2 = self.mk_app(repr, t1)?;
             let eq_t2_x = self.mk_eq_app(t2, repr_x.clone())?;
             let phi_x = self.mk_app(phi.clone(), repr_x.clone())?;
@@ -1372,13 +1399,22 @@ impl Ctx {
             tau,
             c_repr,
             c_abs,
-            fvars,
+            ty_vars,
             repr_x: repr_x.as_var().unwrap().clone(),
             abs_thm,
             abs_x: abs_x.as_var().unwrap().clone(),
             repr_thm,
         };
         Ok(c)
+    }
+}
+
+pub struct ExprWithCtx<'a>(Expr, &'a Ctx);
+
+impl<'a> fmt::Display for ExprWithCtx<'a> {
+    // use the pretty-printer from `syntax`
+    fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
+        crate::syntax::print_expr(&self.1 .0.fixities, &self.0, out)
     }
 }
 

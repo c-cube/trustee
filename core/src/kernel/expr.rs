@@ -1,7 +1,7 @@
 //! # Expressions, types, variables
 
 use super::{symbol::Symbol, Proof, Ref, WeakRef};
-use crate::{error::Result, fnv, rptr::RPtr, rstr::RStr};
+use crate::{error::Result, fnv, rstr::RStr};
 use smallvec::{smallvec, SmallVec};
 use std::{fmt, ops::Deref};
 
@@ -13,6 +13,9 @@ pub type DbIndex = u32;
 /// The expression is refcounted and is thus cheaply clonable.
 #[derive(Clone)]
 pub struct Expr(pub(super) Ref<ExprImpl>);
+
+/// Small vector of exprs.
+pub type Exprs = SmallVec<[Expr; 3]>;
 
 /// A weak reference to an expression.
 ///
@@ -51,6 +54,9 @@ pub struct Var {
     pub ty: Expr,
 }
 
+/// A small vector of variables.
+pub type Vars = SmallVec<[Var; 3]>;
+
 /// The content of an expression.
 pub(super) struct ExprImpl {
     /// Unique ID of the expr manager responsible for creating this expr.
@@ -69,7 +75,7 @@ pub(super) struct ExprImpl {
 /// or a definition ("defined constants"). A defined constant can become
 /// opaque if we just forget its definition.
 #[derive(Clone, Debug)]
-pub struct Const(pub(super) Ref<ConstImpl>);
+pub struct Const(pub(crate) Ref<ConstImpl>);
 
 #[derive(Debug)]
 pub struct ConstImpl {
@@ -413,7 +419,7 @@ impl Expr {
     /// that `e == pi 0:a1. pi 1:a2. …. body` with `ty_args = (a1,a2,…)`.
     ///
     /// The length of `ty_args` indicates how many pi abstractions have been done.
-    pub fn unfold_arrow(&self) -> (SmallVec<[&Type; 4]>, &Expr) {
+    pub fn unfold_arrow(&self) -> (SmallVec<[&Type; 3]>, &Expr) {
         let mut e = self;
         let mut v = smallvec![];
         while let EArrow(ty_arg, body) = e.view() {
@@ -650,13 +656,6 @@ mod impls {
                 &(self.0.as_ref() as *const ExprImpl),
                 &(other.0.as_ref() as *const _),
             )
-        }
-    }
-
-    impl fmt::Display for Expr {
-        // use the pretty-printer from `syntax`
-        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-            crate::syntax::print_expr(self, out)
         }
     }
 
