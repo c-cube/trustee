@@ -302,7 +302,7 @@ pub(super) mod logic_builtins {
             |ctx, args| {
                 check_arity!("sym", args, 1);
                 let th1 = get_arg_thm!(args, 0);
-                let th = algo::thm_sym(ctx.ctx, th1.clone())?;
+                let th = ctx.ctx.thm_sym(th1.clone())?;
                 Ok(Value::Thm(th))
             }
         ),

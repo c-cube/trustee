@@ -240,7 +240,7 @@ impl<'a> CC<'a> {
                             debug_assert_eq!(a, &n2.e);
                             // th_n_n2 is proof of `n2 == n`, so we need
                             // symmetry to get `n == n2`
-                            th_n_n2 = thm_sym(self.ctx, th_n_n2)?;
+                            th_n_n2 = self.ctx.thm_sym(th_n_n2)?;
                         } else {
                             debug_assert_eq!(a, &n.e);
                             debug_assert_eq!(b, &n2.e);
@@ -292,7 +292,7 @@ impl<'a> CC<'a> {
             let middle = self.find_common_ancestor(n1, n2)?;
             let th1 = self.explain_along(n1, middle)?;
             let th2 = self.explain_along(n2, middle)?;
-            let th2 = thm_sym(self.ctx, th2)?; // prove middle=n2
+            let th2 = self.ctx.thm_sym(th2)?; // prove middle=n2
             let th = self.ctx.thm_trans(th1, th2)?;
             Ok(th)
         } else {

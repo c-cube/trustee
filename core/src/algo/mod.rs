@@ -14,10 +14,8 @@ pub mod unif;
 pub use ac_rw::{ACConv, ACConvList};
 pub use cc::{prove_cc, CC};
 pub use conv::{thm_conv_concl, BetaReduce, BetaReduceRepeat, Converter};
-use k::{
-    expr::{Exprs, Vars},
-    Const,
-};
+use k::expr::Vars;
+use k::Const;
 pub use pattern::{Pattern, PatternIdx, PatternSubst, PatternView};
 pub use rw::rewrite_bottom_up;
 pub use rw_rule::{RewriteRule, RewriteRuleSet};
@@ -63,12 +61,12 @@ pub fn thm_new_poly_definition(ctx: &mut Ctx, c: &str, rhs: Expr) -> Result<NewP
 
     let eqn = {
         let v = ctx.mk_var_str(c, rhs.ty().clone());
-        ctx.mk_eq_app(v, rhs.clone())?
+        ctx.mk_eq_app(v, rhs)?
     };
     let (thm, c, ty_vars) = ctx.thm_new_basic_definition(eqn)?;
 
     let c_applied = {
-        let ty_vars_as_exprs: Exprs = ty_vars.iter().map(|v| ctx.mk_var(v.clone())).collect();
+        let ty_vars_as_exprs: ConstArgs = ty_vars.iter().map(|v| ctx.mk_var(v.clone())).collect();
         ctx.mk_const(c.clone(), ty_vars_as_exprs)?
     };
 
@@ -78,30 +76,6 @@ pub fn thm_new_poly_definition(ctx: &mut Ctx, c: &str, rhs: Expr) -> Result<NewP
         ty_vars,
         c_applied,
     })
-}
-
-/// Prove symmetry of equality.
-///
-/// Goes from `A |- t=u` to `A |- u=t`.
-pub fn thm_sym(ctx: &mut Ctx, th: Thm) -> Result<Thm> {
-    // start with `F |- t=u`.
-    // now by left-congruence with `refl(=)`, `F |- ((=) t) = ((=) u)`.
-    // by right-congruence with `refl(t)`, `F |- (((=) t) t) = (((=) u) t)`.
-    // in other words, `F |- (t=t)=(u=t)`.
-    // Just do bool_eq_elim with `|- t=t` (refl(t)) and we're done.
-    let (t, u) = th
-        .concl()
-        .unfold_eq()
-        .ok_or_else(|| Error::new("sym: expect an equation"))?;
-    let refl_t = ctx.thm_refl(t.clone());
-    let th_tequ_eq_ueqt = {
-        let eq = ctx.mk_eq(t.ty().clone());
-        let eq_u = ctx.mk_app(eq, u.ty().clone())?;
-        let th_r = ctx.thm_refl(eq_u);
-        let th_c_r = ctx.thm_congr(th_r, th)?;
-        ctx.thm_congr(th_c_r, refl_t.clone())?
-    };
-    ctx.thm_bool_eq(refl_t, th_tequ_eq_ueqt)
 }
 
 /* TODO?
@@ -122,13 +96,13 @@ pub fn thm_sym_conv(ctx: &mut Ctx, e: Expr) -> Result<Thm> {
         .ok_or_else(|| Error::new("sym: expect an equation"))?;
     let th1 = {
         let hyp = ctx.thm_assume(e.clone())?;
-        thm_sym(ctx, hyp)?
+        ctx.thm_sym(hyp)?
     };
 
     let th2 = {
         let eq = ctx.mk_eq_app(u.clone(), t.clone())?;
         let hyp = ctx.thm_assume(eq)?;
-        thm_sym(ctx, hyp)?
+        ctx.thm_sym(hyp)?
     };
 
     ctx.thm_bool_eq_intro(th1, th2)
@@ -147,7 +121,8 @@ mod test {
         let x_eq_y = ctx.mk_eq_app(x.clone(), y.clone()).unwrap();
         let y_eq_x = ctx.mk_eq_app(y.clone(), x.clone()).unwrap();
         let th = ctx.thm_assume(x_eq_y).unwrap();
-        let th2 = thm_sym(&mut ctx, th).unwrap();
+        println!("th: {:?}", th);
+        let th2 = ctx.thm_sym(th).unwrap();
         assert_eq!(th2.concl(), &y_eq_x);
     }
 
@@ -190,7 +165,7 @@ mod test {
             let f3 = \(x:tau). f2 x in
             p (h (f3 a)) (h a)"#,
         )?;
-        assert_eq!(exp, th2.concl().clone(), "\n\ninitial: {}", e);
+        assert_eq!(exp, th2.concl().clone(), "\n\ninitial: {:?}", e);
         Ok(())
     }
 
@@ -203,6 +178,7 @@ mod test {
             let f2 = \(f:tau->tau) (x:tau). f (f x) in
             h (f2 g1 a) = f2 (f2 g1) a"#,
         )?;
+        println!("e: {:?}", e);
 
         let th1 = ctx.thm_assume(e)?;
         let rw = rw::BottomUpRwConv(&conv::BetaReduce);

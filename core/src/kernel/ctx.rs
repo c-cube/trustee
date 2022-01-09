@@ -658,7 +658,7 @@ impl Ctx {
     /// This takes a constant (possibly polymorphic) and turns it into a term
     /// of a given type.
     #[inline]
-    pub fn mk_const(&mut self, c: Const, args: SmallVec<[Expr; 3]>) -> Result<Expr> {
+    pub fn mk_const(&mut self, c: Const, args: ConstArgs) -> Result<Expr> {
         self.mk_const_(c, args)
     }
 
@@ -873,6 +873,24 @@ impl Ctx {
             None
         };
         Thm::make_(t, self.0.uid, smallvec![], pr)
+    }
+
+    /// Symmetry of equality.
+    ///
+    /// `sym (Γ |- t=u)` is `Γ |- u=t`
+    pub fn thm_sym(&mut self, th: Thm) -> Result<Thm> {
+        self.check_thm_uid_(&th);
+        let (t, u) = th
+            .concl()
+            .unfold_eq()
+            .ok_or_else(|| Error::new("sym: conclusion must be an equation"))?;
+        let concl = self.mk_eq_app(u.clone(), t.clone()).expect("sym");
+        let pr = if self.0.proof_gen {
+            Some(Proof::new(ProofView::Sym(th.clone())))
+        } else {
+            None
+        };
+        Ok(Thm::make_(concl, self.0.uid, th.hyps_vec().clone(), pr))
     }
 
     /// `trans (F1 |- a=b) (F2 |- b'=c)` is `F1, F2 |- a=c`.
@@ -1251,7 +1269,7 @@ impl Ctx {
         };
 
         let (c, ty_vars) = self.mk_new_const(x.name.clone(), x.ty.clone(), pr.clone())?;
-        let ty_vars_as_exprs: Exprs = ty_vars.iter().map(|v| self.mk_var(v.clone())).collect();
+        let ty_vars_as_exprs: ConstArgs = ty_vars.iter().map(|v| self.mk_var(v.clone())).collect();
         let lhs = self.mk_const(c.clone(), ty_vars_as_exprs)?;
         let eqn = self.mk_eq_app(lhs, rhs.clone())?;
         let thm = Thm::make_(eqn, self.0.uid, smallvec![], pr);

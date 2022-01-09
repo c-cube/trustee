@@ -26,6 +26,7 @@ pub enum ProofView {
     Abs(Var, Thm),
     /// Point to self as an axiom.
     Axiom(Expr),
+    Sym(Thm),
     Cut(Thm, Thm),
     BoolEq(Thm, Thm),
     BoolEqIntro(Thm, Thm),
@@ -69,13 +70,14 @@ mod impls {
                     f(a);
                     f(b)
                 }
+                PV::Sym(a) => f(a),
                 PV::Congr(a, b) => {
                     f(a);
                     f(b)
                 }
                 PV::CongrTy(a, e) => {
                     f(a);
-                    fe(&e)
+                    fe(e)
                 }
                 PV::Instantiate(a, subst) => {
                     f(a);

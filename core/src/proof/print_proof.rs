@@ -311,6 +311,10 @@ impl<'a> Printer<'a> {
                             let ide = self.get_term_id(e)?;
                             writeln!(self.out, "RFL {} {}", id, ide)?;
                         }
+                        ProofView::Sym(th) => {
+                            let idth = self.get_thm_id(th)?;
+                            writeln!(self.out, "SY {} {}", id, idth)?;
+                        }
                         ProofView::Trans(th1, th2) => {
                             let n1 = self.get_thm_id(&th1)?;
                             let n2 = self.get_thm_id(&th2)?;

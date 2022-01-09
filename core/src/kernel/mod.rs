@@ -83,7 +83,7 @@ mod test {
             _ => false,
         });
         assert!(f.is_closed());
-        let (ty_args, ty_body) = f.ty().unfold_pi();
+        let (ty_args, ty_body) = f.ty().unfold_arrow();
         assert_eq!(ty_args.len(), 1);
         assert_eq!(ty_args[0], &em.mk_bool());
         assert_eq!(ty_body, &em.mk_bool());

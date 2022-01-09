@@ -284,7 +284,7 @@ mod test {
             let r = parse_expr(&mut ctx, x)
                 .map_err(|e| e.with_source(Error::new_string(format!("parsing {:?}", x))))?;
             // use pretty printer
-            let r2 = format!("{}", r);
+            let r2 = format!("{:?}", r);
             assert_eq!(&r2, *s, "left: actual, right: expected");
         }
         Ok(())
@@ -296,10 +296,10 @@ mod test {
         let a = parse_expr(&mut ctx, "x:bool")?;
         let b = parse_expr(&mut ctx, "y:bool")?;
         let e = ctx.mk_eq_app(a, b)?;
-        let s = format!("{}", e);
+        let s = format!("{:?}", e);
         assert_eq!(s, "with x y:bool. x = y");
         let e1 = e.as_app().ok_or_else(|| Error::new("is not app"))?.0;
-        let s1 = format!("{}", e1);
+        let s1 = format!("{:?}", e1);
         assert_eq!(s1, "with x:bool. (@= bool x)");
         Ok(())
     }

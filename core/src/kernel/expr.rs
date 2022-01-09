@@ -28,7 +28,7 @@ pub(super) struct WExpr(pub(super) WeakRef<ExprImpl>);
 pub type Type = Expr;
 
 /// Type arguments to a constant
-pub type ConstArgs = SmallVec<[Type; 3]>;
+pub type ConstArgs = SmallVec<[Type; 2]>;
 
 /// The public view of an expression's root.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
@@ -211,7 +211,7 @@ impl ExprView {
                 let args = args
                     .iter()
                     .map(|x| f(x, k))
-                    .collect::<Result<SmallVec<[Expr; 3]>>>()?;
+                    .collect::<Result<ConstArgs>>()?;
                 EConst(c.clone(), args)
             }
             EVar(v) => EVar(Var {
@@ -437,7 +437,7 @@ impl Expr {
     /// View a variable.
     pub fn as_var(&self) -> Option<&Var> {
         if let EVar(ref v) = self.0.view {
-            Some(&v)
+            Some(v)
         } else {
             None
         }
@@ -455,7 +455,7 @@ impl Expr {
     /// View as application.
     pub fn as_app(&self) -> Option<(&Expr, &Expr)> {
         if let EApp(ref a, ref b) = self.0.view {
-            Some((&a, &b))
+            Some((a, b))
         } else {
             None
         }
@@ -464,7 +464,7 @@ impl Expr {
     /// View as application.
     pub fn as_arrow(&self) -> Option<(&Expr, &Expr)> {
         if let EArrow(ref a, ref b) = self.0.view {
-            Some((&a, &b))
+            Some((a, b))
         } else {
             None
         }
@@ -473,7 +473,7 @@ impl Expr {
     /// View as a lambda-expression.
     pub fn as_lambda(&self) -> Option<(&Type, &Expr)> {
         if let ELambda(ref ty, ref bod) = self.0.view {
-            Some((&ty, &bod))
+            Some((ty, bod))
         } else {
             None
         }
