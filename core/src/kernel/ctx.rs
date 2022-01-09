@@ -502,15 +502,15 @@ impl Ctx {
         }
 
         let mut subst: SmallVec<[(Var, Expr); 3]> = SmallVec::with_capacity(n_vars);
-        for (i, v_i) in vars.iter().enumerate() {
+        for (i, v_i) in vars.iter().rev().enumerate() {
             let v_i_ty = &v_i.ty;
-            self.check_uid_(&v_i_ty);
+            self.check_uid_(v_i_ty);
             if !v_i_ty.is_closed() {
                 return Err(Error::new("mk_abs: var has non-closed type"));
             }
 
-            // replace `v_i` with `db_i` in `body`. This should also take
-            // care of shifting the DB by `n_vars` as appropriate.
+            // replace `v_i` with `db_i` in `body` (counting from the end).
+            // This should also take care of shifting the DB by `n_vars` as appropriate.
             let db_i = self.mk_bound_var(i as u32, v_i_ty.clone());
             subst.push((v_i.clone(), db_i));
         }
