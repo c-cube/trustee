@@ -121,7 +121,7 @@ impl Ctx {
         ctx.0.tbl.insert(kind.view().clone(), kind.weak());
         let ty = ctx.hashcons_builtin_(EType, Some(kind));
         ctx.0.tbl.insert(ty.view().clone(), ty.weak());
-        ctx.0.e_ty = Some(ty);
+        ctx.0.e_ty = Some(ty.clone());
 
         // define bool
         let e_bool = {
@@ -248,7 +248,7 @@ impl Ctx {
         kind: ConstKind,
         pr: Option<Proof>,
     ) -> Result<Const> {
-        if let ConstKind::ExprConst { ty } = kind {
+        if let ConstKind::ExprConst { ty } = &kind {
             self.check_uid_(&ty);
             if ty.db_depth() > arity as u32 {
                 return Err(errorstr!(
@@ -305,7 +305,7 @@ impl Ctx {
         Ok(match e {
             EKind => None,
             EType => Some(self.get_ty_().clone()),
-            EConst(c, args) => match c.kind {
+            EConst(c, args) => match &c.kind {
                 ConstKind::TyConst => Some(self.get_ty_().clone()),
                 ConstKind::ExprConst { ty } => {
                     // check arity
@@ -540,14 +540,14 @@ impl Ctx {
         self.get_eq_().clone()
     }
 
-    /// Make the `=_α` expression for equality of type α.
-    pub fn mk_eq(&mut self, ty: &Type) -> Expr {
+    /// Build the expression `=_α` for equality of type α.
+    pub fn mk_eq(&mut self, ty: Type) -> Expr {
         let c = self.mk_c_eq();
         debug_assert_eq!(1, c.arity);
-        self.mk_const_(c, smallvec![ty.clone()]).unwrap()
+        self.mk_const_(c, smallvec![ty]).unwrap()
     }
 
-    /// Make `a = b`.
+    /// Build the expression `a = b`.
     ///
     /// Fails if `a` and `b` do not have the same type.
     pub fn mk_eq_app(&mut self, a: Expr, b: Expr) -> Result<Expr> {
@@ -556,7 +556,7 @@ impl Ctx {
         if a.ty() != b.ty() {
             return Err(Error::new("mk_eq: incompatible_types"));
         }
-        let eq = self.mk_eq(a.ty());
+        let eq = self.mk_eq(a.ty().clone());
         self.mk_app_l(eq, &[a, b])
     }
 
@@ -1252,7 +1252,7 @@ impl Ctx {
 
         let (c, ty_vars) = self.mk_new_const(x.name.clone(), x.ty.clone(), pr.clone())?;
         let ty_vars_as_exprs: Exprs = ty_vars.iter().map(|v| self.mk_var(v.clone())).collect();
-        let lhs = self.mk_const(c, ty_vars_as_exprs)?;
+        let lhs = self.mk_const(c.clone(), ty_vars_as_exprs)?;
         let eqn = self.mk_eq_app(lhs, rhs.clone())?;
         let thm = Thm::make_(eqn, self.0.uid, smallvec![], pr);
         Ok((thm, c, ty_vars))
@@ -1334,7 +1334,8 @@ impl Ctx {
         let ty_vars = fvars;
 
         // free vars, as expressions
-        let ty_vars_as_exprs: SmallVec<_> = fvars.iter().map(|v| self.mk_var(v.clone())).collect();
+        let ty_vars_as_exprs: SmallVec<_> =
+            ty_vars.iter().map(|v| self.mk_var(v.clone())).collect();
 
         let pr = if self.0.proof_gen {
             Some(Proof::new(ProofView::NewTyDef(
@@ -1346,27 +1347,23 @@ impl Ctx {
         };
 
         // construct new type and mapping functions
-        let tau: Const = {
-            let ttype = self.mk_ty();
-            let ty_tau = self.abs_on_(&fvars, ttype)?;
-            self.mk_new_ty_const_(name_tau, fvars.len(), pr.clone())?
-        };
+        let tau: Const = { self.mk_new_ty_const_(name_tau, ty_vars.len(), pr.clone())? };
 
         // `tau` applied to `fvars`
         let tau_vars = self.mk_const(tau.clone(), ty_vars_as_exprs.clone())?;
 
         let c_abs = {
             let ty = self.mk_arrow(ty.clone(), tau_vars.clone())?;
-            let ty = self.abs_on_(&fvars, ty)?;
+            let ty = self.abs_on_(&ty_vars[..], ty)?;
             self.mk_new_const(abs, ty, pr.clone())?.0
         };
-        assert_eq!(fvars.len(), c_abs.arity as usize);
+        assert_eq!(ty_vars.len(), c_abs.arity as usize);
         let c_repr = {
             let ty = self.mk_arrow(tau_vars.clone(), ty.clone())?;
-            let ty = self.abs_on_(&fvars, ty)?;
+            let ty = self.abs_on_(&ty_vars[..], ty)?;
             self.mk_new_const(repr, ty, pr.clone())?.0
         };
-        assert_eq!(fvars.len(), c_repr.arity as usize);
+        assert_eq!(ty_vars.len(), c_repr.arity as usize);
 
         let abs_x = self.mk_var_str("x", tau_vars.clone());
         let abs_thm = {

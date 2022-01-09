@@ -7,7 +7,8 @@
 //! and bind `?a` to `(g x)`, and `?b? to `foo`.
 
 use {
-    crate::{fnv::FnvHashMap as HM, rptr::RPtr, Error, Expr, Result},
+    crate::{fnv::FnvHashMap as HM, rptr::RPtr, Const, Error, Expr, Result},
+    smallvec::SmallVec,
     std::fmt,
 };
 
@@ -35,8 +36,11 @@ pub enum PatternView {
     Var(VarIdx),
     /// Non-linear occurrence of a meta-variable
     EqVar(VarIdx),
-    /// Expression to match verbatim
-    Const(Expr),
+    /// Constant application. We ignore type arguments of the matched expression
+    /// constant (i.e. `Pattern::Const(=) will match equality on any type.
+    Const(Const),
+    /// Expression to match, verbatim
+    Expr(Expr),
     /// Application
     App(PatternIdx, PatternIdx),
     /// Any term.
@@ -44,6 +48,8 @@ pub enum PatternView {
     // TODO: with-ty(Pattern, Ty) for checking type
     // TODO? Lam(Ty, PatternIdx),
 }
+
+pub type ConstPatternArgs = SmallVec<[PatternIdx; 3]>;
 
 /// A substitution, obtained by successfully matching a pattern against an expression.
 ///
@@ -100,7 +106,7 @@ impl PatternBuilder {
 
     /// Find or reuse meta-variable with name `s`.
     pub fn alloc_meta(&mut self, s: &str) -> Result<PatternIdx> {
-        if let Some((i, _)) = self.meta_vars.iter().enumerate().find(|(_, x)| &**x == s) {
+        if let Some((i, _)) = self.meta_vars.iter().enumerate().find(|(_, x)| *x == s) {
             // non linear use of that meta
             let i = VarIdx(i as u8);
             self.alloc_node(PatternView::EqVar(i))
@@ -172,7 +178,10 @@ impl Pattern {
         match &self[i] {
             PatternView::Var(v) => write!(out, "?{}", &self[*v]),
             PatternView::EqVar(v) => write!(out, ".?{}", &self[*v]),
-            PatternView::Const(e) => write!(out, "{}", e),
+            PatternView::Expr(e) => write!(out, "{:?}", e),
+            PatternView::Const(c) => {
+                write!(out, "{}", c.name.name())
+            }
             PatternView::App(_, _) => {
                 let (hd, args) = self.unfold_app(i);
                 write!(out, "(")?;
@@ -213,7 +222,9 @@ impl Pattern {
                 self.match_rec_(tbl, *f, ef) && self.match_rec_(tbl, *a, ea)
             }
             (PatternView::App(..), _) => false,
-            (PatternView::Const(c), _) => c == e,
+            (PatternView::Expr(p_e), _) => p_e == e,
+            (PatternView::Const(p_c), EV::EConst(c, _)) => p_c == c,
+            (PatternView::Const(..), _) => false,
         }
     }
 
@@ -259,6 +270,12 @@ mod impls {
         }
     }
 
+    impl Default for PatternBuilder {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl std::ops::Index<VarIdx> for Pattern {
         type Output = str;
 
@@ -287,7 +304,7 @@ mod impls {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "(subst")?;
             for (i, e) in self.subst.iter().enumerate() {
-                write!(f, " (?{} := {})", &self.p[VarIdx(i as u8)], e)?;
+                write!(f, " (?{} := {:?})", &self.p[VarIdx(i as u8)], e)?;
             }
             write!(f, ")")
         }

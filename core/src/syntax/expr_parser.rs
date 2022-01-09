@@ -6,9 +6,16 @@
 //! We follow https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
 //! quite closely :-)
 
-use super::fixity;
-use crate::syntax::{lexer::Position, Lexer, Tok};
-use crate::{kernel as k, syntax::Fixity, Ctx, Error, Result};
+use {
+    super::fixity,
+    crate::{
+        errorstr, kernel as k,
+        syntax::Fixity,
+        syntax::{lexer::Position, Lexer, Tok},
+        Ctx, Error, Result,
+    },
+    smallvec::smallvec,
+};
 
 /// Parse the string into an expression.
 pub fn parse_expr(ctx: &mut Ctx, s: &str) -> Result<k::Expr> {
@@ -236,15 +243,25 @@ impl<'a> Parser<'a> {
             return Ok(e);
         };
         Ok(match s {
-            "=" => self.ctx.mk_eq(),
+            "=" => {
+                let ty = self.parse_expr()?;
+                self.ctx.mk_eq(ty)
+            }
             "bool" => self.ctx.mk_bool(),
             "type" => self.ctx.mk_ty(),
-            _ => self
-                .ctx
-                .find_const(s)
-                .ok_or_else(|| perror!(self, "unknown constant {:?}", s))?
-                .0
-                .clone(),
+            _ => {
+                // parse constant, then as many arguments as needed
+                let c = self
+                    .ctx
+                    .find_const(s)
+                    .ok_or_else(|| perror!(self, "unknown constant {:?}", s))?
+                    .clone();
+                let mut args = smallvec![];
+                for _ in 0..c.arity {
+                    args.push(self.parse_expr()?);
+                }
+                self.ctx.mk_const(c, args)?
+            }
         })
     }
 
@@ -254,8 +271,16 @@ impl<'a> Parser<'a> {
             "=" => self.ctx.mk_eq_app(e1, e2),
             "->" => self.ctx.mk_arrow(e1, e2),
             _ => {
-                if let Some((c, _)) = self.ctx.find_const(s) {
+                if let Some(c) = self.ctx.find_const(s) {
+                    // FIXME: type inference to fill vars, if any
+                    if c.arity > 0 {
+                        return Err(errorstr!(
+                            "cannot use constant `{}` as infix",
+                            c.name.name()
+                        ));
+                    }
                     let c = c.clone();
+                    let c = self.ctx.mk_const(c, smallvec![])?;
                     self.ctx.mk_app_l(c, &[e1, e2])
                 } else {
                     return Err(perror!(self, "unknown infix '{:?}'", s));
@@ -283,21 +308,35 @@ impl<'a> Parser<'a> {
                 body // not a real binder
             }
             "\\" => self.ctx.mk_lambda_l(vars, body)?,
-            "pi" => self.ctx.mk_pi_l(vars, body)?,
             _ => {
-                if let Some((c, Fixity::Binder(..))) = self.ctx.find_const(b) {
+                let c = self
+                    .ctx
+                    .find_const(b)
+                    .cloned()
+                    .ok_or_else(|| errorstr!("`{}` is not a constant", b))?;
+                if let Some(Fixity::Binder(..)) = self.ctx.find_fixity(&c) {
                     // turn `b x:ty. p` into `b ty (λx:ty. p)`
-                    let c = c.clone();
+                    // FIXME: type inference
+                    if c.arity != 1 {
+                        return Err(errorstr!(
+                            "cannot use `{}` as binder, it needs to have exactly 1 type argument",
+                            c.name.name()
+                        ));
+                    }
                     let mut t = body;
                     for v in vars {
                         let ty = v.ty().clone();
-                        let c = self.ctx.mk_app(c.clone(), ty)?;
+                        let c_expr = self.ctx.mk_const(c.clone(), smallvec![ty])?;
                         let lam = self.ctx.mk_lambda(v.clone(), t)?;
-                        t = self.ctx.mk_app(c, lam)?;
+                        t = self.ctx.mk_app(c_expr, lam)?;
                     }
                     t
                 } else {
-                    return Err(perror!(self, "unknown binder {:?}", b));
+                    return Err(perror!(
+                        self,
+                        "constant `{}` is not a binder",
+                        c.name.name()
+                    ));
                 }
             }
         })
@@ -399,30 +438,32 @@ impl<'a> Parser<'a> {
                         // TODO: relative numbers
                         return Err(perror!(self, "cannot parse negative numbers yet"));
                     }
-                    let mut t = self
-                        .ctx
-                        .find_const("Zero")
-                        .ok_or_else(|| {
-                            perror!(self, "cannot find constant `Zero` to encode number `{}`", i)
-                        })?
-                        .0
-                        .clone();
+                    let zero = self.ctx.find_const("Zero").cloned().ok_or_else(|| {
+                        perror!(self, "cannot find constant `Zero` to encode number `{}`", i)
+                    })?;
+                    if zero.arity > 0 {
+                        return Err(Error::new("Zero should not be polymorphic"));
+                    }
+                    let mut t = self.ctx.mk_const(zero, smallvec![])?;
                     while i > 0 {
                         let b = i % 2 == 1;
-                        let f = if b { "Bit1" } else { "Bit0" };
+                        let name = if b { "Bit1" } else { "Bit0" };
                         let f = self
                             .ctx
-                            .find_const(f)
+                            .find_const(name)
                             .ok_or_else(|| {
                                 perror!(
                                     self,
                                     "cannot find constant `{}` to encode number `{}`",
-                                    f,
+                                    name,
                                     i
                                 )
                             })?
-                            .0
                             .clone();
+                        if f.arity > 0 {
+                            return Err(errorstr!("`{}` should not be polymorphic", name));
+                        }
+                        let f = self.ctx.mk_const(f, smallvec![])?;
                         t = self.ctx.mk_app(f, t).map_err(|e| {
                             perror!(self, "type error when encoding number `{}`: {}", i, e)
                         })?;
@@ -436,7 +477,12 @@ impl<'a> Parser<'a> {
                     t
                 }
                 RPAREN | DOT | EOF | COLON | IN | QUOTED_STR(..) => {
-                    return Err(perror!(self, "unexpected token {:?}", t))
+                    return Err(perror!(
+                        self,
+                        "unexpected token {:?} at {}",
+                        t,
+                        self.lexer.cur_pos()
+                    ))
                 }
             }
         };

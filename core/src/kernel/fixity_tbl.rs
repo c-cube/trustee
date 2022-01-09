@@ -5,7 +5,7 @@ use {
 
 /// A table storing fixity (precedence) for each constant.
 #[derive(Default, Clone)]
-pub(crate) struct FixityTbl(HM<Const, Fixity>);
+pub struct FixityTbl(HM<Const, Fixity>);
 
 impl FixityTbl {
     #[inline]

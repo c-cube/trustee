@@ -529,9 +529,9 @@ mod impls {
                     Ok(())
                 }
                 Value::Str(s) => write!(out, "{:?}", s),
-                Value::Expr(e) => write!(out, "${}$", e),
+                Value::Expr(e) => write!(out, "${:?}$", e),
                 Value::Const(c) => write!(out, "${}$", c.name.name()),
-                Value::Thm(th) => write!(out, "{}", th),
+                Value::Thm(th) => write!(out, "{:?}", th),
                 Value::Closure(cl) => {
                     let nup = cl.upvalues().len();
                     if let Some(n) = &cl.0.c.0.name {

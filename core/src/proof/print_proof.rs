@@ -1,6 +1,6 @@
 //! # Proof Printing
 
-use {crate::fnv::FnvHashMap as HM, crate::kernel::*, std::io::Write};
+use {crate::errorstr, crate::fnv::FnvHashMap as HM, crate::kernel::*, std::io::Write};
 
 pub struct Printer<'a> {
     out: &'a mut dyn Write,
@@ -76,14 +76,14 @@ impl<'a> Printer<'a> {
         self.id_expr
             .get(e)
             .copied()
-            .ok_or_else(|| Error::new_string(format!("cannot find name for expression `{}`", e)))
+            .ok_or_else(|| errorstr!("cannot find name for expression `{:?}`", e))
     }
 
     fn get_thm_id(&self, th: &Thm) -> Result<Id> {
         self.id_thm
             .get(th)
             .copied()
-            .ok_or_else(|| Error::new_string(format!("cannot find name for theorem `{}`", th)))
+            .ok_or_else(|| errorstr!("cannot find name for theorem `{:?}`", th))
     }
 
     /// Compute refcount of each element of the proof (expression or theorem).

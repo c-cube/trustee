@@ -57,11 +57,11 @@ mod parser {
                         )));
                     }
 
-                    // consume one interpolation arg
+                    // consume one interpolation arg, to be matched verbatim.
                     let e = self.args[0].clone();
                     self.args = &self.args[1..];
 
-                    p.alloc_node(PatternView::Const(e))?
+                    p.alloc_node(PatternView::Expr(e))?
                 }
                 Tok::QUESTION_MARK_STR(s) => {
                     self.lexer.next();
@@ -73,9 +73,9 @@ mod parser {
                 }
                 Tok::SYM(s) => {
                     self.lexer.next();
-                    if let Some(e) = ctx.find_const(s) {
+                    if let Some(c) = ctx.find_const(s) {
                         // use constant as-is
-                        p.alloc_node(PatternView::Const(e.0.clone()))?
+                        p.alloc_node(PatternView::Const(c.clone()))?
                     } else {
                         return Err(Error::new_string(format!(
                             "unknown constant `{}` at {:?}",

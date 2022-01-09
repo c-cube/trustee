@@ -108,7 +108,7 @@ impl Error {
 
     /// Access the error message.
     pub fn msg(&self) -> &str {
-        match self.msg {
+        match &self.msg {
             ErrorMsg::EStatic(s) => s,
             ErrorMsg::EDyn(s) => &*s,
             ErrorMsg::EMeta { loc: _, msg } => &*msg,

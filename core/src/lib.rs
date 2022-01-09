@@ -34,7 +34,7 @@ pub use crate::meta::{load_prelude_hol, run_code};
 pub use algo::pattern::{self, Pattern, PatternView};
 pub use error::{Error, Result};
 pub use kernel::ExprView::*;
-pub use kernel::{Ctx, Expr, ExprView, Symbol, Thm, Var};
+pub use kernel::{Const, ConstArgs, Ctx, Expr, ExprView, Symbol, Thm, Var, Vars};
 pub use syntax::{parse_expr, parse_expr_with_args, parse_pattern, parse_pattern_with_args};
 
 pub(crate) mod macros {

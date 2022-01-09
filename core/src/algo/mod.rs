@@ -83,7 +83,7 @@ pub fn thm_new_poly_definition(ctx: &mut Ctx, c: &str, rhs: Expr) -> Result<NewP
 /// Prove symmetry of equality.
 ///
 /// Goes from `A |- t=u` to `A |- u=t`.
-pub fn thm_sym(em: &mut Ctx, th: Thm) -> Result<Thm> {
+pub fn thm_sym(ctx: &mut Ctx, th: Thm) -> Result<Thm> {
     // start with `F |- t=u`.
     // now by left-congruence with `refl(=)`, `F |- ((=) t) = ((=) u)`.
     // by right-congruence with `refl(t)`, `F |- (((=) t) t) = (((=) u) t)`.
@@ -93,15 +93,15 @@ pub fn thm_sym(em: &mut Ctx, th: Thm) -> Result<Thm> {
         .concl()
         .unfold_eq()
         .ok_or_else(|| Error::new("sym: expect an equation"))?;
-    let refl_t = em.thm_refl(t.clone());
+    let refl_t = ctx.thm_refl(t.clone());
     let th_tequ_eq_ueqt = {
-        let eq = em.mk_eq(t.ty());
-        let eq_u = em.mk_app(eq, u.ty().clone())?;
-        let th_r = em.thm_refl(eq_u);
-        let th_c_r = em.thm_congr(th_r, th)?;
-        em.thm_congr(th_c_r, refl_t.clone())?
+        let eq = ctx.mk_eq(t.ty().clone());
+        let eq_u = ctx.mk_app(eq, u.ty().clone())?;
+        let th_r = ctx.thm_refl(eq_u);
+        let th_c_r = ctx.thm_congr(th_r, th)?;
+        ctx.thm_congr(th_c_r, refl_t.clone())?
     };
-    em.thm_bool_eq(refl_t, th_tequ_eq_ueqt)
+    ctx.thm_bool_eq(refl_t, th_tequ_eq_ueqt)
 }
 
 /* TODO?

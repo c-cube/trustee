@@ -90,30 +90,6 @@ impl Thm {
 mod impls {
     use super::*;
 
-    impl fmt::Display for Thm {
-        fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-            if self.hyps().len() == 0 {
-                write!(out, "$|- {}$", self.concl())
-            } else {
-                let mut first = true;
-                for h in self.hyps() {
-                    if out.alternate() {
-                        writeln!(out, "    {}", h)?;
-                    } else {
-                        if first {
-                            first = false;
-                            write!(out, "$")?;
-                        } else {
-                            write!(out, ", ")?;
-                        }
-                        write!(out, "{}", h)?;
-                    }
-                }
-                write!(out, " |- {}$", self.concl())
-            }
-        }
-    }
-
     impl fmt::Debug for Thm {
         fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
             if self.hyps().len() == 0 {

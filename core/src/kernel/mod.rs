@@ -14,8 +14,8 @@ pub mod symbol;
 pub mod thm;
 
 pub use ctx::{Ctx, NewTypeDef};
-pub use expr::{Const, Expr, ExprView, Type, Var};
-pub(crate) use fixity_tbl::FixityTbl;
+pub use expr::{Const, ConstArgs, Expr, ExprView, Type, Var, Vars};
+pub use fixity_tbl::FixityTbl;
 pub use proof::{Proof, ProofView};
 pub use subst::Subst;
 pub use symbol::Symbol;

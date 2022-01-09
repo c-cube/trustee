@@ -85,6 +85,7 @@ pub struct ConstImpl {
     pub arity: u8,
     pub kind: ConstKind,
     pub(super) tag: ConstTag,
+    // FIXME: use
     pub(super) proof: Option<Proof>,
 }
 
@@ -175,7 +176,7 @@ fn compute_db_depth(e: &ExprView) -> DbIndex {
         EKind | EType => 0u32,
         EConst(c, args) => {
             let arity = c.0.arity;
-            if let ConstKind::ExprConst { ty } = c.0.kind {
+            if let ConstKind::ExprConst { ty } = &c.0.kind {
                 let d = ty.db_depth();
                 assert!(d <= arity as u32);
             }
@@ -301,6 +302,10 @@ mod free_vars_impl {
                         }
                     }
                     EBoundVar(v) => self.st.push(&v.ty),
+                    ELambda(ty, bod) => {
+                        self.st.push(ty);
+                        self.st.push(bod);
+                    }
                     EApp(a, b) | EArrow(a, b) => {
                         self.st.push(a);
                         self.st.push(b);
@@ -531,9 +536,9 @@ impl Expr {
                 if args.is_empty() {
                     write!(out, "{}", c.0.name.name())
                 } else {
-                    write!(out, "({}", c.0.name.name());
+                    write!(out, "({}", c.0.name.name())?;
                     for a in &args[..] {
-                        write!(out, " ");
+                        write!(out, " ")?;
                         a.pp_(k, out, full)?;
                     }
                     write!(out, ")")
@@ -586,7 +591,7 @@ impl Expr {
 
     /// Basic printer.
     pub fn to_string(&self) -> String {
-        format!("{}", self)
+        format!("{:?}", self)
     }
 }
 

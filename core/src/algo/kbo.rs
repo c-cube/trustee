@@ -146,7 +146,7 @@ mod kbo_cmp {
                 }
                 balance_weight(kbo, st, wb, bod, s, pos)
             }
-            EV::EType | EV::EKind => false, // ignore types
+            EV::EType | EV::EKind | EV::EArrow(..) => false, // ignore types
         }
     }
 
