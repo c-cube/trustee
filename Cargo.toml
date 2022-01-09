@@ -9,6 +9,8 @@ members = [
 
 default-members = [
   "core",
+  "lsp",
+  "cli"
 ]
 
 [profile.release]

@@ -229,10 +229,10 @@ pub fn inspect(
                 meta::Value::Thm(th) => {
                     let mut s = "[theorem]\n\n```\n".to_string();
                     for h in th.hyps() {
-                        write!(s, " {}\n", h).unwrap();
+                        writeln!(s, " {:?}", h).unwrap();
                     }
                     write!(s, "|------------------------------\n").unwrap();
-                    write!(s, " {}\n```\n", th.concl()).unwrap();
+                    write!(s, " {:?}\n```\n", th.concl()).unwrap();
 
                     // print proof, if available
                     if let Some(spr) = trustee::proof::print_proof::proof_to_string(&th) {
@@ -257,7 +257,7 @@ pub fn inspect(
     } else if let Some((tok, TokKind::QuotedExpr, start, end)) = tok {
         let info = match trustee::parse_expr(ctx, &tok) {
             Ok(e) if e.is_kind() => format!("> root of type hierarchy"),
-            Ok(e) => format!("type: `{}`", e.ty()),
+            Ok(e) => format!("type: `{:?}`", e.ty()),
             Err(e) => format!("ERR: could not parse: {}", e),
         };
         return Some((format!("[expr]\n`{}`\n\n{}", tok, info), start, end));
