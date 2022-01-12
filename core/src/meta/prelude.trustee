@@ -15,7 +15,7 @@
 ; #### true ####
 
 (defconst
-  "T" "DefTrue"
+  "T" "DefTrue" []
   $let f = (\x: bool. x) in f=f$)
 
 ; $|- T$
@@ -50,8 +50,8 @@
 
 ; #### forall ####
 
-(defconst "forall" "DefForall"
- $\(a:type) (f:a -> bool). f = (\x:a. T)$)
+(defconst "forall" "DefForall" ["a"]
+ $(f:a -> bool). f = (\x:a. T)$)
 (set_binder "forall" 12) ; lower than ==>
 
 (defn RForallSubst [th e]
@@ -74,7 +74,7 @@
 
 ; #### conjunction ####
 
-(defconst "/\" "DefAnd"
+(defconst "/\" "DefAnd" []
   $\a b: bool. forall (f:bool->bool->bool). (f a b = f T T)$)
 (set_infix "/\" 60 59)
 
@@ -250,7 +250,7 @@
 ; #### false ####
 
 ; define false
-(defconst "F" "DefFalse" $forall p:bool. p$)
+(defconst "F" "DefFalse" [] $forall p:bool. p$)
 
 (defn RFalseElim [th p]
   (doc "takes $|- F$ and a term $p$, and returns $|- p$")
@@ -261,7 +261,7 @@
 ; #### implication ####
 
 ; define implication
-(defconst "==>" "DefImply" $\a b:bool. (a /\ b) = a$)
+(defconst "==>" "DefImply" [] $\a b:bool. (a /\ b) = a$)
 (set_infix "==>" 20 19)
 
 ; instantiates $a ==> b = …$
@@ -353,7 +353,7 @@
 
 ; #### negation ####
 
-(defconst "~" "DefNot" $\p:bool. p ==> F$)
+(defconst "~" "DefNot" [] $\p:bool. p ==> F$)
 (set_prefix "~" 62)
 
 ; expand definition of ~
@@ -420,7 +420,7 @@
 
 ; #### disjunction ####
 
-(defconst "\/" "DefOr" $\a b: bool. forall t: bool. (a ==> t) ==> (b ==> t) ==> t$)
+(defconst "\/" "DefOr" [] $\a b: bool. forall t: bool. (a ==> t) ==> (b ==> t) ==> t$)
 (set_infix "\/" 22 21)
 
 ; def of $\/$

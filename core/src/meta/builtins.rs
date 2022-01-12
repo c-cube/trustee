@@ -1,8 +1,10 @@
 //! Builtins that come with the meta-language.
 
-use super::types::*;
-
-use crate::{algo, algo::conv, kernel as k, rstr::RStr, syntax, Error, Result};
+use {
+    super::types::*,
+    crate::{algo, algo::conv, errorstr, fnv, kernel as k, rstr::RStr, syntax, Error, Result},
+    smallvec::smallvec,
+};
 
 /// Name and help of all the builtin constructs.
 pub fn all_builtin_names_and_help() -> impl Iterator<Item = (&'static str, &'static str)> {
@@ -82,6 +84,21 @@ get_arg_as!(get_arg_str, "string", Value::Str(i), &*i, &str);
 get_arg_as!(get_arg_expr, "expr", Value::Expr(i), i, &k::Expr);
 get_arg_as!(get_arg_thm, "thm", Value::Thm(i), i, k::Thm);
 //get_as_of!(get_slot_sym, "sym", Value::Sym(i), i, k::Ref<str>);
+
+// iterate on a value that is assumed  to be a list
+fn get_list<F>(mut v: &Value, mut f: F) -> Result<()>
+where
+    F: FnMut(&Value) -> Result<()>,
+{
+    while let Value::Cons(pair) = &v {
+        f(&pair.0)?;
+        v = &pair.1;
+    }
+    if *v != Value::Nil {
+        return Err(Error::new("expected a list (nil or cons)"));
+    }
+    Ok(())
+}
 
 /* TODO: with a stack-based VM, have `callBuiltin(offset, n_args)` directly
  * index into that array, and remove `Value::Builtin`
@@ -183,6 +200,26 @@ pub(super) mod basic_primitives {
 pub(super) mod logic_builtins {
     use super::*;
 
+    /// Convert a list
+    fn convert_list_var_names(ctx: &k::Ctx, args: &Value, ty: &k::Expr) -> Result<k::Vars> {
+        let fvars_rhs: fnv::FnvHashSet<&k::Var> = ty.free_vars().collect();
+
+        let mut tyvars: k::Vars = smallvec![];
+        get_list(&args, |x| {
+            if let Value::Str(name) = x {
+                let var = fvars_rhs
+                    .iter()
+                    .find(|v| v.name.name() == &**name)
+                    .ok_or_else(|| errorstr!("cannot find variable named `{}`", &**name))?;
+                tyvars.push((**var).clone());
+                Ok(())
+            } else {
+                Err(Error::new("expected a string, in list of type parameters"))
+            }
+        })?;
+        Ok(tyvars)
+    }
+
     /// Builtin functions for manipulating expressions and theorems.
     pub(crate) const BUILTINS: &[&InstrBuiltin] = &[
         &defbuiltin!(
@@ -211,17 +248,22 @@ pub(super) mod logic_builtins {
         ),
         &defbuiltin!(
             "defconst",
-            "Defines a logic constant. Takes `(nc, nth, expr_rhs)` and returns\
-            the tuple `{c . th}` where `c` is the constant, with name `nc`,\n\
-            and `th` is the defining theorem with name `nth`",
+            "Defines a logic constant. Takes `(namec, nameth, tyvars, expr_rhs)` and returns\
+            the tuple `{c . th}` where `c` is the constant, with name `namec`,\n\
+            and `th` is the defining theorem with name `nameth`,\n\
+            and `tyvars` is a list of type variables.",
             |ctx, args: &[Value]| {
-                check_arity!("defconst", args, 3);
+                check_arity!("defconst", args, 4);
                 let nc: k::Symbol = get_arg_str!(args, 0).into();
                 let nthm = get_arg_str!(args, 1);
-                let rhs = get_arg_expr!(args, 2);
-                let def = algo::thm_new_poly_definition(ctx.ctx, &nc.name(), rhs.clone())?;
-                ctx.ctx.define_lemma(nthm.clone(), def.thm.clone());
-                Ok(Value::cons(Value::Const(def.c), Value::Thm(def.thm)))
+                let rhs = get_arg_expr!(args, 3);
+                let tyvars: k::Vars = convert_list_var_names(ctx.ctx, &args[2], rhs.ty())?;
+
+                let (defthm, c, _vars) =
+                    ctx.ctx
+                        .thm_new_const_definition(&nc.name(), &tyvars[..], rhs.clone())?;
+                ctx.ctx.define_lemma(nthm.clone(), defthm.clone());
+                Ok(Value::cons(Value::Const(c), Value::Thm(defthm)))
             }
         ),
         &defbuiltin!(
@@ -333,12 +375,16 @@ pub(super) mod logic_builtins {
         ),
         &defbuiltin!(
             "decl",
-            "Declare a symbol. Takes a symbol `n`, and a type.",
+            "Declare a symbol. Takes a symbol `n`, a list of variables, and a type.",
             |ctx, args| {
-                check_arity!("decl", args, 2);
+                check_arity!("decl", args, 3);
                 let name = get_arg_str!(args, 0);
-                let ty = get_arg_expr!(args, 1);
-                let c = ctx.ctx.mk_new_const(name, ty.clone(), None)?.0;
+                let ty = get_arg_expr!(args, 2);
+                let ty_vars: k::Vars = convert_list_var_names(ctx.ctx, &args[1], ty)?;
+                let c = ctx
+                    .ctx
+                    .mk_new_const(name, ty.clone(), &ty_vars[..], None)?
+                    .0;
                 Ok(Value::Const(c))
             }
         ),

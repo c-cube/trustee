@@ -20,6 +20,7 @@ use Instr as I;
 pub struct Parser<'a, 'b, 'c> {
     pub(crate) lexer: &'c mut lexer::Lexer<'b>,
     ctx: &'a mut k::Ctx,
+    local_vars: Vec<k::Var>,
     /// Pool of compiler states that can be re-used
     comps: Box<[Option<Box<compiler::CompilerState>>]>,
     /// Where to trace, if anywhere.
@@ -131,6 +132,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
             ctx,
             lexer,
             comps: comps.into_boxed_slice(),
+            vars: vec![],
             trace_points: vec![],
         }
     }
@@ -1145,7 +1147,7 @@ impl<'a, 'b, 'c> Parser<'a, 'b, 'c> {
                     // TODO: interpolation
                     return Err(perror!(loc, "unimplemented: interpolating exprs"));
                 }
-                let e = syntax::parse_expr(self.ctx, e)
+                let e = syntax::parse_expr(self.ctx, e, &self.local_vars[..])
                     .map_err(|e| perror!(loc, "while parsing expression: {}", e))?;
                 let lidx = c.allocate_local(Value::Expr(e))?;
                 self.next_tok_();

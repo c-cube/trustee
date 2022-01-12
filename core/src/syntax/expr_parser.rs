@@ -18,14 +18,21 @@ use {
 };
 
 /// Parse the string into an expression.
-pub fn parse_expr(ctx: &mut Ctx, s: &str) -> Result<k::Expr> {
+pub fn parse_expr(ctx: &mut Ctx, s: &str, locals: &[k::Var]) -> Result<k::Expr> {
     let mut p = Parser::new(ctx, s);
+    p.push_local_vars(locals);
     p.parse_expr()
 }
 
 /// Parse the string into an expression with a set of parameters.
-pub fn parse_expr_with_args(ctx: &mut Ctx, s: &str, qargs: &[k::Expr]) -> Result<k::Expr> {
+pub fn parse_expr_with_args(
+    ctx: &mut Ctx,
+    s: &str,
+    locals: &[k::Var],
+    qargs: &[k::Expr],
+) -> Result<k::Expr> {
     let mut p = Parser::new_with_args(ctx, s, qargs);
+    p.push_local_vars(locals);
     p.parse_expr()
 }
 
@@ -92,6 +99,18 @@ impl<'a> Parser<'a> {
     /// The string must not contain interpolation holes `"?"`.
     pub fn new(ctx: &'a mut Ctx, src: &'a str) -> Self {
         Self::new_with_args(ctx, src, &[])
+    }
+
+    /// Add a local variable from the outside.
+    pub fn push_local_var(&mut self, x: k::Var) {
+        self.local.push(x);
+    }
+
+    /// Push multiple local
+    pub fn push_local_vars(&mut self, args: &[k::Var]) {
+        for x in args.iter().cloned() {
+            self.local.push(x);
+        }
     }
 
     /// Return current `(line,column)` pair.
@@ -174,7 +193,7 @@ impl<'a> Parser<'a> {
         };
 
         let ty = match (&ty_parsed, ty_expected) {
-            (Some(ty), _) => &ty,
+            (Some(ty), _) => ty,
             (None, Some(ty)) => ty,
             (None, None) => {
                 return Err(perror!(self, "cannot infer type for bound variable(s)",));
@@ -599,8 +618,9 @@ mod test {
         let mut ctx = k::Ctx::new();
         {
             // declare a binder
-            let ty = parse_expr(&mut ctx, "pi a. (a -> bool) -> a")?;
-            ctx.mk_new_const(k::Symbol::from_str("myb"), ty, None)?;
+            let ty = parse_expr(&mut ctx, "with (a:type). (a -> bool) -> a")?;
+            let va = k::Var::new("a".into(), ctx.mk_ty());
+            ctx.mk_new_const(k::Symbol::from_str("myb"), ty, &[va], None)?;
             ctx.set_fixity("myb", Fixity::Binder((20, 21)))?;
         }
         Ok(ctx)
@@ -699,7 +719,7 @@ mod test {
         for (x, y) in &pairs {
             let mut ctx = Ctx::new();
             crate::meta::load_prelude_hol(&mut ctx)?;
-            let r = parse_expr(&mut ctx, x)
+            let r = parse_expr(&mut ctx, x, &[])
                 .map_err(|e| e.with_source(Error::new_string(format!("parsing {:?}", x))))?;
             let r2 = format!("{:?}", r);
             assert_eq!(&r2, *y);
@@ -711,7 +731,7 @@ mod test {
     fn test_fvars() -> Result<()> {
         let mut ctx = Ctx::new();
         let s = "with b:type. with t u:(a : type). with f g:(a : type) -> b. (f t) = (g u)";
-        let e = parse_expr(&mut ctx, s)?;
+        let e = parse_expr(&mut ctx, s, &[])?;
         let mut fvars: Vec<_> = e.free_vars().map(|v| v.name.name()).collect();
         fvars.sort();
 

@@ -367,9 +367,9 @@ impl<'a> Printer<'a> {
                             let eid = self.get_term_id(e)?;
                             writeln!(self.out, "BETA {} {}", id, eid)?;
                         }
-                        ProofView::NewDef(e) => {
-                            let eid = self.get_term_id(e)?;
-                            writeln!(self.out, "DEF {} {}", id, eid)?;
+                        ProofView::NewDef(name, rhs) => {
+                            let eid = self.get_term_id(rhs)?;
+                            writeln!(self.out, "DEF {} {} {}", id, name, eid)?;
                         }
                         ProofView::NewTyDef(e, th) => {
                             let ide = self.get_term_id(e)?;

@@ -52,6 +52,12 @@ mod impls {
         }
     }
 
+    impl From<RStr> for Symbol {
+        fn from(s: RStr) -> Self {
+            Symbol(s)
+        }
+    }
+
     impl<'a> BuiltinSymbol<'a> {
         /// Default symbols.
         pub fn default() -> Self {

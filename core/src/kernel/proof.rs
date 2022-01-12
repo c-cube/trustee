@@ -31,7 +31,7 @@ pub enum ProofView {
     BoolEq(Thm, Thm),
     BoolEqIntro(Thm, Thm),
     BetaConv(Expr),
-    NewDef(Expr),
+    NewDef(RStr, Expr),
     NewTyDef(Expr, Thm),
     /// Get existing theorem by its name
     GetThm(RStr),
@@ -104,8 +104,8 @@ mod impls {
                     f(b)
                 }
                 PV::BetaConv(e) => fe(e),
-                PV::NewDef(e) => {
-                    fe(e);
+                PV::NewDef(_, rhs) => {
+                    fe(rhs);
                 }
                 PV::NewTyDef(ty, th) => {
                     fe(ty);

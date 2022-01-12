@@ -34,57 +34,6 @@ pub struct NewPolyDef {
     pub c_applied: Expr,
 }
 
-/// Make a definition from a polymorphic term.
-///
-/// `ExprManager::thm_new_basic_definition` requires the term to be closed,
-/// so we must gather type variables and close over them.
-///
-/// Returns a tuple `(thm_def, c, vars)` where `thm_def` is the theorem
-/// defining the new constant `c`, and `vars` is the set of type variables
-/// closed over.
-pub fn thm_new_poly_definition(ctx: &mut Ctx, c: &str, rhs: Expr) -> Result<NewPolyDef> {
-    /*
-    let mut vars_ty_rhs: Vec<Var> = rhs.ty().free_vars().cloned().collect();
-    //eprintln!("vars_of_ty({:?}) = {:?}", &rhs, &vars_ty_rhs);
-    vars_ty_rhs.sort_unstable();
-    vars_ty_rhs.dedup();
-    */
-
-    if rhs.ty().free_vars().any(|v| !v.ty.is_type()) {
-        return Err(errorstr!(
-            "thm_new_poly_definition: cannot make a polymorphic \
-        definition for {}\nusing rhs = {:?}\nrhs contains non-type free variables",
-            c,
-            rhs
-        ));
-    }
-
-    let eqn = {
-        let v = ctx.mk_var_str(c, rhs.ty().clone());
-        ctx.mk_eq_app(v, rhs)?
-    };
-    let (thm, c, ty_vars) = ctx.thm_new_basic_definition(eqn)?;
-
-    let c_applied = {
-        let ty_vars_as_exprs: ConstArgs = ty_vars.iter().map(|v| ctx.mk_var(v.clone())).collect();
-        ctx.mk_const(c.clone(), ty_vars_as_exprs)?
-    };
-
-    Ok(NewPolyDef {
-        thm,
-        c,
-        ty_vars,
-        c_applied,
-    })
-}
-
-/* TODO?
-/// Prove modus ponens, assuming `==>` and `def_imply` are in the context.
-pub fn thm_mp(ctx: &mut Ctx, th1: Thm, th2: Thm) -> Result<Thm> {
-    todo!()
-}
-*/
-
 /// Prove symmetry of equality as an equation.
 ///
 /// Goes from `t=u` to `|- (t=u) = (u=t)`.

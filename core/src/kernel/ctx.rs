@@ -746,15 +746,16 @@ impl Ctx {
 
     /// Declare a new constant with given name and type.
     ///
-    /// Fails if the type is not ground.
+    /// Fails if the type is not closed.
     /// This constant has no axiom associated to it, it is entirely opaque.
     ///
     /// Also returns the list of free variables abstracted upon,
-    /// in the right order.
+    /// in the same order as passed as argument.
     pub fn mk_new_const(
         &mut self,
         s: impl Into<Symbol>,
         ty: Type,
+        vars: &[Var],
         pr: Option<Proof>,
     ) -> Result<(Const, Vars)> {
         let arity = ty.db_depth();
@@ -763,9 +764,32 @@ impl Ctx {
         }
         let arity = arity as u8;
 
-        let mut fvars: Vars = ty.free_vars().cloned().collect();
-        fvars.sort_unstable();
-        fvars.dedup();
+        if !ty.is_closed() {
+            return Err(Error::new("mk_new_const: type is not closed"));
+        }
+
+        // all free variables must be in `vars`
+        let fvars_raw: Vars = ty.free_vars().cloned().collect();
+        for v in &fvars_raw {
+            if let Some(v) = vars.iter().find(|v| !fvars_raw.iter().any(|v2| v2 == *v)) {
+                return Err(errorstr!(
+                    "mk_new_const: variable `{}` occurs in type but not in parameters",
+                    v.name.name()
+                ));
+            }
+        }
+
+        for v in &vars[..] {
+            if !fvars_raw.iter().any(|v2| v == v2) {
+                return Err(errorstr!(
+                    "mk_new_const: variable `{}` does not occur in type",
+                    v.name.name()
+                ));
+            }
+        }
+
+        // map `vars` to actual variables
+        let fvars: Vars = vars.iter().cloned().collect();
 
         let ty = self.abs_on_(&fvars[..], ty)?;
 
@@ -1243,32 +1267,32 @@ impl Ctx {
         Ok(Thm::make_(eq, self.0.uid, smallvec![], pr))
     }
 
-    /// `new_basic_definition (x=t)` where `x` is a variable and `t` a term
-    /// with a closed type,
-    /// returns a theorem `|- x=t` where `x` is now a constant, along with
-    /// the constant `x`, and the set of free variables of the type of `t`
-    /// that the constant is parametrized with.
-    pub fn thm_new_basic_definition(&mut self, e: Expr) -> Result<(Thm, Const, Vars)> {
-        self.check_uid_(&e);
-        let (x, rhs) = e
-            .unfold_eq()
-            .and_then(|(x, rhs)| x.as_var().map(|x| (x, rhs)))
-            .ok_or_else(|| {
-                Error::new("new definition: expr should be an equation `x = rhs` with rhs closed")
-            })?;
-        assert_eq!(x.ty(), rhs.ty());
+    /// `new_const_definition name [x1…xn] rhs` where `rhs` is a closed term,
+    /// and `x1…xn` are the free varaibles of the type of `rhs`,
+    /// returns a theorem `|- c=t` where `c` is a constant named `name`,
+    /// along with the constant `c`, and the set of free variables of the type of `t` that the
+    /// constant is parametrized with.
+    pub fn thm_new_const_definition(
+        &mut self,
+        name: &str,
+        ty_vars: &[Var],
+        rhs: Expr,
+    ) -> Result<(Thm, Const, Vars)> {
+        self.check_uid_(&rhs);
         // checks that the type of `x` is closed
         if !rhs.is_closed() {
-            return Err(Error::new("RHS of equation should be closed"));
+            return Err(Error::new("thm_new_const_definition: should be closed"));
         }
 
+        let name: RStr = name.into();
+
         let pr = if self.0.proof_gen {
-            Some(Proof::new(ProofView::NewDef(e.clone())))
+            Some(Proof::new(ProofView::NewDef(name.clone(), rhs.clone())))
         } else {
             None
         };
 
-        let (c, ty_vars) = self.mk_new_const(x.name.clone(), x.ty.clone(), pr.clone())?;
+        let (c, ty_vars) = self.mk_new_const(name, rhs.ty().clone(), ty_vars, pr.clone())?;
         let ty_vars_as_exprs: ConstArgs = ty_vars.iter().map(|v| self.mk_var(v.clone())).collect();
         let lhs = self.mk_const(c.clone(), ty_vars_as_exprs)?;
         let eqn = self.mk_eq_app(lhs, rhs.clone())?;
@@ -1372,14 +1396,12 @@ impl Ctx {
 
         let c_abs = {
             let ty = self.mk_arrow(ty.clone(), tau_vars.clone())?;
-            let ty = self.abs_on_(&ty_vars[..], ty)?;
-            self.mk_new_const(abs, ty, pr.clone())?.0
+            self.mk_new_const(abs, ty, &ty_vars[..], pr.clone())?.0
         };
         assert_eq!(ty_vars.len(), c_abs.arity as usize);
         let c_repr = {
             let ty = self.mk_arrow(tau_vars.clone(), ty.clone())?;
-            let ty = self.abs_on_(&ty_vars[..], ty)?;
-            self.mk_new_const(repr, ty, pr.clone())?.0
+            self.mk_new_const(repr, ty, &ty_vars[..], pr.clone())?.0
         };
         assert_eq!(ty_vars.len(), c_repr.arity as usize);
 
