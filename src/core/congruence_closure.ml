@@ -299,13 +299,14 @@ let prove_cc_bool (ctx:K.ctx) (hyps:K.thm list) (concl: E.t) : _ option =
       Log.debugf 5 (fun k->k"prove_cc_bool: cannot pick a predicate hypothesis");
       None
 
-
 let prove_cc_false
     (ctx:K.ctx) ~prove_false ~not_e
     (hyps:K.thm list) : _ option =
-  let as_not e = match E.unfold_app e with
-    | f, [u] when E.equal not_e f -> Some u
-    | _ -> None
+  let rec unfold_sign e = match E.unfold_app e with
+    | f, [u] when E.equal not_e f ->
+      let v, sign = unfold_sign u in
+      v, not sign
+    | _ -> e, true
   in
 
   let pos, neg =
@@ -313,14 +314,14 @@ let prove_cc_false
     |> CCList.partition_filter_map
       (fun th ->
          let concl = K.Thm.concl th in
-         match as_not concl with
-         | None -> `Left (concl, th)
-         | Some e' -> `Right (concl, e', th))
+         match unfold_sign concl with
+         | e, true -> `Left (concl, e, th)
+         | e, false -> `Right (concl, e, th))
   in
 
   (* add all positive and negative terms to a CC *)
   let self = create ctx in
-  let pos = pos |> List.map (fun (e,th) -> add_thm' self th; add_ self e, th) in
+  let pos = pos |> List.map (fun (c,e,th) -> add_thm' self th; c, add_ self e, th) in
   let neg = neg |> List.map (fun (c,e,th) -> add_thm' self th; c, add_ self e, th) in
 
   update self;

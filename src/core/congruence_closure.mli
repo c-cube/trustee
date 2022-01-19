@@ -22,7 +22,12 @@ val prove_cc_bool : K.ctx -> K.thm list -> K.expr -> K.thm option
 val prove_cc_false :
   K.ctx ->
   prove_false:(K.ctx -> K.thm -> K.thm -> K.thm) ->
+  true_e:K.expr ->
+  false_e:K.expr ->
+  ax_t_eq_t_eq_true:K.thm ->
+  ax_not_t_eq_t_eq_false:K.thm ->
   not_e:K.expr ->
+  ax_true_neq_false:K.thm ->
   K.thm list -> K.thm option
 (** [prove_cc_false ctx ~prove_false ~not_e hyps]
     tries to prove [false] from the theorems in [hyps].
