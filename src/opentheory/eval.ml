@@ -3,6 +3,7 @@
 
 module K = Trustee_core.Kernel
 module Log = Trustee_core.Log
+type 'a or_error = 'a Trustee_core.Error.or_error
 
 let now() = Unix.gettimeofday()
 let since_s t = now() -. t
@@ -53,11 +54,12 @@ type state = {
 let create ?(cb=new default_callbacks) ?(progress_bar=false) ~ctx ~idx () : state =
   {ctx; idx; progress_bar; theories=Str_tbl.create 32; cb}
 
-exception Exit of Trustee_error.t
+exception Exit of Trustee_core.Error.t
 
 let find_th_by_name_ self n =
   try Str_tbl.find self.idx.Idx.thy_by_name n
-  with Not_found -> errorf (fun k->k"cannot find theory `%s`" n)
+  with Not_found ->
+    Trustee_core.Error.failf (fun k->k"cannot find theory `%s`" n)
 
 (* TODO: build interpretations *)
 
@@ -114,7 +116,7 @@ and eval_rec_real_ (self:state) uv_name (th:Thy_file.t) : K.Theory.t =
       Log.debugf 4 (fun k->k"(@[@{<green>eval.success@}@ %a@])" K.Theory.pp theory);
       theory
     | Error e ->
-      Log.debugf 1 (fun k->k"(@[@{<red>eval.failure@}@ %a@])" Trustee_error.pp e);
+      Log.debugf 1 (fun k->k"(@[@{<red>eval.failure@}@ %a@])" Trustee_core.Error.pp e);
       raise (Exit e)
   end
 
@@ -122,7 +124,7 @@ and eval_rec_real_ (self:state) uv_name (th:Thy_file.t) : K.Theory.t =
 and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
   (* process imports *)
   let imports = List.map (process_import_ ~requires self th) sub.Thy_file.imports in
-  assert (CCOpt.is_none sub.Thy_file.package || CCOpt.is_none sub.Thy_file.article);
+  assert (Option.is_none sub.Thy_file.package || Option.is_none sub.Thy_file.article);
 
   (* name to give the resulting theory *)
   let th_name =
@@ -133,7 +135,7 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
 
   begin match sub.Thy_file.package, sub.Thy_file.article with
     | Some _, Some _ ->
-      errorf
+      Trustee_core.Error.failf
         (fun k->k"block '%s' of theory '%s' has both article/package fields"
             sub.Thy_file.sub_name th.Thy_file.name)
     | None, None ->
@@ -156,7 +158,7 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
       let file =
         try Str_tbl.find self.idx.Idx.articles art_name
         with Not_found ->
-          errorf(fun k->k"cannot find article `%s`" art_name)
+          Trustee_core.Error.failf (fun k->k"cannot find article `%s`" art_name)
       in
 
       let t1 = now () in
@@ -183,7 +185,7 @@ and process_import_ (self:state) ~requires th (name:string) : K.Theory.t =
   let name = unquote_str name in
   let sub =
     try List.find (fun sub -> sub.Thy_file.sub_name=name) th.Thy_file.subs
-    with Not_found -> errorf(fun k->k"cannot find sub-theory `%s`" name)
+    with Not_found -> Trustee_core.Error.failf (fun k->k"cannot find sub-theory `%s`" name)
   in
   check_sub_ self ~requires th sub
 

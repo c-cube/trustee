@@ -13,7 +13,7 @@ type t = {
   interps: (path * Interp_file.t) list;
   interp_by_name: Interp_file.t Str_tbl.t;
   articles: path Str_tbl.t; (* basename -> path *)
-  errors: (path * Trustee_error.t) list;
+  errors: (path * Trustee_core.Error.t) list;
 }
 
 val list_dir : path -> t

@@ -2,6 +2,7 @@
 (** {1 Evaluate theories} *)
 
 module K = Trustee_core.Kernel
+type 'a or_error = 'a Trustee_core.Error.or_error
 
 (** {2 Callbacks for the checking process} *)
 

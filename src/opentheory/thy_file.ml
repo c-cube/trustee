@@ -1,4 +1,5 @@
 
+open Trustee_core
 let spf = Printf.sprintf
 
 type sub = {
@@ -135,7 +136,7 @@ let parse ~dir : t P.t =
                 (function
                   | I_kv ("interpret", s) ->
                     begin match Interp_file.item_of_string s with
-                      | Error e -> raise (Trustee_error.E e)
+                      | Error err -> Trustee_core.Error.raise err
                       | Ok it -> [it]
                     end
                   | I_kv ("interpretation", path) ->
@@ -143,13 +144,13 @@ let parse ~dir : t P.t =
                     let path = Filename.concat dir path in
                     let content =
                       try CCIO.File.read_exn path
-                      with _ -> errorf (fun k->k"cannot read interp. file '%s'" path)
+                      with _ -> Trustee_core.Error.failf (fun k->k"cannot read interp. file '%s'" path)
                     in
                     begin match Interp_file.of_string content with
                       | Ok l -> l
-                      | Error e ->
-                        errorf ~src:(Trustee_error.E e)
-                          (fun k->k"trying to read interp. file '%s'" path)
+                      | Error err ->
+                        Trustee_core.Error.(raise @@ wrapf
+                          "trying to read interp. file '%s'" path err)
                     end
                   | _ -> [])
                 l
@@ -168,5 +169,5 @@ let parse ~dir : t P.t =
 let of_string ~dir s =
   match P.parse_string (parse ~dir) s with
   | Ok x -> Ok x
-  | Error e -> Error (Trustee_error.mk e)
+  | Error e -> Error (Trustee_core.Error.make e)
 

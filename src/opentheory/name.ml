@@ -1,4 +1,5 @@
 
+open Trustee_core
 
 type t = {
   path: string list;
@@ -27,7 +28,7 @@ let of_string s : t =
   let s = unescape s in
   match CCString.split_on_char '.' s with
   | [name] -> {path=[]; name}
-  | [] -> errorf (fun k->k"invalid name: '%s'" s)
+  | [] -> Error.failf (fun k->k"invalid name: '%s'" s)
   | l ->
     let name = List.hd @@ CCList.last 1 l in
     let path = CCList.take (List.length l-1) l in
