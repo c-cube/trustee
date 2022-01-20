@@ -7,8 +7,6 @@ module H = CCHash
 let ctx_id_bits = 5
 let ctx_id_mask = (1 lsl ctx_id_bits) - 1
 
-type location = Loc.t
-
 module Name : sig
   type t = private string
   val make : string -> t
@@ -66,7 +64,6 @@ and const = {
   c_args: const_args;
   c_ty: ty; (* free vars = c_ty_vars *)
   c_def_id: const_def_id;
-  c_def_loc: location option;
 }
 and ty_const = const
 
@@ -230,7 +227,7 @@ type const_kind = C_ty | C_term
 module Str_k_map = CCMap.Make(struct
     type t = const_kind * string
     let compare (k1,c1)(k2,c2) =
-      if k1=k2 then String.compare c1 c2 else CCOrd.compare k1 k2
+      if k1=k2 then String.compare c1 c2 else Stdlib.compare k1 k2
   end)
 
 type thm = {
@@ -280,7 +277,6 @@ module Const = struct
   type t = const
   let[@inline] pp out c = Name.pp out c.c_name
   let[@inline] to_string c = Fmt.to_string pp c
-  let[@inline] def_loc c = c.c_def_loc
   let[@inline] name c = c.c_name
   let[@inline] equal c1 c2 = Name.equal c1.c_name c2.c_name
 
@@ -351,89 +347,6 @@ module BVar = struct
   let to_string = Fmt.to_string pp
 end
 
-module type EXPR = sig
-  type t = expr
-
-  type view = expr_view =
-    | E_kind
-    | E_type
-    | E_var of var
-    | E_bound_var of bvar
-    | E_const of const * t list
-    | E_app of t * t
-    | E_lam of string * expr * expr
-    | E_arrow of expr * expr
-
-  include Sigs.EQ with type t := t
-  include Sigs.HASH with type t := t
-  include Sigs.COMPARE with type t := t
-  include Sigs.PP with type t := t
-
-  val pp_depth : max_depth:int -> t Fmt.printer
-  (** Print the term and insert ellipsis in subterms above given depth.
-      Useful to print very deep terms *)
-
-  val view : t -> view
-  val ty : t -> ty option
-  val ty_exn : t -> ty
-  val is_closed : t -> bool
-  val is_eq_to_type : t -> bool
-  val is_eq_to_bool : t -> bool
-  val is_a_bool : t -> bool
-  val is_a_type : t -> bool
-  (** Is the type of [e] equal to [Type]? *)
-
-  val iter : f:(bool -> t -> unit) -> t -> unit
-  val exists : f:(bool -> t -> bool) -> t -> bool
-  val for_all : f:(bool -> t -> bool) -> t -> bool
-
-  val contains : t -> sub:t -> bool
-  val free_vars : ?init:Var.Set.t -> t -> Var.Set.t
-  val free_vars_iter : t -> var Iter.t
-
-  val unfold_app : t -> t * t list
-  val unfold_eq : t -> (t * t) option
-  val unfold_arrow : t -> t list * t
-  val return_ty : t -> t
-  val as_const : t -> (Const.t * ty list) option
-  val as_const_exn : t -> Const.t * ty list
-
-  module Set : CCSet.S with type elt = t
-  module Map : CCMap.S with type key = t
-  module Tbl : CCHashtbl.S with type key = t
-
-  val iter_dag : f:(t -> unit) -> t -> unit
-
-  type 'a with_ctx
-
-  val subst : (recursive:bool -> t -> subst -> t) with_ctx
-
-  val type_ : (t) with_ctx
-  val bool : (t) with_ctx
-  val eq : (ty -> t) with_ctx
-  val select : (ty -> t) with_ctx
-  val var : (var -> t) with_ctx
-  val const : (const -> ty list -> t) with_ctx
-  val new_const : (?def_loc:location -> string -> ty_var list -> ty -> const) with_ctx
-  val new_ty_const : (?def_loc:location -> string -> int -> const) with_ctx
-  val var_name : (string -> ty -> t) with_ctx
-  val bvar : (int -> ty -> t) with_ctx
-  val app : (t -> t -> t) with_ctx
-  val app_l : (t -> t list -> t) with_ctx
-  val app_eq : (t -> t -> t) with_ctx
-  val lambda : (var -> t -> t) with_ctx
-  val lambda_l : (var list -> t -> t) with_ctx
-  val lambda_db : (name:string -> ty_v:ty -> t -> t) with_ctx
-  val arrow : (t -> t -> t) with_ctx
-  val arrow_l : (t list -> t -> t) with_ctx
-
-  val map : (f:(bool -> t -> t) -> t -> t) with_ctx
-
-  val db_shift: (t -> int -> t) with_ctx
-  val open_lambda : (t -> (var * t) option) with_ctx
-  val open_lambda_exn : (t -> var * t) with_ctx
-end
-
 module Expr = struct
   type t = expr
 
@@ -464,11 +377,13 @@ module Expr = struct
   let db_depth = expr_db_depth
   let has_fvars = expr_has_fvars
 
+  type 'a with_ctx = ctx -> 'a
+
   let[@inline] iter ~f (e:t) : unit =
     match view e with
     | E_kind | E_type | E_const _ -> ()
     | _ ->
-      CCOpt.iter (f false) (ty e);
+      Option.iter (f false) (ty e);
       match view e with
       | E_kind | E_type | E_const _ -> assert false
       | E_var v -> f false v.v_ty
@@ -624,7 +539,7 @@ module Expr = struct
 
   let id_gen_ = ref 0 (* note: updated atomically *)
 
-  let new_const_ ctx ?def_loc ?in_theory
+  let new_const_ ctx ?in_theory
       name args ty : const =
     let c_def_id = match in_theory with
       | Some th -> C_in_theory th.theory_name
@@ -632,17 +547,16 @@ module Expr = struct
     in
     let c = {
       c_name=name; c_def_id; c_ty=ty; c_args=args;
-      c_def_loc=def_loc;
     } in
     Const.make_ ctx c
 
-  let new_const ctx ?def_loc name ty_vars ty : const =
+  let new_const ctx name ty_vars ty : const =
     let fvars = free_vars ty in
     let diff = Var.Set.diff fvars (Var.Set.of_list ty_vars) in
     begin match Var.Set.choose_opt diff with
       | None -> ()
       | Some v ->
-        errorf
+        Error.failf
           (fun k->k
               "Kernel.new_const: type variable %a@ \
                occurs in type of the constant `%s`,@ \
@@ -650,11 +564,11 @@ module Expr = struct
               Var.pp v name (Fmt.Dump.list Var.pp) ty_vars);
     end;
     let name = Name.make name in
-    new_const_ ctx ?def_loc name (C_ty_vars ty_vars) ty
+    new_const_ ctx name (C_ty_vars ty_vars) ty
 
-  let new_ty_const ctx ?def_loc name n : ty_const =
+  let new_ty_const ctx name n : ty_const =
     let name = Name.make name in
-    new_const_ ctx name ?def_loc (C_arity n) (type_ ctx)
+    new_const_ ctx name (C_arity n) (type_ ctx)
 
   let mk_const_ ctx c args ty : t =
     make_ ctx (E_const (c,args)) ty
@@ -686,7 +600,7 @@ module Expr = struct
 
   let db_shift ctx (e:t) (n:int) =
     ctx_check_e_uid ctx e;
-    assert (CCOpt.for_all is_closed (Lazy.force e.e_ty));
+    assert (Option.for_all is_closed (Lazy.force e.e_ty));
     let rec loop e k : t =
       if is_closed e then e
       else if is_a_type e then e
@@ -792,7 +706,7 @@ module Expr = struct
       match c.c_args with
       | C_arity n ->
         if List.length args <> n then (
-          errorf
+          Error.failf
             (fun k->k"constant %a requires %d arguments, but is applied to %d"
                 Name.pp c.c_name
                 n (List.length args));
@@ -800,7 +714,7 @@ module Expr = struct
         Lazy.from_val (Some c.c_ty)
       | C_ty_vars ty_vars ->
         if List.length args <> List.length ty_vars then (
-          errorf
+          Error.failf
             (fun k->k"constant %a requires %d arguments, but is applied to %d"
                 Name.pp c.c_name
                 (List.length ty_vars) (List.length args));
@@ -824,7 +738,8 @@ module Expr = struct
     ctx_check_e_uid ctx v.v_ty;
     ctx_check_e_uid ctx e;
     if not (is_closed v.v_ty) then (
-      errorf (fun k->k"cannot abstract on variable with non closed type %a" pp v.v_ty)
+      Error.failf
+        (fun k->k"cannot abstract on variable with non closed type %a" pp v.v_ty)
     );
     let db0 = bvar ctx 0 v.v_ty in
     let body = db_shift ctx e 1 in
@@ -880,11 +795,12 @@ module Expr = struct
 
   let open_lambda_exn ctx e = match open_lambda ctx e with
     | Some tup -> tup
-    | None -> errorf (fun k->k"open-lambda: term is not a lambda:@ %a" pp e)
+    | None ->
+      Error.failf (fun k->k"open-lambda: term is not a lambda:@ %a" pp e)
 
   let arrow ctx a b : t =
     if not (is_a_type a) || not (is_a_type b) then (
-      errorf (fun k->k"arrow: both arguments must be types");
+      Error.failf (fun k->k"arrow: both arguments must be types");
     );
     let ty = Lazy.from_val (Some (type_ ctx)) in
     make_ ctx (E_arrow (a,b)) ty
@@ -897,7 +813,7 @@ module Expr = struct
     let ty_a = ty_exn a in
 
     let[@inline never] fail () =
-      errorf
+      Error.failf
         (fun k->
           k"@[<2>kernel: cannot apply function@ `@[%a@]`@ \
            to argument `@[%a@]`@]@];@ \
@@ -934,8 +850,9 @@ module Expr = struct
     ctx_check_e_uid ctx ty_v;
     ctx_check_e_uid ctx bod;
     if not (is_a_type ty_v) then (
-      errorf (fun k->k"lambda: variable must have a type as type, not %a"
-                 pp ty_v);
+      Error.failf
+        (fun k->k"lambda: variable must have a type as type, not %a"
+            pp ty_v);
     );
     let ty = lazy (
       (* type of [λx:a. t] is [a -> typeof(t)] if [a] is a type *)
@@ -975,7 +892,7 @@ module Expr = struct
 
   let[@inline] as_const_exn e = match e.e_view with
     | E_const (c,args) -> c, args
-    | _ -> errorf (fun k->k"%a is not a constant" pp e)
+    | _ -> Error.failf (fun k->k"%a is not a constant" pp e)
 
   module AsKey = struct
     type nonrec t = t
@@ -1000,48 +917,21 @@ module Expr = struct
     loop e
 end
 
-module type EXPR_FOR_CTX = EXPR
-  with type 'a with_ctx := 'a
-   and module Tbl = Expr.Tbl
-     and module Set = Expr.Set
-     and module Map = Expr.Map
-
-let make_expr (ctx: ctx) : (module EXPR_FOR_CTX) =
-  let module M = struct
-    include Expr
-    let subst = subst ctx
-    let type_ = type_ ctx
-    let bool = bool ctx
-    let eq = eq ctx
-    let select = select ctx
-    let var = var ctx
-    let const = const ctx
-    let new_const = new_const ctx
-    let new_ty_const = new_ty_const ctx
-    let bvar = bvar ctx
-    let var_name = var_name ctx
-    let app = app ctx
-    let app_l = app_l ctx
-    let app_eq = app_eq ctx
-    let lambda = lambda ctx
-    let lambda_l = lambda_l ctx
-    let lambda_db = lambda_db ctx
-    let arrow = arrow ctx
-    let arrow_l = arrow_l ctx
-    let map = map ctx
-    let db_shift = db_shift ctx
-    let open_lambda = open_lambda ctx
-    let open_lambda_exn = open_lambda_exn ctx
-  end in
-  (module M)
-
-(* TODO: write Expr_for_ctx; then use it in tests *)
-
 module Subst = struct
   type t = subst = {
     ty: expr Var.Map.t; (* ty subst *)
     m: expr Var.Map.t; (* term subst *)
   }
+
+  let equal a b =
+    Var.Map.equal Expr.equal a.ty b.ty &&
+    Var.Map.equal Expr.equal a.m b.m
+
+  let hash self : int =
+    let hm m =
+      CCHash.iter (CCHash.pair Var.hash Expr.hash) (Var.Map.to_iter m)
+    in
+    CCHash.combine2 (hm self.ty) (hm self.m)
 
   let[@inline] is_empty self =
     Var.Map.is_empty self.ty &&
@@ -1210,45 +1100,6 @@ end
 
 (** {2 Theorems and Deduction Rules} *)
 
-module type THM = sig
-  type 'a with_ctx
-
-  type t = thm
-
-  include Sigs.PP with type t := t
-  val pp_depth : max_depth:int -> t Fmt.printer
-  val pp_quoted : t Fmt.printer
-  val concl : t -> expr
-  val hyps_iter : t -> expr iter
-  val hyps_l : t -> expr list
-  val hyps_sorted_l : t -> expr list
-  val n_hyps : t -> int
-  val has_hyps : t -> bool
-  val is_proof_of : t -> Goal.t -> bool
-  val assume : (expr -> t) with_ctx
-  val axiom : (expr list -> expr -> t) with_ctx
-  val cut : (t -> t -> t) with_ctx
-  val refl : (expr -> t) with_ctx
-  val congr : (t -> t -> t) with_ctx
-  val subst : recursive:bool -> (t -> Subst.t -> t) with_ctx
-  val sym : (t -> t) with_ctx
-  val trans : (t -> t -> t) with_ctx
-  val bool_eq : (t -> t -> t) with_ctx
-  val bool_eq_intro : (t -> t -> t) with_ctx
-  val beta_conv : (expr -> t) with_ctx
-  val abs : (var -> t -> t) with_ctx
-  val new_basic_definition :
-    (?def_loc:location -> expr -> t * const) with_ctx
-  val new_basic_type_definition :
-    (?ty_vars:ty_var list ->
-    name:string ->
-    abs:string ->
-    repr:string ->
-    thm_inhabited:thm ->
-    unit ->
-    New_ty_def.t) with_ctx
-end
-
 module Thm = struct
   type t = thm
 
@@ -1259,6 +1110,17 @@ module Thm = struct
   let hyps_sorted_l = hyps_l
   let[@inline] has_hyps self = not (Expr_set.is_empty self.th_hyps)
   let n_hyps self = Expr_set.cardinal self.th_hyps
+
+  let[@inline] equal a b =
+    Expr.equal a.th_concl b.th_concl &&
+    Expr_set.equal a.th_hyps b.th_hyps &&
+    Option.equal Stdlib.(==) a.th_theory b.th_theory
+
+  let hash (self:t) =
+    CCHash.combine2 (Expr.hash self.th_concl)
+      (CCHash.iter Expr.hash @@ Expr_set.to_iter self.th_hyps)
+
+  type 'a with_ctx = ctx -> 'a
 
   let pp_depth ~max_depth out (th:t) =
     let pp_t = Expr.pp_depth ~max_depth in
@@ -1288,37 +1150,32 @@ module Thm = struct
     let ty = Expr.ty_exn e in
     Expr.equal (Expr.bool ctx) ty
 
-  let[@inline] wrap_exn k f =
-    try f()
-    with e ->
-      errorf ~src:e k
-
   let assume ctx (e:Expr.t) : t =
-    wrap_exn (fun k->k"in assume `@[%a@]`:" Expr.pp e) @@ fun () ->
+    Error.guard (Error.wrapf "in assume `@[%a@]`:" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     if not (is_bool_ ctx e) then (
-      error "assume takes a boolean"
+      Error.fail "assume takes a boolean"
     );
     make_ ctx (Expr.Set.singleton e) e
 
   let axiom ctx hyps e : t =
-    wrap_exn (fun k->
+    Error.guard (fun err ->
         let g = Goal.make_l hyps e in
-        k"in axiom `@[%a@]`:" Goal.pp g)
-    @@ fun () ->
+        Error.wrapf "in axiom `@[%a@]`:" Goal.pp g err) @@ fun () ->
     ctx_check_e_uid ctx e;
     if not ctx.ctx_axioms_allowed then (
-      error "the context does not accept new axioms, see `pledge_no_more_axioms`"
+      Error.fail "the context does not accept new axioms, see `pledge_no_more_axioms`"
     );
     if not (is_bool_ ctx e && List.for_all (is_bool_ ctx) hyps) then (
-      error "axiom takes a boolean"
+      Error.fail "axiom takes a boolean"
     );
     make_ ctx (Expr.Set.of_list hyps) e
 
   let merge_hyps_ = Expr.Set.union
 
   let cut ctx th1 th2 : t =
-    wrap_exn (fun k->k"@[<2>in cut@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2)
+    Error.guard
+      (Error.wrapf "@[<2>in cut@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2)
     @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
@@ -1331,13 +1188,14 @@ module Thm = struct
     make_ ctx Expr.Set.empty (Expr.app_eq ctx e e)
 
   let congr ctx th1 th2 : t =
-    wrap_exn (fun k->k"@[<2>in congr@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2)
+    Error.guard
+      (Error.wrapf "@[<2>in congr@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2)
     @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     match Expr.unfold_eq (concl th1), Expr.unfold_eq (concl th2) with
-    | None, _ -> error "th1 is non equational"
-    | _, None -> error "th2 is non equational"
+    | None, _ -> Error.fail "th1 is non equational"
+    | _, None -> Error.fail "th2 is non equational"
     | Some (f,g), Some (t,u) ->
       let t1 = Expr.app ctx f t in
       let t2 = Expr.app ctx g u in
@@ -1353,7 +1211,7 @@ module Thm = struct
           s.m
       with
       | E_subst_non_closed (v,t) ->
-        errorf(fun k->k"subst: variable %a@ is bound to non-closed term %a"
+        Error.failf(fun k->k"subst: variable %a@ is bound to non-closed term %a"
                   Var.pp v Expr.pp t)
     end;
     let hyps = hyps_ th |> Expr.Set.map (fun e -> Expr.subst ~recursive ctx e s) in
@@ -1361,43 +1219,47 @@ module Thm = struct
     make_ ctx hyps concl
 
   let sym ctx th : t =
-    wrap_exn (fun k->k"@[<2>in sym@ `@[%a@]`@]:" pp th) @@ fun () ->
+    Error.guard (Error.wrapf "@[<2>in sym@ `@[%a@]`@]:" pp th) @@ fun () ->
     ctx_check_th_uid ctx th;
     match Expr.unfold_eq (concl th) with
-    | None -> errorf (fun k->k"sym: concl of %a@ should be an equation" pp th)
+    | None -> Error.failf (fun k->k"sym: concl of %a@ should be an equation" pp th)
     | Some (t,u) ->
       make_ ctx (hyps_ th) (Expr.app_eq ctx u t)
 
   let trans ctx th1 th2 : t =
-    wrap_exn (fun k->k"@[<2>in trans@ %a@ %a@]:" pp_quoted th1 pp_quoted th2) @@ fun () ->
+    Error.guard
+      (Error.wrapf "@[<2>in trans@ %a@ %a@]:" pp_quoted th1 pp_quoted th2)
+    @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     match Expr.unfold_eq (concl th1), Expr.unfold_eq (concl th2) with
-    | None, _ -> errorf (fun k->k"trans: concl of %a@ should be an equation" pp th1)
-    | _, None -> errorf (fun k->k"trans: concl of %a@ should be an equation" pp th2)
+    | None, _ -> Error.failf (fun k->k"trans: concl of %a@ should be an equation" pp th1)
+    | _, None -> Error.failf (fun k->k"trans: concl of %a@ should be an equation" pp th2)
     | Some (t,u), Some (u',v) ->
       if not (Expr.equal u u') then (
-        errorf (fun k->k"@[<2>kernel: trans: conclusions@ \
+        Error.failf (fun k->k"@[<2>kernel: trans: conclusions@ \
                          of %a@ and %a@ do not match@]" pp th1 pp th2)
       );
       let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
       make_ ctx hyps (Expr.app_eq ctx t v)
 
   let bool_eq ctx th1 th2 : t =
-    wrap_exn (fun k->k"@[<hv2>in bool_eq@ th1=%a@ th2=%a@]:"
-                 pp_quoted th1 pp_quoted th2) @@ fun () ->
+    Error.guard
+      (Error.wrapf "@[<hv2>in bool_eq@ th1=%a@ th2=%a@]:"
+         pp_quoted th1 pp_quoted th2)
+    @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     match Expr.unfold_eq (concl th2) with
     | None ->
-      errorf (fun k->k"bool-eq should have a boolean equality as conclusion in %a"
+      Error.failf (fun k->k"bool-eq should have a boolean equality as conclusion in %a"
                  pp th2)
     | Some (t, u) ->
       if Expr.equal t (concl th1) then (
         let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
         make_ ctx hyps u
       ) else (
-        errorf
+        Error.failf
           (fun k->k
               "bool-eq: mismatch,@ conclusion of %a@ does not match LHS of %a@ \
                (lhs is: `@[%a@]`)"
@@ -1405,8 +1267,10 @@ module Thm = struct
       )
 
   let bool_eq_intro ctx th1 th2 : t =
-    wrap_exn (fun k->k"@[<2>in bool_eq_intro@ th1=`@[%a@]`@ th2=`@[%a@]`@]:"
-                 pp th1 pp th2) @@ fun () ->
+    Error.guard
+      (Error.wrapf "@[<2>in bool_eq_intro@ th1=`@[%a@]`@ th2=`@[%a@]`@]:"
+         pp th1 pp th2)
+    @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     let e1 = concl th1 in
@@ -1419,7 +1283,7 @@ module Thm = struct
     make_ ctx hyps (Expr.app_eq ctx e1 e2)
 
   let beta_conv ctx e : t =
-    wrap_exn (fun k->k"@[<2>in beta-conv `@[%a@]`:" Expr.pp e) @@ fun () ->
+    Error.guard (Error.wrapf "@[<2>in beta-conv `@[%a@]`:" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.view e with
     | E_app (f, a) ->
@@ -1429,56 +1293,55 @@ module Thm = struct
          let rhs = Expr.subst_db_0 ctx body ~by:a in
          make_ ctx Expr.Set.empty (Expr.app_eq ctx e rhs)
        | _ ->
-         errorf (fun k->k"not a redex: function %a is not a lambda" Expr.pp f)
+         Error.failf (fun k->k"not a redex: function %a is not a lambda" Expr.pp f)
       )
     | _ ->
-      errorf (fun k->k"not a redex: %a not an application" Expr.pp e)
+      Error.failf (fun k->k"not a redex: %a not an application" Expr.pp e)
 
   let abs ctx v th : t =
-    wrap_exn (fun k->k"@[<2>in abs :var %a `@[%a@]`:" Var.pp v pp th) @@ fun () ->
+    Error.guard (Error.wrapf "@[<2>in abs :var %a `@[%a@]`:" Var.pp v pp th) @@ fun () ->
     ctx_check_th_uid ctx th;
     ctx_check_e_uid ctx v.v_ty;
     match Expr.unfold_eq th.th_concl with
     | Some (a,b) ->
       let is_in_hyp hyp = Iter.mem ~eq:Var.equal v (Expr.free_vars_iter hyp) in
       if Expr.Set.exists is_in_hyp th.th_hyps then (
-        errorf (fun k->k"variable `%a` occurs in an hypothesis@ of %a" Var.pp v pp th);
+        Error.failf (fun k->k"variable `%a` occurs in an hypothesis@ of %a" Var.pp v pp th);
       );
       make_ ctx th.th_hyps
         (Expr.app_eq ctx (Expr.lambda ctx v a) (Expr.lambda ctx v b))
-    | None -> errorf (fun k->k"conclusion of `%a`@ is not an equation" pp th)
+    | None -> Error.failf (fun k->k"conclusion of `%a`@ is not an equation" pp th)
 
-  let new_basic_definition ctx ?def_loc (e:expr) : t * const =
-    Log.debugf 5 (fun k->k"(@[new-basic-def@ :eqn `%a`@])" Expr.pp e);
-    wrap_exn (fun k->k"@[<2>in new-basic-def@ `@[%a@]`@]:" Expr.pp e) @@ fun () ->
+  let new_basic_definition ctx (e:expr) : t * const =
+    Error.guard (Error.wrapf "@[<2>in new-basic-def@ `@[%a@]`@]:" Expr.pp e) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.unfold_eq e with
     | None ->
-      errorf (fun k->k"new-basic-def: expect an equation `x=rhs`,@ got %a" Expr.pp e)
+      Error.failf (fun k->k"new-basic-def: expect an equation `x=rhs`,@ got %a" Expr.pp e)
     | Some (x, rhs) ->
       if Expr.contains rhs ~sub:x then (
-        errorf (fun k->k"RHS %a@ contains variable %a" Expr.pp rhs Expr.pp x)
+        Error.failf (fun k->k"RHS %a@ contains variable %a" Expr.pp rhs Expr.pp x)
       );
       if not (Expr.is_closed rhs) then (
-        errorf (fun k->k"RHS %a@ is not closed" Expr.pp rhs);
+        Error.failf (fun k->k"RHS %a@ is not closed" Expr.pp rhs);
       );
       let x_var = match Expr.view x with
         | E_var v -> v
         | _ ->
-          errorf (fun k-> k "LHS must be a variable,@ but got %a" Expr.pp x)
+          Error.failf (fun k-> k "LHS must be a variable,@ but got %a" Expr.pp x)
       in
 
       let fvars = Expr.free_vars rhs in
       let ty_vars_l = Var.Set.to_list fvars in
       begin match List.find (fun v -> not (Expr.is_eq_to_type v.v_ty)) ty_vars_l with
         | v ->
-          errorf
+          Error.failf
             (fun k->k"RHS contains free variable `@[%a : %a@]`@ which is not a type variable"
                 Var.pp v Expr.pp v.v_ty)
         | exception Not_found -> ()
       end;
 
-      let c = Expr.new_const ctx ?def_loc (Var.name x_var) ty_vars_l (Var.ty x_var) in
+      let c = Expr.new_const ctx (Var.name x_var) ty_vars_l (Var.ty x_var) in
       let c_e = Expr.const ctx c (List.map (Expr.var ctx) ty_vars_l) in
       let th = make_ ctx Expr.Set.empty (Expr.app_eq ctx c_e rhs) in
       th, c
@@ -1486,16 +1349,18 @@ module Thm = struct
   let new_basic_type_definition ctx
       ?ty_vars:provided_ty_vars
       ~name ~abs ~repr ~thm_inhabited () : New_ty_def.t =
-    wrap_exn (fun k->k"@[<2>in new-basic-ty-def :name %s@ :thm `@[%a@]`@]:"
-                 name pp thm_inhabited) @@ fun () ->
+    Error.guard
+      (Error.wrapf "@[<2>in new-basic-ty-def :name %s@ :thm `@[%a@]`@]:"
+         name pp thm_inhabited)
+    @@ fun () ->
     ctx_check_th_uid ctx thm_inhabited;
     if has_hyps thm_inhabited then (
-      errorf (fun k->k"theorem %a must not have any hypothesis" pp thm_inhabited);
+      Error.failf (fun k->k"theorem %a must not have any hypothesis" pp thm_inhabited);
     );
     let phi, witness = match Expr.view (concl thm_inhabited) with
       | E_app (phi,w) -> phi, w
       | _ ->
-        errorf (fun k->k"expected conclusion of theorem %a@ to be an application"
+        Error.failf (fun k->k"expected conclusion of theorem %a@ to be an application"
                    pp thm_inhabited);
     in
     (* the concrete type *)
@@ -1511,7 +1376,7 @@ module Thm = struct
         Var.Set.find_first (fun v -> not (Expr.is_eq_to_type (Var.ty v))) fvars_phi
       with
       | v ->
-        errorf (fun k->k"free variable %a@ occurs in Phi (in `|- Phi t`)@ \
+        Error.failf (fun k->k"free variable %a@ occurs in Phi (in `|- Phi t`)@ \
                          and it is not a type variable" Var.pp_with_ty v)
       | exception Not_found -> ()
     end;
@@ -1520,7 +1385,7 @@ module Thm = struct
       | None -> Var.Set.to_list all_ty_fvars (* pick any order *)
       | Some l ->
         if not (Var.Set.equal all_ty_fvars (Var.Set.of_list l)) then (
-          errorf
+          Error.failf
             (fun k->k
                 "list of type variables (%a) in new-basic-ty-def@ does not match %a"
                 (Fmt.Dump.list Var.pp) (Var.Set.to_list all_ty_fvars)
@@ -1578,29 +1443,6 @@ module Thm = struct
       repr_thm; abs_x; abs_thm}
 end
 
-module type THM_FOR_CTX = THM with type 'a with_ctx := 'a
-
-let make_thm (ctx:ctx) : (module THM_FOR_CTX) =
-  let module M = struct
-    include Thm
-
-    let assume = assume ctx
-    let axiom = axiom ctx
-    let cut = cut ctx
-    let refl = refl ctx
-    let congr = congr ctx
-    let subst = subst ctx
-    let sym = sym ctx
-    let trans = trans ctx
-    let bool_eq = bool_eq ctx
-    let bool_eq_intro = bool_eq_intro ctx
-    let beta_conv = beta_conv ctx
-    let abs = abs ctx
-    let new_basic_definition = new_basic_definition ctx
-    let new_basic_type_definition = new_basic_type_definition ctx
-  end in
-  (module M)
-
 module Theory = struct
   type t = theory
 
@@ -1626,10 +1468,11 @@ module Theory = struct
 
   let assume self hyps concl : thm =
     let ctx = self.theory_ctx in
-    Thm.wrap_exn (fun k->k"in theory_assume@ `@[%a@ |- %a@]`:"
-                 (pp_list Expr.pp) hyps Expr.pp concl) @@ fun () ->
+    Error.guard
+      (Error.wrapf "in theory_assume@ `@[%a@ |- %a@]`:" (pp_list Expr.pp) hyps Expr.pp concl)
+    @@ fun () ->
     if not (Thm.is_bool_ ctx concl && List.for_all (Thm.is_bool_ ctx) hyps) then (
-      error "Theory.assume: all terms must be booleans"
+      Error.fail "Theory.assume: all terms must be booleans"
     );
     let hyps = Expr.Set.of_list hyps in
     {(Thm.make_ ctx hyps concl) with th_theory=Some self}
@@ -1638,7 +1481,7 @@ module Theory = struct
     let s = (c.c_name :> string) in
     let kind = if Expr.is_eq_to_type c.c_ty then C_ty else C_term in
     if Str_k_map.mem (kind,s) self.theory_in_constants then (
-      errorf (fun k->k"Theory.assume_const: constant `%s` already exists" s);
+      Error.failf (fun k->k"Theory.assume_const: constant `%s` already exists" s);
     );
     self.theory_in_constants <- Str_k_map.add (kind,s) c self.theory_in_constants;
     ()
@@ -1653,7 +1496,7 @@ module Theory = struct
       | Some c' when Const.equal c c' ->
         Log.debugf 2 (fun k->k"redef `%s`" s);
       | Some _ ->
-        errorf (fun k->k"Theory.add_const: constant `%s` already defined" s);
+        Error.failf (fun k->k"Theory.add_const: constant `%s` already defined" s);
       | None -> ()
     end;
     self.theory_defined_constants <- Str_k_map.add (kind,s) c self.theory_defined_constants
@@ -1674,7 +1517,7 @@ module Theory = struct
       | None -> th.th_theory <- Some self
       | Some theory' when theory' == self -> ()
       | Some theory' ->
-        errorf (fun k->k"Theory.add_theorem:@ %a@ already belongs in theory `%a`"
+        Error.failf (fun k->k"Theory.add_theorem:@ %a@ already belongs in theory `%a`"
                    Thm.pp_quoted th Name.pp theory'.theory_name);
     end;
     self.theory_defined_theorems <- th :: self.theory_defined_theorems
@@ -1699,14 +1542,14 @@ module Theory = struct
   let check_same_ctx_ ctx l =
     List.iter
       (fun th -> if th.theory_ctx != ctx
-        then errorf (fun k->k"theory `%a` comes from a different context" pp_name th))
+        then Error.failf (fun k->k"theory `%a` comes from a different context" pp_name th))
       l
 
   let union_const_map_ ~what m1 m2 =
     Str_k_map.union
       (fun (_,s) c1 c2 ->
          if not (Const.equal c1 c2) then (
-           errorf (fun k->k"incompatible %s constant `%s`: %a vs %a"
+           Error.failf (fun k->k"incompatible %s constant `%s`: %a vs %a"
                       what s Const.pp c1 Const.pp c2)
          );
          Some c1)

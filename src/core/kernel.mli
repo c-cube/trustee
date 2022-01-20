@@ -11,8 +11,6 @@ type ty_const = const
 type thm
 type theory
 
-type location = Loc.t
-
 type var = {
   v_name: string;
   v_ty: ty;
@@ -24,6 +22,7 @@ type bvar = {
   bv_ty: ty;
 }
 
+(** Main view on expressions *)
 type expr_view =
   | E_kind
   | E_type
@@ -34,6 +33,7 @@ type expr_view =
   | E_lam of string * expr * expr
   | E_arrow of expr * expr
 
+(** Symbols *)
 module Name : sig
   type t
   val equal_str : t -> string -> bool
@@ -43,12 +43,11 @@ module Name : sig
   include Sigs.PP with type t := t
 end
 
+(** Logic constants *)
 module Const : sig
   type t = const
   include Sigs.EQ with type t := t
   include PP with type t := t
-
-  val def_loc : t -> location option
 
   type args =
     | C_ty_vars of ty_var list
@@ -70,7 +69,7 @@ module Const : sig
   val is_eq_to_eq : t -> bool
 end
 
-(** {2 Free Variables} *)
+(** Free Variables *)
 module Var : sig
   type t = var
 
@@ -102,6 +101,8 @@ end
 module Subst : sig
   type t
   include Sigs.PP with type t := t
+  include Sigs.EQ with type t := t
+  include Sigs.HASH with type t := t
   val find_exn : var -> t -> expr
   val empty : t
   val is_empty : t -> bool
@@ -117,13 +118,8 @@ end
 
 (** {2 Expressions and Types} *)
 
-(** Expression API.
-
-    This module type is parametrized by a ['a with_ctx] type
-    which is typically either [ctx -> 'a] (when the context is explicit)
-    or just ['a] (when the context is in scope). Intuitively ['a with_ctx]
-    is just how we express that a function depends on the context. *)
-module type EXPR = sig
+(** Expressions *)
+module Expr : sig
   type t = expr
 
   type view = expr_view =
@@ -182,7 +178,7 @@ module type EXPR = sig
   val iter_dag : f:(t -> unit) -> t -> unit
   (** [iter_dag ~f e] calls [f] once on each unique subterm of [e]. *)
 
-  type 'a with_ctx
+  type 'a with_ctx = ctx -> 'a
 
   val subst : (recursive:bool -> t -> Subst.t -> t) with_ctx
 
@@ -192,8 +188,8 @@ module type EXPR = sig
   val select : (ty -> t) with_ctx
   val var : (var -> t) with_ctx
   val const : (const -> ty list -> t) with_ctx
-  val new_const : (?def_loc:location -> string -> ty_var list -> ty -> const) with_ctx
-  val new_ty_const : (?def_loc:location -> string -> int -> const) with_ctx
+  val new_const : (string -> ty_var list -> ty -> const) with_ctx
+  val new_ty_const : (string -> int -> const) with_ctx
   val var_name : (string -> ty -> t) with_ctx
   val bvar : (int -> ty -> t) with_ctx
   val app : (t -> t -> t) with_ctx
@@ -217,19 +213,6 @@ module type EXPR = sig
   (** Unsafe version of {!open_lambda}.
       @raise Error.Error if the term is not a lambda. *)
 end
-
-(** Explicit expression API with context *)
-module Expr : EXPR with type 'a with_ctx := (ctx -> 'a)
-
-(** Expression API where context is implicit *)
-module type EXPR_FOR_CTX = EXPR
-  with type 'a with_ctx := 'a
-   and module Tbl = Expr.Tbl
-     and module Set = Expr.Set
-     and module Map = Expr.Map
-
-(** Expression module where the context is implicit *)
-val make_expr : ctx -> (module EXPR_FOR_CTX)
 
 (** {2 Toplevel goals} *)
 
@@ -288,13 +271,8 @@ end
     The API to build theorems ensure that only valid theorems are produced,
     following the LCF tradition. *)
 
-(** Theorem API.
-
-    This module type is parametrized by a ['a with_ctx] type
-    which is typically either [ctx -> 'a] (when the context is explicit)
-    or just ['a] (when the context is in scope). Intuitively ['a with_ctx]
-    is just how we express that a function depends on the context. *)
-module type THM = sig
+(** Theorem API. *)
+module Thm : sig
   type t = thm
 
   include Sigs.PP with type t := t
@@ -302,6 +280,8 @@ module type THM = sig
   val pp_quoted : t Fmt.printer
 
   val concl : t -> expr
+  include Sigs.EQ with type t := t
+  include Sigs.HASH with type t := t
 
   val hyps_iter : t -> expr iter
 
@@ -322,8 +302,7 @@ module type THM = sig
   val is_proof_of : t -> Goal.t -> bool
   (** Is this theorem a proof of the given goal? *)
 
-  type 'a with_ctx
-  (** How is the {!ctx} passed to the functions? *)
+  type 'a with_ctx = ctx -> 'a
 
   (** {3 Deduction rules} *)
 
@@ -370,8 +349,7 @@ module type THM = sig
   (** `abs (F |- a=b) x` is `F |- (\x. a) = (\x. b)`
       fails if `x` occurs in `F`. *)
 
-  val new_basic_definition :
-    (?def_loc:location -> expr -> t * const) with_ctx
+  val new_basic_definition : (expr -> t * const) with_ctx
   (** `new_basic_definition (x=t)` where `x` is a variable and `t` a term
       with a closed type,
       returns a theorem `|- x=t` where `x` is now a constant, along with
@@ -403,15 +381,6 @@ module type THM = sig
       It must be the exact set of free variables of [thm_inhabited].
   *)
 end
-
-(** Theorems, with explicit context *)
-module Thm : THM with type 'a with_ctx := (ctx -> 'a)
-
-(** Theorem API specialized for a context *)
-module type THM_FOR_CTX = THM with type 'a with_ctx := 'a
-
-(** Make a theorem API specialized for the given context *)
-val make_thm : ctx -> (module THM_FOR_CTX)
 
 (** {2 Theories}
 
@@ -484,7 +453,7 @@ module Theory : sig
   (** Union of several theories *)
 end
 
-(** {2 Context}
+(** Context
 
     The context is storing the term state, list of axioms,
     and other parameters.

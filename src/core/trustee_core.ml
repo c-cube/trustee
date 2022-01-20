@@ -2,10 +2,10 @@
 module Sigs = Sigs
 module Kernel = Kernel
 module Log = Log
-module Position = Position
-module Loc = Loc
 module Hashcons = Hashcons
 module Proof = Proof
+module Error = Error
+module Error_intf = Error_intf
 
 module Conv = Conv
 module Unif = Unif
