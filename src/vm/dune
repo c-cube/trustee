@@ -1,0 +1,6 @@
+
+(library
+  (name trustee_vm)
+  (public_name trustee.vm)
+  (flags :standard -open Trustee_core.Sigs)
+  (libraries containers iter trustee.core))
