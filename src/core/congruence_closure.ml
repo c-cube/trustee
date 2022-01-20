@@ -58,7 +58,7 @@ let[@inline] res_thm_eq_ (th:K.thm) : E.t * E.t =
   match E.unfold_eq (K.Thm.concl th) with
   | Some (a,b) -> a, b
   | None ->
-    errorf (fun k->k"theorem %a should be an equation" K.Thm.pp_quoted th)
+    Error.failf (fun k->k"theorem %a should be an equation" K.Thm.pp_quoted th)
 
 (* find representative of the class *)
 let[@unroll 2] rec find (n:node) : node =
@@ -176,7 +176,7 @@ and add_uncached_ self e =
   } in
   E.Tbl.add self.nodes e node;
   List.iter (fun sub -> sub.parents <- node :: sub.parents) subs;
-  if CCOpt.is_some sigt then (
+  if Option.is_some sigt then (
     Vec.push self.to_update_sig @@ Update_sig node;
   );
   node
@@ -265,7 +265,7 @@ let add_thm' self th = ignore (add_thm_ self th : bool)
 let add_thm self th : unit =
   let ok = add_thm_ self th in
   if not ok then (
-    errorf (fun k->k"cannot add non-equational theorem %a" K.Thm.pp_quoted th)
+    Error.failf (fun k->k"cannot add non-equational theorem %a" K.Thm.pp_quoted th)
   )
 
 let prove_cc_eqn (ctx:K.ctx) (hyps:K.thm list) (t:E.t) (u:E.t) : _ option =
@@ -286,7 +286,7 @@ let prove_cc_bool (ctx:K.ctx) (hyps:K.thm list) (concl: E.t) : _ option =
   match E.unfold_eq concl with
   | Some (t,u) -> prove_cc_eqn ctx hyps t u
   | None ->
-    match List.partition (fun u -> CCOpt.is_none (E.unfold_eq (K.Thm.concl u))) hyps with
+    match List.partition (fun u -> Option.is_none (E.unfold_eq (K.Thm.concl u))) hyps with
     | [hyp_p], hyp_eqns ->
       begin match prove_cc_eqn ctx hyp_eqns (K.Thm.concl hyp_p) concl with
         | None -> None

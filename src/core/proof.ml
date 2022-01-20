@@ -53,7 +53,7 @@ module Rule = struct
   (* ### define builtins ### *)
 
   let err_badarg what i v =
-    errorf
+    Error.failf
       (fun k->k"expected %d-th arg@ to be %s,@ not %a"
           i what pp_arg_val v)
   let as_e i = function
@@ -153,15 +153,14 @@ module Rule = struct
     let n_args = List.length args in
     let n_r_args = List.length r.r_args in
     if n_args <> n_r_args then (
-      errorf (fun k->k"rule %s expected %d arguments@ but is given %d"
+      Error.failf (fun k->k"rule %s expected %d arguments@ but is given %d"
                  r.r_name n_r_args n_args);
     );
     begin match r.r_view with
       | R_native {run} ->
         begin
-          try run ctx args
-          with e ->
-            errorf ~src:e (fun k->k"while applying rule %s" r.r_name)
+          Error.guard (Error.wrapf "while applying rule %s" r.r_name) @@ fun () ->
+          run ctx args
         end
       | R_defined _ -> assert false (* TODO *)
     end

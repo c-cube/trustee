@@ -1,6 +1,4 @@
 (library
   (name trustee_core)
   (public_name trustee.core)
-  (libraries containers iter unix threads.posix)
-  (ocamlopt_flags :standard -inline 100 -warn-error -a+8)
-  (flags :standard -warn-error -a+8))
+  (libraries containers iter unix))

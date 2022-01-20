@@ -8,7 +8,7 @@ type rw_step = Conv.rw_step = Same | Rw_step of K.thm
 
 let unfold_eqn_ e =
   match E.unfold_eq e with
-  | None -> errorf (fun k->k"rw: %a should be an equation" K.Expr.pp e)
+  | None -> Error.failf (fun k->k"rw: %a should be an equation" K.Expr.pp e)
   | Some pair -> pair
 let thm_res_eqn thm : E.t * E.t =
   unfold_eqn_ (K.Thm.concl thm)
@@ -16,7 +16,7 @@ let thm_res_eqn thm : E.t * E.t =
 let[@inline] arg_n i e =
   let _, args = K.Expr.unfold_app e in
   if i<List.length args then List.nth args i
-  else errorf (fun k->k"`%a` does not have %d args" K.Expr.pp e (i+1))
+  else Error.failf (fun k->k"`%a` does not have %d args" K.Expr.pp e (i+1))
 let arg0 = arg_n 0
 let arg1 = arg_n 1
 let[@inline] eq_lhs e = fst (unfold_eqn_ e)
@@ -110,26 +110,26 @@ end
 
 let under (p:Pos.t) (conv:Conv.t) : Conv.t =
   fun ctx e ->
-  let module Th = (val K.make_thm ctx) in
+  let module Th = K.Thm in
   let rec loop_ p e =
     match p, E.view e with
     | Pos.Root, _ -> conv ctx e
     | Pos.App0 p, E.E_app (f, a) ->
       begin match loop_ p f with
         | Same -> Same
-        | Rw_step th -> Rw_step (Th.congr th (Th.refl a))
+        | Rw_step th -> Rw_step (Th.congr ctx th (Th.refl ctx a))
       end
     | Pos.App1 p, E.E_app (f, a) ->
       begin match loop_ p a with
         | Same -> Same
-        | Rw_step th -> Rw_step (Th.congr (Th.refl f) th)
+        | Rw_step th -> Rw_step (Th.congr ctx (Th.refl ctx f) th)
       end
     | Lam_body p, E.E_lam _ ->
       let v, bod = E.open_lambda_exn ctx e in
       begin match loop_ p bod with
         | Same -> Same
         | Rw_step th ->
-          Rw_step (Th.abs v th)
+          Rw_step (Th.abs ctx v th)
       end
       (*TODO
     | Pos.App_n (i, p), _ ->
@@ -247,26 +247,29 @@ module AC_rule = struct
   }
 
   let make ctx ~f ~assoc ~comm () : t =
-    let module E = (val K.make_expr ctx) in
-    let module Th = (val K.make_thm ctx) in
+    let module E = K.Expr in
+    let module Th = K.Thm in
     (* TODO: polymorphism? *)
 
+    let[@inline] app_l = E.app_l ctx in
+    let[@inline] app_eq = E.app_eq ctx in
+
     let tau = E.ty_exn f |> E.return_ty in
-    let x = E.var_name "x" tau in
-    let y = E.var_name "y" tau in
-    let z = E.var_name "z" tau in
+    let x = E.var_name ctx "x" tau in
+    let y = E.var_name ctx "y" tau in
+    let z = E.var_name ctx "z" tau in
     let assoc_shape =
-      E.(app_eq (app_l f [app_l f [x; y]; z]) (app_l f [x; app_l f [y;z]]))
+      app_eq (app_l f [app_l f [x; y]; z]) (app_l f [x; app_l f [y;z]])
     and comm_shape =
-      E.(app_eq (app_l f [x; y]) (app_l f [y; x]))
+      app_eq (app_l f [x; y]) (app_l f [y; x])
     in
 
     if not (Unif.is_alpha_equiv assoc_shape (Th.concl assoc)) then (
-      errorf (fun k->k"wrong shape for associativity theorem:@ expected `%a`@ got %a"
+      Error.failf (fun k->k"wrong shape for associativity theorem:@ expected `%a`@ got %a"
                  E.pp assoc_shape E.pp (Th.concl assoc))
     );
     if not (Unif.is_alpha_equiv comm_shape (Th.concl comm)) then (
-      errorf (fun k->k"wrong shape for commutativity theorem:@ expected `%a`@ got %a"
+      Error.failf (fun k->k"wrong shape for commutativity theorem:@ expected `%a`@ got %a"
                  E.pp comm_shape E.pp (Th.concl comm))
     );
 
@@ -280,7 +283,7 @@ module AC_rule = struct
       under_apply pos (Rule.to_conv rule) ctx e
     in
 
-    let assoc' = Th.sym assoc in
+    let assoc' = Th.sym ctx assoc in
 
     (* from "E: a brainiac theorem prover", the ground complete system
        is an extension of AC:
@@ -292,7 +295,7 @@ module AC_rule = struct
     *)
     let r1 =
       let r1' = rw_at Pos.(eqn1 root) rule_comm (Th.concl assoc') in
-      Th.bool_eq assoc' r1'
+      Th.bool_eq ctx assoc' r1'
     and r2 =
       (*
          [f x (f y z) = f (f x y) z] (assoc')
@@ -302,9 +305,9 @@ module AC_rule = struct
       *)
       let r1 = rw_at Pos.(eqn1 @@ app0 @@ app1 @@ root) rule_comm
           (Th.concl assoc') in
-      let r2 = Th.bool_eq assoc' r1 in
+      let r2 = Th.bool_eq ctx assoc' r1 in
       let r3 = rw_with rule_assoc (thm_res_rhs r2) in
-      Th.trans r2 r3
+      Th.trans ctx r2 r3
     and r3 =
       (*
          [f x (f y z) = f (f x y) z] (assoc')
@@ -312,19 +315,19 @@ module AC_rule = struct
          comm: [f x (f y z) = f z (f y x)]
       *)
       let r1 = rw_at Pos.(eqn1 root) rule_comm (Th.concl assoc') in
-      let r2 = Th.bool_eq assoc' r1 in
+      let r2 = Th.bool_eq ctx assoc' r1 in
       let r3 = rw_at Pos.(eqn1 @@ app1 root) rule_comm (Th.concl r2) in
-      Th.bool_eq r2 r3
+      Th.bool_eq ctx r2 r3
     in
     let rules = [
       rule_assoc, true;
       rule_comm, false;
       Rule.mk_rule r1, false;
-      Rule.mk_rule (Th.sym r1), false;
+      Rule.mk_rule (Th.sym ctx r1), false;
       Rule.mk_rule r2, false;
-      Rule.mk_rule (Th.sym r2), false;
+      Rule.mk_rule (Th.sym ctx r2), false;
       Rule.mk_rule r3, false;
-      Rule.mk_rule (Th.sym r3), false;
+      Rule.mk_rule (Th.sym ctx r3), false;
     ] in
     {f; assoc; comm; rules; }
 
