@@ -1,3 +1,9 @@
 [submodule "opentheory"]
-	path = opentheory
+	path = vendor/opentheory
 	url = https://github.com/gilith/opentheory
+[submodule "vendor/linol"]
+	path = vendor/linol
+	url = https://github.com/c-cube/linol.git
+[submodule "vendor/pp_loc"]
+	path = vendor/pp_loc
+	url = https://github.com/Armael/pp_loc.git
