@@ -35,13 +35,13 @@ module Make() = struct
     let f = const c_g2 [] in
     fun x y -> app_l f [x;y]
 
-  let ax_f2_assoc = Thm.axiom [] (f2 (f2 x y) z === f2 x (f2 y z))
-  let ax_f2_comm = Thm.axiom [] (f2 x y === f2 y x)
+  let ax_f2_assoc = Thm.axiom ctx [] (f2 (f2 x y) z === f2 x (f2 y z))
+  let ax_f2_comm = Thm.axiom ctx [] (f2 x y === f2 y x)
 
-  let ax_g2_assoc = Thm.axiom [] (g2 (g2 x y) z === g2 x (g2 y z))
-  let ax_g2_comm = Thm.axiom [] (g2 x y === g2 y x)
+  let ax_g2_assoc = Thm.axiom ctx [] (g2 (g2 x y) z === g2 x (g2 y z))
+  let ax_g2_comm = Thm.axiom ctx [] (g2 x y === g2 y x)
 
-  let ax_g2_idem = Thm.axiom [] (g2 x x === x)
+  let ax_g2_idem = Thm.axiom ctx [] (g2 x x === x)
 
   let rules_ac =
     Conv.combine_l [

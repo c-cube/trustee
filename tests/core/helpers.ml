@@ -5,19 +5,28 @@ module E = K.Expr
 
 module Make() = struct
   let ctx = K.Ctx.create ()
-  module E = (val K.make_expr ctx)
+  module E = K.Expr
   module Subst = K.Subst
-  module Thm = (val K.make_thm ctx)
+  module Thm = K.Thm
 
   include E
   let c_bool = K.Const.bool ctx
-  let tau = E.const (E.new_ty_const "tau" 0) []
+  let tau = E.const ctx (E.new_ty_const ctx "tau" 0) []
   let v' s ty = K.Var.make s ty
-  let v = E.var
-  let (@->) = E.arrow
-  let (@@@) = E.app
-  let new_const s ty = E.new_const s [] ty
-  let const' c = E.const c []
+  let bool = E.bool ctx
+  let type_ = E.type_ ctx
+  let v = E.var ctx
+  let app_eq = E.app_eq ctx
+  let (@->) = E.arrow ctx
+  let (@@@) = E.app ctx
+  let new_const s ty = E.new_const ctx s [] ty
+  let const' c = E.const ctx c []
+  let const c l = E.const ctx c l
+  let var_name = E.var_name ctx
+  let var = E.var ctx
+  let app = E.app ctx
+  let lambda = E.lambda ctx
+  let app_l = E.app_l ctx
   let a = new_const "a0" tau
   let b = new_const "b0" tau
   let c = new_const "c0" tau

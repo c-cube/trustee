@@ -46,7 +46,7 @@ let reg1 _ctx =
     (c === (f2 c b));
     (a === (f2 c c));
     ((f2 c (f2 c b)) === (f2 (f2 c c) b));
-  ] |> List.map Thm.assume in
+  ] |> List.map (Thm.assume ctx) in
   let t = (f2 a b) in
   let u = (f2 a c) in (* goal *)
   let res = CC.prove_cc_eqn ctx hyps t u in
@@ -67,7 +67,7 @@ let reg2 _ctx =
     (c_0 === (f2 c_2 c_2));
     ((f2 c_1 (f2 c_0 c_2)) === (f2 (f2 c_1 c_0) c_2));
     ((f2 c_2 (f2 c_2 c_1)) === (f2 (f2 c_2 c_2) c_1));
-  ] |> List.map Thm.assume in
+  ] |> List.map (Thm.assume ctx) in
   let t = f2 c_0 c_1 and u = f2 c_0 c_2 in
   let res = CC.prove_cc_eqn ctx hyps t u in
   if !debug_ then Format.printf "reg2: %a@." (Fmt.Dump.option Thm.pp) res;
@@ -91,7 +91,7 @@ let reg3 _ctx =
     ((f2 c_1 (f2 c_2 c_2)) === (f2 (f2 c_1 c_2) c_2));
     ((f2 c_2 (f2 c_0 c_2)) === (f2 (f2 c_2 c_0) c_2));
     ((f2 c_2 (f2 c_1 c_2)) === (f2 (f2 c_2 c_1) c_2));
-  ] |> List.map Thm.assume in
+  ] |> List.map (Thm.assume ctx) in
   let goal = ((f2 c6 c8) === (f2 c7 c9)) in
   let res = CC.prove_cc_bool ctx hyps goal in
   if !debug_ then Format.printf "reg3: %a@." (Fmt.Dump.option Thm.pp) res;
@@ -116,7 +116,7 @@ let reg3' _ctx =
     (c_1 === (f2 c_2 c_0));
     (c_0 === (f2 c_1 c_0));
     (c_1 === (f2 c_0 c_2));
-  ] |> List.map Thm.assume in
+  ] |> List.map (Thm.assume ctx) in
   let goal = ((f2 c6 c8) === (f2 c7 c9)) in
   let res = CC.prove_cc_bool ctx hyps goal in
   if !debug_ then Format.printf "reg3': %a@." (Fmt.Dump.option Thm.pp) res;
