@@ -1,3 +1,5 @@
+open Trustee_core
+type 'a or_error = 'a Trustee_core.Error.or_error
 
 type item =
   | I_ty of string * string
@@ -54,10 +56,10 @@ let parse : _ P.t =
 let item_of_string s =
   match P.parse_string parse_item s with
   | Ok x -> Ok x
-  | Error e -> Error (Trustee_error.mk e)
+  | Error e -> Error (Trustee_core.Error.make e)
 
 let of_string s =
   match P.parse_string parse s with
   | Ok x -> Ok x
-  | Error e -> Error (Trustee_error.mk e)
+  | Error e -> Error (Trustee_core.Error.make e)
 

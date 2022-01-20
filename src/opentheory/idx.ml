@@ -10,7 +10,7 @@ type t = {
   interps: (path * Interp_file.t) list;
   interp_by_name: Interp_file.t Str_tbl.t;
   articles: path Str_tbl.t; (* basename -> path *)
-  errors: (path * Trustee_error.t) list;
+  errors: (path * Trustee_core.Error.t) list;
 }
 
 (* gen util(s) *)
@@ -44,7 +44,7 @@ let list_dir dir : t =
         theories := (file,thy) :: !theories
       | Error e -> errors := (file,e) :: !errors
     with e ->
-      errors := (file, Trustee_error.mk (Printexc.to_string e)) :: !errors;
+      errors := (file, Trustee_core.Error.of_exn e) :: !errors;
   in
 
   let parse_interp file =
@@ -57,7 +57,7 @@ let list_dir dir : t =
         interp := (file,int) :: !interp
       | Error e -> errors := (file,e) :: !errors
     with e ->
-      errors := (file, Trustee_error.mk (Printexc.to_string e)) :: !errors;
+      errors := (file, Trustee_core.Error.of_exn e) :: !errors;
   in
 
   let handle_file (k,file) =

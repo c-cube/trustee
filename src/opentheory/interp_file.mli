@@ -4,6 +4,8 @@
     See http://www.gilith.com/opentheory/interpretation.html
 *)
 
+type 'a or_error = 'a Trustee_core.Error.or_error
+
 type item =
   | I_ty of string * string
   | I_const of string * string

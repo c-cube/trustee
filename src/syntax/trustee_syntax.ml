@@ -1,9 +1,9 @@
-module Position = Trustee_core.Position
-module Loc = Trustee_core.Loc
+module Position = Position
+module Loc = Loc
+module Loc_input = Loc_input
 
 module ID = ID
 module Syntax = Syntax
-module Hashcons = Hashcons
 module Parse_ast = Parse_ast
 module Type_ast = Type_ast
 module Fixity = Fixity

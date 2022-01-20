@@ -36,5 +36,5 @@ val sub_packages : t -> string list
 module P = CCParse
 
 val parse : dir:string -> t P.t
-val of_string : dir:string -> string -> t or_error
+val of_string : dir:string -> string -> t Trustee_core.Error.or_error
 

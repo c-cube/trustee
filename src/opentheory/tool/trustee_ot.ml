@@ -5,7 +5,7 @@ module K = Trustee_core.Kernel
 module Log = Trustee_core.Log
 
 let print_all idx =
-  let {Idx.errors; theories; interps; _} = idx in 
+  let {Idx.errors; theories; interps; _} = idx in
   List.iter
     (fun (s,thy) -> Fmt.printf "%s: %s@." s thy.Thy_file.name)
     theories;
@@ -13,7 +13,7 @@ let print_all idx =
     (fun (s,int) -> Fmt.printf "interp %s (%d lines)@." s (Interp_file.size int))
     interps;
   List.iter
-    (fun (s,e) -> Fmt.printf "@{<Red>Error@} for %s: %a@." s Trustee_error.pp e)
+    (fun (s,e) -> Fmt.printf "@{<Red>Error@} for %s: %a@." s Trustee_core.Error.pp e)
     errors;
   ()
 
@@ -41,7 +41,7 @@ let check_ (idx:Idx.t) ~progress_bar ~names : unit =
        match Eval.eval_theory eval_st name with
        | Ok _ -> ()
        | Error e ->
-         Format.eprintf "error: %a" Trustee_error.pp e)
+         Format.eprintf "error: %a" Trustee_core.Error.pp e)
     names;
   ()
 
@@ -61,7 +61,7 @@ let main ~dir () =
   let theories = Iter.of_list idx.Idx.theories |> Iter.map snd in
   if !check_all then (
     check_ idx
-      ~progress_bar:!progress_ ~names:(Iter.map Thy_file.name theories); 
+      ~progress_bar:!progress_ ~names:(Iter.map Thy_file.name theories);
   ) else if !check <> [] then (
     check_ idx
       ~progress_bar:!progress_ ~names:(Iter.of_list !check)
