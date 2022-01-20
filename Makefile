@@ -1,11 +1,14 @@
-all:
-	@dune build @all
+OPTS?=-j 3 --profile=release
 
+all:
+	@dune build @all $(OPTS)
+
+WATCH?=@all
 watch:
-	@dune build @all -w
+	@dune build $(OPTS) $(WATCH) -w
 
 test:
-	@dune runtest --force --no-buffer
+	@dune runtest $(OPTS) --force --no-buffer
 
 clean:
 	@dune clean
