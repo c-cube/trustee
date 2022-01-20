@@ -44,7 +44,7 @@ let reg1 _ctxt =
   let t2 = f2 a x in
   let subst = Unif.match_ t1 t2 |> assert_is_some "must match" in
   (*   Format.eprintf "subst %a@." K.Subst.pp subst; *)
-  assert_eq_expr (E.subst ~recursive:false t1 subst) t2
+  assert_eq_expr (E.subst ~recursive:false ctx t1 subst) t2
 
 let reg2 _ctxt =
   let module M = Make() in let open M in
@@ -54,7 +54,7 @@ let reg2 _ctxt =
   let t2' = f2 z (f2 x y) in
   let subst = Unif.match_ lhs t2 |> assert_is_some "must match" in
   (*   Format.eprintf "subst %a@." K.Subst.pp subst; *)
-  assert_eq_expr (E.subst ~recursive:false rhs subst) t2'
+  assert_eq_expr (E.subst ~recursive:false ctx rhs subst) t2'
 
 let reg3 _ctx =
   let module M = Make() in let open M in
