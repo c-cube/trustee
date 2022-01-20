@@ -16,7 +16,7 @@
   (tags (logic proof HOL assistant))
   (depends
     (dune (>= "2.0"))
-    (containers (and (>= 3.0) (< 4.0)))
+    (containers (and (>= 3.3) (< 4.0)))
     (iter (>= 1.0))
     (ocaml (>= 4.06.0))
     (qtest :with-test)
@@ -31,4 +31,36 @@
   (depends
     (dune (>= "2.0"))
     (containers (and (>= 3.0) (< 4.0)))
-    (trustee (= :version))))
+    (trustee (= :version))
+    (odoc :with-doc)))
+
+; TODO: depend on cmdliner to provide subcommands ("check", "repl", "opentheory", etc.)
+; along with relevant options for CI, repl, etc.
+(package
+  (name trustee-itp)
+  (synopsis "Syntax and elaborator for a trustee-powered theorem prover")
+  (depends
+    (dune (>= "2.0"))
+    (containers (and (>= 3.0) (< 4.0)))
+    containers-thread
+    pp_loc
+    logs
+    (ocaml (>= 4.06.0))
+    (odoc :with-doc)))
+
+(package
+  (name trustee-lsp)
+  (synopsis "LSP server for trustee")
+  (license MIT)
+  (tags (logic proof HOL assistant))
+  (depends
+    (dune (>= "2.0"))
+    (containers (and (>= 3.0) (< 4.0)))
+    (trustee (= "version"))
+    (trustee-itp (= "version"))
+    lsp
+    logs
+    (linol (and (>= 0.4) (< 0.5)))
+    (ocaml (>= 4.06.0))
+    (odoc :with-doc)))
+

@@ -1,6 +1,8 @@
 
 module T = Trustee_core
 
+module ITP = Trustee_itp
+
 module Log = T.Log
 module K = T.Kernel
 module Loc = T.Loc
@@ -112,7 +114,7 @@ let trustee_server _ctx = object (self)
 
     (* ## requests ## *)
 
-    method! on_req_hover ~notify_back:_ ~uri ~pos (_d:Linol.doc_state) : _ option =
+    method! on_req_hover ~notify_back:_ ~id:_ ~uri ~pos (_d:Linol.doc_state) : _ option =
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
       | {idx; _} ->
@@ -134,7 +136,7 @@ let trustee_server _ctx = object (self)
         in
         r
 
-    method! on_req_definition ~notify_back:_ ~uri ~pos _st : _ option =
+    method! on_req_definition ~notify_back:_ ~id:_ ~uri ~pos _st : _ option =
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
       | {idx;_} ->
@@ -158,7 +160,7 @@ let trustee_server _ctx = object (self)
         in
         r
 
-    method! on_req_completion ~notify_back:_ ~uri ~pos ~ctx:_ doc_st : _ option =
+    method! on_req_completion ~notify_back:_ ~id:_ ~uri ~pos ~ctx:_ doc_st : _ option =
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
       | {idx;_} ->
@@ -212,12 +214,17 @@ let trustee_server _ctx = object (self)
   end
 
 let setup_logger_ () =
-  if true || Sys.getenv_opt "LSPLOG"=Some"1" then (
+  ITP.Logger.setup_trustee();
+  let reporter = ITP.Logger.create() in
+  Logs.set_reporter (ITP.Logger.as_reporter reporter);
+
+  let dbg = Sys.getenv_opt "LSPLOG"=Some"1" in
+  Logs.set_level ~all:true (Some (if dbg then Logs.Debug else Logs.Info));
+
+  if true || dbg  then (
     let oc = open_out "/tmp/lsp.log" in
-    Log.mutex_ := Some (Mutex.create());
+    ITP.Logger.log_to_chan reporter oc;
     at_exit (fun () -> flush oc; close_out_noerr oc);
-    let out = Format.formatter_of_out_channel oc in
-    Log.set_debug_out out;
     Log.set_level 50;
   )
 
