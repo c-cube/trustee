@@ -33,15 +33,7 @@ type expr_view =
   | E_lam of string * expr * expr
   | E_arrow of expr * expr
 
-(** Symbols *)
-module Name : sig
-  type t
-  val equal_str : t -> string -> bool
-  include Sigs.EQ with type t := t
-  include Sigs.COMPARE with type t := t
-  include Sigs.HASH with type t := t
-  include Sigs.PP with type t := t
-end
+module Name = Name
 
 (** Logic constants *)
 module Const : sig
@@ -419,15 +411,15 @@ module Theory : sig
 
   val add_theorem : t -> thm -> unit
 
-  val find_const : t -> string -> const option
+  val find_const : t -> Name.t -> const option
   (** Find a constant used or defined in this theory by its name *)
 
-  val find_ty_const : t -> string -> ty_const option
+  val find_ty_const : t -> Name.t -> ty_const option
   (** Find a type constant used or defined in this theory by its name *)
 
   (** {3 Composition} *)
 
-  type interpretation = string Str_map.t
+  type interpretation = Name.t Name.Map.t
 
   val instantiate :
     interp:interpretation ->

@@ -1,9 +1,10 @@
 
 ; toolkit
 (executable
-  (name trustee_tk)
-  (public_name trustee_tk)
-  (optional)
-  (package trustee-opentheory)
-  (libraries containers trustee.core trustee.syntax trustee-opentheory)
-  (flags :standard -warn-error -a+8 -open Trustee_core.Sigs))
+  (name trustee_bin)
+  (public_name trustee)
+  (package trustee-itp)
+  (libraries containers logs cmdliner
+             trustee.core trustee.syntax
+             trustee-itp trustee-opentheory)
+  (flags :standard -open Trustee_core.Sigs))

@@ -144,8 +144,9 @@ let lookup_const_in_scope_ self ~is_ty (s:string) : K.const option =
   try
     List.iter (fun th ->
         match
-          if is_ty then K.Theory.find_ty_const th s
-          else K.Theory.find_const th s
+          let name = K.Name.make s in
+          if is_ty then K.Theory.find_ty_const th name
+          else K.Theory.find_const th name
         with
         | None -> ()
         | Some c -> raise_notrace (FoundConst c))
