@@ -1,7 +1,11 @@
+
 module Position = Position
 module Loc = Loc
 module Loc_input = Loc_input
 
+include Common_
+
+module Expr_printer = Expr_printer
 module ID = ID
 module Syntax = Syntax
 module Parse_ast = Parse_ast

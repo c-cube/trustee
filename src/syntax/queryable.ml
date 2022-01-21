@@ -1,7 +1,6 @@
 
 (** {1 Queryable types for the LSP server} *)
 
-open Sigs
 type location = Loc.t
 
 (** Some sort of object that can be observed via the LSP *)
@@ -18,6 +17,7 @@ class virtual t = object
   method def_loc : Loc.t option = None
   (** Location of the definition of this object, if any. *)
 end
+
 type queryable = t
 
 module type S = sig

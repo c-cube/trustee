@@ -1,7 +1,6 @@
 
-open Sigs
+open Common_
 
-module K = Kernel
 module A = Parse_ast
 module AE = A.Expr
 module KProof = Proof

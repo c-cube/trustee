@@ -1,6 +1,4 @@
 
-open Sigs
-
 type loc = Loc.t
 type is_done = bool
 type 'a t = {
@@ -17,7 +15,7 @@ let create ~next () : _ t =
 let is_done self = self.is_done
 let cur self = self.cur, self.loc
 
-let junk self =
+let consume self =
   if not self.is_done then (
     let cur, loc, is_done = self.next() in
     self.cur <- cur; self.loc <- loc; self.is_done <- is_done;
@@ -25,15 +23,18 @@ let junk self =
 
 let next self =
   let r = cur self in
-  junk self;
+  consume self;
   r
 
-let to_list self : _ list =
-  let l = ref [] in
+let iter self k =
   let continue = ref true in
   while !continue do
     let t, _loc = cur self in
-    l := t :: !l;
-    if is_done self then continue := false else junk self;
-  done;
+    k t;
+    if is_done self then continue := false else consume self;
+  done
+
+let to_list self : _ list =
+  let l = ref [] in
+  iter self (fun t -> l := t :: !l);
   List.rev !l

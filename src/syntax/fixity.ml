@@ -1,16 +1,17 @@
 
-open Sigs
+type precedence = int
 
 type t =
   | F_normal
-  | F_infix of int
-  | F_left_assoc of int
-  | F_right_assoc of int
-  | F_prefix of int
-  | F_postfix of int
-  | F_binder of int
+  | F_infix of precedence
+  | F_left_assoc of precedence
+  | F_right_assoc of precedence
+  | F_prefix of precedence
+  | F_postfix of precedence
+  | F_binder of precedence
 
-let pp out = function
+(* NOTE: must be able to reparse this *)
+let pp_syntax out = function
   | F_normal -> Fmt.string out "normal"
   | F_infix i -> Fmt.fprintf out "infix %d" i
   | F_left_assoc i -> Fmt.fprintf out "lassoc %d" i
@@ -18,10 +19,10 @@ let pp out = function
   | F_postfix i -> Fmt.fprintf out "postfix %d" i
   | F_prefix i -> Fmt.fprintf out "prefix %d" i
   | F_binder i -> Fmt.fprintf out "binder %d" i
-let to_string = Fmt.to_string pp
 
-(* NOTE: must be able to reparse this *)
-let to_string_syntax = to_string
+let to_string_syntax = Fmt.to_string pp_syntax
+let pp = pp_syntax
+let to_string = Fmt.to_string pp
 
 let normal = F_normal
 let prefix i = F_prefix i

@@ -26,6 +26,7 @@ val offsets : t -> int * int
 val pp : ctx:ctx -> t Fmt.printer
 
 val union : t -> t -> t
+val union_l : t -> f:('a -> t) -> 'a list -> t
 
 module Infix : sig
   val (++) : t -> t -> t
