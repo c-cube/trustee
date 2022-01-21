@@ -1,9 +1,6 @@
 
 (** {1 Expression parser} *)
 
-open Sigs
-
-module K = Kernel
 module A = Parse_ast
 
 type token =
@@ -29,8 +26,6 @@ type token =
   | ERROR of char
   | EOF
 
-type location = A.location
-
 module Token : sig
   type t = token
   include PP with type t := t
@@ -45,6 +40,9 @@ module Lexer : sig
 end
 
 (** {2 Parser} *)
+
+(* TODO: remove Env? we should only need a Notation.t,
+   and update it on the fly. *)
 
 val parse_expr :
   ?q_args:K.Expr.t list ->
@@ -62,12 +60,3 @@ val parse_top_l_process :
   A.top_statement list
 (** Parse statements, processing each one with {!Parse_ast.Env.process}
     as soon as it is produced *)
-
-(** {2 Parse and perform type inference} *)
-
-val parse_expr_infer :
-  ?q_args:K.Expr.t list ->
-  ctx:K.Ctx.t ->
-  env:A.Env.t ->
-  Lexer.t ->
-  K.expr

@@ -41,6 +41,8 @@ let union a b =
   let b1, b2 = offsets b in
   mk_ (min a1 b1) (max a2 b2)
 
+let union_l a ~f l = List.fold_left (fun l x -> union l (f x)) a l
+
 let of_lexbuf ~ctx:_ctx (buf:Lexing.lexbuf) : t =
   let open Lexing in
   let off1 = buf.lex_start_p.pos_cnum in
