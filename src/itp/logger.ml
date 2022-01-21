@@ -53,7 +53,7 @@ let as_reporter self : Logs.reporter =
         ) else k()
   }
 
-let setup_trustee () =
+let setup_trustee_ = lazy (
   let open Trustee_core.Log in
   let logger = {
     log=fun lvl k ->
@@ -64,3 +64,20 @@ let setup_trustee () =
       | _ -> Logs.debug k2
   } in
   set_logger logger
+)
+
+let setup_trustee () = Lazy.force setup_trustee_
+
+let setup_logs ?(files=[]) ~debug () =
+  setup_trustee();
+  let l = create() in
+  Logs.set_reporter (as_reporter l);
+  Logs.set_level ~all:true (Some (if debug then Logs.Debug else Logs.Warning));
+  Logs.info (fun k->k"logs are set up");
+  List.iter (fun file ->
+      Logs.info(fun k->k"logs to file %S" file);
+      let oc = open_out_bin file in
+      log_to_chan l oc;
+      at_exit (fun () -> close_out_noerr oc))
+    files;
+  ()

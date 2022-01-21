@@ -2,6 +2,7 @@
 (** {1 Evaluate theories} *)
 
 module K = Trustee_core.Kernel
+module Name = Trustee_core.Name
 module Log = Trustee_core.Log
 type 'a or_error = 'a Trustee_core.Error.or_error
 
@@ -69,8 +70,8 @@ let interpr_of_sub (sub:Thy_file.sub) : K.Theory.interpretation =
   |> Iter.map
     (function
       | Interp_file.I_const (a,b)
-      | Interp_file.I_ty (a,b) -> a,b)
-  |> Str_map.of_iter
+      | Interp_file.I_ty (a,b) -> Name.make a, Name.make b)
+  |> Name.Map.of_iter
 
 (* check a theory *)
 let rec eval_rec_ (self:state) (n:string) : K.Theory.t =
@@ -147,7 +148,7 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
       let th_p = eval_rec_ self p in
       let interp = interpr_of_sub sub in
       begin
-        if imports=[] && Str_map.is_empty interp then th_p
+        if imports=[] && Name.Map.is_empty interp then th_p
         else if imports=[] then K.Theory.instantiate ~interp:interp th_p
         else K.Theory.compose ~interp:interp imports th_p
       end

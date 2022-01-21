@@ -15,10 +15,10 @@ type params = {
       If false, then variables are incomparable and [a > b] implies that
       the multiset of variables of [a] contains the one of [b]. *)
 
-  precedence: K.Name.t -> K.Name.t -> int;
+  precedence: Name.t -> Name.t -> int;
   (** Total order on constants *)
 
-  weight : K.Name.t -> int;
+  weight : Name.t -> int;
   (** Weight of constants. Must always be [>= 1]
       (we ignore the edge cases where one unary symbol can have weight 0
       for simplicity) *)
@@ -203,7 +203,7 @@ end
 let default_params () = {
   var_as_cst=false;
   weight=(fun _ -> 1);
-  precedence=K.Name.compare;
+  precedence=Name.compare;
 }
 
 let compare ?(params=default_params()) (e1:E.t) (e2:E.t) : result =
