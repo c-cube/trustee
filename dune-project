@@ -34,17 +34,16 @@
     (trustee (= :version))
     (odoc :with-doc)))
 
-; TODO: depend on cmdliner to provide subcommands ("check", "repl", "opentheory", etc.)
-; along with relevant options for CI, repl, etc.
 (package
   (name trustee-itp)
-  (synopsis "Syntax and elaborator for a trustee-powered theorem prover")
+  (synopsis "Trustee-powered interactive theorem prover")
   (depends
     (dune (>= "2.0"))
     (containers (and (>= 3.0) (< 4.0)))
     containers-thread
     pp_loc
     logs
+    cmdliner
     (ocaml (>= 4.06.0))
     (odoc :with-doc)))
 
