@@ -23,8 +23,9 @@ jobs:
       with:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
     - run: opam pin -n .
-    - run: opam depext -yt trustee
+    - run: opam depext -yt trustee trustee-itp trustee-lsp
     - run: opam install -t . --deps-only
     - run: opam exec -- dune build -p trustee
     - run: opam exec -- dune runtest -p trustee
       if: ${{ matrix.os == 'ubuntu-latest'}}
+    - run: opam exec -- dune build -p trustee,trustee-itp,trustee-lsp
