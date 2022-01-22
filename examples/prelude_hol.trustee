@@ -3,22 +3,18 @@
 
 # TODO: RAppLeft/RAppRight
 
-declare tau : type end
+declare tau : type ;
 
-def T : bool by DefTrue :=
-  let f := (\x: bool. x) in f = f
-end
+def T : bool := let f := (\x: bool. x) in f = f ;
 
-show expr
-  (T = T) = T
-end
+show (T = T) = T;
 
 goal T = T
-  by proof refl T end
-end
+  by refl T
+;
 
-show T end
-show DefTrue end
+show T;
+show T'Def;
 
 show
   proof refl T end

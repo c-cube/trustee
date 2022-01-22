@@ -14,6 +14,8 @@ module Const = struct
   let make ~loc (name:Name.t) : t = {view=name;loc}
   let make_str ~loc s = make ~loc (Name.make s)
   let pp out (self:t) = Name.pp out self.view
+
+  let bool : t = make_str ~loc:Loc.none "bool"
 end
 
 (** A variable, bound or free.
@@ -138,6 +140,7 @@ module Expr = struct
   let var' ~loc v ty : t = var ~loc (Var.make ~loc v ty)
   let const ~loc n : t = mk_ ~loc (Const n)
   let const_str ~loc n : t = const ~loc @@ Const.make_str ~loc n
+  let bool : t = const ~loc:Loc.none Const.bool
   let meta ~loc (s:string) ty : t = mk_ ~loc (Meta {ty; name=s})
   let app (f:t) (args:t list) : t =
     if args=[] then f

@@ -3,16 +3,13 @@ open Common_
 
 module A = Parse_ast
 module AE = A.Expr
-module KProof = Proof
 
 type position = Position.t
-type location = A.location
-let noloc: location = Loc.none
 
 type expr = {
   view: view;
   mutable ty: ty option;
-  loc: location;
+  loc: Loc.t;
 }
 
 and ty = expr
@@ -27,8 +24,19 @@ and var = {
 and bvar = {
   bv_name: ID.t;
   bv_ty: ty;
-  bv_loc: location;
+  bv_loc: Loc.t;
 }
+
+and const = {
+  c_name: ID.t;
+  c_ty: ty;
+  c_loc: Loc.t;
+  c_args: const_args;
+}
+
+and const_args =
+  | C_arity of int
+  | C_vars of var list
 
 and binding = bvar * expr
 
@@ -41,36 +49,39 @@ and view =
   | BVar of bvar
   | Meta of meta
   | Const of {
-      c: K.const;
+      c: const;
       args: ty list;
     }
   | App of expr * expr
   | Lambda of bvar * expr
   | Eq of expr * expr
   | Let of binding list * expr
-  | KExpr of K.Expr.t
 
 and meta = {
   meta_name: string;
   meta_type: expr;
-  meta_loc: location;
+  meta_loc: Loc.t;
   mutable meta_deref: expr option;
-}
-
-(** Pure typing environment *)
-and ty_env = {
-  env_consts: K.const A.with_loc Str_map.t;
-  env_theorems: K.Thm.t A.with_loc Str_map.t;
 }
 
 type subst = (var * expr) list
 
+type thm = {
+  thm_concl: expr;
+  thm_hyps: expr list;
+  thm_loc: Loc.t;
+}
+
+(** Pure typing environment *)
+type ty_env = {
+  env_consts: const Name.Map.t;
+  env_theorems: thm Name.Map.t;
+}
+
 type typing_state = {
-  ctx: K.Ctx.t;
   mutable fvars: var Str_map.t;
   mutable notation: Notation.t;
   mutable ty_env: ty_env;
-  mutable cur_file: string;
   mutable gensym: int;
   mutable to_gen: meta list; (* to generalize *)
 }
@@ -102,56 +113,78 @@ module Meta = struct
   let pp out m = Fmt.fprintf out "?%s" m.meta_name
 end
 
-(** Follow assigned meta-variables *)
-let[@inline][@unroll 1] rec expr_deref_ (e:expr) : expr =
-  match e.view with
-  | Meta {meta_deref=Some u; _} -> expr_deref_ u
-  | _ -> e
+module E0_ = struct
+  (** Follow assigned meta-variables *)
+  let[@inline][@unroll 1] rec expr_deref_ (e:expr) : expr =
+    match e.view with
+    | Meta {meta_deref=Some u; _} -> expr_deref_ u
+    | _ -> e
 
-let rec pp_expr_ out (e:expr) : unit =
-  match view_expr_ e with
-  | Kind -> Fmt.string out "kind"
-  | Type -> Fmt.string out "type"
-  | Bool -> Fmt.string out "bool"
-  | Var v -> Fmt.string out v.v_name
-  | BVar v -> ID.pp out v.bv_name
-  | Ty_arrow (a,b) ->
-    Fmt.fprintf out "%a@ -> %a" pp_atom_ a pp_expr_ b;
-  | Const {c;args=[]} -> K.Const.pp out c
-  | Const {c;args} ->
-    Fmt.fprintf out "%a@ %a" K.Const.pp c (pp_list pp_atom_) args
-  | App _ ->
-    let f, l = unfold_app_ e in
-    Fmt.fprintf out "(@[%a@ %a@])" pp_atom_ f (pp_list pp_atom_) l
-  | Meta v -> Meta.pp out v
-  | Lambda _ ->
-    let vars, bod = unfold_lam e in
-    Fmt.fprintf out "(@[\\%a.@ %a@])" (pp_list pp_bvar_ty) vars pp_expr_ bod
-  | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp_expr_ a pp_expr_ b
-  | Let (bs,bod) ->
-    let pp_b out (v,e) : unit =
-      Fmt.fprintf out "@[%a@ = %a@]" ID.pp v.bv_name pp_expr_ e in
-    Fmt.fprintf out "(@[let %a in@ %a@])" (pp_list ~sep:" and " pp_b) bs pp_expr_ bod
-  | KExpr e -> K.Expr.pp out e
-and pp_atom_ out e =
-  let e = expr_deref_ e in
-  match e.view with
-  | Kind | Type | Var _ | BVar _ | Meta _ | Const {args=[];_} ->
-    pp_expr_ out e
-  | _ -> Fmt.fprintf out "(@[%a@])" pp_expr_ e
-and pp_var out v = Fmt.string out v.v_name
-and pp_bvar out v = ID.pp out v.bv_name
-and pp_bvar_ty out (v:bvar) : unit =
-  Fmt.fprintf out "(@[%a@ : %a@])" ID.pp v.bv_name pp_atom_ v.bv_ty
+  let pp_const out c = ID.pp out c.c_name
+
+  let rec pp_expr_ out (e:expr) : unit =
+    match view_expr_ e with
+    | Kind -> Fmt.string out "kind"
+    | Type -> Fmt.string out "type"
+    | Bool -> Fmt.string out "bool"
+    | Var v -> Fmt.string out v.v_name
+    | BVar v -> ID.pp out v.bv_name
+    | Ty_arrow (a,b) ->
+      Fmt.fprintf out "%a@ -> %a" pp_atom_ a pp_expr_ b;
+    | Const {c;args=[]} -> pp_const out c
+    | Const {c;args} ->
+      Fmt.fprintf out "%a@ %a" pp_const c (pp_list pp_atom_) args
+    | App _ ->
+      let f, l = unfold_app_ e in
+      Fmt.fprintf out "(@[%a@ %a@])" pp_atom_ f (pp_list pp_atom_) l
+    | Meta v -> Meta.pp out v
+    | Lambda _ ->
+      let vars, bod = unfold_lam e in
+      Fmt.fprintf out "(@[\\%a.@ %a@])" (pp_list pp_bvar_ty) vars pp_expr_ bod
+    | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp_expr_ a pp_expr_ b
+    | Let (bs,bod) ->
+      let pp_b out (v,e) : unit =
+        Fmt.fprintf out "@[%a@ = %a@]" ID.pp v.bv_name pp_expr_ e in
+      Fmt.fprintf out "(@[let %a in@ %a@])" (pp_list ~sep:" and " pp_b) bs pp_expr_ bod
+  and pp_atom_ out e =
+    let e = expr_deref_ e in
+    match e.view with
+    | Kind | Type | Var _ | BVar _ | Meta _ | Const {args=[];_} ->
+      pp_expr_ out e
+    | _ -> Fmt.fprintf out "(@[%a@])" pp_expr_ e
+  and pp_var out v = Fmt.string out v.v_name
+  and pp_bvar out v = ID.pp out v.bv_name
+  and pp_bvar_ty out (v:bvar) : unit =
+    Fmt.fprintf out "(@[%a@ : %a@])" ID.pp v.bv_name pp_atom_ v.bv_ty
+end
 
 let ty_env_empty_ : ty_env = {
-  env_consts=Str_map.empty;
-  env_theorems=Str_map.empty;
+  env_consts=Name.Map.empty;
+  env_theorems=Name.Map.empty;
 }
 
-(** {2 Satellite types} *)
+module Const = struct
+  open E0_
+  type t = const
+
+  let ty c = c.c_ty
+  let equal c1 c2 = ID.equal c1.c_name c2.c_name
+  let args c = c.c_args
+
+  let pp_args out = function
+    | C_arity n -> Fmt.fprintf out "/%d" n
+    | C_vars args ->
+      Fmt.fprintf out " %a" (Fmt.Dump.list pp_var) args
+  let def_loc c = c.c_loc
+  let pp = pp_const
+
+  (* TODO
+  let bool : t = assert false
+     *)
+end
 
 module Var = struct
+  open E0_
   type t = var
   let make v_name v_ty : var = {v_name; v_ty; }
   let pp = pp_var
@@ -159,10 +192,11 @@ module Var = struct
 end
 
 module BVar = struct
+  open E0_
   type t = bvar
   let make ~loc bv_name bv_ty : bvar = {bv_name; bv_ty; bv_loc=loc; }
   let compare a b = ID.compare a.bv_name b.bv_name
-  let pp = pp_bvar
+  let pp = E0_.pp_bvar
   let to_string = Fmt.to_string pp
   let pp_with_ty = pp_bvar_ty
 
@@ -180,6 +214,7 @@ module BVar = struct
 end
 
 module Expr = struct
+  open E0_
   type t = expr
   let view = view_expr_
   let unfold_app = unfold_app_
@@ -188,9 +223,9 @@ module Expr = struct
 
   (** Iterate on immediate subterms *)
   let iter ~f ~f_bind b_acc (e:expr) : unit =
-    CCOpt.iter (fun u -> f b_acc u) e.ty;
+    Option.iter (fun u -> f b_acc u) e.ty;
     match view e with
-    | Kind | Type | Bool | Const _ | Meta _ | Var _ | BVar _ | KExpr _ -> ()
+    | Kind | Type | Bool | Const _ | Meta _ | Var _ | BVar _ -> ()
     | Ty_arrow (a, b) | Eq (a,b) | App (a,b) ->
       f b_acc a;
       f b_acc b
@@ -243,7 +278,7 @@ module Expr = struct
 
   let pp out e = Fmt.fprintf out "`@[%a@]`" pp_expr_ e
 
-  let kind_ = {view=Kind; loc=noloc; ty=None}
+  let kind_ = {view=Kind; loc=Loc.none; ty=None}
   let[@inline] mk_ ~loc view ty : expr = {view; loc; ty=Some ty}
 
   let[@inline] loc e = e.loc
@@ -253,8 +288,8 @@ module Expr = struct
 
   (** {2 Core operations} *)
 
-  let type_ : expr = mk_ ~loc:noloc Type kind_
-  let bool : expr = mk_ ~loc:noloc Bool type_
+  let type_ : expr = mk_ ~loc:Loc.none Type kind_
+  let bool : expr = mk_ ~loc:Loc.none Bool type_
   let meta ~loc s ty : expr * meta =
     let m = Meta.make ~loc s ty in
     mk_ ~loc (Meta m) ty, m
@@ -292,6 +327,7 @@ module Expr = struct
     | _ -> false
   let[@inline] is_a_type e = is_eq_to_type (ty e)
 
+  (* TODO: remove
   (* convert a kernel expression back into a type *)
   let rec ty_of_expr ~loc e0 (subst:ty Str_map.t) : ty =
     let rec aux env e =
@@ -320,8 +356,11 @@ module Expr = struct
         errorf (fun k->k"cannot convert kernel expression %a@ to a type" K.Expr.pp e)
     in
     aux [] e0
+     *)
 
-  and const ~loc c args : expr =
+  let const (c:const) args : expr =
+    assert false
+      (* TODO
     let subst = match K.Const.args c with
       | K.Const.C_arity _ -> Str_map.empty
       | K.Const.C_ty_vars vs ->
@@ -331,10 +370,7 @@ module Expr = struct
           Str_map.empty vs args
     in
     mk_ ~loc (Const {c;args}) (ty_of_expr ~loc (K.Const.ty c) subst)
-
-  let of_k_expr ~loc e : expr =
-    let ty = ty_of_expr ~loc (K.Expr.ty_exn e) Str_map.empty in
-    mk_ ~loc (KExpr e) ty
+         *)
 
   let subst_bvars (m:expr ID.Map.t) (e:expr) : expr =
     let rec aux m e =
@@ -345,7 +381,6 @@ module Expr = struct
         let ty = aux m ty in
         let loc = e.loc in
         match e.view with
-        | KExpr _ -> e
         | Kind | Type | Bool | Const _ | Meta _ | Var _ -> {e with ty=Some ty}
         | BVar v ->
           begin match ID.Map.find v.bv_name m with
@@ -364,7 +399,7 @@ module Expr = struct
               (fun m1 (v,t) ->
                  let m1, v' = rename_bvar m1 v in
                  let t = aux m t in
-                 ID.Map.add v.bv_name (mk_ ~loc:noloc (BVar v') ty) m1, (v',t))
+                 ID.Map.add v.bv_name (mk_ ~loc:Loc.none (BVar v') ty) m1, (v',t))
               m bs
           in
           mk_ ~loc (Let (bs, aux m bod)) ty
@@ -372,7 +407,7 @@ module Expr = struct
     and rename_bvar m v =
       let ty = aux m v.bv_ty in
       let v' = {v with bv_name=ID.copy v.bv_name; bv_ty=ty} in
-      ID.Map.add v.bv_name (mk_ ~loc:noloc (BVar v') ty) m, v'
+      ID.Map.add v.bv_name (mk_ ~loc:Loc.none (BVar v') ty) m, v'
     in
     aux m e
 
@@ -394,7 +429,7 @@ module Expr = struct
     let unif_exn_ a b = match unif_ a b with
       | Ok () -> ()
       | Error st ->
-        errorf
+        Error.failf ~loc
           (fun k->k
               "@[<hv2>type error@ in the application \
                @[<2>of %a@ of type %a@]@ @[<2>to term %a@ of type %a@]:@ \
@@ -432,9 +467,8 @@ module Expr = struct
         end;
         match a.view, b.view with
         | Type, Type | Kind, Kind | Bool, Bool -> ()
-        | KExpr e1, KExpr e2 when K.Expr.equal e1 e2 -> ()
-        | Bool, Const c when K.Const.is_eq_to_bool c.c -> ()
-        | Const c, Bool when K.Const.is_eq_to_bool c.c -> ()
+        | Bool, Const {c;args=[]} when Name.equal_str (ID.name c.c_name) "bool" -> ()
+        | Const {c;args=[]}, Bool when Name.equal_str (ID.name c.c_name) "bool" -> ()
           (* FIXME
         | Type, Const (c,[]) when K.Const.is_eq_to_type c -> ()
         | Const c, Type when K.Expr.is_eq_to_type c.c -> ()
@@ -445,7 +479,7 @@ module Expr = struct
             ID.equal a.bv_name b.bv_name
             || same_bvar_ renaming a b
           -> ()
-        | Const c1, Const c2 when K.Const.equal c1.c c2.c ->
+        | Const c1, Const c2 when Const.equal c1.c c2.c ->
           aux_l st renaming a b c1.args c2.args
         | Ty_arrow (a1,a2), Ty_arrow (b1,b2) ->
           aux st' renaming a1 b1;
@@ -467,7 +501,7 @@ module Expr = struct
           m2.meta_deref <- Some a;
         | Let _, _ ->
           fail_ st a b (* TODO? *)
-        | (Type | Bool | Kind | Var _ | BVar _ | Eq _ | KExpr _
+        | (Type | Bool | Kind | Var _ | BVar _ | Eq _
           | Const _ | App _ | Ty_arrow _ | Lambda _), _ ->
           fail_ st a b
       )
@@ -491,12 +525,14 @@ module Expr = struct
 
   let let_ ~loc bs bod : expr = mk_ ~loc (Let (bs, bod)) (ty bod)
 
+  (* FIXME
   let lambda ~loc v bod : expr =
     let ty_lam =
       let tyv = deref_ v.bv_ty in
       if is_eq_to_type tyv then (
-        errorf (fun k->k"lambda: cannot bind on a type variable %a@ at %a"
-                   BVar.pp v Loc.pp loc);
+        Error.failf ~loc
+          (fun k->k"lambda: cannot bind on a type variable %a"
+              BVar.pp v);
       ) else (
         ty_arrow ~loc tyv (ty bod)
       )
@@ -575,7 +611,9 @@ module Expr = struct
     let subst = ID.Map.map (fun v -> v, 0) subst in
     aux subst 0 e
 
-  let rec as_queryable e = object
+ *)
+
+  let rec as_queryable (e:t) = object
     inherit Queryable.t
     method loc = e.loc
     method pp out () = Fmt.fprintf out "@[<hv>expr: %a@ type: %a@]" pp e pp (ty e)
@@ -583,7 +621,7 @@ module Expr = struct
       let yield_e e = yield (as_queryable e) in
       let yield_bv v = yield (BVar.as_queryable v); yield (as_queryable v.bv_ty) in
       begin match view e with
-        | Kind | Type | Bool | Const _ | Meta _ | Var _ | BVar _ | KExpr _ -> ()
+        | Kind | Type | Bool | Const _ | Meta _ | Var _ | BVar _ -> ()
         | Ty_arrow (a, b) | Eq (a,b) | App (a,b) -> yield_e a; yield_e b
         | Lambda (v, bod) -> yield_bv v; yield_e bod
         | Let (bs, bod) ->
@@ -594,11 +632,24 @@ module Expr = struct
       match view e with
       | BVar v -> Some v.bv_loc (* binding point *)
       | Const {c; _} ->
-        let r = K.Const.def_loc c in
-        Log.debugf 5 (fun k->k"def-loc for %a: %a" pp e (Fmt.opt Loc.pp) r);
-        r
+        let r = Const.def_loc c in
+        Log.debugf 5 (fun k->k"def-loc for %a: %a" pp e Loc.pp r);
+        Some r
       | _ -> None
   end
+end
+
+module Thm = struct
+  type t = thm
+  let loc self = self.thm_loc
+  let concl self = self.thm_concl
+  let hyps self = self.thm_hyps
+
+  let pp out self =
+    Fmt.fprintf out "@[<hv>";
+    List.iter (fun e -> Fmt.fprintf out "%a,@ " Expr.pp e) self.thm_hyps;
+    Fmt.fprintf out "@[|- %a@]@]" Expr.pp self.thm_concl
+  let pp_quoted out self = Fmt.fprintf out "`%a`" pp self
 end
 
 module Subst = struct
@@ -620,6 +671,7 @@ module Subst = struct
     )
   let to_string = Fmt.to_string pp
 
+  (* TODO
   let to_k_subst ?(subst=ID.Map.empty) ctx (self:t) =
     List.fold_left
       (fun s (v,t) ->
@@ -627,6 +679,7 @@ module Subst = struct
          let t = Expr.to_k_expr ~subst ctx t in
          K.Subst.bind s v t)
       K.Subst.empty self
+     *)
 end
 
 let name_with_def_as_q ?def_loc (name:string) ~loc pp_def def : Queryable.t =
@@ -639,94 +692,77 @@ let id_with_def_as_q ?def_loc (id:ID.t) ~loc pp_def def : Queryable.t =
 module Ty_env = struct
   type t = ty_env
 
-  let declare_const name (c:K.const A.with_loc) (self:t) : t =
-    Log.debugf 5 (fun k->k"declare new const@ :name %S@ :expr %a@ :ty %a@ :ty-vars %a"
-                     name K.Const.pp c.A.view K.Expr.pp (K.Const.ty c.A.view)
-                     K.Const.pp_args (K.Const.args c.view));
-    {self with env_consts = Str_map.add name c self.env_consts}
+  let declare_const name (c:const) (self:t) : t =
+    Log.debugf 5
+      (fun k->k"declare new const@ :name %a@ :expr %a@ :ty %a@ :ty-vars %a"
+          Name.pp name Const.pp c Expr.pp (Const.ty c)
+          Const.pp_args (Const.args c));
+    {self with env_consts = Name.Map.add name c self.env_consts}
 
   let define_thm name th (self:t) : t =
-    {self with env_theorems = Str_map.add name th self.env_theorems }
+    {self with env_theorems = Name.Map.add name th self.env_theorems }
 
   type named_object =
-    | N_const of K.const A.with_loc
-    | N_thm of K.Thm.t A.with_loc
-    | N_rule of Proof.Rule.t A.with_loc
+    | N_const of const
+    | N_thm of thm
+    (* TODO: meta exprs/consts *)
 
-  let find_rule (_self:t) name : KProof.Rule.t option =
-    match Proof.Rule.find_builtin name with
-    | Some _ as r -> r
-    | None ->
-      None (* TODO: lookup in locally defined rules *)
+  let find_const self name : const option =
+    Name.Map.get name self.env_consts
 
-  let find_const self name : K.const A.with_loc option =
-    Str_map.get name self.env_consts
-
-  let find_thm self name : K.Thm.t A.with_loc option =
-    Str_map.get name self.env_theorems
+  let find_thm self name : thm option =
+    Name.Map.get name self.env_theorems
 
   let find_named (self:t) name : named_object option =
-    try Some (N_const (Str_map.find name self.env_consts))
+    try Some (N_const (Name.Map.find name self.env_consts))
     with Not_found ->
-    try Some (N_thm (Str_map.find name self.env_theorems))
+    try Some (N_thm (Name.Map.find name self.env_theorems))
     with Not_found ->
-    match find_rule self name with
-    | Some r -> Some (N_rule {view=r; loc=noloc}) (* FIXME: store location for defined rules *)
-    | None ->
       None (* TODO: look in local defined rules *)
 
   let empty : t = ty_env_empty_
 
   let iter (self:t) : _ Iter.t =
     let i1 =
-      Str_map.to_iter self.env_consts
+      Name.Map.to_iter self.env_consts
       |> Iter.map (fun (n,c) -> n, N_const c)
     and i2 =
-      Str_map.to_iter self.env_theorems
+      Name.Map.to_iter self.env_theorems
       |> Iter.map (fun (n,th) -> n, N_thm th)
-    and i3 =
-      (* TODO: locally defined rules *)
-      Iter.of_list Proof.Rule.builtins
-      |> Iter.map (fun r -> Proof.Rule.name r, N_rule {A.view=r;loc=noloc})
     in
-    Iter.append_l [i3; i1; i2]
+    Iter.append_l [i1; i2]
 
   let completions (self:t) (s:string) : _ Iter.t =
     iter self
-    |> Iter.filter (fun (name,_) -> CCString.prefix ~pre:s name)
+    |> Iter.filter (fun (name,_) -> CCString.prefix ~pre:s (Name.to_string name))
 
   let pp_named_object out = function
     | N_const c ->
-      Fmt.fprintf out "%a : %a" K.Const.pp c.A.view K.Expr.pp (K.Const.ty c.A.view)
-    | N_thm th -> K.Thm.pp_quoted out th.A.view
-    | N_rule r ->
-      let module R = Proof.Rule in
-      Fmt.fprintf out "%a : %a" R.pp r.A.view R.pp_signature (R.signature r.A.view)
+      Fmt.fprintf out "%a : %a" Const.pp c Expr.pp (Const.ty c)
+    | N_thm th -> Thm.pp_quoted out th
 
   let string_of_named_object = Fmt.to_string pp_named_object
 
   let loc_of_named_object = function
-    | N_const e -> e.A.loc
-    | N_rule r -> r.A.loc
-    | N_thm th -> th.A.loc
+    | N_const c -> c.c_loc
+    | N_thm th -> th.thm_loc
 
   let pp out (self:t) : unit =
     let k_of_no = function
       | N_const _ -> "expr"
       | N_thm _ -> "thm"
-      | N_rule _ -> "rule"
     in
-    let pp_pair out (name,c) = Fmt.fprintf out "(@[%s : %s@])" name (k_of_no c) in
-    Fmt.fprintf out "{@[<hv>ty_env@ %a@;<0 -1>@]}" (Fmt.iter pp_pair) (iter self)
+    let pp_pair out (name,c) = Fmt.fprintf out "(@[%a : %s@])" Name.pp name (k_of_no c) in
+    Fmt.fprintf out "{@[<hv>ty_env@ %a@;<0 -1>@]}"
+      (Fmt.iter pp_pair) (iter self)
 
   let name_with_def_as_q ~loc (n:named_object) : Queryable.t = object
     inherit Queryable.t
     method loc = loc
     method! def_loc = Some (loc_of_named_object n)
     method pp out () = match n with
-      | N_const c -> K.Const.pp out c.view
-      | N_thm th -> K.Thm.pp_quoted out th.view
-      | N_rule r -> Proof.Rule.pp out r.view
+      | N_const c -> Const.pp out c
+      | N_thm th -> Thm.pp_quoted out th
   end
 
   let to_string = Fmt.to_string pp
@@ -753,7 +789,7 @@ module Typing_state = struct
          | None ->
            (* TODO: emit warning if this is a type variable *)
            let v = Var.make m.meta_name m.meta_type in
-           m.meta_deref <- Some (Expr.var ~loc:noloc v))
+           m.meta_deref <- Some (Expr.var ~loc:m.meta_loc v))
       metas;
     ()
 
@@ -765,22 +801,22 @@ module Typing_state = struct
 
   type named_object = Ty_env.named_object
 
-  let find_thm self name : K.Thm.t A.with_loc option =
+  let find_thm self name : Thm.t option =
     Ty_env.find_thm self.ty_env name
 
   let find_named (self:t) name : named_object option =
     Ty_env.find_named self.ty_env name
 
-  let create ?ty_env ctx : t =
+  let create ?ty_env () : t =
     let ty_env = match ty_env with
       | Some e -> e
       | None ->
         Ty_env.empty
-        |> Ty_env.declare_const "bool" {A.view=K.Const.bool ctx; loc=noloc}
+        (* TODO
+           |> Ty_env.declare_const (Name.make "bool") Const.bool
+        *)
     in
     let env = {
-      ctx;
-      cur_file="";
       gensym=0;
       ty_env;
       fvars=Str_map.empty;
@@ -790,248 +826,7 @@ module Typing_state = struct
     env
 end
 
-(** {2 Processing proofs} *)
-module Proof = struct
-  module R = Proof.Rule
-
-  type t = {
-    loc: location;
-    view: view
-  }
-
-  and view =
-    | Proof_atom of step
-    | Proof_steps of {
-        lets: pr_let list;
-        (** intermediate steps *)
-        ret: step;
-        (** proof to return *)
-      }
-
-  (** named steps *)
-  and pr_let =
-    | Let_expr of bvar * expr
-    | Let_step of ID.t A.with_loc * step
-
-  and step = {
-    s_loc: location;
-    s_view: step_view;
-    mutable s_thm: K.Thm.t option
-  }
-
-  (* TODO: put a loc on each rule and rule_arg, so we can query them *)
-  and step_view =
-    | Pr_apply_rule of Proof.Rule.t A.with_loc * rule_arg list
-    | Pr_sub_proof of t
-    | Pr_error of unit Fmt.printer (* parse error *)
-
-  (** An argument to a rule *)
-  and rule_arg =
-    | Arg_var_step of {
-        name: ID.t;
-        loc: location; (* loc of the variable *)
-        points_to: step;
-      }
-    | Arg_step of step
-    | Arg_thm of K.Thm.t A.with_loc * location
-    | Arg_expr of expr
-    | Arg_subst of subst
-
-  type rule_signature = Proof.Rule.signature
-
-  let[@inline] view p = p.view
-  let[@inline] loc p = p.loc
-
-  let rec pp out (self:t) : unit =
-    Fmt.fprintf out "@[<hv>@[<hv2>proof@ ";
-    begin match self.view with
-      | Proof_atom s -> pp_step ~top:true out s
-      | Proof_steps {lets; ret} ->
-        List.iter (fun l -> Fmt.fprintf out "%a@ " pp_pr_let l) lets;
-        pp_step ~top:true out ret
-    end;
-    Fmt.fprintf out "@]@ end@]"
-
-  and pp_pr_let out = function
-    | Let_expr (v,e) ->
-      Fmt.fprintf out "@[<2>let expr %a =@ %a in@]" BVar.pp v Expr.pp e
-    | Let_step (name,p) ->
-      Fmt.fprintf out "@[<2>let %a =@ %a in@]"
-        ID.pp name.view (pp_step ~top:true) p
-
-  and pp_step ~top out (s:step) : unit =
-    match s.s_view with
-    | Pr_apply_rule (r, []) when top -> R.pp out r.view
-    | Pr_apply_rule (r, args) ->
-      if not top then Fmt.char out '(';
-      Fmt.fprintf out "@[<hv2>%a@ %a@]" R.pp r.view (pp_list pp_rule_arg) args;
-      if not top then Fmt.char out ')';
-    | Pr_sub_proof p -> pp out p
-    | Pr_error e -> Fmt.fprintf out "<@[error:@ %a@]>" e ()
-
-  and pp_step_with_res out (self:step) : unit =
-    Fmt.fprintf out "`@[%a@]`%a"
-      (pp_step ~top:true) self (pp_step_res "returns") self
-
-  and pp_step_res sep out (self:step) : unit =
-    match self.s_thm with
-    | None -> ()
-    | Some th -> Fmt.fprintf out "@ %s %a" sep K.Thm.pp_quoted th
-
-  and pp_rule_arg out (a:rule_arg) : unit =
-    match a with
-    | Arg_var_step {name; points_to; _} ->
-      Fmt.fprintf out "@[%a%a@]" ID.pp name (pp_step_res ":=") points_to
-    | Arg_step s -> pp_step ~top:false out s (* always in ( ) *)
-    | Arg_thm (th,_) -> K.Thm.pp_quoted out th.view
-    | Arg_expr e -> Expr.pp out e
-    | Arg_subst s -> Subst.pp out s
-
-  (* expose a proof to LSP queries *)
-  let rec as_queryable (self:t) : Queryable.t = object
-    inherit Queryable.t
-    method pp out () = pp out self
-    method loc = self.loc
-    method! children =
-      match self.view with
-      | Proof_atom a -> Iter.return (step_as_q a)
-      | Proof_steps {lets; ret} ->
-        Iter.cons (step_as_q ret)
-          (Iter.of_list lets |> Iter.flat_map let_as_q)
-  end
-  and step_as_q (self:step) : Queryable.t = object
-    inherit Queryable.t
-    method pp out () = pp_step_with_res out self
-    method loc = self.s_loc
-    method! children = match self.s_view with
-      | Pr_apply_rule (r, l) ->
-        Iter.cons (rule_as_q r)
-          (Iter.of_list l |> Iter.filter_map arg_q)
-      | Pr_sub_proof p -> Iter.return (as_queryable p)
-      | Pr_error _ -> Iter.empty
-  end
-  and rule_as_q (r:R.t A.with_loc) : Queryable.t = object
-    inherit Queryable.t
-    method loc = r.loc
-    method pp out () =
-      (* TODO: inline doc for each rule *)
-      Fmt.fprintf out "@[<v>rule %a.@ @[<hv>signature:@ %a@]@]" R.pp r.view
-        R.pp_signature (R.signature r.view)
-  end
-  and arg_q (self:rule_arg) : Queryable.t option =
-    match self with
-    | Arg_step s -> Some (step_as_q s)
-    | Arg_expr e -> Some (Expr.as_queryable e)
-    | Arg_thm (th,loc) ->
-      Some (Queryable.mk_pp ~def_loc:th.loc ~loc ~pp:K.Thm.pp_quoted th.view)
-    | Arg_var_step v ->
-      Some (Queryable.mk_pp ~def_loc:v.points_to.s_loc ~loc:v.loc ~pp:pp_rule_arg self)
-    | Arg_subst _ -> None
-  and let_as_q (l:pr_let) : Queryable.t Iter.t =
-    match l with
-    | Let_expr (v, e) ->
-      Iter.of_list [BVar.as_queryable v; Expr.as_queryable e]
-    | Let_step (v, s) ->
-      let v_as_q = match s.s_thm with
-        | None -> []
-        | Some th ->
-          [id_with_def_as_q v.view ~loc:v.loc K.Thm.pp_quoted th]
-      in
-      Iter.of_list (v_as_q @ [step_as_q s])
-
-  let to_string = Fmt.to_string pp
-  let pp_rule_signature = R.pp_signature
-
-  let iter_subs (p:t) : t Iter.t =
-    match p.view with
-    | Proof_atom _
-    | Proof_steps _ -> Iter.empty (* TODO *)
-
-  let mk ~loc (view:view) : t = {view; loc}
-  let mk_step ~loc (s_view:step_view) : step =
-    {s_view; s_loc=loc; s_thm=None; }
-
-  type env = {
-    e_subst: K.Expr.t ID.Map.t;
-    e_th: K.Thm.t ID.Map.t; (* steps *)
-  }
-
-  (* how to run a proof, and obtain a theorem at the end *)
-  let run_exn ?(on_step_res=fun _ _ ->())
-      (ctx:K.Ctx.t) (self:t) : K.Thm.t =
-    let module KR = KProof.Rule in
-    let rec run_pr (env:env) (p:t) =
-      let loc = p.loc in
-      try
-        match p.view with
-        | Proof_atom s -> run_step env s
-        | Proof_steps { lets; ret } ->
-          let env =
-            List.fold_left
-              (fun env l ->
-                match l with
-                | Let_expr (v,u) ->
-                  let u = Expr.to_k_expr ~subst:env.e_subst ctx u in
-                  {env with e_subst=ID.Map.add v.bv_name u env.e_subst}
-                | Let_step (name,s) ->
-                  let th = run_step env s in
-                  on_step_res s th;
-                  {env with e_th = ID.Map.add name.view th env.e_th})
-              env lets in
-          run_step env ret
-      with e ->
-        errorf ~src:e (fun k->k"@[<2>while checking proof@ at %a@]" Loc.pp loc)
-
-    and run_step env (s:step) : K.Thm.t =
-      let loc = s.s_loc in
-      match s.s_thm with
-      | Some th -> th
-      | None ->
-        let th =
-          try
-            match s.s_view with
-            | Pr_sub_proof p -> run_pr env p
-            | Pr_error e ->
-              errorf (fun k->k"invalid proof step@ at %a:@ %a" Loc.pp loc e())
-            | Pr_apply_rule (r, args) ->
-              let args = List.map (conv_arg ~loc env) args in
-              Log.debugf 10
-                (fun k->k"apply rule %a@ to args %a"
-                    KR.pp r.view (Fmt.Dump.list KR.pp_arg_val) args);
-              KR.apply ctx r.view args
-          with e ->
-            errorf ~src:e
-              (fun k->k"@[<2>while checking proof step@ at %a@]"
-                  Loc.pp loc)
-        in
-        s.s_thm <- Some th; (* cache the result *)
-        th
-
-    (* convert a rule argument *)
-    and conv_arg ~loc env = function
-      | Arg_expr e ->
-        KR.AV_expr (Expr.to_k_expr ~subst:env.e_subst ctx e)
-      | Arg_subst s ->
-        KR.AV_subst (Subst.to_k_subst ~subst:env.e_subst ctx s)
-      | Arg_step s ->
-        let th = run_step env s in
-        KR.AV_thm th
-      | Arg_thm (th,_) -> KR.AV_thm th.view
-      | Arg_var_step v ->
-        begin match ID.Map.find v.name env.e_th with
-          | th -> KR.AV_thm th
-          | exception Not_found ->
-            errorf
-              (fun k->k"unbound proof step `%a`@ at %a" ID.pp v.name Loc.pp loc)
-        end
-    in
-    run_pr {e_th=ID.Map.empty; e_subst=ID.Map.empty} self
-
-  let run ?on_step_res ctx (self:t) : K.Thm.t or_error =
-    try Ok (run_exn ?on_step_res ctx self)
-    with Trustee_error.E e -> Error e
-end
-
+(*
 module Goal = struct
   type t = {
     hyps: expr list;
@@ -1064,9 +859,9 @@ module Goal = struct
       (List.map (Expr.to_k_expr ctx) self.hyps)
       (Expr.to_k_expr ctx self.concl)
 end
+   *)
 
-module Thm = K.Thm
-
+(* FIXME
 (** {2 type inference} *)
 module Ty_infer = struct
   type st = typing_state
@@ -1389,6 +1184,7 @@ module Ty_infer = struct
     let e0 = {e_expr=Str_map.empty; e_step=Str_map.empty} in
     infer_proof e0 pr
 end
+*)
 
 module Index = struct
   (* TODO: at some point, if [qs] is too large, group them into sub-lists
@@ -1397,7 +1193,7 @@ module Index = struct
 
   type idx = {
     qs: Queryable.t list;
-    ty_envs: (location * ty_env) list;
+    ty_envs: (Loc.t * ty_env) list;
   }
 
   type t =
@@ -1416,7 +1212,7 @@ module Index = struct
       Log.debugf 20 (fun k->k"(@[examine queryable@ `%a`@ at %a@])" q#pp () Loc.pp q#loc);
       if Loc.contains q#loc pos then (
         Log.debugf 5 (fun k->k"(@[matched queryable@ `%a`@ at %a@])" q#pp () Loc.pp q#loc);
-        let sub = Iter.find_map aux q#children |> CCOpt.get_or ~default:[] in
+        let sub = Iter.find_map aux q#children |> Option.get_or ~default:[] in
         Some (q::sub)
       ) else None
     in
@@ -1450,11 +1246,12 @@ module Index = struct
     | Idx idx -> find idx.ty_envs
 end
 
+(* TODO: fix that and move it into its own module?
 module Process_stmt = struct
   type t = {
     st: Typing_state.t;
-    on_show: location -> unit Fmt.printer -> unit;
-    on_error: location -> unit Fmt.printer -> unit;
+    on_show: Loc.t -> unit Fmt.printer -> unit;
+    on_error: Loc.t -> unit Fmt.printer -> unit;
   }
 
   let reset_ (self:t) =
@@ -1696,4 +1493,5 @@ module Process_stmt = struct
 end
 
 let process_stmt = Process_stmt.top
+   *)
 

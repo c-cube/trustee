@@ -1,10 +1,10 @@
 
 
 module Loc = struct
-  type t = Loc.ctx * Loc.t
+  type t = Loc.t
 
-  let pp out (ctx,loc) =
-    Fmt.fprintf out "@[<v>%a@]@]" (Loc.pp ~ctx) loc
+  let pp out loc =
+    Fmt.fprintf out "@[<v>%a@]@]" Loc.pp loc
 end
 
 module E = Trustee_core.Error.Make(Loc)

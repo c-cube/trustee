@@ -1,29 +1,18 @@
-(** Locations
 
-    A location is a range between two positions in a string (a source file).
-*)
+(** Full location *)
 
-module Fmt = CCFormat
+module LL = Local_loc
 
-type ctx = private {
-  str: string;
-  filename: string;
-  input: Loc_input.t;
-  index: Line_index.t lazy_t;
-}
+type t
 
-val create : filename:string -> string -> ctx
-
-type t = private int
+val pp : t Fmt.printer
 
 val none : t
+val make : ctx:LL.ctx -> LL.t -> t
 
-val make : ctx:ctx -> off1:int -> off2:int -> t
-val of_lexbuf : ctx:ctx -> Lexing.lexbuf -> t
-val tr_position : ctx:ctx -> left:bool -> int -> Lexing.position
-val offsets : t -> int * int
-
-val pp : ctx:ctx -> t Fmt.printer
+val filename : t -> string
+val positions : t -> Position.t * Position.t
+val contains : t -> Position.t -> bool
 
 val union : t -> t -> t
 val union_l : t -> f:('a -> t) -> 'a list -> t
@@ -34,4 +23,3 @@ module Infix : sig
 end
 
 include module type of Infix
-

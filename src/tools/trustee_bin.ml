@@ -1,11 +1,15 @@
 
 open Trustee_core.Sigs
 
+module Log = (val Logs.src_log @@ Logs.Src.create "bin")
+
 module ITP = Trustee_itp
+module Error = Trustee_core.Error
 module K = Trustee_core.Kernel
 module A = Trustee_syntax.Parse_ast
 module TA = Trustee_syntax.Type_ast
 module Syntax = Trustee_syntax.Syntax
+module Notation = Trustee_syntax.Notation
 module Loc = Trustee_syntax.Loc
 
 (*
@@ -14,28 +18,31 @@ module Loc = Trustee_syntax.Loc
    *)
 
 module Cat = struct
+  let debug= ref false
   let args = [
-    "-d", Arg.Int Log.set_level, " debug level";
+    "-d", Arg.Set debug, " enable debug";
   ] |> Arg.align
 
   let run args =
-    Log.debugf 1 (fun k->k"cat files %a" (Fmt.Dump.(list string)) args);
-    let env = A.Env.create () in
+    ITP.Logger.setup_logs ~debug:!debug ();
+    Log.app (fun k->k"cat files %a" (Fmt.Dump.(list string)) args);
+    let notation = Notation.Ref.create () in
     List.iter
       (fun file ->
          match CCIO.File.read file with
          | Ok s ->
            let lex = Syntax.Lexer.create ~file s in
-           let l = Syntax.parse_top_l_process ~file ~env lex in
+           let l = Syntax.parse_top_l ~notation lex in
            Fmt.printf "# file %S@." file;
-           Fmt.printf "@[<v>%a@]@." (pp_list A.Top_stmt.pp) l
+           Fmt.printf "@[<v>%a@]@." (pp_list A.Top.pp) l
          | Error e ->
-           errorf (fun k->k"cannot read '%s': %s" file e))
+           Error.failf (fun k->k"cannot read '%s': %s" file e))
       args;
     ()
 
 end
 
+(* TODO
 module Check = struct
   let args = [
     "-d", Arg.Int Log.set_level, " debug level";
@@ -73,20 +80,23 @@ module Check = struct
     ()
 
 end
+   *)
 
 module OT_check = struct
   module Article = Trustee_opentheory.Article
   module VM = Trustee_opentheory.VM
 
   let cat_ = ref false
+  let debug = ref false
 
   let args = [
-    "-d", Arg.Int Log.set_level, " debug level";
+    "-d", Arg.Set debug, " enable debug";
     "-cat", Arg.Set cat_, " print back the parsed articles";
   ] |> Arg.align
 
   let run args =
-    Log.debugf 1 (fun k->k"check opentheory files %a" (Fmt.Dump.(list string)) args);
+    ITP.Logger.setup_logs ~debug:!debug ();
+    Log.app (fun k->k"check opentheory files %a" (Fmt.Dump.(list string)) args);
     let ctx = K.Ctx.create() in
     let vm = VM.create ~in_scope:[] ctx in
     try
@@ -105,7 +115,7 @@ module OT_check = struct
                  );
                  VM.clear_dict vm; (* not reused *)
                | Error e ->
-                 Fmt.eprintf "error: %a@." Trustee_error.pp e;
+                 Fmt.eprintf "error: %a@." Error.pp e;
                  raise Exit
              ))
         args;
@@ -117,7 +127,9 @@ end
 
 let cmds = [
   "cat", (Cat.args, Cat.run);
+  (* TODO
   "check", (Check.args, Check.run);
+     *)
   "ot-check", (OT_check.args, OT_check.run);
 ]
 
@@ -132,7 +144,7 @@ let () =
   in
   Arg.parse_dynamic args
     (fun s ->
-       if CCOpt.is_some !r then (
+       if Option.is_some !r then (
          anon_args := s :: !anon_args
        ) else (
          match List.assoc s cmds with
