@@ -2,6 +2,7 @@
 module Position = Position
 module Loc = Loc
 module Loc_input = Loc_input
+module Local_loc = Local_loc
 
 include Common_
 

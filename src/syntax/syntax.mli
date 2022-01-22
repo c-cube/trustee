@@ -1,6 +1,8 @@
 
 (** {1 Expression parser} *)
 
+open Common_
+module LL = Local_loc
 module A = Parse_ast
 
 type token =
@@ -45,18 +47,16 @@ end
    and update it on the fly. *)
 
 val parse_expr :
-  ?q_args:K.Expr.t list ->
-  env:A.Env.t -> Lexer.t -> A.expr
+  notation:Notation.Ref.t ->
+  Lexer.t -> A.Expr.t
 
 val parse_top :
-  env:A.Env.t ->
+  notation:Notation.Ref.t ->
   Lexer.t ->
-  A.top_statement option
+  A.Top.t option
 
-val parse_top_l_process :
-  ?file:string ->
-  env:A.Env.t ->
+val parse_top_l :
+  notation:Notation.Ref.t ->
   Lexer.t ->
-  A.top_statement list
-(** Parse statements, processing each one with {!Parse_ast.Env.process}
-    as soon as it is produced *)
+  A.Top.t list
+(** Parse statements, updating notations when they are declared. *)

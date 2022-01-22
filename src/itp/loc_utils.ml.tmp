@@ -1,10 +1,10 @@
 
 module Loc = Trustee_syntax.Loc
+module LL = Trustee_syntax.Local_loc
 module Position = Trustee_syntax.Position
 module Loc_input = Trustee_syntax.Loc_input
 
 type t = Loc.t
-type ctx = Loc.ctx
 
 let conv_loc_input (self:Loc_input.t) =
   match Loc_input.view self with

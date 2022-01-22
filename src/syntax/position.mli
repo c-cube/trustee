@@ -4,8 +4,10 @@
     A position in a string. Line and column are 1-based, so that compatibility
     with LSP is easier. *)
 
+open Common_
+
 type t
-[@@deriving show]
+val pp : t Fmt.printer
 
 val line : t -> int
 val col : t -> int

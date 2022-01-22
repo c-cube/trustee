@@ -1,4 +1,4 @@
-module Fmt = CCFormat
+open Common_
 
 let () = assert (Sys.int_size = 63)
 

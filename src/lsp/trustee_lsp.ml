@@ -5,9 +5,11 @@ module ITP = Trustee_itp
 
 module Log = T.Log
 module K = T.Kernel
-module Loc = T.Loc
+module Loc = Trustee_syntax.Loc
+module TPos = Trustee_syntax.Position
 module PA = Trustee_syntax.Parse_ast
 module TA = Trustee_syntax.Type_ast
+module Notation = Trustee_syntax.Notation
 module Syntax = Trustee_syntax.Syntax
 
 module Linol = Linol.Make(Linol.Blocking_IO)
@@ -15,22 +17,23 @@ module Position = Linol.Position
 module Range = Linol.Range
 module LP = Lsp.Types
 
-let lsp_pos_of_pos (p:T.Position.t) : Position.t =
-  Position.create ~line:(p.line-1) ~character:(p.col-1)
+let lsp_pos_of_pos (p:TPos.t) : Position.t =
+  Position.create ~line:(TPos.line p-1) ~character:(TPos.col p-1)
 
-let pos_of_lsp_pos (p:Position.t) : T.Position.t =
-  T.Position.make ~line:(p.line+1) ~col:(p.character+1)
+let pos_of_lsp_pos (p:Position.t) : TPos.t =
+  TPos.make ~line:(p.line+1) ~col:(p.character+1)
 
-let lsp_range_of_loc (l:T.Loc.t) : Range.t =
-  Range.create ~start:(lsp_pos_of_pos l.start) ~end_:(lsp_pos_of_pos l.end_)
+let lsp_range_of_loc (l:Loc.t) : Range.t =
+  let start, end_ = Loc.positions l in
+  Range.create ~start:(lsp_pos_of_pos start) ~end_:(lsp_pos_of_pos end_)
 
 type parsed_buffer = {
-  penv: PA.Env.t;
+  penv: Notation.Ref.t;
   env: TA.Ty_env.t;
   idx: TA.Index.t;
 }
 
-let ident_under_pos ~file (s:string) (pos:T.Position.t) : (string * Loc.t) option =
+let ident_under_pos ~file (s:string) (pos:TPos.t) : (string * Loc.t) option =
   let open Syntax in
   let module Str = Trustee_syntax.Tok_stream in
   let toks = Lexer.create ~file s in
@@ -39,9 +42,9 @@ let ident_under_pos ~file (s:string) (pos:T.Position.t) : (string * Loc.t) optio
     else (
       match Str.cur toks with
       | SYM s, loc when Loc.contains loc pos -> Some (s, loc)
-      | _, loc when T.Position.leq pos loc.start -> None (* gone far enough *)
+      | _, loc when TPos.(pos <= fst (Loc.positions loc)) -> None (* gone far enough *)
       | _ ->
-        Str.junk toks;
+        Str.consume toks;
         find()
     )
   in
@@ -57,15 +60,16 @@ let trustee_server _ctx = object (self)
         ~(notify_back:Linol.notify_back) (d:LP.DocumentUri.t) (content:string) =
       (* TODO: use penv/env from dependencies, if any, once we have import *)
 
-      let penv = PA.Env.create () in
+      let notation = Notation.Ref.create() in
       let stmts =
-        Syntax.parse_top_l_process
-          ~file:d ~env:penv
+        Syntax.parse_top_l
+          ~notation
           (Syntax.Lexer.create ~file:d content)
       in
       Log.debugf 3 (fun k->k "for %s: parsed %d statements" d (List.length stmts));
 
       let diags = ref [] in
+      (* TODO
       let tyst = TA.Typing_state.create _ctx in
       let idx = List.fold_left
           (fun idx stmt ->
@@ -92,7 +96,8 @@ let trustee_server _ctx = object (self)
       in
 
       let env = TA.Typing_state.ty_env tyst in
-      Hashtbl.replace buffers d {penv; env; idx};
+      Hashtbl.replace buffers d {notation; env; idx};
+         *)
 
       let diags = List.rev !diags in
       Log.debugf 2 (fun k->k"send back %d diagnostics" (List.length diags));
@@ -121,7 +126,7 @@ let trustee_server _ctx = object (self)
         let pos = pos_of_lsp_pos pos in
         Log.debugf 1
           (fun k->k"lookup in idx (size %d) at pos %a"
-              (TA.Index.size idx) T.Position.pp pos);
+              (TA.Index.size idx) TPos.pp pos);
         let r =
           match TA.Index.find idx pos with
           | [] -> None
@@ -143,7 +148,7 @@ let trustee_server _ctx = object (self)
         let pos = pos_of_lsp_pos pos in
         Log.debugf 1
           (fun k->k"lookup for def in idx (size %d) at pos %a"
-              (TA.Index.size idx) T.Position.pp pos);
+              (TA.Index.size idx) TPos.pp pos);
         let r =
           match TA.Index.find idx pos with
           | [] -> None
@@ -151,9 +156,9 @@ let trustee_server _ctx = object (self)
             match q#def_loc with
             | None -> None
             | Some loc ->
-              Log.debugf 5 (fun k->k"found def at %a" T.Loc.pp q#loc);
+              Log.debugf 5 (fun k->k"found def at %a" Loc.pp q#loc);
               let loc =
-                LP.Location.create ~uri:loc.T.Loc.file ~range:(lsp_range_of_loc loc) in
+                LP.Location.create ~uri:(Loc.filename loc) ~range:(lsp_range_of_loc loc) in
               let r = `Location [loc] in
               (* Log.debugf 20 (fun k->k"response: %a" Yojson.Safe.pp (Locations.yojson_of_t r)); *)
               Some r
@@ -165,7 +170,7 @@ let trustee_server _ctx = object (self)
       | exception Not_found -> None
       | {idx;_} ->
         let pos = pos_of_lsp_pos pos in
-        Log.debugf 5 (fun k->k"completion at %a" T.Position.pp pos);
+        Log.debugf 5 (fun k->k"completion at %a" TPos.pp pos);
         (* find token under the cursor, if any *)
         begin match ident_under_pos ~file:uri doc_st.content pos with
           | None -> None
@@ -180,16 +185,16 @@ let trustee_server _ctx = object (self)
             in
             Log.debugf 5
               (fun k->k"completions: %a" (Fmt.Dump.list Fmt.string)
-                  (Iter.map fst compls |> Iter.to_list));
+                  (Iter.map fst compls |> Iter.map T.Name.to_string |> Iter.to_list));
             let compls =
               compls
               |> Iter.take 20
               |> Iter.map
                 (fun (name, c) ->
+                  let name = T.Name.to_string name in
                   let lbl, kind = match c with
                     | TA.Ty_env.N_const _ -> "C", LP.CompletionItemKind.Value
                     | TA.Ty_env.N_thm _ -> "T", LP.CompletionItemKind.Value
-                    | TA.Ty_env.N_rule  _ -> "R", LP.CompletionItemKind.Operator
                   in
                   let label = Printf.sprintf "%s %s" lbl name in
                   let textEdit =
