@@ -1,48 +1,45 @@
 
-module T = Trustee_core
+module Log = (val Logs.src_log @@ Logs.Src.create "lsp")
 
+module TC = Trustee_core
+module TS = Trustee_syntax
 module ITP = Trustee_itp
 
-module Log = T.Log
-module K = T.Kernel
-module Loc = Trustee_syntax.Loc
-module TPos = Trustee_syntax.Position
+module K = TC.Kernel
 module PA = Trustee_syntax.Parse_ast
 module TA = Trustee_syntax.Type_ast
-module Notation = Trustee_syntax.Notation
-module Syntax = Trustee_syntax.Syntax
 
 module Linol = Linol.Make(Linol.Blocking_IO)
 module Position = Linol.Position
 module Range = Linol.Range
 module LP = Lsp.Types
 
-let lsp_pos_of_pos (p:TPos.t) : Position.t =
-  Position.create ~line:(TPos.line p-1) ~character:(TPos.col p-1)
+let lsp_pos_of_pos (p:TS.Position.t) : Position.t =
+  Position.create ~line:(TS.Position.line p-1) ~character:(TS.Position.col p-1)
 
-let pos_of_lsp_pos (p:Position.t) : TPos.t =
-  TPos.make ~line:(p.line+1) ~col:(p.character+1)
+let pos_of_lsp_pos (p:Position.t) : TS.Position.t =
+  TS.Position.make ~line:(p.line+1) ~col:(p.character+1)
 
-let lsp_range_of_loc (l:Loc.t) : Range.t =
-  let start, end_ = Loc.positions l in
+let lsp_range_of_loc (l:TS.Loc.t) : Range.t =
+  let start, end_ = TS.Loc.positions l in
   Range.create ~start:(lsp_pos_of_pos start) ~end_:(lsp_pos_of_pos end_)
 
 type parsed_buffer = {
-  penv: Notation.Ref.t;
+  penv: TS.Notation.Ref.t;
   env: TA.Ty_env.t;
   idx: TA.Index.t;
 }
 
-let ident_under_pos ~file (s:string) (pos:TPos.t) : (string * Loc.t) option =
-  let open Syntax in
-  let module Str = Trustee_syntax.Tok_stream in
-  let toks = Lexer.create ~file s in
+let ident_under_pos ~file (s:string) (pos:TS.Position.t) : (string * TS.Loc.t) option =
+  let open TS.Syntax in
+  let module Str = Trustee_syntax.Lstream in
+  let toks = TS.Lexer.create ~file s in
   let rec find () =
     if Str.is_done toks then None
     else (
       match Str.cur toks with
-      | SYM s, loc when Loc.contains loc pos -> Some (s, loc)
-      | _, loc when TPos.(pos <= fst (Loc.positions loc)) -> None (* gone far enough *)
+      | SYM s, loc when TS.Loc.contains loc pos -> Some (s, loc)
+      | _, loc when TS.Position.(pos <= fst (TS.Loc.positions loc)) -> None (* gone far enough *)
       | _ ->
         Str.consume toks;
         find()
@@ -60,13 +57,13 @@ let trustee_server _ctx = object (self)
         ~(notify_back:Linol.notify_back) (d:LP.DocumentUri.t) (content:string) =
       (* TODO: use penv/env from dependencies, if any, once we have import *)
 
-      let notation = Notation.Ref.create() in
+      let notation = TS.Notation.Ref.create() in
       let stmts =
-        Syntax.parse_top_l
+        TS.Syntax.parse_top_l
           ~notation
-          (Syntax.Lexer.create ~file:d content)
+          (TS.Lexer.create ~file:d content)
       in
-      Log.debugf 3 (fun k->k "for %s: parsed %d statements" d (List.length stmts));
+      Log.debug (fun k->k "for %s: parsed %d statements" d (List.length stmts));
 
       let diags = ref [] in
       (* TODO
@@ -100,20 +97,20 @@ let trustee_server _ctx = object (self)
          *)
 
       let diags = List.rev !diags in
-      Log.debugf 2 (fun k->k"send back %d diagnostics" (List.length diags));
+      Log.debug (fun k->k"send back %d diagnostics" (List.length diags));
       notify_back#send_diagnostic diags
 
     method on_notif_doc_did_open ~notify_back d ~content : unit =
-      Log.debugf 2 (fun k->k "did open %s (%d bytes)" d.uri (String.length content));
+      Log.debug (fun k->k "did open %s (%d bytes)" d.uri (String.length content));
       self#_on_doc ~notify_back d.uri content
 
     method on_notif_doc_did_close ~notify_back:_ d : unit =
-      Log.debugf 2 (fun k->k "did close %s" d.uri);
+      Log.debug (fun k->k "did close %s" d.uri);
       Hashtbl.remove buffers d.uri;
       ()
 
     method on_notif_doc_did_change ~notify_back d _c ~old_content:_old ~new_content : unit =
-      Log.debugf 5 (fun k->k "did update %s (%d bytes -> %d bytes)" d.uri
+      Log.debug (fun k->k "did update %s (%d bytes -> %d bytes)" d.uri
                    (String.length _old) (String.length new_content));
       self#_on_doc ~notify_back d.uri new_content
 
@@ -124,14 +121,14 @@ let trustee_server _ctx = object (self)
       | exception Not_found -> None
       | {idx; _} ->
         let pos = pos_of_lsp_pos pos in
-        Log.debugf 1
+        Log.debug
           (fun k->k"lookup in idx (size %d) at pos %a"
-              (TA.Index.size idx) TPos.pp pos);
+              (TA.Index.size idx) TS.Position.pp pos);
         let r =
           match TA.Index.find idx pos with
           | [] -> None
           | q :: _ ->
-            Log.debugf 5 (fun k->k"found %a" q#pp ());
+            Log.debug (fun k->k"found %a" q#pp ());
             let s = Fmt.to_string q#pp () in
             let r = LP.Hover.create
                 ~contents:(`MarkedString {LP.MarkedString.value=s; language=None})
@@ -146,9 +143,9 @@ let trustee_server _ctx = object (self)
       | exception Not_found -> None
       | {idx;_} ->
         let pos = pos_of_lsp_pos pos in
-        Log.debugf 1
+        Log.debug
           (fun k->k"lookup for def in idx (size %d) at pos %a"
-              (TA.Index.size idx) TPos.pp pos);
+              (TA.Index.size idx) TS.Position.pp pos);
         let r =
           match TA.Index.find idx pos with
           | [] -> None
@@ -156,9 +153,9 @@ let trustee_server _ctx = object (self)
             match q#def_loc with
             | None -> None
             | Some loc ->
-              Log.debugf 5 (fun k->k"found def at %a" Loc.pp q#loc);
+              Log.debug (fun k->k"found def at %a" TS.Loc.pp q#loc);
               let loc =
-                LP.Location.create ~uri:(Loc.filename loc) ~range:(lsp_range_of_loc loc) in
+                LP.Location.create ~uri:(TS.Loc.filename loc) ~range:(lsp_range_of_loc loc) in
               let r = `Location [loc] in
               (* Log.debugf 20 (fun k->k"response: %a" Yojson.Safe.pp (Locations.yojson_of_t r)); *)
               Some r
@@ -170,28 +167,28 @@ let trustee_server _ctx = object (self)
       | exception Not_found -> None
       | {idx;_} ->
         let pos = pos_of_lsp_pos pos in
-        Log.debugf 5 (fun k->k"completion at %a" TPos.pp pos);
+        Log.debug (fun k->k"completion at %a" TS.Position.pp pos);
         (* find token under the cursor, if any *)
         begin match ident_under_pos ~file:uri doc_st.content pos with
           | None -> None
           | Some (ident, ident_loc) ->
-            Log.debugf 5 (fun k->k"req-completion: ident `%s`" ident);
+            Log.debug (fun k->k"req-completion: ident `%s`" ident);
 
             let tyenv = TA.Index.find_ty_env idx pos in
-            Log.debugf 10 (fun k->k"req-completion: env@ %a" TA.Ty_env.pp tyenv);
+            Log.debug (fun k->k"req-completion: env@ %a" TA.Ty_env.pp tyenv);
 
             let compls =
               TA.Ty_env.completions tyenv ident
             in
-            Log.debugf 5
+            Log.debug
               (fun k->k"completions: %a" (Fmt.Dump.list Fmt.string)
-                  (Iter.map fst compls |> Iter.map T.Name.to_string |> Iter.to_list));
+                  (Iter.map fst compls |> Iter.map TC.Name.to_string |> Iter.to_list));
             let compls =
               compls
               |> Iter.take 20
               |> Iter.map
                 (fun (name, c) ->
-                  let name = T.Name.to_string name in
+                  let name = TC.Name.to_string name in
                   let lbl, kind = match c with
                     | TA.Ty_env.N_const _ -> "C", LP.CompletionItemKind.Value
                     | TA.Ty_env.N_thm _ -> "T", LP.CompletionItemKind.Value
@@ -206,14 +203,14 @@ let trustee_server _ctx = object (self)
                     ~detail:(TA.Ty_env.string_of_named_object c)
                     ()
                   in
-                  Log.debugf 50
+                  Log.debug
                     (fun k->k"compl item: %a"
                         Yojson.Safe.pp (LP.CompletionItem.yojson_of_t ci));
                   ci
                 )
               |> Iter.to_list
             in
-            Log.debugf 5 (fun k->k"send back %d completions" (List.length compls));
+            Log.debug (fun k->k"send back %d completions" (List.length compls));
             Some (`List compls)
         end
   end
@@ -230,7 +227,7 @@ let setup_logger_ () =
     let oc = open_out "/tmp/lsp.log" in
     ITP.Logger.log_to_chan reporter oc;
     at_exit (fun () -> flush oc; close_out_noerr oc);
-    Log.set_level 50;
+    TC.Log.set_level 50;
   )
 
 let () =
@@ -241,7 +238,7 @@ let () =
   match Linol.run task with
   | exception e ->
     let e = Printexc.to_string e in
-    Log.debugf 1 (fun k->k"error: %s" e);
+    Log.err (fun k->k"error: %s" e);
     Printf.eprintf "error: %s\n%!" e;
     exit 1
   | () -> ()
