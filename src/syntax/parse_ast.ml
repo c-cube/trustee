@@ -194,6 +194,7 @@ module Meta_ty = struct
   and view =
     | Const of Const.t
     | Arrow of t list * t
+    | Error of Error.t
 
   let mk ~loc view : t = {view;loc}
   let loc self = self.loc
@@ -252,6 +253,7 @@ module Meta_expr = struct
         default: t option;
       }
     | Block_expr of block_expr
+    | Error of Error.t
 
   and match_case = {
     pat: pattern;
@@ -331,6 +333,7 @@ module Meta_expr = struct
     | Fun (vars, blk) ->
       Fmt.fprintf out "@[<hv>@[<2>|%a| {@ %a@]@ }@]"
         (pp_list Var.pp) vars pp_block_expr blk
+    | Error e -> Fmt.fprintf out "<@[error %a@]>" Error.pp e
 
     | If (a, b, c) ->
       wrap_ p 5 out @@ fun _p ->
@@ -375,6 +378,10 @@ module Meta_expr = struct
     ) else k p'
 
   let pp = pp_ 0
+
+  let mk ~loc view : t = {view;loc}
+
+  let expr_lit ~loc e : t = mk ~loc (Expr_lit e)
 end
 
 (** Structured proofs.
@@ -396,49 +403,73 @@ module Proof = struct
 
   (** A (structured) proof. *)
   type t = view with_loc
-  and view = {
-    goal: sequent;
-    justification: justification;
-  }
-  and justification =
+  and view =
+    | Exact of Meta_expr.t
+      (** A meta-expression returning the theorem. *)
+
     | By of {
         thm_args: proof_var list;
         solver: Meta_expr.t;
       }
-    (** Call a solver on the goal, with the list of given theorems
-              as first parameter. *)
+      (** Call a solver on the goal, with the list of given theorems
+                as first parameter. *)
 
     | Structured of {
-        steps: structured_step list;
-        (** Intermediate steps in the proof. *)
+        goal: sequent;
+        (** The initial goal to prove. *)
 
-        qed: justification;
-        (** The justification for the last required goal, using {!steps}.
-            The sequent this must prove is the one from
-            the latest "SS_suffices" in {!steps}, or, if no such step
-            exists, the goal of the initial proof.
-        *)
+        block: block;
       }
-      (** Structured proof, with intermediate steps. *)
+    (** Structured proof, with intermediate steps. *)
+
+    | Error of Error.t
+      (** Parsing error *)
+
+  (** Structured proof *)
+  and block = {
+    steps: block_elt list;
+    (** Intermediate steps in the proof. *)
+
+    qed: t;
+    (** The justification for the last required goal, expected to
+        use results from {!steps}.
+
+        The sequent this must prove is the one from
+        the latest "SS_suffices" in {!steps}, or, if no such step
+        exists, the initial goal.
+    *)
+  }
 
   (** A step in a composite proof. *)
-  and structured_step = structured_step_view with_loc
-  and structured_step_view =
-    | SS_suffices of {
+  and block_elt = block_elt_view with_loc
+  and block_elt_view =
+    | Block_suffices of {
         goal: sequent;
-        new_implies_old: justification;
-      } (** new goal, with proof that it implies current goal *)
-    | SS_have of {
+        new_implies_old: block;
+      } (** new goal, with proof that it implies current goal. *)
+
+    | Block_have of {
         name: Const.t;
         goal: sequent;
-        proof: justification;
+        proof: block;
       } (** prove a lemma, to be used later. This binds [name]. *)
-    | SS_pick of {
+
+    | Block_let of {
+        var: Meta_expr.var;
+        rhs: Meta_expr.t;
+      } (** Define a meta-expression. This binds [var]. *)
+
+    | Block_pick of {
         x: Expr.var;
         cond: Expr.t;
-        proof: justification;
+        proof: block;
       } (** Introduce a new variable using "select" and
             a proof of existence. *)
+
+    (* TODO: case *)
+
+    | Block_error of Error.t
+    (** Parse error in a statement *)
 
   let pp_sequent out (s:sequent) =
     let pp_newvar out v =
@@ -455,74 +486,111 @@ module Proof = struct
   let pp_proof_var out (v:proof_var) : unit = Const.pp out v
 
   let rec pp out (self:t) : unit =
-    let {goal; justification} = self.view in
-    Fmt.fprintf out "@[<v>%a@ @[<2>proof:@ %a@]@]"
-      pp_sequent goal pp_justification justification
+    match self.view with
+    | Exact e ->
+      Fmt.fprintf out "@[exact@ %a@]" Meta_expr.pp e
 
-  and pp_justification out = function
     | By {solver; thm_args} ->
       let pp_arg out a = Fmt.fprintf out ",@ %a" pp_proof_var a in
       Fmt.fprintf out "@[<2>by %a" Meta_expr.pp solver;
       List.iter (pp_arg out) thm_args;
       Fmt.fprintf out "@]"
 
-    | Structured {steps; qed} ->
-      let pp_step s = Fmt.fprintf out "- @[%a@]@," pp_structured_step s in
+    | Structured {goal; block} ->
       Fmt.fprintf out "@[<v>";
-      List.iter pp_step steps;
-      pp_justification out qed;
+      Fmt.fprintf out "@[prove %a@];@ " pp_sequent goal;
+      pp_block out block;
       Fmt.fprintf out "@]"
 
-  and pp_structured_step out (self:structured_step) : unit =
+    | Error err ->
+      Fmt.fprintf out "<@[error %a@]>" Error.pp err
+
+  and pp_block out {steps; qed} =
+    let pp_step s = Fmt.fprintf out "- @[%a@]@," pp_block_elt s in
+    Fmt.fprintf out "@[<hv>";
+    List.iter pp_step steps;
+    pp out qed;
+    Fmt.fprintf out "@]"
+
+  and pp_block_elt out (self:block_elt) : unit =
     match self.view with
-    | SS_suffices {goal; new_implies_old} ->
-      Fmt.fprintf out "@[suffices %a@ @[<2>proof:@ %a@]@]"
-        pp_sequent goal pp_justification new_implies_old
+    | Block_suffices {goal; new_implies_old} ->
+      Fmt.fprintf out "@[@[<2>suffices %a {@ %a@]@ }@]"
+        pp_sequent goal pp_block new_implies_old
 
-    | SS_have {name; goal; proof} ->
-      Fmt.fprintf out "@[@[<2>have %a := %a@]@ @[<2>proof:@ %a@]@]"
-        Const.pp name pp_sequent goal pp_justification proof
+    | Block_have {name; goal; proof} ->
+      Fmt.fprintf out "@[@[<2>have %a := %a {@ %a@]@ }@]"
+        Const.pp name pp_sequent goal pp_block proof
 
-    | SS_pick {x; cond; proof} ->
-      Fmt.fprintf out "@[@[<2>pick %a where %a@]@ @[<2>proof:@ %a@]@]"
-        Var.pp x Expr.pp cond pp_justification proof
+    | Block_let {var; rhs} ->
+      Fmt.fprintf out "@[@[<2>let %a :=@ %a@]"
+        Var.pp var Meta_expr.pp rhs
 
+    | Block_pick {x; cond; proof} ->
+      Fmt.fprintf out "@[@[<2>pick %a@ where %a@ {@ %a@]@ }@]"
+        Var.pp x Expr.pp cond pp_block proof
+
+    | Block_error err ->
+      Fmt.fprintf out "<@[error@ %a@]>" Error.pp err
+
+  let mk ~loc view : t = {loc;view}
+
+  let exact ~loc e : t = mk ~loc (Exact e)
+  let by ~loc solver thm_args : t = mk ~loc (By { solver; thm_args })
+  let structured ~loc goal block : t = mk ~loc (Structured {goal; block})
+  let error ~loc e : t = mk ~loc (Error e)
+
+  let mk_sequent ~loc ?(new_vars=[]) ~hyps ~goal () : sequent =
+    {loc; view={ new_vars; hyps; goal }}
+
+  let mk_bl ~loc view : block_elt = {loc; view}
+  let bl_error ~loc e : block_elt =
+    mk_bl ~loc @@ Block_error e
+  let bl_suffices ~loc goal proof : block_elt =
+    mk_bl ~loc @@ Block_suffices {goal; new_implies_old=proof}
+  let bl_have ~loc name goal proof : block_elt =
+    mk_bl ~loc @@ Block_have {name; goal; proof}
+  let bl_let ~loc var rhs : block_elt =
+    mk_bl ~loc @@ Block_let {var; rhs}
+  let bl_pick ~loc x cond proof : block_elt =
+    mk_bl ~loc @@ Block_pick {x; cond; proof}
 end
 
 (** Toplevel statements *)
 module Top = struct
   type t = view with_loc
   and view =
-    | Top_enter_file of string
-    | Top_def of {
+    | Enter_file of string
+    | Def of {
         name: Const.t;
         vars: Expr.var list;
         ret: Expr.ty option;
         body: Expr.t;
       }
-    | Top_decl of {
+    | Decl of {
         name: string with_loc;
         ty: Expr.ty;
       }
-    | Top_fixity of {
+    | Fixity of {
         name: string with_loc;
         fixity: fixity;
       }
-    | Top_axiom of {
+    | Axiom of {
         name: string with_loc;
         thm: Expr.t;
       }
-    | Top_goal of {
+    | Goal of {
         goal: Goal.t;
-        proof: Proof.t;
+        proof: Proof.block;
       } (** Anonymous goal + proof *)
-    | Top_theorem of {
+    | Theorem of {
         name: Const.t;
         goal: Goal.t;
-        proof: Proof.t;
+        proof: Proof.block;
       } (** Theorem + proof *)
-    | Top_show of Meta_expr.t
-    | Top_error of Error.t (** Parse error *)
+    | Show of Expr.t
+    | Eval of Meta_expr.t
+    | Error of Error.t (** Parse error *)
 
   (* TODO  | Top_def_ty of string *)
   (* TODO: | Top_def_proof_rule *)
@@ -537,46 +605,49 @@ module Top = struct
       | Some ty -> Fmt.fprintf out "@ : %a" Expr.pp ty
     in
     match self.view with
-    | Top_enter_file f ->
+    | Enter_file f ->
       Fmt.fprintf out "@[enter_file '%s'@];" f
-    | Top_def { name; vars=[]; ret; body } ->
+    | Def { name; vars=[]; ret; body } ->
       Fmt.fprintf out "@[<2>def %a%a :=@ %a@];"
         Const.pp name pp_ty_opt ret Expr.pp body
-    | Top_def { name; vars; ret; body } ->
+    | Def { name; vars; ret; body } ->
       Fmt.fprintf out "@[<hv2>@[<2>def %a %a%a :=@]@ %a@];"
         Const.pp name (pp_list Expr.pp_var_ty) vars
         pp_ty_opt ret Expr.pp body
-    | Top_decl { name; ty } ->
+    | Decl { name; ty } ->
       Fmt.fprintf out "@[<2>decl %s :@ %a@];"
         name.view Expr.pp ty
-    | Top_fixity {name; fixity} ->
+    | Fixity {name; fixity} ->
       Fmt.fprintf out "@[<2>fixity %s = %s@];"
         name.view (Fixity.to_string_syntax fixity)
-    | Top_axiom { name; thm } ->
-      Fmt.fprintf out "@[<hv>@[<2>axiom %s :=@ %a@];@]"
+    | Axiom { name; thm } ->
+      Fmt.fprintf out "@[<hv>@[<2>axiom %s :=@ %a@]@];"
         name.view Expr.pp thm
-    | Top_goal { goal; proof } ->
-      Fmt.fprintf out "@[<hv>@[<2>goal %a@ proof %a@];@]"
-        Goal.pp goal Proof.pp proof
-    | Top_theorem { name; goal; proof } ->
-      Fmt.fprintf out "@[<hv>@[<2>theorem %a :=@ %a@]@ @[<2>proof@ %a@]@];"
-        Const.pp name Goal.pp goal Proof.pp proof
-    | Top_show e -> Fmt.fprintf out "@[show %a@];" Meta_expr.pp e
-    | Top_error e -> Fmt.fprintf out "<@[<hov2>error:@ @[%a@]@]>" Error.pp e
+    | Goal { goal; proof } ->
+      Fmt.fprintf out "@[<hv>@[<2>goal %a {@ %a@]@ }@];"
+        Goal.pp goal Proof.pp_block proof
+    | Theorem { name; goal; proof } ->
+      Fmt.fprintf out "@[<hv>@[<2>theorem %a :=@ %a {@ %a@]@ }@];"
+        Const.pp name Goal.pp goal Proof.pp_block proof
+    | Show e -> Fmt.fprintf out "@[show %a@];" Expr.pp e
+    | Eval e -> Fmt.fprintf out "@[eval %a@];" Meta_expr.pp e
+    | Error e -> Fmt.fprintf out "<@[<hov2>error:@ @[%a@]@]>" Error.pp e
 
   let to_string = Fmt.to_string pp
+  let pp_quoted = Fmt.within "`" "`" pp
 
   let make ~loc view : t = {loc; view}
-  let enter_file ~loc f : t = make ~loc (Top_enter_file f)
+  let enter_file ~loc f : t = make ~loc (Enter_file f)
   let def ~loc name vars ret body : t =
-    make ~loc (Top_def {name; ret; vars; body})
-  let decl ~loc name ty : t = make ~loc (Top_decl {name; ty})
-  let fixity ~loc name f : t = make ~loc (Top_fixity {name; fixity=f})
-  let axiom ~loc name e : t = make ~loc (Top_axiom {name; thm=e})
-  let goal ~loc goal proof : t = make ~loc (Top_goal {goal; proof})
-  let theorem ~loc name g p : t = make ~loc (Top_theorem{name; goal=g; proof=p})
-  let show ~loc e : t = make ~loc (Top_show e)
-  let error ~loc e : t = make ~loc (Top_error e)
+    make ~loc (Def {name; ret; vars; body})
+  let decl ~loc name ty : t = make ~loc (Decl {name; ty})
+  let fixity ~loc name f : t = make ~loc (Fixity {name; fixity=f})
+  let axiom ~loc name e : t = make ~loc (Axiom {name; thm=e})
+  let goal ~loc goal proof : t = make ~loc (Goal {goal; proof})
+  let theorem ~loc name g p : t = make ~loc (Theorem{name; goal=g; proof=p})
+  let show ~loc e : t = make ~loc (Show e)
+  let eval ~loc e : t = make ~loc (Eval e)
+  let error ~loc e : t = make ~loc (Error e)
 end
 
 
