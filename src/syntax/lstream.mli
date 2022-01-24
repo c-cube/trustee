@@ -5,18 +5,17 @@
     It provides limited lookahead. *)
 
 type 'a t
-type loc = Loc.t
 type is_done = bool
 
 val create :
-  next:(unit -> 'a * loc * is_done) ->
+  next:(unit -> 'a * Loc.t * is_done) ->
   unit -> 'a t
 
 val is_done : _ t -> is_done
 
-val cur : 'a t -> 'a * loc
+val cur : 'a t -> 'a * Loc.t
 
-val next : 'a t -> 'a * loc
+val next : 'a t -> 'a * Loc.t
 
 val consume : _ t -> unit
 

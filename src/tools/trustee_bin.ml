@@ -3,14 +3,14 @@ open Trustee_core.Sigs
 
 module Log = (val Logs.src_log @@ Logs.Src.create "bin")
 
+module TC = Trustee_core
+module TS = Trustee_syntax
 module ITP = Trustee_itp
+
 module Error = Trustee_core.Error
 module K = Trustee_core.Kernel
 module A = Trustee_syntax.Parse_ast
 module TA = Trustee_syntax.Type_ast
-module Syntax = Trustee_syntax.Syntax
-module Notation = Trustee_syntax.Notation
-module Loc = Trustee_syntax.Loc
 
 (*
 ; TODO: use cmdliner to provide subcommands ("check", "repl", "opentheory", etc.)
@@ -26,15 +26,15 @@ module Cat = struct
   let run args =
     ITP.Logger.setup_logs ~debug:!debug ();
     Log.app (fun k->k"cat files %a" (Fmt.Dump.(list string)) args);
-    let notation = Notation.Ref.create () in
+    let notation = TS.Notation.Ref.create () in
     List.iter
       (fun file ->
          match CCIO.File.read file with
          | Ok s ->
-           let lex = Syntax.Lexer.create ~file s in
-           let l = Syntax.parse_top_l ~notation lex in
+           let lex = TS.Lexer.create ~file s in
+           let l = TS.Syntax.parse_top_l ~notation lex in
            Fmt.printf "# file %S@." file;
-           Fmt.printf "@[<v>%a@]@." (pp_list A.Top.pp) l
+           List.iter (Fmt.printf "%a@." A.Top.pp) l;
          | Error e ->
            Error.failf (fun k->k"cannot read '%s': %s" file e))
       args;
@@ -134,6 +134,7 @@ let cmds = [
 ]
 
 let () =
+  Printexc.record_backtrace true;
   let args = ref [] in
   let anon_args = ref [] in
   let r = ref None in

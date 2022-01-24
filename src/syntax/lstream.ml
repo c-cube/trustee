@@ -1,10 +1,9 @@
 
-type loc = Loc.t
 type is_done = bool
 type 'a t = {
-  next:(unit -> 'a * loc * is_done);
+  next:(unit -> 'a * Loc.t * is_done);
   mutable cur: 'a;
-  mutable loc: loc;
+  mutable loc: Loc.t;
   mutable is_done: is_done;
 }
 

@@ -27,7 +27,7 @@ let as_reporter self : Logs.reporter =
   let pp_level_ out = function
     | Logs.Debug -> Fmt.fprintf out "@{<bold>debug@}"
     | Logs.Info -> Fmt.fprintf out "@{<Blue>INFO@}"
-    | Logs.App -> Fmt.fprintf out "app"
+    | Logs.App -> Fmt.fprintf out "APP"
     | Logs.Error -> Fmt.fprintf out "@{<Red>ERROR@}"
     | Logs.Warning -> Fmt.fprintf out "@{<Yellow>WARN@}"
   in
@@ -71,9 +71,11 @@ let setup_trustee () = Lazy.force setup_trustee_
 let setup_logs ?(files=[]) ~debug () =
   setup_trustee();
   let l = create() in
+  log_to_chan l stdout;
   Logs.set_reporter (as_reporter l);
   Logs.set_level ~all:true (Some (if debug then Logs.Debug else Logs.Warning));
-  Logs.info (fun k->k"logs are set up");
+  Trustee_core.Log.set_level (if debug then 50 else 1);
+  Logs.app (fun k->k"logs are set up (debug=%b)" debug);
   List.iter (fun file ->
       Logs.info(fun k->k"logs to file %S" file);
       let oc = open_out_bin file in
