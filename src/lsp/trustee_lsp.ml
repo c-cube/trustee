@@ -59,9 +59,9 @@ let trustee_server _ctx = object (self)
 
       let notation = TS.Notation.Ref.create() in
       let stmts =
-        TS.Syntax.parse_top_l
-          ~notation
-          (TS.Lexer.create ~file:d content)
+        TS.Parser.run_exn
+          (TS.Lexer.create ~file:d content) @@
+        TS.Syntax.parse_top_l ~notation ()
       in
       Log.debug (fun k->k "for %s: parsed %d statements" d (List.length stmts));
 

@@ -13,7 +13,10 @@ module Const = struct
   type t = Name.t with_loc
   let make ~loc (name:Name.t) : t = {view=name;loc}
   let make_str ~loc s = make ~loc (Name.make s)
+
   let pp out (self:t) = Name.pp out self.view
+  let name (self:t) : Name.t = self.view
+  let loc (self:t) = self.loc
 
   let bool : t = make_str ~loc:Loc.none "bool"
 end
@@ -169,22 +172,30 @@ end
 (** A goal, ie. a sequent to prove. *)
 module Goal = struct
   type t = {
+    new_vars: Expr.var list;
     hyps: Expr.t list;
     concl: Expr.t;
     loc: Loc.t;
   }
 
-  let make ~loc hyps concl : t = {hyps; concl;loc}
-  let make_nohyps ~loc c : t = make ~loc [] c
+  let make ~loc ?(new_vars=[]) ~hyps concl : t =
+    {hyps; concl; new_vars; loc}
+  let make_nohyps ~loc c : t = make ~loc ~hyps:[] c
   let loc self = self.loc
 
-  let pp out (self:t) : unit =
-    if CCList.is_empty self.hyps then (
-      Fmt.fprintf out "@[<h>?- %a@]" Expr.pp self.concl
-    ) else (
-      Fmt.fprintf out "@[<v>%a@ ?-@ %a@]"
-        (pp_list Expr.pp) self.hyps Expr.pp self.concl
-    )
+  let pp out (self:t) =
+    let pp_newvar out v =
+      Fmt.fprintf out "@[new %a@],@," Expr.pp_var_ty v
+    and pp_hyp out e =
+      Fmt.fprintf out "@[assume %a@],@," Expr.pp e
+    in
+    let {new_vars; hyps; concl; loc=_} = self in
+    Fmt.fprintf out "@[<v>%a%aprove %a@]"
+      (pp_list pp_newvar) new_vars
+      (pp_list pp_hyp) hyps
+      Expr.pp concl
+
+
   let to_string = Fmt.to_string pp
 end
 
@@ -390,12 +401,6 @@ end
     "how to write a 21st century proof". *)
 module Proof = struct
   (** A local goal in a proof *)
-  type sequent = sequent_view with_loc
-  and sequent_view = {
-    new_vars: Expr.var list;
-    hyps: Expr.t list;
-    goal: Expr.t
-  }
 
   (** A variable refering to the theorem obtained from another proof,
       or from earlier in the same proof. *)
@@ -415,7 +420,7 @@ module Proof = struct
                 as first parameter. *)
 
     | Structured of {
-        goal: sequent;
+        goal: Goal.t;
         (** The initial goal to prove. *)
 
         block: block;
@@ -444,13 +449,13 @@ module Proof = struct
   and block_elt = block_elt_view with_loc
   and block_elt_view =
     | Block_suffices of {
-        goal: sequent;
+        goal: Goal.t;
         new_implies_old: block;
       } (** new goal, with proof that it implies current goal. *)
 
     | Block_have of {
         name: Const.t;
-        goal: sequent;
+        goal: Goal.t;
         proof: block;
       } (** prove a lemma, to be used later. This binds [name]. *)
 
@@ -471,18 +476,6 @@ module Proof = struct
     | Block_error of Error.t
     (** Parse error in a statement *)
 
-  let pp_sequent out (s:sequent) =
-    let pp_newvar out v =
-      Fmt.fprintf out "@[new %a@],@," Expr.pp_var_ty v
-    and pp_hyp out e =
-      Fmt.fprintf out "@[assume %a@],@," Expr.pp e
-    in
-    let {new_vars; hyps; goal} = s.view in
-    Fmt.fprintf out "@[<v>%a%aprove %a@]"
-      (pp_list pp_newvar) new_vars
-      (pp_list pp_hyp) hyps
-      Expr.pp goal
-
   let pp_proof_var out (v:proof_var) : unit = Const.pp out v
 
   let rec pp out (self:t) : unit =
@@ -498,7 +491,7 @@ module Proof = struct
 
     | Structured {goal; block} ->
       Fmt.fprintf out "@[<v>";
-      Fmt.fprintf out "@[prove %a@];@ " pp_sequent goal;
+      Fmt.fprintf out "@[prove %a@];@ " Goal.pp goal;
       pp_block out block;
       Fmt.fprintf out "@]"
 
@@ -516,11 +509,11 @@ module Proof = struct
     match self.view with
     | Block_suffices {goal; new_implies_old} ->
       Fmt.fprintf out "@[@[<2>suffices %a {@ %a@]@ }@]"
-        pp_sequent goal pp_block new_implies_old
+        Goal.pp goal pp_block new_implies_old
 
     | Block_have {name; goal; proof} ->
       Fmt.fprintf out "@[@[<2>have %a := %a {@ %a@]@ }@]"
-        Const.pp name pp_sequent goal pp_block proof
+        Const.pp name Goal.pp goal pp_block proof
 
     | Block_let {var; rhs} ->
       Fmt.fprintf out "@[@[<2>let %a :=@ %a@]"
@@ -539,9 +532,6 @@ module Proof = struct
   let by ~loc solver thm_args : t = mk ~loc (By { solver; thm_args })
   let structured ~loc goal block : t = mk ~loc (Structured {goal; block})
   let error ~loc e : t = mk ~loc (Error e)
-
-  let mk_sequent ~loc ?(new_vars=[]) ~hyps ~goal () : sequent =
-    {loc; view={ new_vars; hyps; goal }}
 
   let mk_bl ~loc view : block_elt = {loc; view}
   let bl_error ~loc e : block_elt =
@@ -568,15 +558,15 @@ module Top = struct
         body: Expr.t;
       }
     | Decl of {
-        name: string with_loc;
+        name: Const.t;
         ty: Expr.ty;
       }
     | Fixity of {
-        name: string with_loc;
+        name: Const.t;
         fixity: fixity;
       }
     | Axiom of {
-        name: string with_loc;
+        name: Const.t;
         thm: Expr.t;
       }
     | Goal of {
@@ -615,14 +605,14 @@ module Top = struct
         Const.pp name (pp_list Expr.pp_var_ty) vars
         pp_ty_opt ret Expr.pp body
     | Decl { name; ty } ->
-      Fmt.fprintf out "@[<2>decl %s :@ %a@];"
-        name.view Expr.pp ty
+      Fmt.fprintf out "@[<2>decl %a :@ %a@];"
+        Const.pp name Expr.pp ty
     | Fixity {name; fixity} ->
-      Fmt.fprintf out "@[<2>fixity %s = %s@];"
-        name.view (Fixity.to_string_syntax fixity)
+      Fmt.fprintf out "@[<2>fixity %a = %s@];"
+        Const.pp name (Fixity.to_string_syntax fixity)
     | Axiom { name; thm } ->
-      Fmt.fprintf out "@[<hv>@[<2>axiom %s :=@ %a@]@];"
-        name.view Expr.pp thm
+      Fmt.fprintf out "@[<hv>@[<2>axiom %a :=@ %a@]@];"
+        Const.pp name Expr.pp thm
     | Goal { goal; proof } ->
       Fmt.fprintf out "@[<hv>@[<2>goal %a {@ %a@]@ }@];"
         Goal.pp goal Proof.pp_block proof

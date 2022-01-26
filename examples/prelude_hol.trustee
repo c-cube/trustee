@@ -43,7 +43,7 @@ theorem EqTrueIntro := x = (x = T) {
 // TODO: REqTrueIntro
 // TODO: REqTrueElim
 
-def forall : ('a -> bool) -> bool := \(f: 'a -> bool). f = (\x:'a. T);
+def forall a : (a -> bool) -> bool := \(f: a -> bool). f = (\x:a. T);
 
 fixity forall := binder 12;
 
@@ -58,7 +58,7 @@ eval Forall'Def;
 def /\ (a b : bool) : bool
   := forall (f: bool -> bool -> bool). f a b = f T T;
 
-fixity /\ := rassoc 15;
+fixity /\ := rassoc 18; // above ==>
 
 show T /\ a /\ b /\ c;
 

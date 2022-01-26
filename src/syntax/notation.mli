@@ -30,6 +30,7 @@ module Ref : sig
   type nonrec t = notation ref
 
   val create : unit -> t
+  val create_hol : unit -> t
   val of_notation : notation -> t
 
   val find : t -> Name.t -> fixity option

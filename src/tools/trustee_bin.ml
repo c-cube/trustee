@@ -26,13 +26,13 @@ module Cat = struct
   let run args =
     ITP.Logger.setup_logs ~debug:!debug ();
     Log.app (fun k->k"cat files %a" (Fmt.Dump.(list string)) args);
-    let notation = TS.Notation.Ref.create () in
+    let notation = TS.Notation.Ref.create_hol () in
     List.iter
       (fun file ->
          match CCIO.File.read file with
          | Ok s ->
            let lex = TS.Lexer.create ~file s in
-           let l = TS.Syntax.parse_top_l ~notation lex in
+           let l = TS.Parser.run_exn lex @@ TS.Syntax.parse_top_l ~notation () in
            Fmt.printf "# file %S@." file;
            List.iter (Fmt.printf "%a@." A.Top.pp) l;
          | Error e ->

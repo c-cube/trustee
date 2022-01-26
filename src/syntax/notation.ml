@@ -21,20 +21,23 @@ let pp out (self:t) : unit =
   Fmt.fprintf out "(@[notations@ (@[%a@])@])"
     Fmt.(iter pp_pair) (N_map.to_iter self.fixs)
 
+
+let empty_hol =
+  empty
+  |> declare (Name.make "=") (Fixity.infix 40)
+  |> declare (Name.make "select") (Fixity.binder 30)
+  |> declare (Name.make "==>") (Fixity.rassoc 15)
+  |> declare (Name.make "->") (Fixity.rassoc 1000)
+  |> declare (Name.make "\\") (Fixity.binder 5)
+
 module Ref = struct
   type notation = t
   type nonrec t = notation ref
   let create() = ref empty
+  let create_hol() = ref empty_hol
   let of_notation n = ref n
   let find self s = find !self s
   let find_or_default self s = find_or_default !self s
   let declare self s f = self := declare s f !self
   let pp out self = pp out !self
 end
-
-
-let empty_hol =
-  empty
-  |> declare (Name.make "=") (Fixity.infix 18)
-  |> declare (Name.make "select") (Fixity.binder 10)
-  |> declare (Name.make "==>") (Fixity.rassoc 12)
