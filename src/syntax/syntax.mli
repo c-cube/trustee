@@ -10,15 +10,19 @@ module LL = Local_loc
 module A = Parse_ast
 module P = Parser
 
-val expr :
-  notation:Notation.Ref.t ->
+val parse_expr :
+  notation:Notation.t ->
+  unit ->
   A.Expr.t P.t
 
 val parse_top :
-  notation:Notation.Ref.t ->
+  notation:Notation.t ->
+  unit ->
   A.Top.t option P.t
 
 val parse_top_l :
   notation:Notation.Ref.t ->
+  unit ->
   A.Top.t list P.t
 (** Parse statements, updating notations when they are declared. *)
+

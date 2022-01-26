@@ -5,6 +5,10 @@ type 'a t
 val run : Token.t Lstream.t -> 'a t -> ('a, Error.t) result
 (** Run the parser *)
 
+val run_exn : Token.t Lstream.t -> 'a t -> 'a
+(** Run the parser.
+    @raise Error.E in case of error. *)
+
 (** {2 Core combinators} *)
 
 val return : 'a -> 'a t
@@ -34,10 +38,6 @@ val loc : Loc.t t
 val token_if : ?msg:string -> (Token.t -> bool) -> (Token.t * Loc.t) t
 (** [token_if f] parses a token that is accepted by [f], and consumes it. *)
 
-val if_next :
-  (Token.t -> 'a option) ->
-  ('a -> 'b t) -> 'b t -> 'b t
-
 val switch_next :
   (Token.t -> Loc.t -> [`consume | `keep] * 'a t) ->
   'a t
@@ -49,6 +49,9 @@ val switch_next :
 val (<|>) : (Token.t * 'a t) -> 'a t -> 'a t
 (** [(tok, p1) <|> p2] consumes [tok] if it's the next token and
       becomes [p1], or doesn't consume the next token and becomes [p2]. *)
+
+val try_ : 'a t -> ('a, Error.t) result t
+(** Reify errors *)
 
 val parsing : (Error.t -> Error.t) -> 'a t -> 'a t
 (** [parsing wrap p] behaves like [p], but errors raised by [p]

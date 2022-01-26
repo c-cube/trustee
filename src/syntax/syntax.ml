@@ -67,6 +67,21 @@ module P_state = struct
 end
    *)
 
+
+(* recover: skip to the next ";", without consuming it *)
+let try_recover_semi : Loc.t P.t =
+  let rec loop loc0 =
+    P.switch_next @@ fun tok loc ->
+    match tok with
+    | SEMI_COLON | EOF ->
+      `keep, P.return (loc0++loc)
+    | _ ->
+      `consume, loop loc0
+  in
+
+  let* loc = P.loc in
+  loop loc
+
 (* We follow a mix of:
    - https://en.wikipedia.org/wiki/Operator-precedence_parser
    - https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
@@ -228,7 +243,7 @@ end = struct
     | LPAREN ->
       `consume,
       let* e = p_expr_ ~notation ~bindings ~ty_expect 0 in
-      let+ () = P.rparen ~msg:"atomic expression" () in
+      let+ () = P.rparen ~msg:"expected a closing ')' after an atomic expression" () in
       e
     | LET ->
       `consume,
@@ -260,7 +275,10 @@ end = struct
           A.Expr.app lhs [arg]
         | F_binder i ->
           `consume,
+          (
+          Log.debug 0 "binder";
           let* vars = p_tyvars_and_dot ~notation [] in
+          Log.debug 0 "parsed vars";
           let+ body = p_expr_ ~bindings ~notation ~ty_expect i in
           let loc = loc_t ++ A.Expr.loc body in
           begin match s with
@@ -269,7 +287,7 @@ end = struct
             | _ ->
               let b = A.Const.make ~loc:loc_t (Name.make s) in
               A.Expr.bind ~loc b vars body
-          end
+          end)
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
           `keep,
           P.fail_strf
@@ -476,204 +494,243 @@ end = struct
        *)
 end
 
-module P_proof : sig
-  val block : A.Proof.block parser_
-  val proof : A.Proof.t parser_
+module P_goal : sig
+  val goal : notation:Notation.t -> unit -> A.Goal.t Parser.t
 end = struct
-  open P_state
-  open Loc.Infix
-
   (* parse a sequent *)
-  let goal (self:t) : A.Proof.sequent =
-    let _, loc1 = Lexer.S.cur self.lex in
-    let e = P_expr.expr self in
-    let _, loc2 = Lexer.S.cur self.lex in
+  let goal ~notation () : A.Goal.t P.t =
+    let* loc1 = P.loc in
+    let* e = P_expr.expr ~ty_expect:A.Expr.bool ~notation () in
     (* TODO: read "new (x y:int)" *)
     (* TODO: read "assume expr" *)
+    let+ loc2 = P.loc in
     let loc = loc1 ++ loc2 in
-    A.Proof.mk_sequent ~loc ~hyps:[] ~goal:e ()
+    A.Goal.make ~loc ~hyps:[] e
+end
 
-  let rec proof (self:t) : A.Proof.t =
-    Log.debugf 5 (fun k->k"start parsing proof");
-    match Lexer.S.cur self.lex with
-    | SYM "exact", t_loc ->
-      Lexer.S.consume self.lex;
-      let e = P_meta_expr.meta_expr self in
-      let loc =
-        t_loc ++ eat_semi self ~msg:"expect `;` after exact proof step" in
+module P_proof : sig
+  val block : notation:Notation.t -> unit -> A.Proof.block Parser.t
+  val proof : notation:Notation.t -> unit -> A.Proof.t Parser.t
+end = struct
+
+  let rec proof ~notation () : A.Proof.t P.t =
+    P.switch_next @@ fun tok t_loc ->
+    match tok with
+    | SYM "exact" ->
+      `consume,
+      let* e = P_meta_expr.meta_expr ~notation () in
+      let+ loc2 = P.exact SEMI_COLON ~msg:"expect `;` after exact proof step" in
+      let loc = t_loc ++ loc2 in
       A.Proof.exact ~loc e
 
-    | SYM "by", t_loc ->
-      Lexer.S.consume self.lex;
-      let e = P_meta_expr.meta_expr self in
-      let loc =
-        t_loc ++ eat_semi self ~msg:"expect `;` after exact proof step" in
+    | SYM "by" ->
+      `consume,
+      let* e = P_meta_expr.meta_expr ~notation () in
+      let+ loc2 = P.exact SEMI_COLON ~msg:"expect `;` after exact proof step" in
+      let loc = t_loc ++ loc2 in
       A.Proof.exact ~loc e
 
-    | tok, loc ->
-      let loc = loc ++ try_recover_semi self in
-      eat_semi' self ~msg:"expect semicolon after a proof";
+    | SYM "subproof" ->
+      `consume,
+      let* goal = P_goal.goal ~notation () in
+      let* () = P.exact' LBRACE ~msg:"expect `{` to open the subproof" in
+      let* bl = block ~notation () in
+      let* () = P.exact' RBRACE ~msg:"expect closing `}` after the subproof" in
+      let* loc2 = P.exact SEMI_COLON ~msg:"expect `;` after the subproof" in
+      let loc = t_loc ++ loc2 in
+      P.return @@ A.Proof.structured ~loc goal bl
+
+    | _ ->
+      `keep,
+      let* _ = try_recover_semi in
+      let+ loc2 = P.exact SEMI_COLON ~msg:"expect semicolon after a proof" in
+      let loc = t_loc ++ loc2 in
       let e =
         Error.makef ~loc "expected a proof,@ got %a" Token.pp tok
       in
       A.Proof.error ~loc e
 
-  and block (self:t) : A.Proof.block =
-    block_rec self []
+  and block ~notation () : A.Proof.block P.t =
+    block_rec ~notation []
 
-  and block_rec self acc : A.Proof.block =
-    match Lexer.S.cur self.lex with
-    | SYM "have", t_loc ->
-      Lexer.S.consume self.lex;
-      let name = P_expr.p_const self in
-      eat_eq' self EQDEF ~msg:"expect `:=` after `have <name>`";
-      let goal = goal self in
-      eat_eq' self LBRACE ~msg:"expect `{` after `have <name> := <goal>`";
-      let proof = block self in
-      eat_eq' self RBRACE ~msg:"expect closing `}`";
-      let loc = t_loc ++ eat_semi self ~msg:"expect `;` after `have` step" in
-      block_rec self (A.Proof.bl_have ~loc name goal proof :: acc)
+  and block_rec ~notation acc : A.Proof.block P.t =
+    P.switch_next @@ fun tok t_loc ->
+    match tok with
+    | SYM "have" ->
+      `consume,
+      let* name = P_expr.p_const in
+      let* () = P.exact' EQDEF ~msg:"expect `:=` after `have <name>`" in
+      let* goal = P_goal.goal ~notation () in
+      let* () = P.exact' LBRACE ~msg:"expect `{` after `have <name> := <goal>`" in
+      let* proof = block ~notation () in
+      let* () = P.exact' RBRACE ~msg:"expect closing `}`" in
+      let* loc2 = P.exact SEMI_COLON ~msg:"expect `;` after `have` step" in
+      let loc = t_loc ++ loc2 in
+      (* recurse *)
+      block_rec ~notation (A.Proof.bl_have ~loc name goal proof :: acc)
 
-    | SYM "let", t_loc ->
-      Lexer.S.consume self.lex;
-      let var, var_loc = P_expr.p_ident self in
+    | SYM "let" ->
+      `consume,
+      let* var, var_loc = P_expr.p_ident in
       let var = A.Var.make ~kind:A.Var.V_normal ~loc:var_loc var None in
-      eat_eq' self EQDEF ~msg:"expect `:=` after `have <name>`";
-      let e = P_meta_expr.meta_expr self in
-      let loc = t_loc ++ eat_semi self ~msg:"expect `;` after `have` step" in
-      block_rec self (A.Proof.bl_let ~loc var e :: acc)
+      let* () = P.exact' EQDEF ~msg:"expect `:=` after `let <name>`" in
+      let* e = P_meta_expr.meta_expr ~notation () in
+      let* loc2 = P.exact SEMI_COLON ~msg:"expect `;` after `let <name> := <expr>" in
+      let loc = t_loc ++ loc2 in
+      block_rec ~notation (A.Proof.bl_let ~loc var e :: acc)
 
-    | SYM "pick", t_loc ->
-      Lexer.S.consume self.lex;
-      let x, x_lock = P_expr.p_ident self in
+    | SYM "pick" ->
+      `consume,
+      let* x, x_lock = P_expr.p_ident in
       let x = A.Var.make ~kind:A.Var.V_normal ~loc:x_lock x None in
-      eat_eq' self (SYM "where") ~msg:"expect `where` after `pick <var>`";
-      let cond = P_expr.expr self in
-      eat_eq' self LBRACE ~msg:"expect `{` after `pick <name> where <cond>`";
-      let proof = block self in
-      eat_eq' self RBRACE ~msg:"expect closing `}`";
-      let loc = t_loc ++ eat_semi self ~msg:"expect `;` after pick` step" in
-      block_rec self
+      let* () = P.exact' (SYM "where") ~msg:"expect `where` after `pick <var>`" in
+      let* cond = P_expr.expr ~notation () in
+      let* () = P.exact' LBRACE ~msg:"expect `{` after `pick <name> where <cond>`" in
+      let* proof = block ~notation () in
+      let* () = P.exact' RBRACE ~msg:"expect closing `}`" in
+      let* loc2 = P.exact SEMI_COLON ~msg:"expect `;` after pick` step" in
+      let loc = t_loc ++ loc2 in
+      block_rec ~notation
         (A.Proof.bl_pick ~loc x cond proof :: acc)
 
     (* TODO: suffices *)
 
-    | _, t_loc ->
+    | _ ->
       (* parse an atomic proof as the last step *)
-      try
-        let pr = proof self in
-        {A.Proof.steps=List.rev acc; qed=pr}
-      with Error.E err ->
-        let loc = t_loc ++ try_recover_semi self in
-        eat_semi' self ~msg:"expect semicolon after a proof item.";
-        let pr = A.Proof.error ~loc err in
-        {A.Proof.steps=List.rev acc; qed=pr}
+      `keep,
+      let* r = P.try_ (proof ~notation ()) in
+      begin match r with
+        | Ok pr ->
+          P.return {A.Proof.steps=List.rev acc; qed=pr}
+
+        | Error err ->
+          let* _ = try_recover_semi in
+          let* loc2 = P.exact SEMI_COLON ~msg:"expect `;` after a proof" in
+          let loc = t_loc ++ loc2 in
+          let pr = A.Proof.error ~loc err in
+          P.return {A.Proof.steps=List.rev acc; qed=pr}
+      end
 end
 
-module P_top = struct
-  open P_state
-  open Loc.Infix
+module P_top : sig
+  type top_parser =
+    loc0:Loc.t -> notation:Notation.t -> unit -> A.Top.t P.t
+
+  val parsers : (string * top_parser) list
+
+  val top : notation:Notation.t -> unit -> A.Top.t option P.t
+end = struct
+  type top_parser =
+    loc0:Loc.t -> notation:Notation.t -> unit -> A.Top.t P.t
 
   (* parse logic definition *)
-  let p_def ~loc:loc0 self : A.Top.t =
-    let name, loc_name = P_expr.p_ident self in
-    let tok, t_loc, vars =
-      P_expr.p_tyvars_until self []
+  let p_def ~loc0 ~notation () : A.Top.t P.t =
+    let* name = P_expr.p_const in
+    let* tok, t_loc, vars =
+      P_expr.p_tyvars_until ~notation []
         ~f:(function COLON | EQDEF | LBRACE -> true |_ -> false)
     in
     Log.debugf 5 (fun k->k"got vars %a, tok %a"
                      (Fmt.Dump.list A.Expr.pp_var_ty) vars Token.pp tok);
-    let tok, t_loc, ret = match tok with
+    let* tok, t_loc, ret = match tok with
       | COLON ->
         (* parse type *)
-        let e =  P_expr.expr ~ty_expect:A.Expr.type_ self in
-        let tok, t_loc = Lexer.S.cur self.lex in
-        Lexer.S.consume self.lex;
-        tok, t_loc, Some (e)
-      | _ -> tok, t_loc, None
+        let* e =  P_expr.expr ~ty_expect:A.Expr.type_ ~notation () in
+        let+ tok, t_loc = P.next in
+        tok, t_loc, Some e
+      | _ ->
+        P.return (tok, t_loc, None)
     in
     if not (Token.equal tok EQDEF) then (
-      Error.failf ~loc:t_loc
-        (fun k->k"expected `:=` in a definition after <vars> and optional return type,@ \
-                  got %a instead" Token.pp tok)
-    );
-    Log.debugf 5 (fun k->k"def: return type %a, %d vars, current token: %a"
-                     (Fmt.Dump.option A.Expr.pp_quoted) ret (List.length vars)
-                     Token.pp (fst @@ Lexer.S.cur self.lex));
-    let body = P_expr.expr self in
-    let loc = loc0 ++ eat_semi self ~msg:"expect `end` after a definition" in
-    A.Top.def ~loc (A.Const.make_str ~loc:loc_name name) vars ret body
+      P.fail @@
+      Error.makef ~loc:t_loc
+        "expected `:=` in a definition after <vars> and optional return type,@ \
+         got %a instead" Token.pp tok
+    ) else (
+      Log.debugf 5 (fun k->k"def: return type %a, %d vars"
+                       (Fmt.Dump.option A.Expr.pp_quoted) ret (List.length vars));
+      let* body = P_expr.expr ~notation () in
+      let* loc2 = P.exact SEMI_COLON ~msg:"expect `end` after a definition" in
+      let loc = loc0 ++ loc2 in
+      P.return @@ A.Top.def ~loc name vars ret body
+    )
 
-  let p_declare ~loc self : A.Top.t =
-    let name, loc_name = P_expr.p_ident self in
-    eat_eq' self COLON ~msg:"expect `:` in a type declaration";
-    let ty = P_expr.expr_atomic ~ty_expect:A.Expr.type_ self in
+  let p_declare ~loc0 ~notation () : A.Top.t P.t =
+    let* name = P_expr.p_const in
+    let* () = P.exact' COLON ~msg:"expect `:` in a type declaration" in
+    let* ty = P_expr.expr_atomic ~ty_expect:A.Expr.type_ ~notation () in
     Log.debugf 5 (fun k->k"parsed decl: type %a" A.Expr.pp ty);
-    let loc = loc ++ eat_semi self ~msg:"expect `end` after a declaration" in
-    A.Top.decl ~loc {A.view=name;loc=loc_name} ty
+    let+ loc2 = P.exact SEMI_COLON ~msg:"expect `end` after a declaration" in
+    let loc = loc0 ++ loc2 in
+    A.Top.decl ~loc name ty
 
-  let p_show ~loc self : _ =
-    let e = P_expr.expr self in
-    let loc = loc ++ eat_semi self ~msg:"expect `;` after `show <expr>`" in
+  let p_show ~loc0 ~notation () : _ P.t =
+    let* e = P_expr.expr ~notation () in
+    let+ loc2 = P.exact SEMI_COLON ~msg:"expect `;` after `show <expr>`" in
+    let loc = loc0 ++ loc2 in
     A.Top.show ~loc e
 
-  let p_eval ~loc self : _ =
-    let e = P_meta_expr.meta_expr self in
-    let loc = loc ++ eat_semi self ~msg:"expect `;` after eval <expr>`" in
+  let p_eval ~loc0 ~notation () : _ P.t =
+    let* e = P_meta_expr.meta_expr ~notation () in
+    let+ loc2 = P.exact SEMI_COLON ~msg:"expect `;` after eval <expr>`" in
+    let loc = loc0 ++ loc2 in
     A.Top.eval ~loc e
 
-  let p_thm ~loc self : _ =
-    let name, loc_name = P_expr.p_ident self in
-    eat_eq' self EQDEF ~msg:"expect `:=` after the theorem's name";
-    let e = P_expr.expr self ~ty_expect:A.Expr.bool in
-    eat_eq' self LBRACE ~msg:"expect `{` after the theorem's statement";
-    let pr = P_proof.block self in
-    eat_eq' self RBRACE ~msg:"expect `}` after the theorem";
-    let loc = loc ++ eat_semi self ~msg:"expect `;` after the theorem" in
-    A.Top.theorem ~loc (A.Const.make_str ~loc:loc_name name)
-      (A.Goal.make_nohyps ~loc e) pr
+  let p_thm ~loc0 ~notation () : _ P.t =
+    let* name = P_expr.p_const in
+    let* () = P.exact' EQDEF ~msg:"expect `:=` after the theorem's name" in
+    let* goal = P_goal.goal ~notation () in
+    let* () = P.exact' LBRACE ~msg:"expect `{` after the theorem's statement" in
+    let* pr = P_proof.block ~notation () in
+    let* () = P.exact' RBRACE ~msg:"expect `}` after the theorem" in
+    let+ loc2 = P.exact SEMI_COLON ~msg:"expect `;` after the theorem" in
+    let loc = loc0 ++ loc2 in
+    A.Top.theorem ~loc name goal pr
 
-  let p_goal ~loc self : _ =
-    let e = P_expr.expr self ~ty_expect:A.Expr.bool in
-    eat_eq' self LBRACE ~msg:"expect `{` after the goal's statement";
-    let pr = P_proof.block self in
-    eat_eq' self RBRACE ~msg:"expect `}` after the goal";
-    let loc = loc ++ eat_semi self ~msg:"expect `;` after the goal" in
-    A.Top.goal ~loc (A.Goal.make_nohyps ~loc e) pr
+  let p_goal ~loc0 ~notation () : _ P.t =
+    let* goal = P_goal.goal ~notation () in
+    let* () = P.exact' LBRACE ~msg:"expect `{` after the goal's statement" in
+    let* pr = P_proof.block ~notation () in
+    let* () = P.exact' RBRACE ~msg:"expect `}` after the goal" in
+    let+ loc2 = P.exact SEMI_COLON ~msg:"expect `;` after the goal" in
+    let loc = loc0 ++ loc2 in
+    A.Top.goal ~loc goal pr
 
-  let p_fixity ~loc self =
-    let name, loc_name = P_expr.p_ident self in
-    eat_eq' self EQDEF ~msg:"expect `:=` after symbol";
-    let mkfix, needsint =
-      match fst @@ P_expr.p_ident self with
-      | "infix" -> Fixity.infix, true
-      | "prefix" -> Fixity.prefix, true
-      | "postfix" -> Fixity.postfix, true
-      | "lassoc" -> Fixity.lassoc, true
-      | "rassoc" -> Fixity.rassoc, true
-      | "binder" -> Fixity.binder, true
-      | "normal" -> (fun _->Fixity.normal), false
-      | s ->
-        Error.failf ~loc:loc_name
-          (fun k->k
-              "expected one of: normal|infix|prefix|postfix|lassoc|rassoc|binder@ \
-               but got '%s'" s)
+  let p_fixity ~loc0 ~notation () : _ P.t =
+    let* name = P_expr.p_const in
+    let* () = P.exact' EQDEF ~msg:"expect `:=` after symbol" in
+    let* s, s_loc = P_expr.p_ident in
+    let* mkfix, needsint =
+      match s with
+      | "infix" -> P.return (Fixity.infix, true)
+      | "prefix" -> P.return (Fixity.prefix, true)
+      | "postfix" -> P.return (Fixity.postfix, true)
+      | "lassoc" -> P.return (Fixity.lassoc, true)
+      | "rassoc" -> P.return (Fixity.rassoc, true)
+      | "binder" -> P.return (Fixity.binder, true)
+      | "normal" -> P.return ((fun _->Fixity.normal), false)
+      | _ ->
+        P.fail @@
+        Error.makef ~loc:s_loc
+          "expected one of: normal|infix|prefix|postfix|lassoc|rassoc|binder@ \
+           but got '%s'" s
     in
-    let n =
+    let* n =
       if needsint then (
-        let n, _ = eat_p self ~msg:"expect a number after fixity"
-            ~f:(function NUM _ -> true | _ -> false)
-        in
-        match n with NUM s -> int_of_string s | _ -> assert false
-      ) else 0
+        P.switch_next @@ fun n _loc ->
+        match n with
+        | NUM n -> `consume, P.return (int_of_string n)
+        | _ -> `keep, P.fail_str "expect a number after `fixity`"
+      ) else P.return 0
     in
     let fix = mkfix n in
-    let loc = loc ++ eat_semi self ~msg:"expect `end` after fixity declarations" in
-    A.Top.fixity ~loc {A.view=name;loc=loc_name} fix
+    let+ loc2 = P.exact SEMI_COLON ~msg:"expect `end` after fixity declarations" in
+    let loc = loc0 ++ loc2 in
+    A.Top.fixity ~loc name fix
 
   (* TODO: make it extensible *)
   (* list of toplevel parsers *)
-  let parsers = [
+  let parsers : (string * top_parser) list = [
     "def", p_def;
     "show", p_show;
     "eval", p_eval;
@@ -683,79 +740,76 @@ module P_top = struct
     "goal", p_goal;
   ]
 
-  let top (self:t) : A.Top.t option =
+  let top ~notation () : A.Top.t option P.t =
     Log.debugf 1 (fun k->k"parse top");
-    let parsing = ref None in
     let errm ~loc tok =
       Error.makef ~loc
         "expected toplevel statement, but got token %a;@ expected one of: [%s]"
         Token.pp tok
         (String.concat "," @@ List.map (fun (s,_) -> String.escaped s) parsers)
     in
-    try
-      match Lexer.S.cur self.lex with
-      | EOF, _ -> None
-      | SYM s as t, loc ->
+    let* loc0 = P.loc in
+    let* res =
+      P.try_ @@
+      P.switch_next @@ fun tok0 loc0 ->
+      match tok0 with
+      | EOF ->
+        `keep, P.return None
+      | SYM s ->
+        `consume,
         begin match List.assoc s parsers with
           | exception Not_found ->
-            Log.debugf 5 (fun k->k"unknown toplevek tok %a" Token.pp t);
-            let err = errm ~loc t in
-            let loc = loc ++ try_recover_semi self in
-            eat_semi' self
-              ~msg:"expect semicolon after an unknown statement.";
+            Log.debugf 5 (fun k->k"unknown toplevek tok %a" Token.pp tok0);
+            let err = errm ~loc:loc0 tok0 in
+            let* _ = try_recover_semi in
+            let+ loc2 = P.exact SEMI_COLON
+                ~msg:"expect semicolon after an unknown statement." in
+            let loc = loc0 ++ loc2 in
             Some (A.Top.error ~loc err)
           | p ->
-            parsing := Some s;
             Log.debugf 5 (fun k->k"parse toplevel %s" s);
-            Lexer.S.consume self.lex;
-            Some (p ~loc self)
+            let+ x = p ~loc0 ~notation () in
+            Some x
         end
-      | tok, loc ->
-        let err = errm ~loc tok in
-        let loc = loc ++ try_recover_semi self in
-        eat_semi' self ~msg:"expect semicolon after a toplevel statement";
+      | _ ->
+        `keep,
+        let err = errm ~loc:loc0 tok0 in
+        let* _ = try_recover_semi in
+        let+ loc2 = P.exact SEMI_COLON
+            ~msg:"expect semicolon after a toplevel statement" in
+        let loc = loc0 ++ loc2 in
         Some (A.Top.error ~loc err)
-    with
-    | Error.E err ->
-      Log.debugf 0 (fun k->k"error %a" Error.pp err);
-      let _, loc = Lexer.S.cur self.lex in
-      let loc = loc ++ try_recover_semi self in
-      eat_semi' self ~msg:"expect semicolon after toplevel statement";
-      let err =
-        let parsing out () = match !parsing with
-          | None -> ()
-          | Some p -> Fmt.fprintf out "@ while parsing `%s`" p
-        in
-        Error.wrapf ~loc
-          "expected a toplevel statement%a" parsing () err
-      in
-      Some (A.Top.error ~loc err)
+    in
+    begin match res with
+      | Ok r -> P.return r
+      | Error err ->
+        Log.debugf 0 (fun k->k"error %a" Error.pp err);
+        let* _ = try_recover_semi in
+        let+ loc2 = P.exact SEMI_COLON
+            ~msg:"expect semicolon after toplevel statement" in
+        let loc = loc0 ++ loc2 in
+        let err = Error.wrap ~loc "expected a toplevel statement" err in
+        Some (A.Top.error ~loc err)
+    end
 end
 
-let parse_expr ~notation lex : A.Expr.t =
-  let p = P_state.create ~notation lex in
-  let e =
-    Error.guard (Error.wrap "parsing expression") @@ fun () ->
-    P_expr.expr_and_eof p
-  in
-  e
+let parse_expr ~notation () : A.Expr.t P.t =
+  P.parsing (Error.wrap "parsing expression") @@
+  P_expr.expr_and_eof ~notation ()
 
-let parse_top ~notation lex : A.Top.t option =
-  let p = P_state.create ~notation lex in
-  let st = P_top.top p in
-  Log.debugf 1 (fun k->k"parsed %a" (Fmt.Dump.option A.Top.pp_quoted) st);
-  st
+let parse_top = P_top.top
 
-let parse_top_l ~notation lex : A.Top.t list =
-  let rec aux acc =
-    match parse_top ~notation lex with
-    | None -> List.rev acc
+let parse_top_l ~notation () : A.Top.t list P.t =
+  let rec loop acc =
+    let* r = P_top.top ~notation:(!notation) () in
+    match r with
+    | None -> P.return (List.rev acc)
     | Some st ->
       begin match st.A.view with
         | A.Top.Fixity {name; fixity} ->
-          Notation.Ref.declare notation (Name.make name.A.view) fixity
+          Notation.Ref.declare notation (A.Const.name name) fixity
         | _ -> ()
       end;
-      aux (st::acc)
+      loop (st::acc)
   in
-  aux []
+  loop []

@@ -11,6 +11,7 @@ module ID = ID
 module Syntax = Syntax
 module Token = Token
 module Lexer = Lexer
+module Parser = Parser
 module Parse_ast = Parse_ast
 module Type_ast = Type_ast
 module Fixity = Fixity

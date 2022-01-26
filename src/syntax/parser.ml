@@ -12,6 +12,9 @@ type 'a t = {
 let run lex self : _ result =
   self.run {lex} ~ok:(fun x -> Ok x) ~err:(fun e -> Error e)
 
+let run_exn lex self =
+  self.run {lex} ~ok:(fun x -> x) ~err:Error.raise
+
 let[@inline] return x : _ t = { run=fun _ ~ok ~err:_ -> ok x }
 let[@inline] fail e : _ t = { run=fun _ ~ok:_ ~err -> err e }
 
@@ -56,7 +59,7 @@ let exact ?(msg="") tok : _ t = {
   run=fun state ~ok ~err ->
     let tok2, loc = Lstream.next state.lex in
     if T.equal tok tok2 then ok loc
-    else err (Error.makef ~loc "expected `%a` but got `%a`@ %s"
+    else err (Error.makef ~loc "expected %a but got %a@ %s"
                 T.pp tok T.pp tok2 msg)
 }
 
@@ -97,7 +100,7 @@ let token_if ?(msg="") f : _ t = {
     else err (Error.makef ~loc "unexpected token `%a`@ %s" T.pp tok msg)
 }
 
-let switch_next f p_else : _ t = {
+let switch_next f : _ t = {
   run=fun state ~ok ~err ->
     let tok, loc = Lstream.cur state.lex in
     let b, p = f tok loc in
@@ -111,6 +114,11 @@ let switch_next f p_else : _ t = {
 let (<|>) (tok,p1) p2 =
   switch_next @@ fun tok2 _ ->
   if Token.equal tok tok2 then `consume, p1 else `keep, p2
+
+let try_ p = {
+  run=fun state ~ok ~err:_ ->
+    p.run state ~ok:(fun x -> ok (Ok x)) ~err:(fun e -> ok (Error e))
+}
 
 let eoi ~msg () = exact' ~msg T.EOF
 let lbrace ?msg () = exact' ?msg T.LBRACE
