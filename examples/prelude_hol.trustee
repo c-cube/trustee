@@ -11,7 +11,7 @@ show (T = T) = T;
 
 goal T = T {
   exact refl T;
-};
+}
 
 show T;
 eval T'Def;
@@ -26,7 +26,7 @@ theorem TrueIsTrue := T {
     let th2 := sym DefTrue;
     bool_eq th1 th2
   }
-};
+}
 
 // TODO: support attribute syntax `#[doc="theorem `(x=T)=x`"]`
 theorem EqTrueElim := (x = T) = x {
@@ -34,11 +34,11 @@ theorem EqTrueElim := (x = T) = x {
     (bool_eq TrueIsTrue (sym (assume $x=T$)))
     (bool_eq_intro (assume $(x:bool)$) TrueIsTrue);
   exact sym th1;
-};
+}
 
 theorem EqTrueIntro := x = (x = T) {
   exact sym EqTrueElim;
-};
+}
 
 // TODO: REqTrueIntro
 // TODO: REqTrueElim

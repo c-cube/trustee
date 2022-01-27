@@ -19,6 +19,8 @@ let() = assert (Sys.int_size = 63)
 let n_bits_offset = 31
 let n_bits_len = Sys.int_size - n_bits_offset
 
+let equal : t -> t -> bool = (=)
+
 let mk_ off1 off2 : t =
   assert (off2 >= off1);
   let len = off2 - off1 in

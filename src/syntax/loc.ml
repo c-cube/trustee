@@ -9,6 +9,8 @@ type t = {
 let pp out {ctx; loc} = LL.pp ~ctx out loc
 let filename self = self.ctx.LL.filename
 
+let local_loc self = self.loc
+let same_local_loc a b = LL.equal a.loc b.loc
 let make ~ctx loc : t = {loc; ctx}
 
 let none : t =

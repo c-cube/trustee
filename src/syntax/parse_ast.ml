@@ -242,16 +242,17 @@ module Meta_expr = struct
     | V_bool b -> Fmt.bool out b
     | V_unit -> Fmt.string out "()"
 
+  (* TODO: list comprehensions *)
   (** An expression *)
   type t = view with_loc
   and view =
     | Value of value
-    | Const of Name.t
     | Const_accessor of Const.t * accessor
     | Var of var
     | Binop of Const.t * t * t
     | App of t * t list
     | Expr_lit of Expr.t (** between '$' *)
+    | List_lit of t list
     | Record of {
         fields: (Const.t * t) list;
         extends: t option;
@@ -286,15 +287,14 @@ module Meta_expr = struct
       }
 
   (** Label to access a property of some logical constant. *)
-  and accessor = Name.t with_loc
+  and accessor = Const.t
 
   and binding = var * t
 
   (** A block expression, made of statements, but returning a value. *)
   and block_expr = {
     stmts: block_stmt list;
-    ret: t
-  }
+  } [@@unboxed]
 
   (** A single statement in a block.
 
@@ -302,24 +302,28 @@ module Meta_expr = struct
   and block_stmt = block_stmt_view with_loc
   and block_stmt_view =
     | Blk_let of binding
-    | Blk_eval of t
-    | Blk_return of t
+    | Blk_eval_seq of t (* x; *)
+    | Blk_eval of t (* x (return value) *)
+    | Blk_return of t (* return from function *)
     | Blk_if of {
         test: t;
-        then_: block_stmt list;
-        else_: block_stmt list option;
+        then_: block_expr;
+        else_ifs: (t * block_expr) list;
+        else_: block_expr option;
       }
+    | Blk_error of Error.t
     (* TODO: Blk_var of binding? *)
     (* TODO: Blk_set of binding? *)
     (* TODO: Blk_while of t * block_stmt list ? *)
 
-  let pp_accessor : accessor Fmt.printer = fun out a -> Name.pp out a.view
+  let mk_bl ~loc view : block_stmt = {loc; view}
+
+  let pp_accessor : accessor Fmt.printer = Const.pp
 
   let rec pp_ p out (self:t) : unit =
     let pp' = pp_ p in
     match self.view with
     | Value v -> pp_value out v
-    | Const c -> Name.pp out c
     | Const_accessor (c, acc) ->
       Fmt.fprintf out "%a'%a" Const.pp c pp_accessor acc
     | Var v -> Var.pp out v
@@ -330,6 +334,8 @@ module Meta_expr = struct
     | Binop (op, a, b) ->
       wrap_ p 0 out @@ fun p ->
       Fmt.fprintf out "%a@ %a %a" (pp_ p) a Const.pp op (pp_ p) b
+    | List_lit l ->
+      Fmt.fprintf out "[@[%a@]]" (pp_list ~sep:", " @@ pp_ 0) l
     | Expr_lit e ->
       Fmt.fprintf out "$ @[%a@] $" Expr.pp e
     | Record {fields; extends} ->
@@ -357,10 +363,9 @@ module Meta_expr = struct
   and pp0 out e = pp_ 0 out e
 
   and pp_block_expr out (b:block_expr) : unit =
-    let {stmts; ret} = b in
+    let {stmts} = b in
     Fmt.fprintf out "@[<v>";
     pp_block_stmts out stmts;
-    pp0 out ret;
     Fmt.fprintf out "@]"
 
   and pp_block_stmts out l =
@@ -370,15 +375,23 @@ module Meta_expr = struct
     match st.view with
     | Blk_let (v,e) ->
       Fmt.fprintf out "@[<2>let %a =@ %a@];" Var.pp v pp0 e
-    | Blk_eval e -> Fmt.fprintf out "@[%a@];" pp0 e
+    | Blk_eval_seq e -> Fmt.fprintf out "@[%a@];" pp0 e
+    | Blk_eval e -> Fmt.fprintf out "@[%a@]" pp0 e
     | Blk_return e -> Fmt.fprintf out "@[return %a@];" pp0 e
-    | Blk_if {test; then_; else_} ->
+    | Blk_if {test; then_; else_ifs; else_} ->
+      let ppelseif out (t,bl) =
+        Fmt.fprintf out " else if %a@ {@ %a@ @[<2>}"
+          pp0 t pp_block_expr bl
+      in
       let ppelse out = match else_ with
         | None -> ()
-        | Some bl -> Fmt.fprintf out " else {@ %a@]@ }" pp_block_stmts bl
+        | Some bl -> Fmt.fprintf out " else {@ %a@]@ }" pp_block_expr bl
       in
-      Fmt.fprintf out "@[<hv>@[<2>if %a {@ %a@]@ @[<2>}%t@]@]"
-        pp0 test pp_block_stmts then_ ppelse
+      Fmt.fprintf out "@[<hv>@[<2>if %a {@ %a@]@ @[<2>}%a%t@]@]"
+        pp0 test pp_block_expr then_
+        (pp_list ~sep:"" ppelseif) else_ifs ppelse
+    | Blk_error err ->
+      Fmt.fprintf out "<@[error@ %a@]>" Error.pp err
 
   (* wrap in () if [p>p']; call [k (max p p')] to print the expr *)
   and wrap_ p p' out k =
@@ -393,6 +406,11 @@ module Meta_expr = struct
   let mk ~loc view : t = {view;loc}
 
   let expr_lit ~loc e : t = mk ~loc (Expr_lit e)
+  let apply f args : t = match args with
+    | [] -> f
+    | _ ->
+      let loc = List.fold_left (fun l e -> Loc.Infix.(l ++ e.loc)) f.loc args in
+      mk ~loc (App (f, args))
 end
 
 (** Structured proofs.
