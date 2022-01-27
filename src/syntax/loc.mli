@@ -14,6 +14,9 @@ val filename : t -> string
 val positions : t -> Position.t * Position.t
 val contains : t -> Position.t -> bool
 
+val local_loc : t -> Local_loc.t
+val same_local_loc : t -> t -> bool
+
 val union : t -> t -> t
 val union_l : t -> f:('a -> t) -> 'a list -> t
 

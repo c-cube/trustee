@@ -21,14 +21,17 @@ let[@inline] loc self : Loc.t =
   let ll = LL.make ~ctx:self.ctx ~off1:self.start ~off2:self.i in
   Loc.make ~ctx:self.ctx ll
 
+let[@inline] is_idx (self:st) (i:int) = i < String.length self.src
+let[@inline] get (self:st) (i:int) : char = String.get self.src i
+
 (* skip rest of line *)
 let rest_of_line self : unit =
   assert (self.st != Done);
-  while self.i < String.length self.src && String.get self.src self.i != '\n' do
+  while is_idx self self.i && get self self.i != '\n' do
     self.i <- 1 + self.i
   done;
-  if self.i < String.length self.src then (
-    assert (String.get self.src self.i = '\n');
+  if is_idx self self.i then (
+    assert (get self self.i = '\n');
     self.i <- 1 + self.i;
   );
   ()
@@ -47,8 +50,8 @@ let is_symbol = function
   | _ -> false
 
 let rec read_many self f j : int =
-  if j < String.length self.src then (
-    let c = String.get self.src j in
+  if is_idx self j then (
+    let c = get self j in
     if f c then read_many self f (j+1) else j
   ) else (
     j
@@ -59,10 +62,11 @@ let next_ (self:st) : Token.t =
   (* skip whitespace *)
   begin
     let in_white = ref true in
-    while self.i < String.length self.src && !in_white do
-      let c = String.get self.src self.i in
-      if c = '/' && self.i+1<String.length self.src &&
-         String.get self.src (self.i+1) = '/' then (
+    while is_idx self self.i && !in_white do
+      let c = get self self.i in
+      if c = '/'
+      && is_idx self (self.i+1)
+      && get self (self.i + 1) = '/' then (
         rest_of_line self;
       ) else if c = ' ' || c = '\t' || c = '\n' then (
         self.i <- 1 + self.i;
@@ -76,17 +80,21 @@ let next_ (self:st) : Token.t =
     self.st <- Done;
     EOF
   ) else (
-    let c = String.get self.src self.i in
+    let c = get self self.i in
     match c with
     | '(' -> self.i <- 1 + self.i; LPAREN
     | ')' -> self.i <- 1 + self.i; RPAREN
     | '{' -> self.i <- 1 + self.i; LBRACE
     | '}' -> self.i <- 1 + self.i; RBRACE
+    | '[' -> self.i <- 1 + self.i; LBRACKET
+    | ']' -> self.i <- 1 + self.i; RBRACKET
+    | '=' when is_idx self (self.i+1) && get self (self.i+1) = '>' ->
+      self.i <- 2 + self.i; FAT_ARROW
     | ',' -> self.i <- 1 + self.i; COMMA
     | ';' -> self.i <- 1 + self.i; SEMI_COLON
     | ':' ->
       self.i <- 1 + self.i;
-      if self.i < String.length self.src && String.get self.src self.i = '=' then (
+      if is_idx self self.i && get self self.i = '=' then (
         self.i <- 1 + self.i;
         EQDEF
       ) else (
@@ -94,6 +102,7 @@ let next_ (self:st) : Token.t =
       )
     | '.' -> self.i <- 1 + self.i; DOT
     | '_' -> self.i <- 1 + self.i; WILDCARD
+    | '$' -> self.i <- 1 + self.i; DOLLAR
     | '?' ->
       self.i <- 1 + self.i;
       let i0 = self.i in
@@ -116,7 +125,7 @@ let next_ (self:st) : Token.t =
       let j =
         read_many self (fun c -> c <> '"') self.i
       in
-      if j < String.length self.src && String.get self.src j = '"' then (
+      if is_idx self j && get self j = '"' then (
         self.i <- j + 1;
         QUOTED_STR (String.sub self.src i0 (j-i0))
       ) else (
@@ -131,7 +140,8 @@ let next_ (self:st) : Token.t =
       let s = String.sub self.src i0 (j-i0) in
       begin match s with
         | "let" -> LET
-        | "by" -> BY
+        | "if" -> IF
+        | "match" -> MATCH
         | "and" -> AND
         | "in" -> IN
         | _ -> SYM s

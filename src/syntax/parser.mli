@@ -11,6 +11,8 @@ val run_exn : Token.t Lstream.t -> 'a t -> 'a
 
 (** {2 Core combinators} *)
 
+type message = unit -> string
+
 val return : 'a -> 'a t
 val fail : Error.t -> _ t
 val fail_str : string -> _ t
@@ -26,8 +28,8 @@ end
 
 include module type of Infix
 
-val exact : ?msg:string -> Token.t -> Loc.t t
-val exact' : ?msg:string -> Token.t -> unit t
+val exact : ?msg:message -> Token.t -> Loc.t t
+val exact' : ?msg:message -> Token.t -> unit t
 
 val next : (Token.t * Loc.t) t
 (** Read and consume next token *)
@@ -35,7 +37,7 @@ val next : (Token.t * Loc.t) t
 val loc : Loc.t t
 (** Location of next token. Does not consume the token. *)
 
-val token_if : ?msg:string -> (Token.t -> bool) -> (Token.t * Loc.t) t
+val token_if : ?msg:message -> (Token.t -> bool) -> (Token.t * Loc.t) t
 (** [token_if f] parses a token that is accepted by [f], and consumes it. *)
 
 val switch_next :
@@ -60,11 +62,11 @@ val parsing : (Error.t -> Error.t) -> 'a t -> 'a t
 
 (** {2 Helpers} *)
 
-val lbrace : ?msg:string -> unit -> unit t
-val rbrace : ?msg:string -> unit -> unit t
-val lparen : ?msg:string -> unit -> unit t
-val rparen : ?msg:string -> unit -> unit t
-val semi : ?msg:string -> unit -> unit t
-val eoi : msg:string -> unit -> unit t
+val lbrace : ?msg:message -> unit -> unit t
+val rbrace : ?msg:message -> unit -> unit t
+val lparen : ?msg:message -> unit -> unit t
+val rparen : ?msg:message -> unit -> unit t
+val semi : ?msg:message -> unit -> unit t
+val eoi : msg:message -> unit -> unit t
 
 val sym : string t

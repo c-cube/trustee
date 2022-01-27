@@ -5,6 +5,8 @@ type state = {
   lex: Token.t Lstream.t;
 }
 
+type message = unit -> string
+
 type 'a t = {
   run: 'b. state-> ok:('a -> 'b) -> err:(Error.t -> 'b) -> 'b;
 } [@@unboxed]
@@ -55,12 +57,14 @@ module Infix = struct
   let ( <* ) = ( <* )
 end
 
-let exact ?(msg="") tok : _ t = {
+let[@inline] const_ msg () = msg
+
+let exact ?(msg=const_ "") tok : _ t = {
   run=fun state ~ok ~err ->
     let tok2, loc = Lstream.next state.lex in
     if T.equal tok tok2 then ok loc
     else err (Error.makef ~loc "expected %a but got %a@ %s"
-                T.pp tok T.pp tok2 msg)
+                T.pp tok T.pp tok2 (msg ()))
 }
 
 let exact' ?msg tok : _ =
@@ -93,11 +97,11 @@ let parsing f p = {
   run=fun state ~ok ~err -> p.run state ~ok ~err:(fun e -> err (f e))
 }
 
-let token_if ?(msg="") f : _ t = {
+let token_if ?(msg=const_ "") f : _ t = {
   run=fun state ~ok ~err ->
     let tok, loc = Lstream.next state.lex in
     if f tok then ok (tok,loc)
-    else err (Error.makef ~loc "unexpected token `%a`@ %s" T.pp tok msg)
+    else err (Error.makef ~loc "unexpected token `%a`@ %s" T.pp tok (msg()))
 }
 
 let switch_next f : _ t = {

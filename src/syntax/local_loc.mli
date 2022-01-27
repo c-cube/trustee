@@ -33,6 +33,8 @@ val pp : ctx:ctx -> t Fmt.printer
 
 val contains : t -> off:int -> bool
 
+val equal : t -> t -> bool
+
 val union : t -> t -> t
 val union_l : t -> f:('a -> t) -> 'a list -> t
 
