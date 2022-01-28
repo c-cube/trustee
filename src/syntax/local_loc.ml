@@ -36,6 +36,10 @@ let offsets self =
   let off2 = off1 + len in
   off1, off2
 
+let add_offset ~off self =
+  let off1, off2 = offsets self in
+  mk_ (off+off1) (off+off2)
+
 let contains self ~off:p : bool =
   let o1, o2 = offsets self in
   o1 <= p && p <= o2

@@ -29,6 +29,10 @@ val pos_of_offset : ctx:ctx -> int -> Position.t
 val offsets : t -> int * int
 val positions : ctx:ctx -> t -> Position.t * Position.t
 
+val add_offset : off:int -> t -> t
+(** [add_offset ~off loc] is [loc], shifted so that its offset
+    0 actually starts at [off]. *)
+
 val pp : ctx:ctx -> t Fmt.printer
 
 val contains : t -> off:int -> bool

@@ -27,8 +27,6 @@ let empty_hol =
   |> declare (Name.make "=") (Fixity.infix 40)
   |> declare (Name.make "select") (Fixity.binder 30)
   |> declare (Name.make "==>") (Fixity.rassoc 15)
-  |> declare (Name.make "->") (Fixity.rassoc 1000)
-  |> declare (Name.make "\\") (Fixity.binder 5)
 
 module Ref = struct
   type notation = t
