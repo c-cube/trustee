@@ -4,3 +4,5 @@
   (public_name trustee.syntax)
   (libraries trustee.core containers)
   (flags :standard -warn-error -a+8 -open Trustee_core.Sigs))
+
+(ocamllex (modules sexp_lex))
