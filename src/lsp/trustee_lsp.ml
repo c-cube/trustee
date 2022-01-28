@@ -31,8 +31,12 @@ type parsed_buffer = {
 }
 
 let ident_under_pos ~file (s:string) (pos:TS.Position.t) : (string * TS.Loc.t) option =
-  let open TS.Syntax in
-  let module Str = Trustee_syntax.Lstream in
+  None
+(* FIXME: traverse parsetree instead
+let ident_under_pos ~file (s:string) (pos:TS.Position.t) : (string * TS.Loc.t) option =
+  let notation = TS.Notation.Ref.create() in
+  let pstate = TS.Parser.create ~notation () in
+
   let toks = TS.Lexer.create ~file s in
   let rec find () =
     if Str.is_done toks then None
@@ -46,6 +50,7 @@ let ident_under_pos ~file (s:string) (pos:TS.Position.t) : (string * TS.Loc.t) o
     )
   in
   find()
+   *)
 
 let trustee_server _ctx = object (self)
     inherit Linol.server
@@ -58,10 +63,9 @@ let trustee_server _ctx = object (self)
       (* TODO: use penv/env from dependencies, if any, once we have import *)
 
       let notation = TS.Notation.Ref.create() in
+      let pstate = TS.Parser.create ~notation () in
       let stmts =
-        TS.Parser.run_exn
-          (TS.Lexer.create ~file:d content) @@
-        TS.Syntax.parse_top_l ~notation ()
+        TS.Parser.run_exn pstate ~filename:d content TS.Parser.top
       in
       Log.debug (fun k->k "for %s: parsed %d statements" d (List.length stmts));
 

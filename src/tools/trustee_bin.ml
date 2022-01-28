@@ -7,9 +7,9 @@ module TC = Trustee_core
 module TS = Trustee_syntax
 module ITP = Trustee_itp
 
-module Error = Trustee_core.Error
 module K = Trustee_core.Kernel
 module A = Trustee_syntax.Parse_ast
+module Error = Trustee_syntax.Error
 module TA = Trustee_syntax.Type_ast
 
 (*
@@ -30,11 +30,18 @@ module Cat = struct
     List.iter
       (fun file ->
          match CCIO.File.read file with
-         | Ok s ->
-           let lex = TS.Lexer.create ~file s in
-           let l = TS.Parser.run_exn lex @@ TS.Syntax.parse_top_l ~notation () in
-           Fmt.printf "# file %S@." file;
-           List.iter (Fmt.printf "%a@." A.Top.pp) l;
+         | Ok str ->
+           let p = TS.Parser.create ~notation () in
+           begin match
+             TS.Parser.run_exn p ~filename:file str TS.Parser.top
+           with
+           | l ->
+             Fmt.printf "# file %S@." file;
+             List.iter (Fmt.printf "%a@." A.Top.pp) l;
+           | exception Error.E err ->
+             (* report error *)
+             Fmt.printf "%a@." Error.pp err;
+           end
          | Error e ->
            Error.failf (fun k->k"cannot read '%s': %s" file e))
       args;
@@ -114,8 +121,9 @@ module OT_check = struct
                    Fmt.eprintf "VM stack is not empty@."; exit 1
                  );
                  VM.clear_dict vm; (* not reused *)
-               | Error e ->
-                 Fmt.eprintf "error: %a@." Error.pp e;
+               | Error err ->
+                 let err = Error.of_kernel_err err in
+                 Fmt.eprintf "error: %a@." Error.pp err;
                  raise Exit
              ))
         args;

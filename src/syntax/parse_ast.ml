@@ -57,9 +57,9 @@ module Expr = struct
 
   and view =
     | Type
-    | Ty_arrow of ty * ty
+    | Ty_arrow of ty list * ty
     | Var of var
-    | Const of Const.t
+    | Const of Const.t * ty list option
     | Meta of {
         name: string;
         ty: ty option;
@@ -75,6 +75,7 @@ module Expr = struct
     | Eq of t * t
     | With of var list * t
     | Let of binding list * t
+    | Error of Error.t
 
   let unfold_app e : t * t list =
     let rec aux acc e = match e.view with
@@ -88,9 +89,11 @@ module Expr = struct
     | Var v -> Var.pp out v
     | Ty_arrow (a,b) ->
       if p>1 then Fmt.char out '(';
-      Fmt.fprintf out "%a@ -> %a" pp_atom_ a (pp_ p) b;
+      Fmt.fprintf out "%a@ -> %a" (pp_list ~sep:" -> " pp_atom_) a (pp_ p) b;
       if p>1 then Fmt.char out ')';
-    | Const c -> Const.pp out c
+    | Const (c,None) -> Const.pp out c
+    | Const (c,Some l) ->
+      Fmt.fprintf out "(@[%a@ %a@])" Const.pp c (pp_list @@ pp_ 0) l
     | App _ ->
       let f, args = unfold_app e in
       if p>0 then Fmt.char out '(';
@@ -123,6 +126,8 @@ module Expr = struct
         Fmt.fprintf out "@[%a@ := %a@]" Var.pp v (pp_ 0) e in
       Fmt.fprintf out "@[let %a in@ %a@]" (pp_list ~sep:" and " pp_b) bs (pp_ 0) bod;
       if p>0 then Fmt.char out ')';
+    | Error err ->
+      Fmt.fprintf out "<@[error@ %a@]>" Error.pp err
   and pp_atom_ out e = pp_ max_int out e
   and pp_var_ty out v = Var.pp_with_ty (pp_ 0) out v
 
@@ -141,9 +146,9 @@ module Expr = struct
 
   let var ~loc (v:var) : t = mk_ ~loc (Var v)
   let var' ~loc v ty : t = var ~loc (Var.make ~loc v ty)
-  let const ~loc n : t = mk_ ~loc (Const n)
-  let const_str ~loc n : t = const ~loc @@ Const.make_str ~loc n
-  let bool : t = const ~loc:Loc.none Const.bool
+  let const ~loc n args : t = mk_ ~loc (Const (n, args))
+  let const_str ~loc n args : t = const ~loc (Const.make_str ~loc n) args
+  let bool : t = const ~loc:Loc.none Const.bool None
   let meta ~loc (s:string) ty : t = mk_ ~loc (Meta {ty; name=s})
   let app (f:t) (args:t list) : t =
     if args=[] then f
@@ -155,16 +160,17 @@ module Expr = struct
     mk_ ~loc (Bind {b; vars; body})
   let eq ~loc a b : t = mk_ ~loc (Eq (a,b))
   let wildcard ~loc () : t = mk_ ~loc Wildcard
+  let error ~loc err : t = mk_ ~loc (Error err)
 
   let to_string = Fmt.to_string @@ Fmt.hvbox pp
 end
 
 (** A logical substitution literal. *)
 module Subst = struct
-  type t = (string with_loc * Expr.t) list with_loc
+  type t = (Expr.var * Expr.t) list with_loc
   let mk_ ~loc view : t = {view; loc}
-  let pp out s =
-    let pppair out (v,e) = Fmt.fprintf out "(@[%s := %a@])" v.view Expr.pp e in
+  let pp out (s:t) =
+    let pppair out (v,e) = Fmt.fprintf out "(@[%a := %a@])" Var.pp v Expr.pp e in
     Fmt.fprintf out "(@[%a@])" (pp_list ~sep:"," pppair) s.view
   let to_string = Fmt.to_string pp
 end
