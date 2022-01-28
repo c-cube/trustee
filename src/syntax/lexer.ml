@@ -10,6 +10,7 @@ type st = {
   src: string;
   file: string;
   ctx: LL.ctx;
+  loc_offset: int;
   mutable i: int;
   mutable start: int;
   mutable st: state;
@@ -18,7 +19,9 @@ type st = {
 type t = Token.t S.t
 
 let[@inline] loc self : Loc.t =
-  let ll = LL.make ~ctx:self.ctx ~off1:self.start ~off2:self.i in
+  let off1 = self.start + self.loc_offset in
+  let off2 = self.i + self.loc_offset in
+  let ll = LL.make ~ctx:self.ctx ~off1 ~off2 in
   Loc.make ~ctx:self.ctx ll
 
 let[@inline] is_idx (self:st) (i:int) = i < String.length self.src
@@ -84,14 +87,7 @@ let next_ (self:st) : Token.t =
     match c with
     | '(' -> self.i <- 1 + self.i; LPAREN
     | ')' -> self.i <- 1 + self.i; RPAREN
-    | '{' -> self.i <- 1 + self.i; LBRACE
-    | '}' -> self.i <- 1 + self.i; RBRACE
-    | '[' -> self.i <- 1 + self.i; LBRACKET
-    | ']' -> self.i <- 1 + self.i; RBRACKET
-    | '=' when is_idx self (self.i+1) && get self (self.i+1) = '>' ->
-      self.i <- 2 + self.i; FAT_ARROW
     | ',' -> self.i <- 1 + self.i; COMMA
-    | ';' -> self.i <- 1 + self.i; SEMI_COLON
     | ':' ->
       self.i <- 1 + self.i;
       if is_idx self self.i && get self self.i = '=' then (
@@ -102,7 +98,6 @@ let next_ (self:st) : Token.t =
       )
     | '.' -> self.i <- 1 + self.i; DOT
     | '_' -> self.i <- 1 + self.i; WILDCARD
-    | '$' -> self.i <- 1 + self.i; DOLLAR
     | '?' ->
       self.i <- 1 + self.i;
       let i0 = self.i in
@@ -116,9 +111,6 @@ let next_ (self:st) : Token.t =
         self.i <- j;
         QUESTION_MARK_STR (String.sub self.src i0 (j-i0))
       )
-    | '\'' ->
-      self.i <- 1 + self.i;
-      SINGLE_QUOTE
     | '"' ->
       self.i <- 1 + self.i;
       let i0 = self.i in
@@ -140,9 +132,6 @@ let next_ (self:st) : Token.t =
       let s = String.sub self.src i0 (j-i0) in
       begin match s with
         | "let" -> LET
-        | "if" -> IF
-        | "match" -> MATCH
-        | "and" -> AND
         | "in" -> IN
         | _ -> SYM s
       end
@@ -173,10 +162,10 @@ let next self () : Token.t * Loc.t * S.is_done =
     t, loc self, self.st == Done
   )
 
-let create ~file src : _ S.t =
+let create ?(loc_offset=0) ~file src : _ S.t =
   let ctx = LL.create ~filename:file src in
   let self = {
-    ctx; src; i=0; file; st=Read_next; start=0;
+    ctx; loc_offset; src; i=0; file; st=Read_next; start=0;
   } in
   S.create ~next:(next self) ()
 
