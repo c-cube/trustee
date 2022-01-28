@@ -6,11 +6,11 @@ module Local_loc = Local_loc
 
 include Common_
 
+module Error = Error
 module Expr_printer = Expr_printer
 module ID = ID
-module Syntax = Syntax
-module Token = Token
-module Lexer = Lexer
+module Sexp_loc = Sexp_loc
+module Sexp_decode = Sexp_decode
 module Parser = Parser
 module Parse_ast = Parse_ast
 module Type_ast = Type_ast

@@ -1,72 +1,43 @@
 
-type 'a t
-(** A parser of values of type ['a]. *)
+(** Main parser.
 
-val run : Token.t Lstream.t -> 'a t -> ('a, Error.t) result
-(** Run the parser *)
+    This is the parser for files, containing all top declarations,
+    logical expressions (see {!Expr_parser}), meta definitions, etc.
 
-val run_exn : Token.t Lstream.t -> 'a t -> 'a
-(** Run the parser.
-    @raise Error.E in case of error. *)
+    We use a S-expression based syntax because life is short, and it
+    looks good without having to make any syntactic decisions.
+*)
 
-(** {2 Core combinators} *)
+open Common_
 
-type message = unit -> string
+module A = Parse_ast
+module SD = Sexp_decode
 
-val return : 'a -> 'a t
-val fail : Error.t -> _ t
-val fail_str : string -> _ t
-val fail_strf : ('a, Format.formatter, unit, 'b t) format4 -> 'a
+type t
 
-module Infix : sig
-  val ( let+ ) : 'a t -> ('a -> 'b) -> 'b t
-  val ( and+ ) : 'a t -> 'b t -> ('a * 'b) t
-  val ( let* ) : 'a t -> ('a -> 'b t) -> 'b t
-  val ( *> ) : _ t -> 'a t -> 'a t
-  val ( <* ) : 'a t -> _ t -> 'a t
+val create :
+  notation:Notation.Ref.t ->
+  unit -> t
+
+type 'a parser = t -> 'a SD.t
+type 'a or_error = ('a, Loc.t * Error.t) result
+
+module Or_error : sig
+  type 'a t = 'a or_error
+  val get_exn : 'a t -> 'a
+  val sequence_l : 'a t list -> 'a list t
 end
 
-include module type of Infix
+val run : t -> filename:string -> string -> 'a parser -> 'a or_error list
+val run_exn : t -> filename:string -> string -> 'a parser -> 'a list
 
-val exact : ?msg:message -> Token.t -> Loc.t t
-val exact' : ?msg:message -> Token.t -> unit t
+module P_expr : sig
+  val top : A.Expr.t parser
+end
 
-val next : (Token.t * Loc.t) t
-(** Read and consume next token *)
+module P_subst : sig
+  val top : A.Subst.t parser
+end
 
-val loc : Loc.t t
-(** Location of next token. Does not consume the token. *)
+val top : A.Top.t parser
 
-val token_if : ?msg:message -> (Token.t -> bool) -> (Token.t * Loc.t) t
-(** [token_if f] parses a token that is accepted by [f], and consumes it. *)
-
-val switch_next :
-  (Token.t -> Loc.t -> [`consume | `keep] * 'a t) ->
-  'a t
-(** [switch_next f] calls [f tok loc] where [tok] is the next token,
-    with location [loc].
-    If [f tok = `consume, p], it consumes [tok] before becoming [p],
-    else [f tok = `keep, p] it doesn't consume [tok]. It becomes [p] in both cases. *)
-
-val (<|>) : (Token.t * 'a t) -> 'a t -> 'a t
-(** [(tok, p1) <|> p2] consumes [tok] if it's the next token and
-      becomes [p1], or doesn't consume the next token and becomes [p2]. *)
-
-val try_ : 'a t -> ('a, Error.t) result t
-(** Reify errors *)
-
-val parsing : (Error.t -> Error.t) -> 'a t -> 'a t
-(** [parsing wrap p] behaves like [p], but errors raised by [p]
-    are modified using [wrap]. Typically, {!Error.wrap}
-    or {!Error.wrapf} can be used to provide context. *)
-
-(** {2 Helpers} *)
-
-val lbrace : ?msg:message -> unit -> unit t
-val rbrace : ?msg:message -> unit -> unit t
-val lparen : ?msg:message -> unit -> unit t
-val rparen : ?msg:message -> unit -> unit t
-val semi : ?msg:message -> unit -> unit t
-val eoi : msg:message -> unit -> unit t
-
-val sym : string t
