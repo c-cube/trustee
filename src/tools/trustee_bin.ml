@@ -31,9 +31,8 @@ module Cat = struct
       (fun file ->
          match CCIO.File.read file with
          | Ok str ->
-           let p = TS.Parser.create ~notation () in
            begin match
-             TS.Parser.run_exn p ~filename:file str TS.Parser.top
+               TS.Parser.parse_string_exn str ~notation TS.Parser.top
            with
            | l ->
              Fmt.printf "# file %S@." file;

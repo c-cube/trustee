@@ -158,12 +158,14 @@ let next self () : Token.t * Loc.t * S.is_done =
     EOF, loc self, true
   ) else (
     let t = next_ self in
-    Log.debugf 20 (fun k->k"TOK.next %a, %a" Token.pp t Loc.pp (loc self));
+    Log.debugf 20 (fun k->k"TOK.next %a, %a" Token.pp t Loc.pp_compact (loc self));
     t, loc self, self.st == Done
   )
 
-let create ?(loc_offset=0) ~file src : _ S.t =
-  let ctx = LL.create ~filename:file src in
+let create ?(loc_offset=0) ?src_string ~file src : _ S.t =
+  let ctx =
+    let ctx_src = match src_string with Some s -> s | None -> src in
+    LL.create ~filename:file ctx_src in
   let self = {
     ctx; loc_offset; src; i=0; file; st=Read_next; start=0;
   } in

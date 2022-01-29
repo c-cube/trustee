@@ -5,7 +5,9 @@ module LL = Local_loc
 
 type t
 
+val pp_compact : t Fmt.printer
 val pp : t Fmt.printer
+val pp_l : t list Fmt.printer
 
 val none : t
 val make : ctx:LL.ctx -> LL.t -> t

@@ -59,7 +59,6 @@ module Expr = struct
     | Type
     | Ty_arrow of ty list * ty
     | Var of var
-    | Const of Const.t * ty list option
     | Meta of {
         name: string;
         ty: ty option;
@@ -91,9 +90,6 @@ module Expr = struct
       if p>1 then Fmt.char out '(';
       Fmt.fprintf out "%a@ -> %a" (pp_list ~sep:" -> " pp_atom_) a (pp_ p) b;
       if p>1 then Fmt.char out ')';
-    | Const (c,None) -> Const.pp out c
-    | Const (c,Some l) ->
-      Fmt.fprintf out "(@[%a@ %a@])" Const.pp c (pp_list @@ pp_ 0) l
     | App _ ->
       let f, args = unfold_app e in
       if p>0 then Fmt.char out '(';
@@ -146,9 +142,7 @@ module Expr = struct
 
   let var ~loc (v:var) : t = mk_ ~loc (Var v)
   let var' ~loc v ty : t = var ~loc (Var.make ~loc v ty)
-  let const ~loc n args : t = mk_ ~loc (Const (n, args))
-  let const_str ~loc n args : t = const ~loc (Const.make_str ~loc n) args
-  let bool : t = const ~loc:Loc.none Const.bool None
+  let bool : t = var' ~loc:Loc.none "bool" (Some type_)
   let meta ~loc (s:string) ty : t = mk_ ~loc (Meta {ty; name=s})
   let app (f:t) (args:t list) : t =
     if args=[] then f

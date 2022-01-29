@@ -1,12 +1,13 @@
 
 module LL = Local_loc
 
+type ctx = Local_loc.ctx
 type t = {
   loc: Local_loc.t;
   ctx: Local_loc.ctx;
 }
 
-let pp out {ctx; loc} = LL.pp ~ctx out loc
+let pp_compact out {ctx;loc} = LL.pp ~ctx out loc
 let filename self = self.ctx.LL.filename
 
 let local_loc self = self.loc
@@ -31,3 +32,41 @@ module Infix = struct
   let (++) = union
 end
 include Infix
+
+module Util_pp_loc : sig
+  val pp : t Fmt.printer
+  val pp_l : t list Fmt.printer
+end = struct
+
+  let conv_loc_input (self:Loc_input.t) =
+    match Loc_input.view self with
+    | Loc_input.String s -> Pp_loc.Input.string s
+
+  let to_pp_loc (self:t) : Pp_loc.loc =
+    let off1, off2 = LL.offsets self.loc in
+    LL.tr_position ~ctx:self.ctx ~left:true ~offset:off1,
+    LL.tr_position ~ctx:self.ctx ~left:false ~offset:off2
+
+  let pp out (self:t) : unit =
+    if self == none then ()
+    else (
+      let input = conv_loc_input self.ctx.input in
+      Format.fprintf out "@[<v>%a@ %a@]"
+        (LL.pp ~ctx:self.ctx) self.loc
+        (Pp_loc.pp ~max_lines:5 ~input) [to_pp_loc self]
+    )
+
+  let pp_l out (l:t list) : unit =
+    match l with
+    | [] -> ()
+    | l1 :: _ ->
+      let ctx = l1.ctx in
+      let input = conv_loc_input ctx.input in
+      let locs = List.map to_pp_loc l in
+      Format.fprintf out "@[<v>%a@ %a@]"
+        Fmt.(list ~sep:(return ";@ and ") pp_compact) l
+        (Pp_loc.pp ~max_lines:5 ~input) locs
+end
+
+let pp = Util_pp_loc.pp
+let pp_l = Util_pp_loc.pp_l
