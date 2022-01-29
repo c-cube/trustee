@@ -24,15 +24,19 @@ val value : sexp t
 val loc : Loc.t t
 val atom : string t
 val dollar_str : string t
+val quoted_str : string t
 val list : sexp list t
 val list_of : ?what:string -> 'a t -> 'a list t
+val bracket_list_of : ?what:string -> 'a t -> 'a list t
 val pair : 'a t -> 'b t -> ('a * 'b) t
 
 val tuple2: 'a t -> 'b t -> ('a * 'b) t
 val tuple3: 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) t
 
+val guard : msg:string -> ('a -> bool) -> 'a t -> 'a t
+
 val string : string t
-(** Alias to {!atom} *)
+(** Alias to {!quoted_str} *)
 
 val int : int t
 val bool : bool t
@@ -42,28 +46,35 @@ val atom_or_atom_list : string list t
 
 val keyword : msg:string -> (string * 'a) list -> 'a t
 
-val is_atom : bool t
-val is_atom_of : string -> bool t
-val is_dollar_str : bool t
-val is_list : bool t
+type predicate = bool t
 
-val succeeds: 'a t -> bool t
+val is_atom : predicate
+val is_atom_of : string -> predicate
+val is_atom_if : (string -> bool) -> predicate
+val is_dollar_str : predicate
+val is_quoted_str : predicate
+val is_list : predicate
+val is_bracket_list : predicate
+
+val succeeds: 'a t -> predicate
 (** [succeeds d] returns [true] if [d] parses the S-expr, and [false] otherwise. *)
 
-val is_applied : string -> bool t
+val is_applied : string -> predicate
 (** [is_applied "foo"] is the recognizer that
     accepts expressions of the form [("foo" …)] *)
 
-val try_succeed : 'a t -> (bool t * 'a t)
+val try_succeed : 'a t -> (predicate * 'a t)
 (** [try_succeed d] is [succeeds d, d] *)
 
-val try_l : msg:string -> (bool t * 'a t) list -> 'a t
+val try_l : ?else_:'a t -> msg:string -> (predicate * 'a t) list -> 'a t
 (** [try_l ~msg l] parses a sexp by trying each case in [l] successively,
     until one succeeds.
     A case is a pair of a recognizer and a parser. If the recognizer succeeds,
     then this case wins, and [try_l l] behaves like the case's parser;
     if the recognizer fails, the case is discarded and the next case is tried.
-    @param msg error message if no case recognizes the parser. *)
+    @param else_ the fallback case if no predicate matches
+    @param msg error message if no case recognizes the parser and [else_] is not provided.
+*)
 
 val with_msg : msg:string -> 'a t -> 'a t
 (** [with_msg ~msg d] behaves like [d] but replaces
@@ -74,6 +85,7 @@ val fold_l : ('b -> 'a -> 'b t) -> 'b -> 'a list -> 'b t
 
 val fix : ('a t -> 'a t) -> 'a t
 val sub : 'a t -> sexp -> 'a t
+val sub_l : 'a t -> sexp list -> 'a list t
 
 val applied : string -> 'a t -> 'a list t
 val applied0 : string -> unit t

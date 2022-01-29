@@ -42,7 +42,12 @@ let dollar_str = {run=fun s ->
     | S.Dollar x -> Ok x
     | _ -> fail_ (const "expected a $…$ literal") s
   }
-let string = atom
+let quoted_str = {run=fun s ->
+    match s.S.view with
+    | S.Quoted_string x -> Ok x
+    | _ -> fail_ (const "expected a $…$ literal") s
+  }
+let string = quoted_str
 
 let int = {
   run=fun s ->
@@ -70,23 +75,37 @@ let list_of ?what d =
       fun s ->
         match s.view with
         | List l ->
+          let get u = match d.run u with
+            | Ok x -> x
+            | Error e -> raise (E e) in
           begin
-            try
-              let l =
-                l
-                |> List.map (fun u ->
-                    match d.run u with
-                    | Ok x -> x
-                    | Error e -> raise (E e))
-              in
-              Ok l
-            with E e ->
-              Error e
+            try Ok (List.map get l)
+            with E e -> Error e
           end
         | _ ->
           let msg() = match what with
             | None -> "expected list"
             | Some w -> spf "expected list of %s" w in
+          fail_ msg s
+  }
+
+let bracket_list_of ?what d =
+  let exception E of err in
+  { run=
+      fun s ->
+        match s.view with
+        | Bracket_list l ->
+          let get u = match d.run u with
+            | Ok x -> x
+            | Error e -> raise (E e) in
+          begin
+            try Ok (List.map get l)
+            with E e -> Error e
+          end
+        | _ ->
+          let msg() = match what with
+            | None -> "expected bracketed list"
+            | Some w -> spf "expected bracketed list of %s" w in
           fail_ msg s
   }
 
@@ -134,10 +153,14 @@ let fix f =
   in
   Lazy.force self
 
+type predicate = bool t
 let is_atom = {run=fun s -> match s.S.view with Atom _ -> Ok true | _ -> Ok false}
-let is_atom_of str = {run=fun s -> match s.S.view with Atom s2 -> Ok (str=s2) | _ -> Ok false}
+let is_atom_if f = {run=fun s -> match s.S.view with Atom s -> Ok (f s) | _ -> Ok false}
+let is_atom_of str = is_atom_if (String.equal str)
 let is_dollar_str = {run=fun s -> match s.S.view with Dollar _ -> Ok true | _ -> Ok false}
+let is_quoted_str = {run=fun s -> match s.S.view with Quoted_string _ -> Ok true | _ -> Ok false}
 let is_list = {run=fun s -> match s.S.view with List _ -> Ok true | _ -> Ok false}
+let is_bracket_list = {run=fun s -> match s.S.view with Bracket_list _ -> Ok true | _ -> Ok false}
 
 let succeeds d = {
   run=fun s -> match d.run s with
@@ -153,19 +176,21 @@ let is_applied foo = {
 
 let try_succeed d = succeeds d, d
 
-let try_l (type x) ~msg decs = {
+let try_l (type x) ?else_ ~msg decs = {
   run=fun s ->
-    let exception E of x t in
+    let exception Found of x t in
     try
       List.iter
         (fun (check,dec) ->
            match check.run s with
            | Ok false | Error _ -> ()
-           | Ok true -> raise_notrace (E dec))
+           | Ok true -> raise_notrace (Found dec))
         decs;
-      (* no decoder found *)
-      fail_ (const msg) s
-    with E dec ->
+      begin match else_ with
+        | Some e -> e.run s
+        | None -> fail_ (const msg) s (* no decoder found *)
+      end
+    with Found dec ->
       begin match dec.run s with
         | Ok _ as x -> x
         | Error e ->
@@ -184,6 +209,17 @@ let with_msg ~msg d = {
 let sub self s = {
   run=fun _ -> self.run s
 }
+
+let sub_l p l =
+  let exception E of err in
+  let p1 s = match p.run s with
+    | Ok x -> x
+    | Error e -> raise_notrace (E e)
+  in
+  {run=fun _ ->
+      try Ok (List.map p1 l)
+      with E err -> Error err
+  }
 
 let pair a b =
   let* l = list_of value in
@@ -204,6 +240,11 @@ let tuple3 a b c =
     and+ z = sub c z in
     x,y,z
   | _ -> fail "expected a triple"
+
+let guard ~msg f p =
+  let* x = p in
+  if f x then return x
+  else fail msg
 
 let try_apply name f else_ = {
   run=fun s ->
