@@ -1,2 +1,3 @@
 #!/bin/sh
-exec dune exec --profile=release src/tools/trustee_bin.exe -- $@
+OPTS=--profile=release
+exec dune exec $(OPTS) src/tools/trustee_bin.exe -- $@
