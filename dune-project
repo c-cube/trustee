@@ -17,6 +17,7 @@
   (depends
     (dune (>= "2.0"))
     (containers (and (>= 3.3) (< 4.0)))
+    (pp_loc (and (>= 1.0) (< 2.0)))
     (iter (>= 1.0))
     (ocaml (>= 4.08.0))
     (qtest :with-test)
@@ -41,7 +42,6 @@
     (dune (>= "2.0"))
     (containers (and (>= 3.0) (< 4.0)))
     containers-thread
-    pp_loc
     logs
     cmdliner
     (ocaml (>= 4.08.0))

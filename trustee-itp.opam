@@ -9,7 +9,6 @@ depends: [
   "dune" {>= "2.0"}
   "containers" {>= "3.0" & < "4.0"}
   "containers-thread"
-  "pp_loc"
   "logs"
   "cmdliner"
   "ocaml" {>= "4.08.0"}
