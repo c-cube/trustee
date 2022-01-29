@@ -1,8 +1,32 @@
 module K = Trustee_core.Kernel
-module Notation = Notation
 module E = K.Expr
 
 open OUnit2
+
+let test_sexp1 = "test_sexp1" >:: fun ctxt ->
+  let str = {|(foo (bar "hello world") [1 2 {3}])|} in
+  begin match Sexp_loc.of_string ~filename:"t1" str with
+    | None -> assert_failure "no parse"
+    | Some s2 ->
+      assert_equal ~ctxt str (Sexp_loc.to_string s2)
+        ~printer:CCFun.id
+  end
+
+let test_sexp2 = "test_sexp2" >:: fun ctxt ->
+    let str = {|(foo (bar "hello world")
+    ; comment
+    [1 2  ; oh?
+    {3}]
+
+    )  |} in
+  begin match Sexp_loc.of_string ~filename:"t1" str with
+    | None -> assert_failure "no parse"
+    | Some s2 ->
+      let str_expect = {|(foo (bar  "hello world") [1 2 {3}])|} in
+      assert_equal ~ctxt str_expect (Sexp_loc.to_string s2)
+        ~printer:CCFun.id
+  end
+
 
 (*$inject
   open Sigs
@@ -179,4 +203,6 @@ open OUnit2
 
 let suite =
   "syntax" >::: [
+    test_sexp1;
+    test_sexp2;
   ]
