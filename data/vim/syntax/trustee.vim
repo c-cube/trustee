@@ -18,7 +18,7 @@ syn match       trusteeKW        "/"
 syn match       trusteeKW        "%"
 syn match       trusteeKW        "*"
 
-syn match       trusteeComment "//.*" contains=trusteeTodo
+syn match       trusteeComment ";.*" contains=trusteeTodo
 
 syn match       trusteeStr      +"[^"]\+"+
 syn match       trusteeSym      ":[^ \])]\+"
