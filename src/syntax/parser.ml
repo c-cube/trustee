@@ -800,7 +800,9 @@ end = struct
         begin match List.assoc_opt s parsers with
           | None ->
             SD.failf (fun k->k"unknown command %S" s)
-          | Some p -> p self
+          | Some p ->
+            SD.with_msg ~msg:(spf "parsing command %S" s) @@
+            p self
         end
       | _ -> SD.fail "expected a top statement: `(<command> <arg>*)`"
     in
