@@ -1,5 +1,6 @@
 module K = Trustee_core.Kernel
 module E = K.Expr
+module A = Parse_ast
 
 open OUnit2
 
@@ -38,6 +39,37 @@ let test_sexp3 = "test_sexp3" >:: fun ctxt ->
       assert_equal ~ctxt str (Sexp_loc.to_string s2)
         ~printer:CCFun.id
   end
+
+let test_sexp4 = "test_sexp4" >:: fun ctxt ->
+    match Sexp_loc.of_string ~filename:"t4" "[]" with
+    | Some {Sexp_loc.view=Sexp_loc.Bracket_list []; _} -> ()
+    | Some s ->
+      assert_failure (Fmt.asprintf "wrong parse for '[]', got %a" Sexp_loc.pp s)
+    | None -> assert_failure "wrong parse for '[]'"
+
+
+module T_expr = struct
+  let i = ref 0
+  let mk_test str str2 =
+    let name = Printf.sprintf "test_expr%d" !i in
+    incr i;
+    name >:: fun ctxt ->
+      let notation = Notation.Ref.create() in
+      match Parser.parse_string_exn ~notation str Parser.P_expr.top with
+      | [e] ->
+        let str_e = A.Expr.to_string e in
+        assert_equal ~ctxt ~printer:CCFun.id str2 str_e
+      | l ->
+        let s = Fmt.asprintf "expected one expr, got %d:@. %a"
+            (List.length l) (Fmt.Dump.list A.Expr.pp) l in
+        assert_failure s
+
+end
+
+let test_exprs = [
+  T_expr.mk_test "bool" "bool";
+  T_expr.mk_test " (   ?f ?x )" "?f ?x";
+]
 
 
 (*$inject
@@ -214,8 +246,13 @@ let test_sexp3 = "test_sexp3" >:: fun ctxt ->
 *)
 
 let suite =
-  "syntax" >::: [
-    test_sexp1;
-    test_sexp2;
-    test_sexp3;
-  ]
+  let l = [
+    [
+      test_sexp1;
+      test_sexp2;
+      test_sexp3;
+      test_sexp4;
+    ];
+    test_exprs;
+  ] |> List.flatten in
+  "syntax" >::: l

@@ -3,7 +3,7 @@
   (name run_tests)
   (modes native)
   (flags :standard  -w -a -warn-error -a+8
-         -open Trustee_core -open Trustee_syntax)
+         -open Trustee_core -open Trustee_core.Sigs -open Trustee_syntax)
   (libraries trustee.core trustee.syntax ounit2))
 
 (rule
