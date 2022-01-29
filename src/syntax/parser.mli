@@ -16,6 +16,7 @@ module SD = Sexp_decode
 type t
 
 val create :
+  src_string:string ->
   notation:Notation.Ref.t ->
   unit -> t
 
@@ -41,3 +42,15 @@ end
 
 val top : A.Top.t parser
 
+
+val parse_string :
+  ?filename:string ->
+  notation:Notation.Ref.t ->
+  string ->
+  'a parser -> 'a or_error list
+
+val parse_string_exn :
+  ?filename:string ->
+  notation:Notation.Ref.t ->
+  string ->
+  'a parser -> 'a list

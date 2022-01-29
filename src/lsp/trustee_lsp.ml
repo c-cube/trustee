@@ -63,9 +63,8 @@ let trustee_server _ctx = object (self)
       (* TODO: use penv/env from dependencies, if any, once we have import *)
 
       let notation = TS.Notation.Ref.create() in
-      let pstate = TS.Parser.create ~notation () in
       let stmts =
-        TS.Parser.run_exn pstate ~filename:d content TS.Parser.top
+        TS.Parser.parse_string_exn content ~notation TS.Parser.top
       in
       Log.debug (fun k->k "for %s: parsed %d statements" d (List.length stmts));
 

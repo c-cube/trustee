@@ -13,6 +13,7 @@ val parse_expr :
 
 val expr_of_string :
   ?loc_offset:int ->
+  ?src_string:string ->
   ?file:string ->
   notation:Notation.t ->
   string -> A.Expr.t or_error

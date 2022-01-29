@@ -13,6 +13,7 @@ let spf = Printf.sprintf
 
 type t = {
   notation: Notation.Ref.t;
+  src_string: string;
 }
 type 'a parser = t -> 'a SD.t
 type 'a or_error = ('a, Loc.t * Error.t) result
@@ -61,8 +62,16 @@ let run_exn (self:t) ~filename str p : _ list =
   in
   loop []
 
-let create ~notation () : t =
-  { notation; }
+let create ~src_string ~notation () : t =
+  { notation; src_string; }
+
+let parse_string ?(filename="<string>") ~notation str (p:'a parser) : 'a or_error list =
+  let self = create ~src_string:str ~notation () in
+  run self ~filename str p
+
+let parse_string_exn ?(filename="<string>") ~notation str (p:'a parser) : 'a list =
+  let self = create ~src_string:str ~notation () in
+  run_exn self ~filename str p
 
 (** Parse a variable.
     @param p_ty how to parse the type, if needed
@@ -101,40 +110,55 @@ end = struct
 
 Such expressions can be built as follows:
 
-- $ <expr> $ using predefined notations and user-defined notations.
-  For example, $ \(x y:bool). x=y $ is a lambda-term.
-- (expr/app <expr> <expr>+) is a function application.
-- (expr/var <var>) is a variable node. A variable is either a name "x"
-    or a pair (x <type>).
-- (expr/lam (<var>*) <expr>) is a lambda abstraction.
-- (expr/const "name" <expr>*) is a constant, with its type arguments.
-- expr/type is Type, the type of types.
-- (expr/arrow <expr>+ <expr>) is the function arrow type. (expr/arrow a b c)
+- `$ <expr> $` using predefined notations and user-defined notations.
+  For example, `$ \(x y:bool). x=y $` is a lambda-term.
+- `(<expr> <expr>+)` is a function application or a constant applied
+  to type parameters (to be determined at typechecking).
+- `?x` is a free variable named "x" without an explicit type.
+- `x` is a variable or constant.
+- `[x <ty:expr>]` is a variable node with an explicit type.
+- `(lambda (<var_with_type>+) <expr>)` is a lambda abstraction.
+- `type` is Type, the type of types.
+- `(-> <expr>+ <expr>)` is the function arrow type. `(-> a b c)`
   builds the type `a -> b -> c`.
+
+In `lambda`, variables with types have the shape `[x y z <ty:expr>]`
+(a group of names, followed by a type). The case `[x <ty:expr>]` works fine,
+but there must be at least one variable name.
 |}
+
+  let p_vars_block ~p_ty self : E.var list SD.t =
+    let* l = SD.list_or_bracket_list_of ~what:"variables and type" SD.value in
+    begin match List.rev l with
+      | last :: ((_::_) as rargs) ->
+        let+ ty = SD.sub p_ty last
+        and+ rnames =
+          SD.sub_l (let+ loc=SD.loc and+ name = SD.atom in name,loc)
+            rargs in
+        List.rev_map (fun (v,loc) -> A.Var.make ~loc v (Some ty)) rnames
+      | [_] ->
+        SD.fail "a variable declaration needs at least one name and the type"
+      | [] ->
+        SD.fail "an empty list is not a valid variable(s) declaration"
+    end
 
   (* either parse a $ foo $ value, or a s-expr *)
   let p_rec_ (self:t) : _ SD.t =
     SD.fix @@ fun expr ->
     SD.try_l ~msg:doc [
 
-      (SD.is_atom_of "expr/type", SD.return E.type_);
+      (SD.is_atom_of "type", SD.return E.type_);
 
-      (SD.is_applied "expr/app",
-       let* l = SD.applied "expr/app" SD.value in
-       begin match l with
-         | [] | [_] -> SD.fail "expr/app needs at least 2 arguments"
-         | f :: args ->
-           let+ f = SD.sub expr f
-           and+ args = SD.map_l (SD.sub expr) args in
-           E.app f args
-       end);
+      (SD.is_atom,
+       let+ loc = SD.loc
+       and+ name = SD.atom in
+       E.var' ~loc name None);
 
-      (SD.is_applied "expr/arrow",
+      (SD.is_applied "->",
        let* loc = SD.loc in
-       let* l = SD.applied "expr/arrow" SD.value in
+       let* l = SD.applied "->" SD.value in
        begin match l with
-         | [] | [_] -> SD.fail "expr/arrow needs at least 2 arguments"
+         | [] | [_] -> SD.fail "`->` needs at least 2 arguments"
          | l ->
            let+ l = SD.map_l (SD.sub expr) l in
            match List.rev l with
@@ -142,32 +166,32 @@ Such expressions can be built as follows:
            | [] -> assert false
        end);
 
-      (SD.is_applied "expr/lam",
+      (SD.is_list,
+       let* l = SD.list_of ~what:"expressions" expr in
+       begin match l with
+         | [] | [_] ->
+           SD.fail "in logical expression, \
+                    application needs at least a function and an argument"
+         | f :: args ->
+           SD.return @@ E.app f args
+       end);
+
+      (SD.is_applied "lambda",
        let* loc = SD.loc in
-       let+ vars, bod =
-         SD.applied2 "expr/lam"
-           SD.(list_of ~what:"typed variables" @@ p_var ~p_ty:expr ()) expr in
-       E.lambda ~loc vars bod);
+       let* vars, bod =
+         SD.applied2 "lambda"
+           SD.(list_of ~what:"typed variables" @@ p_vars_block ~p_ty:expr self) expr in
+       let vars = List.flatten vars in
+       if vars=[] then (
+         SD.fail "`lambda` requires at least one variable"
+       ) else (
+         SD.return @@ E.lambda ~loc vars bod
+       ));
 
       (SD.is_applied "expr/var",
        let* loc = SD.loc in
        let+ v = SD.applied1 "expr/var" (p_var ~p_ty:expr ()) in
        E.var ~loc v);
-
-      (SD.is_applied "expr/const",
-       let* loc = SD.loc in
-       let* l = SD.applied "expr/const" SD.value in
-       begin match l with
-         | [] -> SD.fail "expr/const needs at least one argument"
-         | [c] ->
-           let+ c = SD.sub p_const c in
-           E.const ~loc c None
-
-         | c :: args ->
-           let+ c = SD.sub p_const c
-           and+ args = SD.map_l (SD.sub expr) args in
-           E.const ~loc c (Some args)
-       end);
 
       (* parse expression in "$" … "$" *)
       (SD.is_dollar_str,
@@ -178,9 +202,11 @@ Such expressions can be built as follows:
        let loc_offset = Loc.local_loc loc |> Loc.LL.offsets |> fst in
        let filename = Loc.filename loc in
        let* s = SD.dollar_str in
+       Log.debugf 5 (fun k->k"parse expr from $-string %S" s);
        begin match
            Expr_parser.expr_of_string s
              ~loc_offset ~notation:!(self.notation) ~file:filename
+             ~src_string:self.src_string
          with
          | Ok e ->
            SD.return e
@@ -224,7 +250,7 @@ module P_meta_ty : sig
 end = struct
   module Ty = A.Meta_ty
 
-  let ty_rec (self:t) : _ SD.t =
+  let ty_rec (_self:t) : _ SD.t =
     SD.fix @@ fun ty ->
     SD.try_l ~msg:"expected meta-level type" [
 
@@ -323,7 +349,7 @@ end = struct
 
       (SD.is_applied "if",
        let+ loc = SD.loc
-       and+ e = SD.list_of ~what:"meta-expressions" (meta_expr_rec_ self) in
+       and+ e = SD.applied "if" (meta_expr_rec_ self) in
        begin match e with
          | [cond; a; b] ->
            E.mk ~loc @@ E.If (cond, a, Some b)
@@ -336,7 +362,7 @@ end = struct
 
       (SD.is_applied "cond",
        let* loc = SD.loc
-       and* l = SD.list in
+       and* l = SD.applied "cond" SD.value in
 
        begin match List.rev l with
          | last :: (_ :: _ as rl) ->
@@ -439,18 +465,15 @@ end = struct
   let p_item (self:t) : _ SD.t =
     SD.try_l ~msg:"goal item (assume|prove|new)" [
       (SD.is_applied "assume",
-       let+ loc = SD.loc
-       and+ e = SD.applied1 "assume" (P_expr.top self) in
+       let+ e = SD.applied1 "assume" (P_expr.top self) in
        Assume e);
 
       (SD.is_applied "prove",
-       let+ loc = SD.loc
-       and+ e = SD.applied1 "prove" (P_expr.top self) in
+       let+ e = SD.applied1 "prove" (P_expr.top self) in
        Prove e);
 
       (SD.is_applied "new",
-       let+ loc = SD.loc
-       and+ v = SD.applied1 "prove" (P_expr.p_var self) in
+       let+ v = SD.applied1 "new" (P_expr.p_var self) in
        New v);
     ]
 
@@ -645,13 +668,11 @@ Proofs can be of various forms:
     SD.try_l ~msg:"expected a proof step, `(qed <proof>)`, or `(goal <proof>)`" [
 
       (SD.is_applied "qed",
-       let+ loc = SD.loc
-       and+ p = SD.applied1 "qed" (proof_rec_ self) in
+       let+ p = SD.applied1 "qed" (proof_rec_ self) in
        GS_qed p);
 
       (SD.is_applied "goal",
-       let+ loc = SD.loc
-       and+ g = SD.applied1 "goal" (P_goal.top self) in
+       let+ g = SD.applied1 "goal" (P_goal.top self) in
        GS_goal g);
 
       (SD.is_applied "let",
@@ -712,14 +733,17 @@ end = struct
     let* loc = SD.loc in
     let+ name, vars, ret, body =
       SD.applied4 "def" p_const
-        (SD.list_or_bracket_list_of ~what:"variables"
+        (let* v = SD.value in
+         Log.debugf  1 (fun k->k"list: %a" Sexp_loc.pp v);
+
+         SD.list_or_bracket_list_of ~what:"variables"
            (P_expr.p_var ~require_ty:true self))
         (P_expr.top self)
         (P_expr.top self)
     in
     A.Top.def ~loc name vars (Some ret) body
 
-  let p_declare self : A.Top.t SD.t =
+  let p_decl self : A.Top.t SD.t =
     let* loc = SD.loc in
     let+ name, ty = SD.applied2 "decl" p_const (P_expr.top self) in
     A.Top.decl ~loc name ty
@@ -752,10 +776,8 @@ end = struct
 
   let p_fixity self : _ SD.t =
     let* loc = SD.loc in
-
     let p_fix =
-      let* loc = SD.loc
-      and* s = SD.value in
+      let* s = SD.value in
       match s.Sexp_loc.view with
       | Sexp_loc.Atom "normal" -> SD.return Fixity.normal
       | Sexp_loc.List [a; n] ->
@@ -779,10 +801,10 @@ end = struct
   (* list of toplevel parsers *)
   let parsers : (string * top_parser) list = [
     "def", p_def;
+    "decl", p_decl;
     "show", p_show;
     "eval", p_eval;
     "fixity", p_fixity;
-    "declare", p_declare;
     "theorem", p_thm;
     "goal", p_goal;
   ]
@@ -790,13 +812,12 @@ end = struct
   let top (self:t) : A.Top.t SD.t =
     Log.debugf 1 (fun k->k"parse top");
 
-    let* loc = SD.loc in
     let+ r =
       SD.try_catch @@
       SD.with_msg ~msg:"parsing toplevel statement" @@
       let* v = SD.value in
       match v.Sexp_loc.view with
-      | Sexp_loc.List ({Sexp_loc.view=Atom s;_} :: l) ->
+      | Sexp_loc.List ({Sexp_loc.view=Atom s;_} :: _) ->
         begin match List.assoc_opt s parsers with
           | None ->
             SD.failf (fun k->k"unknown command %S" s)
@@ -819,6 +840,7 @@ let p_top_ = P_top.top
 
 let top self : A.Top.t SD.t =
   let+ st = p_top_ self in
+  Log.debugf 5 (fun k->k"parsed top statement@ `%a`"  A.Top.pp st);
   begin match st.A.view with
     | A.Top.Fixity {name; fixity} ->
       Notation.Ref.declare self.notation (A.Const.name name) fixity

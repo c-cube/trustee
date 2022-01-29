@@ -212,7 +212,9 @@ let with_msg ~msg d = {
   run=fun s ->
     match d.run s with
     | Ok _ as x -> x
-    | Error (Err r) -> Error (Err {r with msg=const msg})
+    | Error (Err _ as e) ->
+      let e2 = Err {msg=const msg; value=s; ctx_of=Some e} in
+      Error e2
 }
 
 let sub self s = {

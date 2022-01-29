@@ -248,7 +248,7 @@ end = struct
 
   and p_expr_ ~ty_expect (self:t) (p:precedence) : A.Expr.t =
     let lhs = ref (p_expr_app_ ~ty_expect self) in
-    Log.debugf 6 (fun k->k"lhs: `%a` loc=%a prec=%d" A.Expr.pp !lhs Loc.pp (A.Expr.loc !lhs) p);
+    Log.debugf 6 (fun k->k"lhs: `%a`, prec: %d, loc=%a" A.Expr.pp !lhs p Loc.pp_compact (A.Expr.loc !lhs));
     let p = ref p in
     let continue = ref true in
     while !continue do
@@ -351,5 +351,6 @@ let parse_expr ~notation lex : A.Expr.t or_error =
     in
     Error (loc,err)
 
-let expr_of_string ?loc_offset ?(file="<string>") ~notation s : A.Expr.t or_error =
-  parse_expr ~notation (Lexer.create ?loc_offset ~file s)
+let expr_of_string ?loc_offset ?src_string ?(file="<string>") ~notation
+    s : A.Expr.t or_error =
+  parse_expr ~notation (Lexer.create ?loc_offset ?src_string ~file s)
