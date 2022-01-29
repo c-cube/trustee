@@ -9,6 +9,8 @@ type t = {
 and view =
   | Atom of string
   | List of t list
+  | Bracket_list of t list
+  | Quoted_string of string
   | Dollar of string
   | Error of Error.t
 
@@ -17,34 +19,25 @@ type sexp = t
 let mk ~loc view : t = {loc;view}
 let atom ~loc s : t = mk ~loc (Atom s)
 let list ~loc s : t = mk ~loc (List s)
+let blist ~loc s : t = mk ~loc (Bracket_list s)
 let dollar ~loc s : t = mk ~loc (Dollar s)
+let quoted_str ~loc s : t = mk ~loc (Quoted_string s)
 let error ~loc s : t = mk ~loc (Error s)
 
 module PP = struct
-  (* shall we escape the string because of one of its chars? *)
-  let _must_escape s =
-    try
-      for i = 0 to String.length s - 1 do
-        let c = String.unsafe_get s i in
-        match c with
-          | ' ' | ')' | '(' | '"' | ';' | '\\' | '\n' | '\t' | '\r' -> raise Exit
-          | _ when Char.code c > 127 -> raise Exit  (* non-ascii *)
-          | _ -> ()
-      done;
-      false
-    with Exit -> true
-
-  (* empty atoms must be escaped *)
-  let _must_escape s = String.length s = 0 || _must_escape s
-
   let rec pp out (self:t) : unit =
     match self.view with
-    | Atom s ->
-          if _must_escape s then Format.fprintf out "\"%s\"" (String.escaped s)
-          else Format.pp_print_string out s
+    | Atom s -> Fmt.string out s
     | Dollar s -> Fmt.fprintf out "$ %s $" s
-    | List [] -> Format.pp_print_string out "()"
-    | List [x] -> Format.fprintf out "@[<hov2>(%a)@]" pp x
+    | Quoted_string s -> Fmt.fprintf out "%S" s
+    | Bracket_list l ->
+      Format.fprintf out "[@[";
+      List.iteri (fun i e ->
+          if i>0  then Fmt.fprintf out "@ ";
+          pp out e) l;
+      Format.fprintf out "@]]";
+    | List [] -> Fmt.string out "()"
+    | List [x] -> Fmt.fprintf out "@[<hov2>(%a)@]" pp x
     | List l ->
       Format.fprintf out "@[<hov1>(";
       List.iteri
@@ -108,7 +101,7 @@ module Parse = struct
     match cur self, n with
     | L.EOI, _ -> ()
     | _, N_empty -> ()
-    | (L.ATOM _ | L.DOLLAR_STR _), _ ->
+    | (L.ATOM _ | L.QUOTED_STR _ | L.DOLLAR_STR _), _ ->
       consume self; recover_err_ self n
     | L.LPAREN, _ -> consume self; recover_err_ self (N_paren n)
     | L.LBRACKET , _ -> consume self; recover_err_ self (N_bracket n)
@@ -143,6 +136,10 @@ module Parse = struct
         consume self;
         dollar ~loc:loc1 s
 
+      | L.QUOTED_STR s ->
+        consume self;
+        quoted_str ~loc:loc1 s
+
       | L.LPAREN ->
         consume self;
         nesting := N_paren !nesting;
@@ -172,14 +169,14 @@ module Parse = struct
         nesting := n';
         consume self;
         let loc = loc1 ++ loc_ self in
-        list ~loc @@ List.rev acc
+        blist ~loc @@ List.rev acc
 
       | (L.RPAREN | L.RBRACKET), _ ->
         let loc = loc_ self in
         let err = Error.make ~loc "invalid closing delimiter" in
         raise (E_error (loc, err))
 
-      | (L.LPAREN | L.LBRACKET | L.ATOM _ | L.DOLLAR_STR _), _ ->
+      | (L.LPAREN | L.LBRACKET | L.ATOM _ | L.QUOTED_STR _ | L.DOLLAR_STR _), _ ->
         let sub = expr () in
         p_list ~loc1 (sub::acc)
       | L.EOI, _ ->

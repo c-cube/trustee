@@ -1,11 +1,12 @@
 {
   type token =
     | ATOM of string
+    | QUOTED_STR of string
+    | DOLLAR_STR of string
     | LPAREN
     | RPAREN
     | LBRACKET
     | RBRACKET
-    | DOLLAR_STR of string
     | EOI
 
   (* location + message *)
@@ -90,7 +91,7 @@ rule token = parse
       let buf = Buffer.create 32 in
       dollarstr buf lexbuf }
   | id { ATOM (Lexing.lexeme lexbuf) }
-  | string { ATOM (remove_quotes lexbuf (Lexing.lexeme lexbuf)) }
+  | string { QUOTED_STR (remove_quotes lexbuf (Lexing.lexeme lexbuf)) }
   | _ as c
     { error lexbuf (Printf.sprintf "lexing failed on char `%c`" c) }
 
