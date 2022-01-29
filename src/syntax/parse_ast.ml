@@ -177,30 +177,35 @@ end
 
 (** A goal, ie. a sequent to prove. *)
 module Goal = struct
-  type t = {
-    new_vars: Expr.var list;
-    hyps: Expr.t list;
-    concl: Expr.t;
-    loc: Loc.t;
-  }
+  type t = view with_loc
+  and view =
+    | Goal of {
+        new_vars: Expr.var list;
+        hyps: Expr.t list;
+        concl: Expr.t;
+      }
+    | Error of Error.t
 
-  let make ~loc ?(new_vars=[]) ~hyps concl : t =
-    {hyps; concl; new_vars; loc}
-  let make_nohyps ~loc c : t = make ~loc ~hyps:[] c
+  let mk ~loc view : t = {loc;view}
+  let goal ~loc ?(new_vars=[]) ~hyps concl : t =
+    mk ~loc @@ Goal {hyps; concl; new_vars}
+  let goal_nohyps ~loc c : t = goal ~loc ~hyps:[] c
+  let error ~loc err : t = mk ~loc @@ Error err
   let loc self = self.loc
 
   let pp out (self:t) =
     let pp_newvar out v =
-      Fmt.fprintf out "@[new %a@],@," Expr.pp_var_ty v
+      Fmt.fprintf out "(@[new@ %a@])@," Expr.pp_var_ty v
     and pp_hyp out e =
-      Fmt.fprintf out "@[assume %a@],@," Expr.pp e
+      Fmt.fprintf out "(@[assume@ %a@])@," Expr.pp e
     in
-    let {new_vars; hyps; concl; loc=_} = self in
-    Fmt.fprintf out "@[<v>%a%aprove %a@]"
-      (pp_list pp_newvar) new_vars
-      (pp_list pp_hyp) hyps
-      Expr.pp concl
-
+    match self.view with
+    | Goal {new_vars; hyps; concl; } ->
+      Fmt.fprintf out "(@[<hv>goal@ %a%a(@[prove@ %a@])@])"
+        (pp_list pp_newvar) new_vars
+        (pp_list pp_hyp) hyps
+        Expr.pp concl
+    | Error e -> Fmt.fprintf out "<@[error@ %a@]>" Error.pp e
 
   let to_string = Fmt.to_string pp
 end
@@ -253,7 +258,7 @@ module Meta_expr = struct
   type t = view with_loc
   and view =
     | Value of value
-    | Const_accessor of Const.t * accessor
+
     | Var of var
     | Binop of Const.t * t * t
     | App of t * t list
@@ -276,6 +281,9 @@ module Meta_expr = struct
       }
     | Block_expr of block_expr
     | Error of Error.t
+
+      (* TODO: remove, replace with primitive? *)
+    | Const_accessor of Const.t * accessor
 
   and match_case = {
     pat: pattern;
@@ -312,15 +320,8 @@ module Meta_expr = struct
   and block_stmt = block_stmt_view with_loc
   and block_stmt_view =
     | Blk_let of binding
-    | Blk_eval_seq of t (* x; *)
-    | Blk_eval of t (* x (return value) *)
+    | Blk_eval of t (* x *)
     | Blk_return of t (* return from function *)
-    | Blk_if of {
-        test: t;
-        then_: block_expr;
-        else_ifs: (t * block_expr) list;
-        else_: block_expr option;
-      }
     | Blk_error of Error.t
     (* TODO: Blk_var of binding? *)
     (* TODO: Blk_set of binding? *)
@@ -396,21 +397,8 @@ module Meta_expr = struct
     match st.view with
     | Blk_let (v,e) ->
       Fmt.fprintf out "@[<2>let %a =@ %a@];" Var.pp v pp0 e
-    | Blk_eval_seq e -> Fmt.fprintf out "@[%a@];" pp0 e
     | Blk_eval e -> Fmt.fprintf out "@[%a@]" pp0 e
     | Blk_return e -> Fmt.fprintf out "@[return %a@];" pp0 e
-    | Blk_if {test; then_; else_ifs; else_} ->
-      let ppelseif out (t,bl) =
-        Fmt.fprintf out " else if %a@ {@ %a@ @[<2>}"
-          pp0 t pp_block_expr bl
-      in
-      let ppelse out = match else_ with
-        | None -> ()
-        | Some bl -> Fmt.fprintf out " else {@ %a@]@ }" pp_block_expr bl
-      in
-      Fmt.fprintf out "@[<hv>@[<2>if %a {@ %a@]@ @[<2>}%a%t@]@]"
-        pp0 test pp_block_expr then_
-        (pp_list ~sep:"" ppelseif) else_ifs ppelse
     | Blk_error err ->
       Fmt.fprintf out "<@[error@ %a@]>" Error.pp err
 

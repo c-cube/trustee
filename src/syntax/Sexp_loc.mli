@@ -9,6 +9,7 @@ and view =
   | Atom of string
   | List of t list
   | Bracket_list of t list
+  | Brace_list of t list
   | Quoted_string of string
   | Dollar of string
   | Error of Error.t

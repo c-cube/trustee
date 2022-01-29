@@ -7,6 +7,8 @@
     | RPAREN
     | LBRACKET
     | RBRACKET
+    | LBRACE
+    | RBRACE
     | EOI
 
   (* location + message *)
@@ -87,6 +89,8 @@ rule token = parse
   | ')' { RPAREN }
   | '[' { LBRACKET }
   | ']' { RBRACKET }
+  | '{' { LBRACE }
+  | '}' { RBRACE }
   | '$' {
       let buf = Buffer.create 32 in
       dollarstr buf lexbuf }
