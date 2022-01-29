@@ -103,6 +103,6 @@ and dollarstr buf = parse
   | '$' {
       let s = Buffer.contents buf in
       DOLLAR_STR s }
-  | '\n' { Lexing.new_line lexbuf; dollarstr buf lexbuf }
-  | _ { dollarstr buf lexbuf }
+  | '\n' { Buffer.add_char buf '\n'; Lexing.new_line lexbuf; dollarstr buf lexbuf }
+  | _ as c { Buffer.add_char buf c; dollarstr buf lexbuf }
 

@@ -19,11 +19,23 @@ let test_sexp2 = "test_sexp2" >:: fun ctxt ->
     {3}]
 
     )  |} in
-  begin match Sexp_loc.of_string ~filename:"t1" str with
+  begin match Sexp_loc.of_string ~filename:"t2" str with
     | None -> assert_failure "no parse"
     | Some s2 ->
-      let str_expect = {|(foo (bar  "hello world") [1 2 {3}])|} in
+      let str_expect = {|(foo (bar "hello world") [1 2 {3}])|} in
       assert_equal ~ctxt str_expect (Sexp_loc.to_string s2)
+        ~printer:CCFun.id
+  end
+
+let test_sexp3 = "test_sexp3" >:: fun ctxt ->
+    let str = {|(foo (bar $ 1 + 1 $) [1 $ let x=1
+    in x+
+    {yolo}
+    $ 2 {3}])|} in
+  begin match Sexp_loc.of_string ~filename:"t3" str with
+    | None -> assert_failure "no parse"
+    | Some s2 ->
+      assert_equal ~ctxt str (Sexp_loc.to_string s2)
         ~printer:CCFun.id
   end
 
@@ -205,4 +217,5 @@ let suite =
   "syntax" >::: [
     test_sexp1;
     test_sexp2;
+    test_sexp3;
   ]

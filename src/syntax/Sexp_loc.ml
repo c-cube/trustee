@@ -30,7 +30,7 @@ module PP = struct
   let rec pp out (self:t) : unit =
     match self.view with
     | Atom s -> Fmt.string out s
-    | Dollar s -> Fmt.fprintf out "$ %s $" s
+    | Dollar s -> Fmt.fprintf out "$%s$" s
     | Quoted_string s -> Fmt.fprintf out "%S" s
     | Bracket_list l ->
       Format.fprintf out "[@[<hov>";
