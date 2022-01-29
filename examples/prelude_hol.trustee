@@ -1,67 +1,73 @@
 
-// The HOL prelude for Trustee
+; The HOL prelude for Trustee
 
-// TODO: RAppLeft/RAppRight
+; TODO: RAppLeft/RAppRight
 
-declare tau : type;
+; TODO: arity
+(decl tau type)
 
-def T : bool := let f := (\x: bool. x) in f = f ;
+(def T [] bool $ let f := (\x: bool. x) in f = f $)
 
-show (T = T) = T;
+(show $ (T = T) = T $)
 
-goal T = T {
-  exact refl T;
-}
+(goal (prove $ T = T $) {
+  (exact (refl T));
+})
 
-show T;
-eval T'Def;
-eval refl T;
+(show T)
 
-show \x y z: bool. x = (y = z);
+; FIXME:
+; eval T'Def;
 
-theorem TrueIsTrue := T {
-  exact {
-    let e := $\x: bool. x$;
-    let th1 := refl e;
-    let th2 := sym DefTrue;
-    bool_eq th1 th2
-  }
-}
+(eval (refl T))
 
-// TODO: support attribute syntax `#[doc="theorem `(x=T)=x`"]`
-theorem EqTrueElim := (x = T) = x {
-  have th1 := bool_eq_intro
-    (bool_eq TrueIsTrue (sym (assume $x=T$)))
-    (bool_eq_intro (assume $(x:bool)$) TrueIsTrue);
-  exact sym th1;
-}
+(show $ \x y z: bool. x = (y = z) $)
 
-theorem EqTrueIntro := x = (x = T) {
-  exact sym EqTrueElim;
-}
+(theorem TrueIsTrue (prove $ T $) {
+  (exact {
+    (let e $\x: bool. x$)
+    (let th1 (refl e))
+    (let th2 (sym DefTrue))
+    (bool_eq th1 th2)
+  })
+})
 
-// TODO: REqTrueIntro
-// TODO: REqTrueElim
+; TODO: support attribute syntax `#[doc="theorem `(x=T)=x`"]`
+(theorem EqTrueElim (prove $(x = T) = x$) {
+  (have th1 (prove $x = (x = T)$)
+    (exact (bool_eq_intro
+      (bool_eq TrueIsTrue (sym (assume $x=T$)))
+      (bool_eq_intro (assume $(x:bool)$) TrueIsTrue))))
+  (qed (exact sym th1))
+})
 
-def forall a : (a -> bool) -> bool := \(f: a -> bool). f = (\x:a. T);
+(theorem EqTrueIntro (prove $x = (x = T)$) {
+  (exact (sym EqTrueElim))
+})
 
-fixity forall := binder 12;
+; TODO: REqTrueIntro
+; TODO: REqTrueElim
 
-show forall (x y : tau). x = y ;
+(def forall [(a $(a -> bool) -> bool$)] bool $ \(f: a -> bool). f = (\x:a. T) $)
 
-// TODO RForallSubst
-// TODO RForallIntro
+(fixity forall (binder 12))
 
-eval Forall'Def;
+(show $ forall (x y : tau). x = y $)
 
+; TODO RForallSubst
+; TODO RForallIntro
 
-def /\ (a b : bool) : bool
-  := forall (f: bool -> bool -> bool). f a b = f T T;
+; FIXME
+; eval Forall'Def;
 
-fixity /\ := rassoc 18; // above ==>
+(def /\ [(a bool) (b bool)] bool
+  $ forall (f: bool -> bool -> bool). f a b = f T T $)
 
-show T /\ a /\ b /\ c;
+(fixity /\ (rassoc 18)) ; above ==>
 
-// TODO: import defs and theorems from rust prelude
+(show $ T /\ a /\ b /\ c $)
 
-eval And'Def; // TODO
+; TODO: import defs and theorems from rust prelude
+
+; FIXME
+;eval And'Def;
