@@ -264,7 +264,11 @@ module Meta_expr = struct
         extends: t option;
       }
     | Fun of var list * block_expr
-    | If of t * block_expr * block_expr
+    | If of t * t * t option
+    | Cond of {
+        cases: (t * t) list;
+        default: t;
+      }
     | Match of {
         lhs: t;
         cases: match_case list;
@@ -358,10 +362,21 @@ module Meta_expr = struct
         (pp_list Var.pp) vars pp_block_expr blk
     | Error e -> Fmt.fprintf out "<@[error %a@]>" Error.pp e
 
-    | If (a, b, c) ->
+    | If (a, b, None) ->
+      wrap_ p 5 out @@ fun _p ->
+      Fmt.fprintf out "@[if %a@ { %a@ }@]"
+        pp0 a pp0 b
+    | If (a, b, Some c) ->
       wrap_ p 5 out @@ fun _p ->
       Fmt.fprintf out "@[if %a@ { %a@ } else {@ %a@ }@]"
-        pp0 a pp_block_expr b pp_block_expr c
+        pp0 a pp0 b pp0 c
+    | Cond {cases; default} ->
+      let ppcase out (c,e) =
+        Fmt.fprintf out "(@[%a@ %a@])" pp0 c pp0 e
+      and ppdefault out d =
+        Fmt.fprintf out "(@[default@ %a@])" pp0 d
+      in
+      Fmt.fprintf out "(@[cond@ %a@ %a@])" (pp_list ppcase) cases ppdefault default
     | Match _ -> assert false (* TODO *)
     | Block_expr e ->
       Fmt.fprintf out "@[<hv>{@[<1>@ %a@]@,}@]" pp_block_expr e
