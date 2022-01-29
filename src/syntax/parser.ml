@@ -79,8 +79,11 @@ let p_var ~p_ty () =
     SD.fail "expected a variable"
 
 module P_expr : sig
+  val p_var : A.Expr.var parser
   val top : A.Expr.t parser
 end = struct
+  module E = A.Expr
+
   let doc =
 {|expected a logical expression.
 
@@ -96,15 +99,14 @@ Such expressions can be built as follows:
 - expr/type is Type, the type of types.
 - (expr/arrow <expr>+ <expr>) is the function arrow type. (expr/arrow a b c)
   builds the type `a -> b -> c`.
-
 |}
 
   (* either parse a $ foo $ value, or a s-expr *)
   let top (self:t) : _ SD.t =
     SD.fix @@ fun expr ->
-    SD.try_l ~msg:"expected a logical expression" [
+    SD.try_l ~msg:doc [
 
-      (SD.is_atom_of "expr/type", SD.return A.Expr.type_);
+      (SD.is_atom_of "expr/type", SD.return E.type_);
 
       (SD.is_applied "expr/app",
        let* l = SD.applied "expr/app" SD.value in
@@ -113,7 +115,7 @@ Such expressions can be built as follows:
          | f :: args ->
            let+ f = SD.sub expr f
            and+ args = SD.map_l (SD.sub expr) args in
-           A.Expr.app f args
+           E.app f args
        end);
 
       (SD.is_applied "expr/arrow",
@@ -124,7 +126,7 @@ Such expressions can be built as follows:
          | l ->
            let+ l = SD.map_l (SD.sub expr) l in
            match List.rev l with
-           | ret :: args -> A.Expr.ty_arrow ~loc (List.rev args) ret
+           | ret :: args -> E.ty_arrow ~loc (List.rev args) ret
            | [] -> assert false
        end);
 
@@ -133,12 +135,12 @@ Such expressions can be built as follows:
        let+ vars, bod =
          SD.applied2 "expr/lam"
            SD.(list_of ~what:"typed variables" @@ p_var ~p_ty:expr ()) expr in
-       A.Expr.lambda ~loc vars bod);
+       E.lambda ~loc vars bod);
 
       (SD.is_applied "expr/var",
        let* loc = SD.loc in
        let+ v = SD.applied1 "expr/var" (p_var ~p_ty:expr ()) in
-       A.Expr.var ~loc v);
+       E.var ~loc v);
 
       (SD.is_applied "expr/const",
        let* loc = SD.loc in
@@ -147,13 +149,13 @@ Such expressions can be built as follows:
          | [] -> SD.fail "expr/const needs at least one argument"
          | [c] ->
            let+ c = SD.sub SD.atom c in
-           A.Expr.const ~loc (A.Const.make ~loc (Name.make c)) None
+           E.const ~loc (A.Const.make ~loc (Name.make c)) None
 
          | c :: args ->
            let+ c = SD.sub SD.atom c
            and+ c_loc = SD.sub SD.loc c
            and+ args = SD.map_l (SD.sub expr) args in
-           A.Expr.const ~loc (A.Const.make ~loc:c_loc (Name.make c)) (Some args)
+           E.const ~loc (A.Const.make ~loc:c_loc (Name.make c)) (Some args)
        end);
 
       (* parse expression in "$" … "$" *)
@@ -172,12 +174,17 @@ Such expressions can be built as follows:
          | Ok e ->
            SD.return e
          | Error (loc, err) ->
-           let expr = A.Expr.error ~loc err in
+           let expr = E.error ~loc err in
            SD.return expr
        end);
 
-    ]
+    ] ~else_:(
+      let+ loc = SD.loc in
+      let err = Error.make ~loc doc in
+      E.error ~loc err
+    )
 
+  let p_var self = p_var ~p_ty:(top self) ()
 end
 
 module P_subst : sig
@@ -191,250 +198,180 @@ end = struct
     A.Subst.mk_ ~loc l
 end
 
-(* TODO
-module P_meta_expr : sig
-  val meta_expr : A.Meta_expr.t parser
+module P_meta_ty : sig
+  val top : A.Meta_ty.t parser
 end = struct
-  module E = A.Meta_expr
+  module Ty = A.Meta_ty
 
-  let p_var = SD.atom
+  let ty_rec (self:t) : _ SD.t =
+    SD.fix @@ fun ty ->
+    SD.try_l ~msg:"expected meta-level type" [
 
-  let rec meta_expr_rec_ ~notation () : _ SD.t =
-    SD.switch_next @@ fun tok t_loc ->
-    begin match tok with
-      | NUM n ->
-        (* TODO: handle int parsing error *)
-        `consume,
-        SD.return @@ E.mk ~loc:t_loc (E.Value (E.V_int (int_of_string n)))
+      (SD.is_atom,
+       let+ loc = SD.loc
+       and+ c = SD.atom in
+       let c = A.Const.make ~loc (Name.make c) in
+       Ty.const c);
 
-      | SYM (("true" | "false") as b) ->
-        `consume,
-        SD.return @@ E.mk ~loc:t_loc (E.Value (E.V_bool (bool_of_string b)))
+      (SD.is_applied "->",
+       let* loc = SD.loc in
+       let* args = SD.applied "->" ty in
+       match List.rev args with
+       | ret :: (_ :: _ as rargs) ->
+         SD.return @@ Ty.arrow (List.rev rargs) ret
 
-      | QUOTED_STR s ->
-        `consume,
-        SD.return @@ E.mk ~loc:t_loc (E.Value (E.V_string s))
+       | _ ->
+         let err = Error.make ~loc "`->` takes at least 2 arguments" in
+         SD.return @@ Ty.mk ~loc @@ Ty.Error err);
+    ] ~else_:(
+      let+ loc = SD.loc in
+      let err = Error.make ~loc "expected a meta-type" in
+      Ty.mk ~loc @@ Ty.Error err
+    )
 
-      | LBRACE ->
-        (* parse a block *)
-        `consume,
-        let* bl, loc = block_stmts ~notation [] in
-        SD.return @@ E.mk ~loc (E.Block_expr bl)
 
-      | LBRACKET ->
-        `consume,
-        (* TODO: comprehensions *)
-        let* l =
-          list_many ~what:"meta-expressions" ~sep:COMMA ~stop:RBRACKET @@
-          meta_expr_rec_ ~notation () in
-        let* loc2 =
-          SD.exact RBRACKET ~msg:(m_"expect closing `]` after list literal") in
-        let loc = t_loc ++ loc2 in
-        SD.return @@ E.mk ~loc (E.List_lit l)
-
-      | DOLLAR ->
-        `consume,
-        let* e = P_expr.expr ~notation () in
-        let+ loc2 = SD.exact DOLLAR ~msg:(m_ "expect closing `$` after expression") in
-        let loc = t_loc ++ loc2 in
-        E.mk ~loc (E.Expr_lit e)
-
-      | IF ->
-        `consume,
-        assert false
-
-      | MATCH ->
-        `consume,
-        assert false
-
-      | SYM c ->
-        `consume,
-        SD.switch_next @@ fun tok2 loc2 ->
-        begin match tok2 with
-          | SINGLE_QUOTE ->
-            (* c'accessor *)
-            `consume,
-            let* accessor = P_expr.p_const in
-            let+ loc2 = SD.loc in
-            let loc = t_loc ++ loc2 in
-            E.mk ~loc (E.Const_accessor (A.Const.make_str ~loc:t_loc c, accessor))
-
-          | _ ->
-            (* variable, application, or infix expression*)
-            `keep,
-            let lhs = E.mk ~loc:t_loc (E.Var (A.Var.make ~loc:t_loc c None)) in
-            meta_expr_apply_ ~notation lhs
-        end
-
-      | LPAREN ->
-        `consume,
-        SD.switch_next @@ fun tok2 loc2 ->
-        begin match tok2 with
-          | RPAREN ->
-            `consume,
-            SD.return @@ E.mk ~loc:t_loc (E.Value (E.V_unit))
-
-          | _ ->
-            (* parse sub-expression *)
-            `keep,
-            let* e = meta_expr_rec_ ~notation () in
-            let+ () = SD.exact' RPAREN ~msg:(m_"expect closing `)` after expression") in
-            e
-
-        end
-
-      | ERROR c ->
-        (* lexer error *)
-        `consume,
-        let err = Error.makef ~loc:t_loc "expected meta-expression, not %C" c in
-        SD.return @@ E.mk ~loc:t_loc (E.Error err)
-
-      | EQDEF | IN | AND | WILDCARD | SINGLE_QUOTE | DOT | RBRACKET
-      | COMMA | SEMI_COLON | RPAREN | QUESTION_MARK | QUOTE_STR _
-      | QUESTION_MARK_STR _ | RBRACE | COLON | EOF | LET | FAT_ARROW ->
-        `keep,
-        SD.fail_str "expected meta-expression"
-    end
-
-  and meta_expr_apply_ ~notation lhs : E.t SD.t =
-    SD.switch_next @@ fun tok t_loc ->
-    match tok with
-    | RPAREN | RBRACKET | RBRACE | SEMI_COLON ->
-      `keep,
-      SD.return lhs
-
-    | LPAREN | LBRACKET | LBRACE ->
-      `keep,
-      let* e = meta_expr_rec_ ~notation () in
-      let lhs = E.apply lhs [e] in
-      meta_expr_apply_ ~notation lhs
-
-    | SYM "+" ->
-      assert false
-
-    | SYM s ->
-      (* TODO: make var, apply *)
-      assert false
-
-    | _ -> assert false (* TODO: fail? *)
-
-  and block_stmt ~notation () : (E.block_stmt * [`last | `any]) SD.t =
-    SD.parsing (Error.wrap "parsing a block statement") @@
-    SD.switch_next @@ fun tok loc ->
-    match tok with
-    | RBRACE ->
-      `keep, SD.fail_str "expected statement"
-    | LET ->
-      `consume,
-      let* x, x_loc = p_var in
-      let x = A.Var.make ~loc:x_loc x None in
-      let* () = SD.exact' EQDEF ~msg:(m_"expect `:=` in let binding") in
-      let* e = meta_expr_rec_ ~notation () in
-      let* loc2 = SD.exact SEMI_COLON ~msg:(m_"expect `;` after let binding") in
-
-      let stmt = E.mk_bl ~loc:(loc++loc2) @@ E.Blk_let (x,e) in
-      SD.return (stmt, `any)
-
-    | SYM "return" ->
-      `consume,
-      let* e = meta_expr_rec_ ~notation () in
-      let* loc3 = SD.exact SEMI_COLON ~msg:(m_"expect `;` after `return <expr>`") in
-      let stmt = E.mk_bl ~loc:(loc++loc3) @@ E.Blk_return e in
-      SD.return (stmt, `last)
-
-    | IF ->
-      `consume,
-      let* test = meta_expr_rec_ ~notation () in
-      let* (then_,_), loc1 = in_braces ~what:"if branch" @@ block_stmts ~notation [] in
-
-      let rec p_rest elseifs loc =
-        SD.switch_next @@ fun tok2 loc2 ->
-        match tok2 with
-        | SYM "else" ->
-          `consume,
-          SD.switch_next @@ fun tok3 _ ->
-          if Token.equal tok3 IF then (
-            (* a "else if" *)
-            `consume,
-            let* cond = meta_expr_rec_ ~notation () in
-            let* (bl,_), loc =
-              in_braces ~what:"else if branch" @@ block_stmts ~notation [] in
-            p_rest ((cond,bl)::elseifs) loc
-          ) else (
-            `keep,
-            (* a real "else" *)
-            let* (bl,_), loc =
-              in_braces ~what:"else branch" @@ block_stmts ~notation [] in
-            SD.return (List.rev elseifs, Some bl, loc)
-          )
-        | _ ->
-          `keep,
-          SD.return (List.rev elseifs, None, loc)
-      in
-
-      let* else_ifs, else_, loc2 = p_rest [] loc1 in
-      let loc = loc ++ loc2 in
-      let stmt = E.mk_bl ~loc @@ E.Blk_if {test; then_; else_ifs; else_} in
-      SD.return (stmt, `any)
-
-    | _ ->
-      (* parse either [e] or [e;] *)
-      `keep,
-      let* e = meta_expr_rec_ ~notation () in
-      begin
-        SD.switch_next @@ fun tok3 loc3 ->
-        match tok3 with
-        | SEMI_COLON ->
-          `consume,
-          let stmt = E.mk_bl ~loc:(loc++loc3) @@ E.Blk_eval_seq e in
-          SD.return (stmt, `any)
-
-        | _ ->
-          `keep,
-          let stmt = E.mk_bl ~loc:(loc++loc3) @@ E.Blk_eval e in
-          SD.return (stmt, `last)
-      end
-
-  (* read a block, return the `}`'s location *)
-  and block_stmts ~notation acc : (E.block_expr * Loc.t) SD.t =
-    SD.switch_next @@ fun tok loc ->
-    match tok with
-    | RBRACE ->
-      `consume,
-      let bl = {E.stmts=List.rev acc} in
-      SD.return (bl, loc)
-
-    | _ ->
-      `keep,
-      let* st, islast =
-        let* r = SD.try_ @@ block_stmt ~notation () in
-        match r with
-        | Ok x -> SD.return x
-        | Error err ->
-          (* catch errors and wrap them *)
-
-          let* () = (* make sure to make progress *)
-            let* loc2 = SD.loc in
-            if Loc.same_local_loc loc loc2
-            then let+ _ = SD.next in () else SD.return () in (* skip *)
-
-          let* loc = try_recover_semi_or_rbrace in
-          let bl = E.mk_bl ~loc @@ E.Blk_error err in
-          SD.return (bl, `any)
-      in
-      begin match islast with
-        | `last ->
-          let bl = {E.stmts=List.rev acc} in
-          SD.return (bl, loc)
-        | `any ->
-          block_stmts ~notation (st::acc)
-      end
-
-  let meta_expr ~notation () : A.Meta_expr.t SD.t =
-    SD.parsing (Error.wrap "parsing meta-expression") @@
-    meta_expr_rec_ ~notation ()
+  let top self : _ SD.t =
+    SD.with_msg ~msg:"parsing a meta-type" @@ ty_rec self
 end
 
+module P_meta_expr : sig
+  val top : A.Meta_expr.t parser
+end = struct
+  module E = A.Meta_expr
+  module Ty = A.Meta_ty
+
+  (* parse a variable *)
+  let p_var self : E.var SD.t = p_var ~p_ty:(P_meta_ty.top self) ()
+
+  let rec meta_expr_rec_ (self:t) : E.t SD.t =
+    SD.try_l ~msg:"expected a meta-expression" [
+
+      (SD.succeeds SD.int,
+       let+ loc = SD.loc
+       and+ i = SD.int in
+       E.mk ~loc @@ E.Value (E.V_int i));
+
+      (SD.is_atom_of "true",
+       let+ loc = SD.loc in
+       E.mk ~loc @@ E.Value (E.V_bool true));
+
+      (SD.is_atom_of "false",
+       let+ loc = SD.loc in
+       E.mk ~loc @@ E.Value (E.V_bool false));
+
+      (SD.is_quoted_str,
+       let+ loc = SD.loc
+       and+ s = SD.quoted_str in
+       E.mk ~loc @@ E.Value (E.V_string s));
+
+      (SD.is_applied "do",
+       (* parse a block *)
+       let+ loc = SD.loc
+       and+ stmts = SD.applied "do" (block_stmt self) in
+       let bl = {E.stmts} in
+       E.mk ~loc (E.Block_expr bl));
+
+      (SD.is_bracket_list,
+       (* TODO: comprehensions, maybe
+          "[for <var:string> <src:expr> <yield:expr> [if <guard:expr>]]"? *)
+       let+ loc = SD.loc
+       and+ l = SD.bracket_list_of ~what:"meta-expressions" (meta_expr_rec_ self) in
+       E.mk ~loc (E.List_lit l));
+
+      (SD.is_dollar_str,
+       let* loc = SD.loc in
+       (* parse $ … $ as a logic expression *)
+       let+ e = P_expr.top self in
+       E.mk ~loc (E.Expr_lit e));
+
+      (SD.is_applied "if",
+       let+ loc = SD.loc
+       and+ e = SD.list_of ~what:"meta-expressions" (meta_expr_rec_ self) in
+       begin match e with
+         | [cond; a; b] ->
+           E.mk ~loc @@ E.If (cond, a, Some b)
+         | [cond; a] ->
+           E.mk ~loc @@ E.If (cond, a, None)
+         | _ ->
+           let err = Error.make ~loc "`if` takes 2 or 3 arguments" in
+           E.mk ~loc @@ E.Error err
+       end);
+
+      (SD.is_applied "cond",
+       let* loc = SD.loc
+       and* l = SD.list in
+
+       begin match List.rev l with
+         | last :: (_ :: _ as rl) ->
+           let p_pair =
+             SD.pair (meta_expr_rec_ self) (meta_expr_rec_ self)
+           and p_default =
+             SD.pair
+               (SD.atom |> SD.guard ~msg:"expected `default`" (String.equal "default"))
+               (meta_expr_rec_ self)
+           in
+           let+ cases =
+             SD.with_msg ~msg:"parsing pairs of (<condition> <expression>)" @@
+             SD.sub_l p_pair (List.rev rl)
+           and+ default =
+             let+ _, e = SD.sub p_default last in
+             e
+           in
+           E.mk ~loc @@ E.Cond {cases; default}
+         | _ ->
+           let err = Error.make ~loc "`cond` requires at least a case and a default" in
+           SD.return @@ E.mk ~loc @@ E.Error err
+       end);
+
+      (* variable *)
+      (SD.is_atom,
+       let+ loc = SD.loc
+       and+ v = SD.atom in
+       E.mk ~loc @@ E.Var (A.Var.make ~loc v None));
+
+      (* application *)
+      (SD.is_list,
+       let+ loc = SD.loc
+       and+ args = SD.list_of ~what:"meta-expressions" (meta_expr_rec_ self) in
+       begin match args with
+         | [] | [_] ->
+           let err = Error.make ~loc "function application takes at least 2 arguments" in
+           E.mk ~loc @@ E.Error err
+         | f :: args ->
+           E.mk ~loc @@ E.App (f, args)
+       end);
+    ] ~else_:(
+      let+ loc = SD.loc in
+      let err = Error.make ~loc "expected a meta-expression" in
+      E.mk ~loc @@ E.Error err
+    )
+
+  and block_stmt (self:t) : E.block_stmt SD.t =
+    SD.try_l ~msg:"expected a block statement (let|return|<expr>)" [
+
+      (SD.is_applied "let",
+       let* loc = SD.loc in
+       let+ x, e = SD.applied2 "let" (p_var self) (meta_expr_rec_ self) in
+       E.mk_bl ~loc @@ E.Blk_let (x, e));
+
+      (SD.is_applied "return",
+       let+ loc = SD.loc
+       and+ e = meta_expr_rec_ self in
+       E.mk_bl ~loc @@ E.Blk_return e);
+
+    ] ~else_:(
+      (* fallback case is to just eval an expression *)
+      let+ loc = SD.loc
+      and+ e = meta_expr_rec_ self in
+      E.mk_bl ~loc @@ E.Blk_eval e
+    )
+
+  let top (self:t) : A.Meta_expr.t SD.t =
+    SD.with_msg ~msg:"parsing meta-expression" @@
+    meta_expr_rec_ self
+end
+
+(* TODO
 module P_goal : sig
   val goal : notation:Notation.t -> unit -> A.Goal.t Parser.t
 end = struct
