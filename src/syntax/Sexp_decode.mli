@@ -10,6 +10,9 @@ val return : 'a -> 'a t
 val fail : string -> _ t
 val failf : ((('a, Format.formatter, unit, string) format4 -> 'a) -> string) -> 'b m
 
+type err
+(** Internal type of errors. See {!Err} to manipulate them. *)
+
 module Infix : sig
   val ( let+ ) : 'a t -> ('a -> 'b) -> 'b t
   val ( >|= ) : 'a t -> ('a -> 'b) -> 'b t
@@ -28,11 +31,14 @@ val quoted_str : string t
 val list : sexp list t
 val list_of : ?what:string -> 'a t -> 'a list t
 val bracket_list_of : ?what:string -> 'a t -> 'a list t
+val brace_list_of : ?what:string -> 'a t -> 'a list t
+val list_or_bracket_list_of : ?what:string -> 'a t -> 'a list t
 val pair : 'a t -> 'b t -> ('a * 'b) t
 
 val tuple2: 'a t -> 'b t -> ('a * 'b) t
 val tuple3: 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) t
 
+val map : ('a -> 'b) -> 'a t -> 'b t
 val guard : msg:string -> ('a -> bool) -> 'a t -> 'a t
 
 val string : string t
@@ -55,6 +61,7 @@ val is_dollar_str : predicate
 val is_quoted_str : predicate
 val is_list : predicate
 val is_bracket_list : predicate
+val is_brace_list : predicate
 
 val succeeds: 'a t -> predicate
 (** [succeeds d] returns [true] if [d] parses the S-expr, and [false] otherwise. *)
@@ -87,11 +94,14 @@ val fix : ('a t -> 'a t) -> 'a t
 val sub : 'a t -> sexp -> 'a t
 val sub_l : 'a t -> sexp list -> 'a list t
 
+val try_catch : 'a t -> ('a, err) result t
+
 val applied : string -> 'a t -> 'a list t
 val applied0 : string -> unit t
 val applied1 : string -> 'a t -> 'a t
 val applied2 : string -> 'a t -> 'b t -> ('a * 'b) t
 val applied3 : string -> 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) t
+val applied4 : string -> 'a t -> 'b t -> 'c t -> 'd t -> ('a * 'b * 'c * 'd) t
 
 val try_apply : string -> (sexp list -> 'a t) -> 'a t -> 'a t
 (** [try_apply f ok else_] tries to parse the sexp [(f x1…xn)],
@@ -129,8 +139,6 @@ val fields : Fields.t t
 val applied_fields : string -> Fields.t t
 (** [applied_fields "foo"] accepts [("foo" (a b) (c d) …)]
     and returns the corresponding list of fields. *)
-
-type err
 
 val run : 'a t -> sexp -> ('a, err) result
 val run' : 'a t -> sexp -> ('a, string) result

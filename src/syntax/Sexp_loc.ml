@@ -10,6 +10,7 @@ and view =
   | Atom of string
   | List of t list
   | Bracket_list of t list
+  | Brace_list of t list
   | Quoted_string of string
   | Dollar of string
   | Error of Error.t
@@ -19,7 +20,8 @@ type sexp = t
 let mk ~loc view : t = {loc;view}
 let atom ~loc s : t = mk ~loc (Atom s)
 let list ~loc s : t = mk ~loc (List s)
-let blist ~loc s : t = mk ~loc (Bracket_list s)
+let bracket_list ~loc s : t = mk ~loc (Bracket_list s)
+let brace_list ~loc s : t = mk ~loc (Brace_list s)
 let dollar ~loc s : t = mk ~loc (Dollar s)
 let quoted_str ~loc s : t = mk ~loc (Quoted_string s)
 let error ~loc s : t = mk ~loc (Error s)
@@ -31,11 +33,17 @@ module PP = struct
     | Dollar s -> Fmt.fprintf out "$ %s $" s
     | Quoted_string s -> Fmt.fprintf out "%S" s
     | Bracket_list l ->
-      Format.fprintf out "[@[";
+      Format.fprintf out "[@[<hov>";
       List.iteri (fun i e ->
           if i>0  then Fmt.fprintf out "@ ";
           pp out e) l;
       Format.fprintf out "@]]";
+    | Brace_list l ->
+      Format.fprintf out "{@[<hv>";
+      List.iteri (fun i e ->
+          if i>0  then Fmt.fprintf out "@ ";
+          pp out e) l;
+      Format.fprintf out "@]}";
     | List [] -> Fmt.string out "()"
     | List [x] -> Fmt.fprintf out "@[<hov2>(%a)@]" pp x
     | List l ->
@@ -95,6 +103,7 @@ module Parse = struct
     | N_empty
     | N_paren of nesting
     | N_bracket of nesting
+    | N_brace of nesting
 
   (* error recovery: get out of the layers of open '(' and '[' *)
   let rec recover_err_ (self:t) (n:nesting) =
@@ -105,9 +114,11 @@ module Parse = struct
       consume self; recover_err_ self n
     | L.LPAREN, _ -> consume self; recover_err_ self (N_paren n)
     | L.LBRACKET , _ -> consume self; recover_err_ self (N_bracket n)
+    | L.LBRACE , _ -> consume self; recover_err_ self (N_brace n)
     | L.RPAREN, N_paren n' -> consume self; recover_err_ self n'
     | L.RBRACKET, N_bracket n' -> consume self; recover_err_ self n'
-    | (L.RPAREN | L.RBRACKET), _ ->
+    | L.RBRACE, N_brace n' -> consume self; recover_err_ self n'
+    | (L.RPAREN | L.RBRACKET | L.RBRACE), _ ->
       consume self; recover_err_ self n
 
 
@@ -150,11 +161,19 @@ module Parse = struct
         nesting := N_bracket !nesting;
         p_list ~loc1 []
 
+      | L.LBRACE ->
+        consume self;
+        nesting := N_brace !nesting;
+        p_list ~loc1 []
+
       | L.RPAREN ->
         let err = Error.make ~loc:loc1 "unexpected ')' when parsing a S-expression" in
         raise_notrace (E_error (loc1,err))
       | L.RBRACKET ->
         let err = Error.make ~loc:loc1 "unexpected ']' when parsing a S-expression" in
+        raise_notrace (E_error (loc1,err))
+      | L.RBRACE ->
+        let err = Error.make ~loc:loc1 "unexpected '}' when parsing a S-expression" in
         raise_notrace (E_error (loc1,err))
 
     and p_list ~loc1 acc =
@@ -169,14 +188,21 @@ module Parse = struct
         nesting := n';
         consume self;
         let loc = loc1 ++ loc_ self in
-        blist ~loc @@ List.rev acc
+        bracket_list ~loc @@ List.rev acc
 
-      | (L.RPAREN | L.RBRACKET), _ ->
+      | L.RBRACE, N_brace n' ->
+        nesting := n';
+        consume self;
+        let loc = loc1 ++ loc_ self in
+        brace_list ~loc @@ List.rev acc
+
+      | (L.RPAREN | L.RBRACKET | L.RBRACE), _ ->
         let loc = loc_ self in
         let err = Error.make ~loc "invalid closing delimiter" in
         raise (E_error (loc, err))
 
-      | (L.LPAREN | L.LBRACKET | L.ATOM _ | L.QUOTED_STR _ | L.DOLLAR_STR _), _ ->
+      | (L.LPAREN | L.LBRACKET | L.LBRACE | L.ATOM _
+        | L.QUOTED_STR _ | L.DOLLAR_STR _), _ ->
         let sub = expr () in
         p_list ~loc1 (sub::acc)
       | L.EOI, _ ->

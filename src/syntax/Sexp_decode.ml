@@ -69,12 +69,12 @@ let list = {run=fun s ->
     | _ -> fail_ (const "expected a list") s
   }
 
-let list_of ?what d =
+let list_of_ ~what_l ?what ~get_l d =
   let exception E of err in
   { run=
       fun s ->
-        match s.view with
-        | List l ->
+        match get_l s with
+        | Some l ->
           let get u = match d.run u with
             | Ok x -> x
             | Error e -> raise (E e) in
@@ -82,32 +82,40 @@ let list_of ?what d =
             try Ok (List.map get l)
             with E e -> Error e
           end
-        | _ ->
+        | None ->
           let msg() = match what with
-            | None -> "expected list"
-            | Some w -> spf "expected list of %s" w in
+            | None -> spf "expected %s" what_l
+            | Some w -> spf "expected %s of %s" what_l w in
           fail_ msg s
   }
 
+let list_of ?what d =
+  let get_l s = match s.S.view with
+    | S.List l -> Some l
+    | _ -> None
+  in
+  list_of_ ?what ~what_l:"list" ~get_l d
+
 let bracket_list_of ?what d =
-  let exception E of err in
-  { run=
-      fun s ->
-        match s.view with
-        | Bracket_list l ->
-          let get u = match d.run u with
-            | Ok x -> x
-            | Error e -> raise (E e) in
-          begin
-            try Ok (List.map get l)
-            with E e -> Error e
-          end
-        | _ ->
-          let msg() = match what with
-            | None -> "expected bracketed list"
-            | Some w -> spf "expected bracketed list of %s" w in
-          fail_ msg s
-  }
+  let get_l s = match s.S.view with
+    | S.Bracket_list l -> Some l
+    | _ -> None
+  in
+  list_of_ ?what ~what_l:"bracket list (`[…]`)" ~get_l d
+
+let brace_list_of ?what d =
+  let get_l s = match s.S.view with
+    | S.Brace_list l -> Some l
+    | _ -> None
+  in
+  list_of_ ?what ~what_l:"brace list (`{…}`)" ~get_l d
+
+let list_or_bracket_list_of ?what d =
+  let get_l s = match s.S.view with
+    | S.List l | S.Bracket_list l -> Some l
+    | _ -> None
+  in
+  list_of_ ?what ~what_l:"list or bracket list (`[…]`)" ~get_l d
 
 let ( let+ ) x f = {
   run=fun s ->
@@ -161,6 +169,7 @@ let is_dollar_str = {run=fun s -> match s.S.view with Dollar _ -> Ok true | _ ->
 let is_quoted_str = {run=fun s -> match s.S.view with Quoted_string _ -> Ok true | _ -> Ok false}
 let is_list = {run=fun s -> match s.S.view with List _ -> Ok true | _ -> Ok false}
 let is_bracket_list = {run=fun s -> match s.S.view with Bracket_list _ -> Ok true | _ -> Ok false}
+let is_brace_list = {run=fun s -> match s.S.view with Brace_list _ -> Ok true | _ -> Ok false}
 
 let succeeds d = {
   run=fun s -> match d.run s with
@@ -221,6 +230,10 @@ let sub_l p l =
       with E err -> Error err
   }
 
+let try_catch p : _ t = {
+  run=fun s -> Ok (p.run s)
+}
+
 let pair a b =
   let* l = list_of value in
   match l with
@@ -241,6 +254,7 @@ let tuple3 a b c =
     x,y,z
   | _ -> fail "expected a triple"
 
+let map f x = let+ x = x in f x
 let guard ~msg f p =
   let* x = p in
   if f x then return x
@@ -309,7 +323,18 @@ let applied3 name d1 d2 d3 =
     let* y = sub d2 y in
     let+ z = sub d3 z in
     x,y,z
-  | _ -> failf (fun k->k"expected (%s _ _)" name)
+  | _ -> failf (fun k->k"expected (%s _ _ _)" name)
+
+let applied4 name d1 d2 d3 d4 =
+  let* l = applied name value in
+  match l with
+  | [x;y;z;w] ->
+    let* x = sub d1 x in
+    let* y = sub d2 y in
+    let* z = sub d3 z in
+    let+ w = sub d4 w in
+    x,y,z,w
+  | _ -> failf (fun k->k"expected (%s _ _ _ _)" name)
 
 let atom_or_atom_list = {
   run=fun s ->
