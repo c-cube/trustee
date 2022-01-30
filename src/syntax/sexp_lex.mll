@@ -2,7 +2,7 @@
   type token =
     | ATOM of string
     | QUOTED_STR of string
-    | DOLLAR_STR of string
+    | DOLLAR_STR of Lexing.position * Lexing.position * string
     | LPAREN
     | RPAREN
     | LBRACKET
@@ -92,17 +92,21 @@ rule token = parse
   | '{' { LBRACE }
   | '}' { RBRACE }
   | '$' {
+      let pstart = lexbuf.Lexing.lex_start_p in
       let buf = Buffer.create 32 in
-      dollarstr buf lexbuf }
+      dollarstr pstart buf lexbuf }
   | id { ATOM (Lexing.lexeme lexbuf) }
   | string { QUOTED_STR (remove_quotes lexbuf (Lexing.lexeme lexbuf)) }
   | _ as c
     { error lexbuf (Printf.sprintf "lexing failed on char `%c`" c) }
 
-and dollarstr buf = parse
+and dollarstr pstart buf = parse
   | '$' {
+      let pstop = lexbuf.Lexing.lex_curr_p in
       let s = Buffer.contents buf in
-      DOLLAR_STR s }
-  | '\n' { Buffer.add_char buf '\n'; Lexing.new_line lexbuf; dollarstr buf lexbuf }
-  | _ as c { Buffer.add_char buf c; dollarstr buf lexbuf }
+      DOLLAR_STR (pstart,pstop,s) }
+  | '\n' {
+      Buffer.add_char buf '\n'; Lexing.new_line lexbuf;
+      dollarstr pstart buf lexbuf }
+  | _ as c { Buffer.add_char buf c; dollarstr pstart buf lexbuf }
 

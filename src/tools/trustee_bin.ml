@@ -32,7 +32,9 @@ module Cat = struct
          match CCIO.File.read file with
          | Ok str ->
            begin match
-               TS.Parser.parse_string_exn str ~notation TS.Parser.top
+               TS.Parser.parse_string_exn
+                 str TS.Parser.top
+                 ~filename:file ~notation
            with
            | l ->
              Fmt.printf "# file %S@." file;

@@ -51,11 +51,15 @@ let union a b =
 
 let union_l a ~f l = List.fold_left (fun l x -> union l (f x)) a l
 
-let of_lexbuf ~ctx:_ctx (buf:Lexing.lexbuf) : t =
+let of_lex_pos ~ctx:_ctx p1 p2 : t =
   let open Lexing in
-  let off1 = buf.lex_start_p.pos_cnum in
-  let off2 = buf.lex_curr_p.pos_cnum in
+  let off1 = p1.pos_cnum in
+  let off2 = p2.pos_cnum-1 in (* offset is one past end of token *)
   mk_ off1 off2
+
+let of_lexbuf ~ctx (buf:Lexing.lexbuf) : t =
+  let open Lexing in
+  of_lex_pos ~ctx buf.lex_start_p buf.lex_curr_p
 
 let tr_offset ctx off : int * int =
   let lazy index = ctx.index in
