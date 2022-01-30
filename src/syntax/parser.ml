@@ -342,10 +342,10 @@ end = struct
        E.mk ~loc @@ E.Value (E.V_string s));
 
       (* unit: `()` *)
-      (let emptyl =
+      (let is_empty =
          let+ l = SD.list in l==[]
        in
-       SD.succeeds emptyl,
+       is_empty,
        let+ loc = SD.loc in
        E.mk ~loc @@ E.Value E.V_unit);
 
@@ -705,7 +705,7 @@ Proofs can be of various forms:
   (* read a proof block *)
   and proof_block (self:t) : (P.block, Loc.t * Error.t) result SD.t =
     let* loc = SD.loc in
-    let+ l = SD.list_or_bracket_list_of ~what:"proof steps" (proof_step_ self) in
+    let+ l = SD.list_or_brace_list_of ~what:"proof steps" (proof_step_ self) in
     return_block ~loc l
 
   (* parse an individual step in a structured block *)
@@ -741,16 +741,11 @@ Proofs can be of various forms:
        let*?? bl = proof in
        let step = P.bl_have ~loc var goal bl in
        SD.return @@ GS_block_elt step);
-
-      (SD.is_applied "pick",
-       let* loc = SD.loc
-       and* var, cond, proof = SD.applied3 "pick"
-           (P_expr.p_var self) (P_expr.top self) (proof_block self) in
-       let*?? bl = proof in
-       let step = P.bl_pick ~loc var cond bl in
-       SD.return @@ GS_block_elt step);
-
-    ]
+    ] ~else_:(
+      (* fallback to just parsing a QED step *)
+      let+ e = proof_rec_ self in
+      GS_qed e
+    )
 
   let proof self =
     SD.with_msg ~msg:"parsing a proof" @@ proof_rec_ self
@@ -811,8 +806,7 @@ end = struct
   let p_thm self : _ SD.t =
     let* loc = SD.loc in
     let* name, goal, proof =
-      SD.applied3 "theorem"
-        p_const (P_goal.top self) (P_proof.block self)
+      SD.applied3 "theorem" p_const (P_goal.top self) (P_proof.block self)
     in
     let*? bl = proof in
     SD.return @@ A.Top.theorem ~loc name goal bl
@@ -874,9 +868,7 @@ end = struct
         begin match List.assoc_opt s parsers with
           | None ->
             SD.failf (fun k->k"unknown command %S" s)
-          | Some p ->
-            SD.with_msg ~msg:(spf "parsing command %S" s) @@
-            p self
+          | Some p -> p self
         end
       | _ -> SD.fail "expected a top statement: `(<command> <arg>*)`"
     in

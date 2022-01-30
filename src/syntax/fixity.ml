@@ -13,12 +13,12 @@ type t =
 (* NOTE: must be able to reparse this *)
 let pp_syntax out = function
   | F_normal -> Fmt.string out "normal"
-  | F_infix i -> Fmt.fprintf out "infix %d" i
-  | F_left_assoc i -> Fmt.fprintf out "lassoc %d" i
-  | F_right_assoc i -> Fmt.fprintf out "rassoc %d" i
-  | F_postfix i -> Fmt.fprintf out "postfix %d" i
-  | F_prefix i -> Fmt.fprintf out "prefix %d" i
-  | F_binder i -> Fmt.fprintf out "binder %d" i
+  | F_infix i -> Fmt.fprintf out "(infix %d)" i
+  | F_left_assoc i -> Fmt.fprintf out "(lassoc %d)" i
+  | F_right_assoc i -> Fmt.fprintf out "(rassoc %d)" i
+  | F_postfix i -> Fmt.fprintf out "(postfix %d)" i
+  | F_prefix i -> Fmt.fprintf out "(prefix %d)" i
+  | F_binder i -> Fmt.fprintf out "(binder %d)" i
 
 let to_string_syntax = Fmt.to_string pp_syntax
 let pp = pp_syntax
