@@ -81,14 +81,19 @@ module Parse = struct
       cur_tok=None;
     }
 
-  let[@inline] cur (self:t): L.token =
-    match self.cur_tok with
-    | Some t -> t
-    | None ->
+  let update_cur self : unit =
+    if self.cur_tok == None then (
       (* fetch token *)
       let tok = L.token self.buf in
       self.cur_tok <- Some tok;
-      tok
+    )
+
+
+  let[@inline] cur (self:t): L.token =
+    update_cur self;
+    match self.cur_tok with
+    | Some t -> t
+    | None -> assert false
 
   let[@inline] consume t = t.cur_tok <- None
 
@@ -121,7 +126,6 @@ module Parse = struct
     | (L.RPAREN | L.RBRACKET | L.RBRACE), _ ->
       consume self; recover_err_ self n
 
-
   let parse1 (self:t) =
     let open Lexing in
 
@@ -129,6 +133,7 @@ module Parse = struct
 
     (* parse an expression, at [depth] levels of list nesting *)
     let rec expr () =
+      update_cur self; (* before using [loc_] *)
       let loc1 = loc_ self in
       match cur self with
       | L.EOI ->
