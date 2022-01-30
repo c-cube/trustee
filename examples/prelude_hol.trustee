@@ -3,27 +3,28 @@
 
 ; TODO: RAppLeft/RAppRight
 
-; TODO: arity
+; TODO: decltype, taking arity. `decl` would take a list of parameters for polymorphic constants.
 (decl tau type)
 
 (def T [] bool $ let f := (\x: bool. x) in f = f $)
 
 (show $ (T = T) = T $)
 
-(goal (prove $ T = T $) {
+(goal $ T = T $ {
   (exact (refl T));
 })
 
 (show T)
 
-; FIXME:
+; FIXME: have another way to handle accessors
+; (such as definition theorems, abs/concrete functions, etc.).
 ; eval T'Def;
 
 (eval (refl T))
 
 (show $ \x y z: bool. x = (y = z) $)
 
-(theorem TrueIsTrue (prove $ T $) {
+(theorem TrueIsTrue $ T $ {
   (exact {
     (let e $\x: bool. x$)
     (let th1 (refl e))
@@ -32,13 +33,14 @@
   })
 })
 
-; TODO: support attribute syntax `#[doc="theorem `(x=T)=x`"]`
-(theorem EqTrueElim (prove $(x = T) = x$) {
-  (have th1 (prove $x = (x = T)$)
+; TODO: metadata/attributes? `#[doc="theorem `(x=T)=x`"]`
+(theorem EqTrueElim $(x = T) = x$ {
+  (have th1 $x = (x = T)$ {
     (exact (bool_eq_intro
       (bool_eq TrueIsTrue (sym (assume $x=T$)))
-      (bool_eq_intro (assume $(x:bool)$) TrueIsTrue))))
-  (qed (exact sym th1))
+      (bool_eq_intro (assume $(x:bool)$) TrueIsTrue)))
+  })
+  (qed (exact (sym th1)))
 })
 
 (theorem EqTrueIntro
