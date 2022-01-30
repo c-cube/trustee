@@ -118,6 +118,10 @@ Such expressions can be built as follows:
 - `x` is a variable or constant.
 - `[x <ty:expr>]` is a variable node with an explicit type.
 - `(lambda (<var_with_type>+) <expr>)` is a lambda abstraction.
+- `(with (<var_with_type>+) <expr>)` is a way to annotate the types
+  of free variables.
+- `(let (<binding>+) <expr>)` bindings some local variables, to represent
+  shared sub-expressions compactly.
 - `type` is Type, the type of types.
 - `(-> <expr>+ <expr>)` is the function arrow type. `(-> a b c)`
   builds the type `a -> b -> c`.
@@ -127,7 +131,13 @@ In `lambda`, variables with types have the shape `[x y z <ty:expr>]`
 but there must be at least one variable name.
 |}
 
-  let p_vars_block ~p_ty self : E.var list SD.t =
+  (* parse variable without type annotation *)
+  let p_var_no_ty : _ A.Var.t SD.t =
+    let+ loc=SD.loc
+    and+ name = SD.atom in
+    A.Var.make ~loc name None
+
+  let p_vars_block ~p_ty _self : E.var list SD.t =
     let* l = SD.list_or_bracket_list_of ~what:"variables and type" SD.value in
     begin match List.rev l with
       | last :: ((_::_) as rargs) ->
@@ -188,10 +198,25 @@ but there must be at least one variable name.
          SD.return @@ E.lambda ~loc vars bod
        ));
 
-      (SD.is_applied "expr/var",
+      (SD.is_applied "let",
        let* loc = SD.loc in
-       let+ v = SD.applied1 "expr/var" (p_var ~p_ty:expr ()) in
-       E.var ~loc v);
+       let+ bs, bod =
+         SD.applied2 "let"
+           SD.(list_of ~what:"let bindings" @@ SD.pair p_var_no_ty expr) expr in
+       E.let_ ~loc bs bod
+       );
+
+      (SD.is_applied "with",
+       let* loc = SD.loc in
+       let* vars, bod =
+         SD.applied2 "with"
+           SD.(list_of ~what:"typed variables" @@ p_vars_block ~p_ty:expr self) expr in
+       let vars = List.flatten vars in
+       if vars=[] then (
+         SD.fail "`with requires at least one variable"
+       ) else (
+         SD.return @@ E.with_ ~loc vars bod
+       ));
 
       (* parse expression in "$" … "$" *)
       (SD.is_dollar_str,
@@ -202,7 +227,8 @@ but there must be at least one variable name.
        let loc_offset = Loc.local_loc loc |> Loc.LL.offsets |> fst in
        let filename = Loc.filename loc in
        let* s = SD.dollar_str in
-       Log.debugf 5 (fun k->k"parse expr from $-string %S" s);
+       Log.debugf 5 (fun k->k"parse expr@ from $-string %S@ loc-offset %d@ loc %a"
+                        s loc_offset Loc.pp loc);
        begin match
            Expr_parser.expr_of_string s
              ~loc_offset ~notation:!(self.notation) ~file:filename
@@ -767,6 +793,11 @@ end = struct
     let+ name, ty = SD.applied2 "decl" p_const (P_expr.top self) in
     A.Top.decl ~loc name ty
 
+  let p_axiom self : A.Top.t SD.t =
+    let* loc = SD.loc in
+    let+ name, e = SD.applied2 "axiom" p_const (P_expr.top self) in
+    A.Top.axiom ~loc name e
+
   let p_show self : _ SD.t =
     let* loc = SD.loc in
     let+ e = SD.applied1 "show" (P_expr.top self) in
@@ -821,6 +852,7 @@ end = struct
   let parsers : (string * top_parser) list = [
     "def", p_def;
     "decl", p_decl;
+    "axiom", p_axiom;
     "show", p_show;
     "eval", p_eval;
     "fixity", p_fixity;
