@@ -45,7 +45,7 @@ module Var = struct
   let pp_with_ty ppty out self =
     match self.ty with
     | None -> Fmt.string out self.name
-    | Some ty -> Fmt.fprintf out "(@[%s@ : %a@])" self.name ppty ty
+    | Some ty -> Fmt.fprintf out "[@[%s@ %a@]]" self.name ppty ty
 end
 
 (** A logical expression. *)
@@ -82,52 +82,36 @@ module Expr = struct
       | _ -> e, acc
     in aux [] e
 
-  let rec pp_ (p:_) out (e:t) : unit =
+  let rec pp_sexp out (e:t) : unit =
     match e.view with
     | Type -> Fmt.string out "type"
     | Var v -> Var.pp out v
     | Ty_arrow (a,b) ->
-      if p>1 then Fmt.char out '(';
-      Fmt.fprintf out "%a@ -> %a" (pp_list ~sep:" -> " pp_atom_) a (pp_ p) b;
-      if p>1 then Fmt.char out ')';
+      Fmt.fprintf out "(@[->@ %a@ %a@])" (pp_list pp_sexp) a pp_sexp b
     | App _ ->
       let f, args = unfold_app e in
-      if p>0 then Fmt.char out '(';
-      Fmt.fprintf out "@[%a@ %a@]" pp_atom_ f (pp_list pp_atom_) args;
-      if p>0 then Fmt.char out ')';
+      Fmt.fprintf out "(@[%a@ %a@])" pp_sexp f (pp_list pp_sexp) args;
     | Meta v -> Fmt.fprintf out "?%s" v.name
     | Lambda (vars,bod) ->
-      if p>0 then Fmt.char out '(';
-      Fmt.fprintf out "@[\\%a.@ %a@]" (pp_list pp_var_ty) vars (pp_ 0) bod;
-      if p>0 then Fmt.char out ')';
-    | Bind {b; vars; body; } ->
-      if p>0 then Fmt.char out '(';
-      Fmt.fprintf out "@[%a %a.@ %a@]"
-        Const.pp b (pp_list pp_var_ty) vars (pp_ 0) body;
-      if p>0 then Fmt.char out ')';
+      Fmt.fprintf out "(@[lambda (@[%a@])@ %a@])"
+        (pp_list pp_var_ty) vars pp_sexp bod
+    | Bind { b; vars; body; } ->
+      Fmt.fprintf out "(@[%a@ (@[lambda (@[%a@])@ %a@])@])"
+        Const.pp b (pp_list pp_var_ty) vars pp_sexp body
     | With (vars,bod) ->
-      if p>0 then Fmt.char out '(';
-      Fmt.fprintf out "@[with %a.@ %a@]" (pp_list pp_var_ty) vars (pp_ 0) bod;
-      if p>0 then Fmt.char out ')';
-    | Eq (a,b) ->
-      (* TODO: actually, allow applications to be () free in there.
-         we need proper precedences for that. *)
-      if p>0 then Fmt.char out '(';
-      Fmt.fprintf out "@[%a@ =@ %a@]" pp_atom_ a pp_atom_ b;
-      if p>0 then Fmt.char out ')';
+      Fmt.fprintf out "(@[with (@[%a@])@ %a@])"
+        (pp_list pp_var_ty) vars pp_sexp bod
+    | Eq (a,b) -> Fmt.fprintf out "(@[=@ %a@ %a@])" pp_sexp a pp_sexp b
     | Wildcard -> Fmt.string out "_"
     | Let (bs,bod) ->
-      if p>0 then Fmt.char out '(';
-      let pp_b out (v,e) : unit =
-        Fmt.fprintf out "@[%a@ := %a@]" Var.pp v (pp_ 0) e in
-      Fmt.fprintf out "@[let %a in@ %a@]" (pp_list ~sep:" and " pp_b) bs (pp_ 0) bod;
-      if p>0 then Fmt.char out ')';
+      let pp_binding out (x,e) = Fmt.fprintf out "[@[%a@ %a@]]" Var.pp x pp_sexp e in
+      Fmt.fprintf out "(@[let@ (@[%a@])@ %a@])"
+        (pp_list pp_binding) bs pp_sexp bod
     | Error err ->
-      Fmt.fprintf out "<@[error@ %a@]>" Error.pp err
-  and pp_atom_ out e = pp_ max_int out e
-  and pp_var_ty out v = Var.pp_with_ty (pp_ 0) out v
+      Fmt.fprintf out "(@[error@ %a@])" Error.pp err
+  and pp_var_ty out v = Var.pp_with_ty pp_sexp out v
 
-  let pp out e = Fmt.fprintf out "@[%a@]" (pp_ 0) e
+  let pp out e = Fmt.fprintf out "@[%a@]" pp_sexp e
 
   let mk_ ~loc view : t = {view; loc}
 
@@ -164,8 +148,8 @@ module Subst = struct
   type t = (Expr.var * Expr.t) list with_loc
   let mk_ ~loc view : t = {view; loc}
   let pp out (s:t) =
-    let pppair out (v,e) = Fmt.fprintf out "(@[%a := %a@])" Var.pp v Expr.pp e in
-    Fmt.fprintf out "(@[%a@])" (pp_list ~sep:"," pppair) s.view
+    let pppair out (v,e) = Fmt.fprintf out "(@[%a %a@])" Var.pp v Expr.pp e in
+    Fmt.fprintf out "(@[subst@ %a@])" (pp_list ~sep:"," pppair) s.view
   let to_string = Fmt.to_string pp
 end
 
@@ -194,6 +178,7 @@ module Goal = struct
       Fmt.fprintf out "(@[assume@ %a@])@," Expr.pp e
     in
     match self.view with
+    | Goal {new_vars=[]; hyps=[]; concl; } -> Expr.pp out concl
     | Goal {new_vars; hyps; concl; } ->
       Fmt.fprintf out "(@[<hv>goal@ %a%a(@[prove@ %a@])@])"
         (pp_list pp_newvar) new_vars
@@ -216,8 +201,15 @@ module Meta_ty = struct
   let loc self = self.loc
   let view self = self.view
 
+  let rec pp out (self:t) = match self.view with
+    | Const c -> Const.pp out c
+    | Arrow (args, ret) ->
+      Fmt.fprintf out "(@[->@ %a@ %a@])" (pp_list pp) args pp ret
+    | Error err ->
+      Fmt.fprintf out "(@[error@ %a@])" Error.pp err
+
   let const c : t = mk ~loc:c.loc (Const c)
-  let const_str ~loc s : t = const (Const.make_str loc s)
+  let const_str ~loc s : t = const (Const.make_str ~loc s)
   let arrow args ret = match args with
     | [] -> ret
     | _ ->
@@ -325,58 +317,58 @@ module Meta_expr = struct
 
   let pp_accessor : accessor Fmt.printer = Const.pp
 
-  let rec pp_ p out (self:t) : unit =
-    let pp' = pp_ p in
+  let rec pp out (self:t) : unit =
     match self.view with
     | Value v -> pp_value out v
     | Const_accessor (c, acc) ->
-      Fmt.fprintf out "%a'%a" Const.pp c pp_accessor acc
+      (* FIXME 
+      Fmt.fprintf out "%a'%a" Const.pp c pp_accessor acc *)
+      assert false
     | Var v -> Var.pp out v
-    | App (f, []) -> pp' out f
+    | App (f, []) -> pp out f
     | App (f, args) ->
-      wrap_ p 10 out @@ fun p ->
-      Fmt.fprintf out "@[%a@ %a@]" pp0 f (pp_list (pp_ p)) args
+      Fmt.fprintf out "(@[%a@ %a@])" pp f (pp_list pp) args
     | Binop (op, a, b) ->
-      wrap_ p 0 out @@ fun p ->
-      Fmt.fprintf out "%a@ %a %a" (pp_ p) a Const.pp op (pp_ p) b
+      (* TODO: use some infix notation? {x op y}? instead of do blocks *)
+      Fmt.fprintf out "(@[%a@ %a@ %a@])" Const.pp op pp a pp b
     | List_lit l ->
-      Fmt.fprintf out "[@[%a@]]" (pp_list ~sep:", " @@ pp_ 0) l
+      Fmt.fprintf out "[@[%a@]]" (pp_list ~sep:", " pp ) l
     | Expr_lit e ->
-      Fmt.fprintf out "$ @[%a@] $" Expr.pp e
+      (* TODO: take a notation to print properly, binders included *)
+      Expr.pp_sexp out e
     | Record {fields; extends} ->
+      (* FIXME: think of a syntax for that *)
       let pp_rest out = match extends with
         | None -> ()
-        | Some e -> Fmt.fprintf out ",@ .. %a" pp0 e
+        | Some e -> Fmt.fprintf out ",@ .. %a" pp e
       and pp_pair out (f,e) =
-        Fmt.fprintf out "@[<2>%a:@ %a@]" Const.pp f pp0 e
+        Fmt.fprintf out "@[<2>%a:@ %a@]" Const.pp f pp e
       in
       Fmt.fprintf out "{@[%a%t@]}"
         (pp_list ~sep:", " pp_pair) fields pp_rest
     | Fun (vars, blk) ->
-      Fmt.fprintf out "@[<hv>@[<2>|%a| {@ %a@]@ }@]"
-        (pp_list Var.pp) vars pp_block_expr blk
+      Fmt.fprintf out "(@[<hv>fn [@[%a@]]@ %a@])"
+        (pp_list pp_var_ty) vars pp_block_stmts blk.stmts
     | Error e -> Fmt.fprintf out "<@[error %a@]>" Error.pp e
 
     | If (a, b, None) ->
-      wrap_ p 5 out @@ fun _p ->
-      Fmt.fprintf out "@[if %a@ { %a@ }@]"
-        pp0 a pp0 b
+      Fmt.fprintf out "(@[if %a@ %a@])"
+        pp a pp b
     | If (a, b, Some c) ->
-      wrap_ p 5 out @@ fun _p ->
-      Fmt.fprintf out "@[if %a@ { %a@ } else {@ %a@ }@]"
-        pp0 a pp0 b pp0 c
+      Fmt.fprintf out "(@[if %a@ %a@ %a@])"
+        pp a pp b pp c
     | Cond {cases; default} ->
       let ppcase out (c,e) =
-        Fmt.fprintf out "(@[%a@ %a@])" pp0 c pp0 e
+        Fmt.fprintf out "(@[%a@ %a@])" pp c pp e
       and ppdefault out d =
-        Fmt.fprintf out "(@[default@ %a@])" pp0 d
+        Fmt.fprintf out "(@[default@ %a@])" pp d
       in
       Fmt.fprintf out "(@[cond@ %a@ %a@])" (pp_list ppcase) cases ppdefault default
     | Match _ -> assert false (* TODO *)
     | Block_expr e ->
       Fmt.fprintf out "@[<hv>{@[<1>@ %a@]@,}@]" pp_block_expr e
 
-  and pp0 out e = pp_ 0 out e
+  and pp_var_ty out v = Var.pp_with_ty Meta_ty.pp out v
 
   and pp_block_expr out (b:block_expr) : unit =
     let {stmts} = b in
@@ -390,21 +382,13 @@ module Meta_expr = struct
   and pp_block_stmt out (st:block_stmt) : unit =
     match st.view with
     | Blk_let (v,e) ->
-      Fmt.fprintf out "@[<2>let %a =@ %a@];" Var.pp v pp0 e
-    | Blk_eval e -> Fmt.fprintf out "@[%a@]" pp0 e
-    | Blk_return e -> Fmt.fprintf out "@[return %a@];" pp0 e
+      Fmt.fprintf out "(@[<2>let %a %a@])" Var.pp v pp e
+    | Blk_eval e -> Fmt.fprintf out "@[%a@]" pp e
+    | Blk_return e -> Fmt.fprintf out "(@[return %a@])" pp e
     | Blk_error err ->
-      Fmt.fprintf out "<@[error@ %a@]>" Error.pp err
+      Fmt.fprintf out "(@[error@ %a@])" Error.pp err
 
-  (* wrap in () if [p>p']; call [k (max p p')] to print the expr *)
-  and wrap_ p p' out k =
-    if p>=p' then (
-      Fmt.fprintf out "(@[";
-      k p;
-      Fmt.fprintf out "@])";
-    ) else k p'
-
-  let pp = pp_ 0
+  let pp = pp
 
   let mk ~loc view : t = {view;loc}
 
@@ -502,25 +486,25 @@ module Proof = struct
   let rec pp out (self:t) : unit =
     match self.view with
     | Exact e ->
-      Fmt.fprintf out "@[exact@ %a@]" Meta_expr.pp e
+      Fmt.fprintf out "(@[exact@ %a@])" Meta_expr.pp e
 
     | By {solver; thm_args} ->
       let pp_arg out a = Fmt.fprintf out ",@ %a" pp_proof_var a in
-      Fmt.fprintf out "@[<2>by %a" Meta_expr.pp solver;
+      Fmt.fprintf out "(@[<2>by %a" Meta_expr.pp solver;
       List.iter (pp_arg out) thm_args;
-      Fmt.fprintf out "@]"
+      Fmt.fprintf out "@])"
 
     | Structured {goal; block} ->
-      Fmt.fprintf out "@[<v>";
-      Fmt.fprintf out "@[prove %a@];@ " Goal.pp goal;
+      Fmt.fprintf out "(@[<v>";
+      Fmt.fprintf out "(@[prove %a@])@ " Goal.pp goal;
       pp_block out block;
-      Fmt.fprintf out "@]"
+      Fmt.fprintf out "@])"
 
     | Error err ->
-      Fmt.fprintf out "<@[error %a@]>" Error.pp err
+      Fmt.fprintf out "(@[error@ %a@])" Error.pp err
 
   and pp_block out {steps; qed} =
-    let pp_step s = Fmt.fprintf out "- @[%a@]@," pp_block_elt s in
+    let pp_step s = Fmt.fprintf out "@[%a@]@," pp_block_elt s in
     Fmt.fprintf out "@[<hv>";
     List.iter pp_step steps;
     pp out qed;
@@ -529,23 +513,23 @@ module Proof = struct
   and pp_block_elt out (self:block_elt) : unit =
     match self.view with
     | Block_suffices {goal; new_implies_old} ->
-      Fmt.fprintf out "@[@[<2>suffices %a {@ %a@]@ }@]"
+      Fmt.fprintf out "(@[@[<2>suffices %a {@ %a@]@ }@])"
         Goal.pp goal pp_block new_implies_old
 
     | Block_have {name; goal; proof} ->
-      Fmt.fprintf out "@[@[<2>have %a := %a {@ %a@]@ }@]"
+      Fmt.fprintf out "(@[@[<2>have %a@ %a@ {@ %a@]@ }@])"
         Const.pp name Goal.pp goal pp_block proof
 
     | Block_let {var; rhs} ->
-      Fmt.fprintf out "@[@[<2>let %a :=@ %a@]"
+      Fmt.fprintf out "(@[@[<2>let %a@ %a@])"
         Var.pp var Meta_expr.pp rhs
 
     | Block_pick {x; cond; proof} ->
-      Fmt.fprintf out "@[@[<2>pick %a@ where %a@ {@ %a@]@ }@]"
+      Fmt.fprintf out "(@[@[<2>pick %a@ %a@ {@ %a@]@ }@])"
         Var.pp x Expr.pp cond pp_block proof
 
     | Block_error err ->
-      Fmt.fprintf out "<@[error@ %a@]>" Error.pp err
+      Fmt.fprintf out "(@[error@ %a@])" Error.pp err
 
   let mk ~loc view : t = {loc;view}
 
@@ -612,37 +596,37 @@ module Top = struct
   let[@inline] loc st = st.loc
   let pp out (self:t) : unit =
     let pp_ty_opt out ty = match ty with
-      | None -> ()
-      | Some ty -> Fmt.fprintf out "@ : %a" Expr.pp ty
+      | None -> Fmt.string out "_"
+      | Some ty -> Expr.pp out ty
     in
     match self.view with
     | Enter_file f ->
-      Fmt.fprintf out "@[enter_file '%s'@];" f
+      Fmt.fprintf out "(@[enter_file %S@])" f
     | Def { name; vars=[]; ret; body } ->
-      Fmt.fprintf out "@[<2>def %a%a :=@ %a@];"
+      Fmt.fprintf out "(@[<2>def %a []@ %a@ %a@])"
         Const.pp name pp_ty_opt ret Expr.pp body
     | Def { name; vars; ret; body } ->
-      Fmt.fprintf out "@[<hv2>@[<2>def %a %a%a :=@]@ %a@];"
+      Fmt.fprintf out "(@[<hv2>@[<2>def %a [@[%a@]] %a@]@ %a@])"
         Const.pp name (pp_list Expr.pp_var_ty) vars
         pp_ty_opt ret Expr.pp body
     | Decl { name; ty } ->
-      Fmt.fprintf out "@[<2>decl %a :@ %a@];"
+      Fmt.fprintf out "(@[<2>decl %a@ %a@])"
         Const.pp name Expr.pp ty
     | Fixity {name; fixity} ->
-      Fmt.fprintf out "@[<2>fixity %a = %s@];"
+      Fmt.fprintf out "(@[<2>fixity %a %s@])"
         Const.pp name (Fixity.to_string_syntax fixity)
     | Axiom { name; thm } ->
-      Fmt.fprintf out "@[<hv>@[<2>axiom %a :=@ %a@]@];"
+      Fmt.fprintf out "(@[<2>axiom %a@ %a@])"
         Const.pp name Expr.pp thm
     | Goal { goal; proof } ->
-      Fmt.fprintf out "@[<hv>@[<2>goal %a {@ %a@]@ }@];"
+      Fmt.fprintf out "(@[<hv>@[<2>goal %a {@ %a@]@ }@])"
         Goal.pp goal Proof.pp_block proof
     | Theorem { name; goal; proof } ->
-      Fmt.fprintf out "@[<hv>@[<2>theorem %a :=@ %a {@ %a@]@ }@];"
+      Fmt.fprintf out "(@[<hv>@[<2>theorem %a@ %a {@ %a@]@ }@])"
         Const.pp name Goal.pp goal Proof.pp_block proof
-    | Show e -> Fmt.fprintf out "@[show %a@];" Expr.pp e
-    | Eval e -> Fmt.fprintf out "@[eval %a@];" Meta_expr.pp e
-    | Error e -> Fmt.fprintf out "<@[<hov2>error:@ @[%a@]@]>" Error.pp e
+    | Show e -> Fmt.fprintf out "(@[show %a@])" Expr.pp e
+    | Eval e -> Fmt.fprintf out "(@[eval %a@])" Meta_expr.pp e
+    | Error e -> Fmt.fprintf out "(@[<hov2>error@ @[%a@]@])" Error.pp e
 
   let to_string = Fmt.to_string pp
   let pp_quoted = Fmt.within "`" "`" pp
