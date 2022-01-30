@@ -603,30 +603,30 @@ module Top = struct
     | Enter_file f ->
       Fmt.fprintf out "(@[enter_file %S@])" f
     | Def { name; vars=[]; ret; body } ->
-      Fmt.fprintf out "(@[<2>def %a []@ %a@ %a@])"
+      Fmt.fprintf out "(@[<1>def %a ()@ %a@ %a@])"
         Const.pp name pp_ty_opt ret Expr.pp body
     | Def { name; vars; ret; body } ->
-      Fmt.fprintf out "(@[<hv2>@[<2>def %a [@[%a@]] %a@]@ %a@])"
+      Fmt.fprintf out "(@[<1>def %a (@[%a@]) %a@ %a@])"
         Const.pp name (pp_list Expr.pp_var_ty) vars
         pp_ty_opt ret Expr.pp body
     | Decl { name; ty } ->
-      Fmt.fprintf out "(@[<2>decl %a@ %a@])"
+      Fmt.fprintf out "(@[<1>decl %a@ %a@])"
         Const.pp name Expr.pp ty
     | Fixity {name; fixity} ->
-      Fmt.fprintf out "(@[<2>fixity %a %s@])"
+      Fmt.fprintf out "(@[<1>fixity %a %s@])"
         Const.pp name (Fixity.to_string_syntax fixity)
     | Axiom { name; thm } ->
-      Fmt.fprintf out "(@[<2>axiom %a@ %a@])"
+      Fmt.fprintf out "(@[<1>axiom %a@ %a@])"
         Const.pp name Expr.pp thm
     | Goal { goal; proof } ->
-      Fmt.fprintf out "(@[<hv>@[<2>goal %a {@ %a@]@ }@])"
+      Fmt.fprintf out "(@[@[<hv1>goal %a {@ %a@]@ }@])"
         Goal.pp goal Proof.pp_block proof
     | Theorem { name; goal; proof } ->
       Fmt.fprintf out "(@[<hv>@[<2>theorem %a@ %a {@ %a@]@ }@])"
         Const.pp name Goal.pp goal Proof.pp_block proof
-    | Show e -> Fmt.fprintf out "(@[show %a@])" Expr.pp e
-    | Eval e -> Fmt.fprintf out "(@[eval %a@])" Meta_expr.pp e
-    | Error e -> Fmt.fprintf out "(@[<hov2>error@ @[%a@]@])" Error.pp e
+    | Show e -> Fmt.fprintf out "(@[<1>show@ %a@])" Expr.pp e
+    | Eval e -> Fmt.fprintf out "(@[<1>eval@ %a@])" Meta_expr.pp e
+    | Error e -> Fmt.fprintf out "(@[<hov1>error@ @[%a@]@])" Error.pp e
 
   let to_string = Fmt.to_string pp
   let pp_quoted = Fmt.within "`" "`" pp
