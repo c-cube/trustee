@@ -172,7 +172,6 @@ end = struct
       (* parse `let x = e in e2` *)
       Log.debugf 5 (fun k->k"parsing let");
       let bs = p_bindings_ self in
-      eat_eq' self ~msg:"let binding body" IN;
       List.iter (fun (v,_) -> Str_tbl.add self.bindings v.A.Var.name v) bs;
       let bod = p_expr_ ~ty_expect self 0 in
       List.iter (fun (v,_) -> Str_tbl.remove self.bindings v.A.Var.name) bs;
