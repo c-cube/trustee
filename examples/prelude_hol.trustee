@@ -41,7 +41,8 @@
   (qed (exact sym th1))
 })
 
-(theorem EqTrueIntro (prove $x = (x = T)$) {
+(theorem EqTrueIntro
+  $x = (x = T)$ {
   (exact (sym EqTrueElim))
 })
 

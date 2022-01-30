@@ -143,7 +143,7 @@ end = struct
     l
 
   and p_nullary_ ~loc (self:t) (s:string) : A.Expr.t =
-    Log.debugf 6 (fun k->k"nullary `%s` loc=%a" s Loc.pp loc);
+    Log.debugf 6 (fun k->k"nullary `%s` loc=%a" s Loc.pp_compact loc);
     match Lexer.S.cur self.lex with
     | COLON, _ ->
       Lexer.S.consume self.lex;

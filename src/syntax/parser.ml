@@ -290,6 +290,8 @@ end = struct
   let var self : E.var SD.t = p_var ~p_ty:(P_meta_ty.top self) ()
 
   let rec meta_expr_rec_ (self:t) : E.t SD.t =
+    let* v = SD.value in
+    Log.debugf 5 (fun k->k"parse meta-expr from %a" Sexp.pp v);
     SD.try_l ~msg:"expected a meta-expression" [
 
       (* value literals *)
@@ -462,8 +464,10 @@ end = struct
     | Prove of A.Expr.t
     | New of A.Expr.var
 
+  let doc_goal_item = "expected goal item (assume|prove|new)"
+
   let p_item (self:t) : _ SD.t =
-    SD.try_l ~msg:"goal item (assume|prove|new)" [
+    SD.try_l ~msg:doc_goal_item [
       (SD.is_applied "assume",
        let+ e = SD.applied1 "assume" (P_expr.top self) in
        Assume e);
@@ -477,32 +481,47 @@ end = struct
        New v);
     ]
 
+  (* either: `((prove a) (goal b) (assume c))`,
+     or just an expression `expr` *)
   let top self =
-    let+ loc = SD.loc
-    and+ l = SD.applied "goal" (p_item self) in
+    let* loc = SD.loc
+    and* v = SD.value in
 
-    let assume = ref [] in
-    let prove = ref [] in
-    let new_ = ref [] in
+    let open Sexp in
+    match v.view with
+    | Dollar _ ->
+      let+ e = P_expr.top self in
+      A.Goal.goal ~loc ~hyps:[] e
 
-    List.iter
-      (function
-        | Assume e -> assume := e :: !assume
-        | Prove e -> prove := e :: !prove
-        | New v -> new_ := v :: !new_)
-      l;
+    | _ ->
+      let+ l = SD.list_of ~what:doc_goal_item (p_item self) in
 
-    begin match !prove with
-      | [p] ->
-        A.Goal.goal ~loc ~hyps:!assume ~new_vars:!new_ p
-      | [] ->
-        let err = Error.make ~loc "a goal needs one `(prove <expr>)` entry" in
-        A.Goal.error ~loc err
-      | g1 :: g2 :: _ ->
-        let loc_err = g1.loc ++ g2.loc in
-        let err = Error.make ~loc:loc_err "a goal needs only one `(prove <expr>)` entry" in
-        A.Goal.error ~loc err
-    end
+      let assume = ref [] in
+      let prove = ref [] in
+      let new_ = ref [] in
+
+      List.iter
+        (function
+          | Assume e -> assume := e :: !assume
+          | Prove e -> prove := e :: !prove
+          | New v -> new_ := v :: !new_)
+        l;
+
+      begin match !prove with
+        | [p] ->
+          A.Goal.goal ~loc ~hyps:!assume ~new_vars:!new_ p
+        | [] ->
+          let err = Error.make ~loc "a goal needs one `(prove <expr>)` entry" in
+          A.Goal.error ~loc err
+        | g1 :: g2 :: _ ->
+          let loc_err = g1.loc ++ g2.loc in
+          let err = Error.make ~loc:loc_err "a goal needs only one `(prove <expr>)` entry" in
+          A.Goal.error ~loc err
+      end
+
+      (* TODO: finer grained?
+    | List ({view=List({view=Atom ("prove"|"assume"|"goal");_}::_);_}::_) ->
+    *)
 end
 
 module P_proof : sig
@@ -734,7 +753,7 @@ end = struct
     let+ name, vars, ret, body =
       SD.applied4 "def" p_const
         (let* v = SD.value in
-         Log.debugf  1 (fun k->k"list: %a" Sexp_loc.pp v);
+         Log.debugf  1 (fun k->k"list: %a" Sexp.pp v);
 
          SD.list_or_bracket_list_of ~what:"variables"
            (P_expr.p_var ~require_ty:true self))
@@ -778,9 +797,9 @@ end = struct
     let* loc = SD.loc in
     let p_fix =
       let* s = SD.value in
-      match s.Sexp_loc.view with
-      | Sexp_loc.Atom "normal" -> SD.return Fixity.normal
-      | Sexp_loc.List [a; n] ->
+      match s.Sexp.view with
+      | Sexp.Atom "normal" -> SD.return Fixity.normal
+      | Sexp.List [a; n] ->
         let* a = SD.sub SD.atom a
         and* n = SD.sub SD.int n in
         begin match a with
@@ -816,8 +835,8 @@ end = struct
       SD.try_catch @@
       SD.with_msg ~msg:"parsing toplevel statement" @@
       let* v = SD.value in
-      match v.Sexp_loc.view with
-      | Sexp_loc.List ({Sexp_loc.view=Atom s;_} :: _) ->
+      match v.Sexp.view with
+      | Sexp.List ({Sexp.view=Atom s;_} :: _) ->
         begin match List.assoc_opt s parsers with
           | None ->
             SD.failf (fun k->k"unknown command %S" s)

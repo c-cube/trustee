@@ -81,7 +81,7 @@ module Make(Loc : LOC) : S with type loc = Loc.t = struct
       match loc with
       | None -> Fmt.string_lines out msg
       | Some loc ->
-        Fmt.fprintf out "@[<v>%a@,%a@]@]"
+        Fmt.fprintf out "@[<v>%a@,%a@]"
           Fmt.string_lines msg Loc.pp loc
     in
     let rec loop out self =
