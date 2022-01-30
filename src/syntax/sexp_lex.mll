@@ -74,7 +74,7 @@ let white = [' ' '\r' '\t'] | newline
 let comment_line = ';' [^ '\n']*
 let printable_char = [^ '\n']
 
-let id = [^ ')' '(' ']' '[' '}' '{' '"' ' ' '\t' '\r' '\n']+
+let id = [^ '$' ')' '(' ']' '[' '}' '{' '"' ' ' '\t' '\r' '\n']+
 let num = ['0'-'9']
 let string_item =
   ([^ '"' '\\'] | "\\\"" | "\\\\" | "\\b" | "\\n" | "\\t" | "\\r" | '\\' num num num )
