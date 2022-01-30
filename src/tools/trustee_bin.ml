@@ -168,5 +168,8 @@ let () =
   Fmt.set_color_default true;
   match !r with
   | None -> Fmt.eprintf "please provide a command@."; exit 1
-  | Some r -> r (List.rev !anon_args)
+  | Some r ->
+    try r (List.rev !anon_args)
+    with Error.E err ->
+      Fmt.printf "%a@." Error.pp err; exit 1
 
