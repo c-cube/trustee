@@ -36,7 +36,7 @@ let run (self:t) ~filename str (p:'a parser) : _ list =
   let rec loop acc = match Sexp.Parse.parse1 se_p with
     | None -> List.rev acc
     | Some sexp ->
-      Log.debugf 5 (fun k->k"parse S-expr %a" Sexp.pp sexp);
+      Log.debugf 5 (fun k->k"(@[<1>parse S-expr %a@ %a@])" Sexp.pp sexp Loc.pp sexp.loc);
       begin match SD.run (p self) sexp with
         | Ok r -> loop (Ok r::acc)
         | Error sd_err ->
@@ -52,7 +52,7 @@ let run_exn (self:t) ~filename str p : _ list =
   let rec loop acc = match Sexp.Parse.parse1 se_p with
     | None -> List.rev acc
     | Some sexp ->
-      Log.debugf 5 (fun k->k"parse S-expr %a" Sexp.pp sexp);
+      Log.debugf 5 (fun k->k"(@[<1>parse S-expr %a@ %a@])" Sexp.pp sexp Loc.pp sexp.loc);
       begin match SD.run (p self) sexp with
         | Ok r -> loop (r::acc)
         | Error sd_err ->
@@ -848,6 +848,8 @@ end = struct
     A.Top.fixity ~loc name fix
 
   (* TODO: make it extensible *)
+  (* TODO: in typetree, each command should have some on-hover doc *)
+
   (* list of toplevel parsers *)
   let parsers : (string * top_parser) list = [
     "def", p_def;
