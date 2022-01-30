@@ -68,7 +68,7 @@ end
 
 let test_exprs = [
   T_expr.mk_test "bool" "bool";
-  T_expr.mk_test " (   ?f ?x )" "?f ?x";
+  T_expr.mk_test " (   ?f ?x )" "(?f ?x)";
 ]
 
 
