@@ -31,5 +31,6 @@ val infix : precedence -> t
 
 val get_prec : t -> precedence
 
+val pp_syntax : t Fmt.printer
 val to_string_syntax : t -> string
 (** Print in a re-parsable way. *)

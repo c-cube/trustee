@@ -33,6 +33,7 @@ val list_of : ?what:string -> 'a t -> 'a list t
 val bracket_list_of : ?what:string -> 'a t -> 'a list t
 val brace_list_of : ?what:string -> 'a t -> 'a list t
 val list_or_bracket_list_of : ?what:string -> 'a t -> 'a list t
+val list_or_brace_list_of : ?what:string -> 'a t -> 'a list t
 val pair : 'a t -> 'b t -> ('a * 'b) t
 
 val tuple2: 'a t -> 'b t -> ('a * 'b) t

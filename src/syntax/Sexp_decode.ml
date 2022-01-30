@@ -117,6 +117,13 @@ let list_or_bracket_list_of ?what d =
   in
   list_of_ ?what ~what_l:"list or bracket list (`[…]`)" ~get_l d
 
+let list_or_brace_list_of ?what d =
+  let get_l s = match s.S.view with
+    | S.List l | S.Brace_list l -> Some l
+    | _ -> None
+  in
+  list_of_ ?what ~what_l:"list or brace list (`{…}`)" ~get_l d
+
 let ( let+ ) x f = {
   run=fun s ->
     match x.run s with
