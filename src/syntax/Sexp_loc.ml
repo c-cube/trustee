@@ -143,9 +143,12 @@ module Parse = struct
         consume self;
         atom ~loc:loc1 s
 
-      | L.DOLLAR_STR s ->
+      | L.DOLLAR_STR (p1,p2,s) ->
         consume self;
-        dollar ~loc:loc1 s
+        (* use p1 and p2 to specify the actual location *)
+        let lloc = Loc.LL.of_lex_pos ~ctx:self.ctx p1 p2 in
+        let loc = Loc.make ~ctx:self.ctx lloc in
+        dollar ~loc s
 
       | L.QUOTED_STR s ->
         consume self;
