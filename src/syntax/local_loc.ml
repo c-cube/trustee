@@ -54,7 +54,7 @@ let union_l a ~f l = List.fold_left (fun l x -> union l (f x)) a l
 let of_lex_pos ~ctx:_ctx p1 p2 : t =
   let open Lexing in
   let off1 = p1.pos_cnum in
-  let off2 = p2.pos_cnum-1 in (* offset is one past end of token *)
+  let off2 = max off1 (p2.pos_cnum-1) in (* offset is one past end of token *)
   mk_ off1 off2
 
 let of_lexbuf ~ctx (buf:Lexing.lexbuf) : t =
