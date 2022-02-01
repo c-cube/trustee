@@ -1,0 +1,86 @@
+(APP[application] logs are set up (debug=false))
+(APP[bin] cat files ["bad.trustee"])
+# file "bad.trustee"
+(decl foo1 type)
+(error
+  [31;1mError[0m:
+    unknown command "yoloswag"
+    in file 'bad.trustee', line 8 columns 2..21
+    7 | .
+    8 | (yoloswag x y $ z $)
+    ------------------------------------------------------------
+  [34;1mContext[0m:
+    parsing toplevel statement
+    in file 'bad.trustee', line 8 columns 2..21
+    7 | .
+    8 | (yoloswag x y $ z $)
+    )
+(def t1 () something
+  (error
+   [31;1mError[0m:
+     expected end of input after parsing expression, but got ')'
+     in file 'bad.trustee', line 10 columns 27..28
+      8 | 
+      9 | 
+     10 | .........................o)...........
+     ------------------------------------------------------------
+   [34;1mContext[0m:
+     parsing expression))
+(def t2 () something
+  (error
+   [31;1mError[0m:
+     unexpected token EOF while parsing;
+     `.` terminating list of bound variables
+     in file 'bad.trustee', line 11 columns 33..33
+     10 | .
+     11 | ............................... ...........
+     ------------------------------------------------------------
+   [34;1mContext[0m:
+     parsing expression))
+(error
+  [31;1mError[0m:
+    expected (decl _ _)
+    in file 'bad.trustee', line 13 columns 2..23
+    11 | 
+    12 | 
+    13 | (decl a too many args)............
+    ------------------------------------------------------------
+  [34;1mContext[0m:
+    parsing toplevel statement
+    in file 'bad.trustee', line 13 columns 2..23
+    11 | 
+    12 | 
+    13 | (decl a too many args)............
+    )
+(error
+  [31;1mError[0m:
+    expected a top statement: `(<command> <arg>*)`
+    in file 'bad.trustee', line 15 columns 28..28
+    13 | 
+    14 | 
+    15 | ..........................]...........................
+    ------------------------------------------------------------
+  [34;1mContext[0m:
+    parsing toplevel statement
+    in file 'bad.trustee', line 15 columns 28..28
+    13 | 
+    14 | 
+    15 | ..........................]...........................
+    )
+(decl foo2 type)
+(error
+  [31;1mError[0m:
+    expected a top statement: `(<command> <arg>*)`
+    in file 'bad.trustee', line 19 columns 28..28
+    17 | 
+    18 | 
+    19 | ..........................]..................
+    ------------------------------------------------------------
+  [34;1mContext[0m:
+    parsing toplevel statement
+    in file 'bad.trustee', line 19 columns 28..28
+    17 | 
+    18 | 
+    19 | ..........................]..................
+    )
+(decl foo3 type)
