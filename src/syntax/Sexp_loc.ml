@@ -53,7 +53,7 @@ module PP = struct
         l;
       Format.fprintf out ")@]"
     | Error e ->
-      Fmt.fprintf out "<@[error@ %a@]>" Error.pp e
+      Fmt.fprintf out "(@[error@ %a@])" Error.pp e
 end
 
 let pp = PP.pp
@@ -104,32 +104,39 @@ module Parse = struct
     let lloc = Loc.LL.of_lexbuf ~ctx:self.ctx self.buf in
     Loc.make ~ctx:self.ctx lloc
 
-  type nesting =
-    | N_empty
-    | N_paren of nesting
-    | N_bracket of nesting
-    | N_brace of nesting
+  type delim =
+    | D_paren
+    | D_bracket
+    | D_brace
+
+  type nesting = delim list
 
   (* error recovery: get out of the layers of open '(' and '[' *)
   let rec recover_err_ (self:t) (n:nesting) =
     match cur self, n with
     | L.EOI, _ -> ()
-    | _, N_empty -> ()
+    | _, [] -> ()
     | (L.ATOM _ | L.QUOTED_STR _ | L.DOLLAR_STR _), _ ->
       consume self; recover_err_ self n
-    | L.LPAREN, _ -> consume self; recover_err_ self (N_paren n)
-    | L.LBRACKET , _ -> consume self; recover_err_ self (N_bracket n)
-    | L.LBRACE , _ -> consume self; recover_err_ self (N_brace n)
-    | L.RPAREN, N_paren n' -> consume self; recover_err_ self n'
-    | L.RBRACKET, N_bracket n' -> consume self; recover_err_ self n'
-    | L.RBRACE, N_brace n' -> consume self; recover_err_ self n'
+    | L.LPAREN, _ -> consume self; recover_err_ self (D_paren :: n)
+    | L.LBRACKET , _ -> consume self; recover_err_ self (D_bracket :: n)
+    | L.LBRACE , _ -> consume self; recover_err_ self (D_brace :: n)
+    | L.RPAREN, D_paren :: n'
+    | L.RBRACKET, D_bracket :: n'
+    | L.RBRACE, D_brace :: n' -> consume self; recover_err_ self n'
+    | L.RPAREN, _ :: D_paren :: n'
+    | L.RBRACKET, _ :: D_bracket :: n'
+    | L.RBRACE, _ :: D_brace :: n' ->
+      (* assume we close the surrouding delim because clearly
+         it doesn't match the first one *)
+      consume self; recover_err_ self n'
     | (L.RPAREN | L.RBRACKET | L.RBRACE), _ ->
       consume self; recover_err_ self n
 
   let parse1 (self:t) =
     let open Lexing in
 
-    let nesting = ref N_empty in
+    let nesting = ref [] in
 
     (* parse an expression, at [depth] levels of list nesting *)
     let rec expr () =
@@ -137,7 +144,7 @@ module Parse = struct
       let loc1 = loc_ self in
       match cur self with
       | L.EOI ->
-        if !nesting=N_empty then (
+        if !nesting=[] then (
           raise_notrace E_end
         ) else (
           let err = Error.make ~loc:loc1
@@ -161,44 +168,47 @@ module Parse = struct
 
       | L.LPAREN ->
         consume self;
-        nesting := N_paren !nesting;
+        nesting := D_paren :: !nesting;
         p_list ~loc1 []
 
       | L.LBRACKET ->
         consume self;
-        nesting := N_bracket !nesting;
+        nesting := D_bracket :: !nesting;
         p_list ~loc1 []
 
       | L.LBRACE ->
         consume self;
-        nesting := N_brace !nesting;
+        nesting := D_brace :: !nesting;
         p_list ~loc1 []
 
       | L.RPAREN ->
+        consume self;
         let err = Error.make ~loc:loc1 "unexpected ')' when parsing a S-expression" in
         raise_notrace (E_error (loc1,err))
       | L.RBRACKET ->
+        consume self;
         let err = Error.make ~loc:loc1 "unexpected ']' when parsing a S-expression" in
         raise_notrace (E_error (loc1,err))
       | L.RBRACE ->
+        consume self;
         let err = Error.make ~loc:loc1 "unexpected '}' when parsing a S-expression" in
         raise_notrace (E_error (loc1,err))
 
     and p_list ~loc1 acc =
       match cur self, !nesting with
-      | L.RPAREN, N_paren n' ->
+      | L.RPAREN, D_paren :: n' ->
         nesting := n';
         consume self;
         let loc = loc1 ++ loc_ self in
         list ~loc @@ List.rev acc
 
-      | L.RBRACKET, N_bracket n' ->
+      | L.RBRACKET, D_bracket :: n' ->
         nesting := n';
         consume self;
         let loc = loc1 ++ loc_ self in
         bracket_list ~loc @@ List.rev acc
 
-      | L.RBRACE, N_brace n' ->
+      | L.RBRACE, D_brace :: n' ->
         nesting := n';
         consume self;
         let loc = loc1 ++ loc_ self in
@@ -206,6 +216,7 @@ module Parse = struct
 
       | (L.RPAREN | L.RBRACKET | L.RBRACE), _ ->
         let loc = loc_ self in
+        consume self;
         let err = Error.make ~loc "invalid closing delimiter" in
         raise (E_error (loc, err))
 
