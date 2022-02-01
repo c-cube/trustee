@@ -1,0 +1,37 @@
+(APP[application] logs are set up (debug=false))
+(APP[bin] cat files ["basic_hol.trustee"])
+# file "basic_hol.trustee"
+(decl tau type)
+(def T () bool (let ([f (lambda ([x bool]) x)]) (= f f)))
+(show (= (= T T) T))
+(goal (= T T) { (exact (refl T)) })
+(show T)
+(eval (refl T))
+(show (lambda ([x bool] [y bool] [z bool]) (= x (= y z))))
+(theorem TrueIsTrue T {
+   (exact
+    {
+     (let e (lambda ([x bool]) x))
+     (let th1 (refl e))
+     (let th2 (sym DefTrue))
+     (bool_eq th1 th2)
+    })
+ })
+(theorem EqTrueElim (= (= x T) x) {
+   (have th1 (= x (= x T)) {
+      (exact
+       (bool_eq_intro
+        (bool_eq TrueIsTrue (sym (assume (= x T)))) 
+        (bool_eq_intro (assume x) TrueIsTrue)))
+    })
+   (exact (sym th1))
+ })
+(theorem EqTrueIntro (= x (= x T)) { (exact (sym EqTrueElim)) })
+(def forall ([a (-> (-> a bool) bool)]) bool
+  (lambda ([f (-> a bool)]) (= f (lambda ([x a]) T))))
+(fixity forall (binder 12))
+(show (forall (lambda ([x tau] [y tau]) (= x y))))
+(def /\ ([a bool] [b bool]) bool
+  (forall (lambda ([f (-> bool (-> bool bool))]) (= (f a b) (f T T)))))
+(fixity /\ (rassoc 18))
+(show (/\ T (/\ a (/\ b c))))
