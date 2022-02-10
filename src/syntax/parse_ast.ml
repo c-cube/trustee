@@ -3,7 +3,7 @@ open Common_
 
 type fixity = Fixity.t
 
-type 'a with_loc = {
+type 'a with_loc = 'a With_loc.t = {
   loc: Loc.t;
   view: 'a;
 }
