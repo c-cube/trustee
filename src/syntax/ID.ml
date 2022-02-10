@@ -6,6 +6,7 @@ type t = {
 }
 
 let make_name =
+  (* TODO: use some Atomic shim instead *)
   let n = ref 0 in
   fun name ->
     let x = { id= !n; name; } in
