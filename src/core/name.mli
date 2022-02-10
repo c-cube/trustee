@@ -14,3 +14,4 @@ include Sigs.HASH with type t := t
 include Sigs.PP with type t := t
 
 module Map : CCMap.S with type key = t
+module Tbl : CCHashtbl.S with type key = t

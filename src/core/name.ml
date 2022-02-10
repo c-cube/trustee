@@ -12,3 +12,4 @@ let make s = s
 let to_string s = s
 
 module Map = Str_map
+module Tbl = Str_tbl
