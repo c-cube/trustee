@@ -22,4 +22,5 @@ module With_loc = With_loc
 module Queryable = Queryable
 module Lstream = Lstream
 module Notation = Notation
+module Error_set = Error_set
 
