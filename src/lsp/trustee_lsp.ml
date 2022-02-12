@@ -52,7 +52,15 @@ let ident_under_pos ~file (s:string) (pos:TS.Position.t) : (string * TS.Loc.t) o
   find()
    *)
 
-let trustee_server _ctx = object (self)
+let diag_of_error ((loc,err): TS.Loc.t * TS.Error.t) : LP.Diagnostic.t =
+  let range = lsp_range_of_loc loc in
+  let message = Fmt.asprintf "@[%a@]" TS.Error.pp err in
+  let d = LP.Diagnostic.create
+      ~severity:LP.DiagnosticSeverity.Error ~range ~message () in
+  d
+
+let trustee_server _ctx =
+  object (self)
     inherit Linol.server
 
     (* one env per document *)
@@ -62,7 +70,7 @@ let trustee_server _ctx = object (self)
     method! config_hover = Some (`Bool true)
     method! config_sync_opts =
       LP.TextDocumentSyncOptions.create
-        ~change:LP.TextDocumentSyncKind.Incremental ~openClose:true
+        ~change:LP.TextDocumentSyncKind.Full ~openClose:true
         ~save:(LP.SaveOptions.create ~includeText:false ())
         ~willSave:false ()
 
@@ -76,7 +84,20 @@ let trustee_server _ctx = object (self)
       in
       Log.debug (fun k->k "for %s: parsed %d statements" d (List.length stmts));
 
-      let diags = ref [] in
+      let all_errors =
+        PA.Top.error_set_l stmts
+      in
+
+      let diags =
+        all_errors
+        |> TS.Error_set.iter_errors
+        |> Iter.map diag_of_error
+        |> Iter.to_list
+        |> ref
+      in
+
+      (* TODO: collect errors in Type_ast *)
+      (* TODO: collect show/eval results *)
       (* TODO
       let tyst = TA.Typing_state.create _ctx in
       let idx = List.fold_left
@@ -107,7 +128,8 @@ let trustee_server _ctx = object (self)
       Hashtbl.replace buffers d {notation; env; idx};
          *)
 
-      let diags = List.rev !diags in
+      let diags = !diags in
+
       Log.debug (fun k->k"send back %d diagnostics" (List.length diags));
       notify_back#send_diagnostic diags
 
