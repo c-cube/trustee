@@ -37,6 +37,12 @@ module State : sig
     t ->
     ty meta_var list
 
+  val find_free_var : t -> string -> TA.Expr.var option
+
+  val add_fvar : t -> TA.Var.t -> unit
+
+  val reset : t -> unit
+
   val new_ty_meta : t -> loc:Loc.t -> TA.expr
   (** Allocate a new type metavariable *)
 
@@ -50,12 +56,22 @@ end = struct
   type t = {
     mutable i: int;
     mutable to_gen : ty meta_var list;
+    mutable fvars: TA.Expr.var Str_map.t;
     mutable env: Env.t;
   }
 
   let to_generalize self = self.to_gen
   let update_env self f = self.env <- f self.env
   let env self = self.env
+
+  let find_free_var self (s:string) = Str_map.find_opt s self.fvars
+
+  let reset self =
+    self.to_gen <- [];
+    self.fvars <- Str_map.empty
+
+  let add_fvar self (v:TA.Var.t) =
+    self.fvars <- Str_map.add v.name v self.fvars
 
   (* fresh type meta *)
   let new_ty_meta self ~loc =
@@ -78,6 +94,7 @@ end = struct
     { to_gen=[];
       env;
       i=0;
+      fvars=Str_map.empty;
     }
 
 end
@@ -320,7 +337,9 @@ module Make(Arg : sig
     let ty_meta ~loc (id:ID.t) : ty =
       mk_ ~loc ~ty:type_ @@ Meta (TA.Meta_var.make ~ty:type_ ~loc id)
     let ty_arrow ~loc a b : ty = mk_ ~loc ~ty:type_ (Ty_arrow (a,b))
+    let ty_arrow_l ~loc args ret : ty = CCList.fold_right (ty_arrow ~loc) args ret
 
+    let bvar ~loc (v:bvar) : t = mk_ ~loc ~ty:v.ty (BVar v)
     let var ~loc (v:var) : t = mk_ ~loc ~ty:v.ty (Var v)
     let var' ~loc v ty : t = var ~loc (TA.Var.make ~loc v ty)
 
@@ -362,7 +381,6 @@ module Make(Arg : sig
       (* TODO: unify ty (ty_exn b) *)
       mk_ ~loc ~ty @@ Eq (a,b)
 
-    (* TODO: compute type *)
     let const ~loc (c:TA.const) args : t =
       let@ () = guard_err_ ~loc in
       let@ () =
@@ -434,48 +452,66 @@ module Make(Arg : sig
       let inf_rec_ = infer_ ~reify in
       let loc = AE.loc e in
       (* Log.debugf 15 (fun k->k"infer-rec loc=%a e=`%a`" Loc.pp loc AE.pp e); *)
+
+      (* reify errors, if required *)
+      let wrap f =
+        if reify then guard_err_ ~loc f
+        else f()
+      in
+      wrap @@ fun () ->
+
       begin match AE.view e with
         | AE.Type -> Expr.type_
+
         | AE.Error err ->
           let ty = State.new_ty_meta state ~loc in
           error ~loc ~ty @@ err
-        | AE.Ty_arrow (a, b) -> ty_arrow ~loc (inf_rec_ bv a) (inf_rec_ bv b)
-        | AE.Var v when Str_map.mem v.A.v_name bv ->
+
+        | AE.Ty_arrow (a, b) ->
+          ty_arrow_l ~loc (List.map (inf_rec_ bv) a) (inf_rec_ bv b)
+
+        | AE.Var v when Str_map.mem v.name bv ->
           (* use variable in scope, but change location of the expression *)
-          begin match Str_map.find v.A.v_name bv with
-            | BV bv -> Expr.bvar ~loc bv (* bound variable *)
-            | V v -> Expr.var ~loc v
+          begin match Str_map.find v.name bv with
+            | BV bv -> bvar ~loc bv (* bound variable *)
+            | V v -> var ~loc v
           end
+
         | AE.Var va ->
-          let v =
-            match Str_map.find va.A.v_name st.fvars with
-            | v' ->
-              begin match va.A.v_ty with
+            begin match
+              State.find_free_var state va.name,
+              Env.find_const (Name.make va.name) (State.env state)
+            with
+            | Some v', _ ->
+              begin match va.A.Var.ty with
+                | None -> ()
                 | Some ty ->
                   (* unify expected type with actual type *)
                   let ty = inf_rec_ bv ty in
-                  unif_exn_ ty v'.v_ty
-                | None -> ()
+                  unif_exn_ ~loc e ty v'.TA.Var.ty
               end;
-              v'
-            | exception Not_found ->
-              let ty = match va.A.v_ty with
+              var ~loc v'
+
+            | None, Some c ->
+              (* named variable *)
+              infer_const_ ~loc c
+
+            | None, None ->
+              (* new free variable *)
+              let ty = match va.ty with
                 | Some ty -> inf_rec_ bv ty
-                | None ->
-                  let ty, m = Expr.ty_meta ~loc st in
-                  st.to_gen <- m :: st.to_gen;
-                  ty
+                | None -> State.new_ty_meta state ~loc
               in
-              let v = Var.make va.A.v_name ty in
-              st.fvars <- Str_map.add v.v_name v st.fvars;
-              v
-          in
-          Expr.var ~loc v
+              let v = TA.Var.make ~loc va.name ty in
+              State.add_fvar state v;
+              var ~loc v
+          end
+
         | AE.Wildcard ->
-          let t, m = Expr.wildcard ~loc st in
-          st.to_gen <- m :: st.to_gen;
-          t
-        | AE.Meta {name;ty} ->
+          State.new_ty_meta state ~loc
+
+        | AE.Meta _ ->
+          assert false (* TODO: do we want to handle that?
           let ty = match ty with
             | None -> Expr.type_
             | Some ty -> inf_rec_ bv ty
@@ -483,84 +519,101 @@ module Make(Arg : sig
           let t, m = Expr.meta ~loc name ty in
           st.to_gen <- m :: st.to_gen;
           t
+                       *)
+
         | AE.Eq (a,b) ->
           let a = inf_rec_ bv a in
           let b = inf_rec_ bv b in
-          unif_exn_ (Expr.ty a) (Expr.ty b);
-          Expr.eq a b
-        | AE.App (f,a) ->
+          unif_exn_ ~loc e (ty_exn a) (ty_exn b);
+          eq ~loc a b
+
+        | AE.App (f,args) ->
           let f = inf_rec_ bv f in
-          let a = inf_rec_ bv a in
-          Expr.app st f a
+          let args = List.map (inf_rec_ bv) args in
+          app_l f args
+
         | AE.With (vs, bod) ->
           let bv =
             List.fold_left
-              (fun bv v ->
-                 let ty = infer_ty_opt_ ~loc ~default:Expr.type_ bv v.A.v_ty in
-                 let var = Var.make v.A.v_name ty in
-                 Str_map.add v.A.v_name (V var) bv)
+              (fun bv (v:AE.var) ->
+                 let ty =
+                   infer_ty_opt_ ~reify ~loc ~default:type_ bv v.ty in
+                 let var = TA.Var.make ~loc v.name ty in
+                 Str_map.add v.name (V var) bv)
               bv vs
           in
+          (* return the body, removing "with" *)
           inf_rec_ bv bod
+
         | AE.Lambda (vars, bod) ->
           let bv, vars =
             CCList.fold_map
-              (fun bv v ->
-                 let v' = infer_bvar_ bv v in
-                 Str_map.add v.A.v_name (BV v') bv, v')
+              (fun bv (v:AE.var) ->
+                 let v' = infer_bvar_ ~reify bv v in
+                 Str_map.add v.name (BV v') bv, v')
               bv vars
           in
           let bod = inf_rec_ bv bod in
-          Expr.lambda_l ~loc vars bod
-        | AE.Bind { b; b_loc=_; vars; body } ->
-          let f = inf_rec_ bv b in
-          Log.debugf 5 (fun k->k"binder: f=%a@ ty=%a" Expr.pp f Expr.pp (Expr.ty f));
+          lambda_l ~loc vars bod
+
+        | AE.Bind { b; vars; body } ->
+
+          (* resolve binder *)
+          let b =
+            match Env.find_const (A.Const.name b) (State.env state) with
+            | None ->
+              Error.failf ~loc
+                (fun k->k"Unknown constant %a" A.Const.pp b)
+
+            | Some c -> c
+          in
+
+          (* Log.debugf 5 (fun k->k"binder: f=%a@ ty=%a" Expr.pp f Expr.pp (Expr.ty f));*)
           let bv, vars =
             CCList.fold_map
-              (fun bv v ->
-                 let v' = infer_bvar_ bv v in
-                 Str_map.add v.A.v_name (BV v') bv, v')
+              (fun bv (v:AE.var) ->
+                 let v' = infer_bvar_ ~reify bv v in
+                 Str_map.add v.name (BV v') bv, v')
               bv vars
           in
           let body = inf_rec_ bv body in
-          Log.debugf 5 (fun k->k"body: f=%a@ ty=%a" Expr.pp body Expr.pp (Expr.ty body));
-          (* now for each [v], create [f (\x. bod)] *)
+          (* Log.debugf 5 (fun k->k"body: f=%a@ ty=%a" Expr.pp body Expr.pp (Expr.ty body));*)
+
+          (* now for each [v], create [b (\x. bod)] *)
           CCList.fold_right
             (fun bv body ->
-               let lam = Expr.lambda ~loc bv body in
-               let e = Expr.app st f lam in
-               Log.debugf 5 (fun k->k"app: f=%a@ ty=%a" Expr.pp e Expr.pp (Expr.ty e));
+               let b = infer_const_ ~loc b in
+               let lam = lambda ~loc bv body in
+               let e = app b lam in
+               Log.debugf 5 (fun k->k"app: f=%a@ ty=%a" Expr.pp e Expr.pp (ty_exn e));
                e)
             vars body
+
         | AE.Let (bindings, body) ->
           let bv', bindings =
             CCList.fold_map
-              (fun bv' (v,t) ->
-                 let v' = infer_bvar_ bv v in
+              (fun bv' ((v:AE.var),t) ->
+                 let v' = infer_bvar_ ~reify bv v in
                  let t = inf_rec_ bv t in
-                 unif_exn_ v'.bv_ty (Expr.ty t);
-                 let bv' = Str_map.add v.A.v_name (BV v') bv' in
+                 unif_exn_ ~loc:Loc.(v.loc ++ t.loc) e v'.ty (ty_exn t);
+                 let bv' = Str_map.add v.name (BV v') bv' in
                  bv', (v', t))
               bv bindings
           in
-          Expr.let_ ~loc bindings @@ inf_rec_ bv' body
+          let_ ~loc bindings @@ inf_rec_ bv' body
       end
 
-    and infer_const_ ~loc env c : expr =
+    and infer_const_ ~loc (c:TA.Const.t) : expr =
       (*Log.debugf 50 (fun k->k"infer-const %a at %a" A.Const.pp c Loc.pp loc);*)
       let arity =
-        match K.Const.args c with
-        | K.Const.C_arity n -> n
-        | K.Const.C_ty_vars vs -> List.length vs
+        match TA.Const.args c with
+        | TA.Const.C_arity n -> n
+        | TA.Const.C_vars vs -> List.length vs
       in
       let args =
-        CCList.init arity
-          (fun _ ->
-             let ty, m = Expr.ty_meta ~loc env in
-             env.to_gen <- m :: env.to_gen;
-             ty)
+        CCList.init arity (fun _ -> State.new_ty_meta ~loc state)
       in
-      Expr.const ~loc c args
+      const ~loc c args
 
     and infer_ty_opt_ ~reify ~loc ?default bv ty : ty =
       match ty with
@@ -571,13 +624,13 @@ module Make(Arg : sig
         end
       | Some ty0 ->
         let ty = infer_ ~reify bv ty0 in
-        if not @@ (Expr.is_a_type ty || Expr.is_eq_to_type ty) then (
-          unif_exn_ ~loc ty0 ty Expr.type_;
+        if not @@ (TA.Expr.is_a_type ty || TA.Expr.is_eq_to_type ty) then (
+          unif_exn_ ~loc ty0 ty TA.Expr.type_;
         );
         ty
 
-    and infer_bvar_ ?default bv (v:AE.var) : bvar =
-      let ty_v = infer_ty_opt_ ?default ~loc:v.loc bv v.ty in
+    and infer_bvar_ ~reify ?default bv (v:AE.var) : bvar =
+      let ty_v = infer_ty_opt_ ~reify ?default ~loc:v.loc bv v.ty in
       let v' = TA.BVar.make ~loc:v.loc (ID.make v.name) ty_v in
       v'
 

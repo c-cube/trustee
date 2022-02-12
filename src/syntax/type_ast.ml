@@ -100,6 +100,10 @@ end
 module Const = struct
   open Init_
 
+  type args = Init_.const_args =
+    | C_arity of int
+    | C_vars of ty bvar list
+
   type t = Init_.const = {
     name: Name.t;
     ty: ty;
@@ -108,9 +112,11 @@ module Const = struct
   }
 
   let pp out (self:t) = Name.pp out self.name
-  let equal (a:t) (b:t) = Name.equal a.name b.name
-  let name (self:t) : Name.t = self.name
-  let loc (self:t) = self.loc
+  let to_string self = Name.to_string self.name
+  let[@inline] equal (a:t) (b:t) = Name.equal a.name b.name
+  let[@inline] name (self:t) : Name.t = self.name
+  let[@inline] loc (self:t) = self.loc
+  let[@inline] args (self:t) = self.args
 
   let make ~loc ~ty ~args name : t = {loc;ty;args;name}
   let make_str ~loc ~ty ~args s : t = make ~loc ~ty ~args (Name.make s)
@@ -231,6 +237,9 @@ module Expr = struct
   (**/**)
   let mk_ ~loc ~ty view : t = {view; loc; ty=Some ty}
   (**/**)
+
+  let[@inline] is_eq_to_type (self:t) = match view self with Type -> true | _ -> false
+  let[@inline] is_a_type (self:t) = is_eq_to_type (ty_exn self)
 
   let rec unfold_arrow e = match view e with
     | Ty_arrow (a,b) ->
