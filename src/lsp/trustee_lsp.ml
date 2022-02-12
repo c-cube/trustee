@@ -58,6 +58,14 @@ let trustee_server _ctx = object (self)
     (* one env per document *)
     val buffers: (LP.DocumentUri.t, parsed_buffer) Hashtbl.t = Hashtbl.create 32
 
+    method! config_definition = Some (`Bool true)
+    method! config_hover = Some (`Bool true)
+    method! config_sync_opts =
+      LP.TextDocumentSyncOptions.create
+        ~change:LP.TextDocumentSyncKind.Incremental ~openClose:true
+        ~save:(LP.SaveOptions.create ~includeText:false ())
+        ~willSave:false ()
+
     method private _on_doc
         ~(notify_back:Linol.notify_back) (d:LP.DocumentUri.t) (content:string) =
       (* TODO: use penv/env from dependencies, if any, once we have import *)
