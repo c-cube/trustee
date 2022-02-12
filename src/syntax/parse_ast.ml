@@ -141,6 +141,27 @@ module Expr = struct
   let error ~loc err : t = mk_ ~loc (Error err)
 
   let to_string = Fmt.to_string @@ Fmt.hvbox pp
+
+  let rec iter_errors yield e =
+    let recurse e = iter_errors yield e in
+    let recurse_v v = Option.iter recurse v.Var.ty in
+    match view e with
+    | Type | Wildcard -> ()
+    | Var v -> recurse_v v
+    | Ty_arrow (args,ret) -> List.iter recurse args; recurse ret
+    | Meta {ty;_} -> Option.iter recurse ty
+    | App (f, args) -> recurse f; List.iter recurse args
+    | Lambda (vs,bod) -> List.iter recurse_v vs; recurse bod
+    | Bind {vars;body; _} -> List.iter recurse_v vars; recurse body
+    | Eq (a,b) -> recurse a; recurse b
+    | With (vs,b) -> List.iter recurse_v vs; recurse b
+    | Let (bs,bod) ->
+      recurse bod;
+      List.iter (fun (v,t) -> recurse_v v; recurse t) bs
+    | Error err -> yield (e.loc,err)
+
+  let error_set (e:t) : Error_set.t =
+    object method iter_errors k = iter_errors k e end
 end
 
 (** A logical substitution literal. *)
@@ -164,12 +185,14 @@ module Goal = struct
       }
     | Error of Error.t
 
-  let mk ~loc view : t = {loc;view}
+  let[@inline] mk ~loc view : t = {loc;view}
+  let[@inline] view self = self.view
+  let[@inline] loc self = self.loc
+
   let goal ~loc ?(new_vars=[]) ~hyps concl : t =
     mk ~loc @@ Goal {hyps; concl; new_vars}
   let goal_nohyps ~loc c : t = goal ~loc ~hyps:[] c
   let error ~loc err : t = mk ~loc @@ Error err
-  let loc self = self.loc
 
   let pp out (self:t) =
     let pp_newvar out v =
@@ -187,6 +210,15 @@ module Goal = struct
     | Error e -> Fmt.fprintf out "<@[error@ %a@]>" Error.pp e
 
   let to_string = Fmt.to_string pp
+
+  let iter_errors f (self:t) =
+    match view self with
+    | Goal {new_vars; hyps; concl} ->
+      let recurse_e = Expr.iter_errors f in
+      List.iter (fun v -> Option.iter recurse_e v.Var.ty) new_vars;
+      List.iter recurse_e hyps;
+      recurse_e concl
+    | Error err -> f (self.loc,err)
 end
 
 (** A type in the meta language. *)
@@ -197,9 +229,9 @@ module Meta_ty = struct
     | Arrow of t list * t
     | Error of Error.t
 
-  let mk ~loc view : t = {view;loc}
-  let loc self = self.loc
-  let view self = self.view
+  let[@inline] mk ~loc view : t = {view;loc}
+  let[@inline] loc self = self.loc
+  let[@inline] view self = self.view
 
   let rec pp out (self:t) = match self.view with
     | Const c -> Const.pp out c
@@ -215,6 +247,16 @@ module Meta_ty = struct
     | _ ->
       let loc = Loc.(union_l ret.loc ~f:loc args) in
       mk ~loc (Arrow (args, ret))
+
+  let rec iter_errors f (self:t) : unit =
+    let recurse e = iter_errors f e in
+    match view self with
+    | Const _ -> ()
+    | Arrow (args,ret) -> List.iter recurse args; recurse ret
+    | Error err -> f (self.loc,err)
+
+  let error_set self : Error_set.t =
+    object method iter_errors f = iter_errors f self end
 end
 
 (** An expression of the meta language.
@@ -321,7 +363,7 @@ module Meta_expr = struct
     match self.view with
     | Value v -> pp_value out v
     | Const_accessor (c, acc) ->
-      (* FIXME 
+      (* FIXME
       Fmt.fprintf out "%a'%a" Const.pp c pp_accessor acc *)
       assert false
     | Var v -> Var.pp out v
@@ -400,6 +442,44 @@ module Meta_expr = struct
     | _ ->
       let loc = List.fold_left (fun l e -> Loc.Infix.(l ++ e.loc)) f.loc args in
       mk ~loc (App (f, args))
+
+  let[@inline] view (e:t) = e.view
+  let[@inline] loc (e:t) = e.loc
+
+  let rec iter_errors f (e:t) =
+    let recurse e = iter_errors f e in
+    let recurse2 (a,b) = recurse a; recurse b; in
+    let recurse_ty = Meta_ty.iter_errors f in
+    let recurse_v v = Option.iter recurse_ty v.Var.ty in
+    match view e with
+    | Value _ -> ()
+    | Var v -> recurse_v v
+    | Binop (_,a,b) -> recurse a; recurse b
+    | App (f, args) -> recurse f; List.iter recurse args
+    | Expr_lit e -> Expr.iter_errors f e
+    | List_lit l -> List.iter recurse l
+    | Fun (vs,bod) -> List.iter recurse_v vs; iter_block_errors f bod
+    | If (a,b,c) -> recurse a; recurse b; Option.iter recurse c
+    | Cond {cases; default} -> List.iter recurse2 cases; recurse default
+    | Error err -> f (e.loc,err)
+    | Block_expr bl -> iter_block_errors f bl
+    | Match _ -> assert false (* FIXME *)
+    | Record _ -> assert false (* FIXME *)
+    | Const_accessor _ -> assert false (* FIXME *)
+
+  and iter_block_stmt f (stmt:block_stmt) =
+    match stmt.view with
+    | Blk_return e | Blk_eval e -> iter_errors f e
+    | Blk_error err -> f (stmt.loc,err)
+    | Blk_let (x,e) ->
+      Option.iter (Meta_ty.iter_errors f) x.Var.ty;
+      iter_errors f e
+
+  and iter_block_errors f (bl:block_expr) : unit =
+    List.iter (iter_block_stmt f) bl.stmts
+
+  let error_set (e:t) : Error_set.t =
+    object method iter_errors f = iter_errors f e end
 end
 
 (** Structured proofs.
@@ -533,7 +613,9 @@ module Proof = struct
     | Block_error err ->
       Fmt.fprintf out "(@[error@ %a@])" Error.pp err
 
-  let mk ~loc view : t = {loc;view}
+  let[@inline] mk ~loc view : t = {loc;view}
+  let[@inline] view (self:t) = self.view
+  let[@inline] loc (self:t) = self.loc
 
   let exact ~loc e : t = mk ~loc (Exact e)
   let by ~loc solver thm_args : t = mk ~loc (By { solver; thm_args })
@@ -551,6 +633,41 @@ module Proof = struct
     mk_bl ~loc @@ Block_let {var; rhs}
   let bl_pick ~loc x cond proof : block_elt =
     mk_bl ~loc @@ Block_pick {x; cond; proof}
+
+  let rec iter_errors f (self:t) =
+    let recurse_e = Meta_expr.iter_errors f in
+    match view self with
+    | Exact e -> recurse_e e
+    | By { thm_args=_; solver} -> recurse_e solver
+    | Structured {goal;block} ->
+      Goal.iter_errors f goal; iter_errors_block f block
+    | Error err -> f (self.loc,err)
+
+and iter_errors_block f (bl:block) =
+    List.iter (iter_errors_block_elt f) bl.steps;
+    iter_errors f bl.qed
+
+  and iter_errors_block_elt f (ble:block_elt) =
+    let recurse_e = Expr.iter_errors f in
+    let recurse_me = Meta_expr.iter_errors f in
+    match ble.view with
+    | Block_have {name=_; goal; proof} ->
+      iter_errors_block f proof;
+      Goal.iter_errors f goal
+    | Block_pick {x;cond;proof} ->
+      Option.iter recurse_e x.Var.ty;
+      recurse_e cond;
+      iter_errors_block f proof
+    | Block_let {var;rhs} ->
+      Option.iter (Meta_ty.iter_errors f) var.Var.ty;
+      recurse_me rhs
+    | Block_suffices {goal; new_implies_old} ->
+      Goal.iter_errors f goal;
+      iter_errors_block f new_implies_old
+    | Block_error err -> f (ble.loc,err)
+
+  let error_set e : Error_set.t =
+    object method iter_errors f = iter_errors f e end
 end
 
 (** Toplevel statements *)
@@ -645,6 +762,30 @@ module Top = struct
   let show ~loc e : t = make ~loc (Show e)
   let eval ~loc e : t = make ~loc (Eval e)
   let error ~loc e : t = make ~loc (Error e)
+
+  let iter_errors f (self:t): unit =
+    let recurse_e = Expr.iter_errors f in
+    let recurse_v v = Option.iter recurse_e v.Var.ty in
+    let recurse_prbl = Proof.iter_errors_block f in
+    let recurse_goal = Goal.iter_errors f in
+    match view self with
+    | Enter_file _ -> ()
+    | Def { name=_; vars; ret; body } ->
+      List.iter recurse_v vars; Option.iter recurse_e ret; recurse_e body
+    | Decl { name=_; ty } -> recurse_e ty
+    | Fixity _ -> ()
+    | Axiom { name=_; thm } -> recurse_e thm
+    | Goal { goal; proof }
+    | Theorem { name=_; goal; proof } -> recurse_goal goal; recurse_prbl proof
+    | Show e -> recurse_e e
+    | Eval e -> Meta_expr.iter_errors f e
+    | Error err -> f (self.loc, err)
+
+  let error_set self : Error_set.t =
+    object method iter_errors f = iter_errors f self end
+
+  let error_set_l (l:t list) : Error_set.t =
+    CCSeq.of_list l |> CCSeq.map error_set |> Error_set.merge_seq
 end
 
 

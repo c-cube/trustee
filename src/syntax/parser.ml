@@ -857,7 +857,7 @@ end = struct
   ]
 
   let top (self:t) : A.Top.t SD.t =
-    Log.debugf 1 (fun k->k"parse top");
+    Log.debugf 2 (fun k->k"parse top");
 
     let+ r =
       SD.try_catch @@
