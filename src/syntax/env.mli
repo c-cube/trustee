@@ -17,6 +17,9 @@ val find_const : Name.t -> t -> TA.Const.t option
 
 val all_consts : t -> TA.Const.t Iter.t
 
+val completions : t -> string -> TA.Const.t Iter.t
+(** Possible completions for the string *)
+
 val pp : t Fmt.printer
 
 (* TODO: modules? merge? maybe not before hierarchical names *)

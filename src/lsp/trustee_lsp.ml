@@ -26,8 +26,8 @@ let lsp_range_of_loc (l:TS.Loc.t) : Range.t =
 
 type parsed_buffer = {
   penv: TS.Notation.Ref.t;
-  env: TA.Ty_env.t;
-  idx: TA.Index.t;
+  env: TS.Env.t;
+  idx: TS.Index.t;
 }
 
 let ident_under_pos ~file (s:string) (pos:TS.Position.t) : (string * TS.Loc.t) option =
@@ -126,9 +126,9 @@ let trustee_server _ctx = object (self)
         let pos = pos_of_lsp_pos pos in
         Log.debug
           (fun k->k"lookup in idx (size %d) at pos %a"
-              (TA.Index.size idx) TS.Position.pp pos);
+              (TS.Index.size idx) TS.Position.pp pos);
         let r =
-          match TA.Index.find idx pos with
+          match TS.Index.find idx pos with
           | [] -> None
           | q :: _ ->
             Log.debug (fun k->k"found %a" q#pp ());
@@ -148,9 +148,9 @@ let trustee_server _ctx = object (self)
         let pos = pos_of_lsp_pos pos in
         Log.debug
           (fun k->k"lookup for def in idx (size %d) at pos %a"
-              (TA.Index.size idx) TS.Position.pp pos);
+              (TS.Index.size idx) TS.Position.pp pos);
         let r =
-          match TA.Index.find idx pos with
+          match TS.Index.find idx pos with
           | [] -> None
           | q :: _ ->
             match q#def_loc with
@@ -177,25 +177,28 @@ let trustee_server _ctx = object (self)
           | Some (ident, ident_loc) ->
             Log.debug (fun k->k"req-completion: ident `%s`" ident);
 
-            let tyenv = TA.Index.find_ty_env idx pos in
-            Log.debug (fun k->k"req-completion: env@ %a" TA.Ty_env.pp tyenv);
+            let tyenv = TS.Index.find_ty_env idx pos in
+            Log.debug (fun k->k"req-completion: env@ %a" TS.Env.pp tyenv);
 
             let compls =
-              TA.Ty_env.completions tyenv ident
+              TS.Env.completions tyenv ident
             in
             Log.debug
               (fun k->k"completions: %a" (Fmt.Dump.list Fmt.string)
-                  (Iter.map fst compls |> Iter.map TC.Name.to_string |> Iter.to_list));
+                  (compls |> Iter.map TA.Const.to_string |> Iter.to_list));
             let compls =
               compls
               |> Iter.take 20
               |> Iter.map
-                (fun (name, c) ->
-                  let name = TC.Name.to_string name in
+                (fun (c:TA.Const.t) ->
+                  let name = TS.Name.to_string c.name in
+                  let lbl, kind = "C", LP.CompletionItemKind.Value in
+                  (* TODO: handle meta variables
                   let lbl, kind = match c with
                     | TA.Ty_env.N_const _ -> "C", LP.CompletionItemKind.Value
                     | TA.Ty_env.N_thm _ -> "T", LP.CompletionItemKind.Value
                   in
+                     *)
                   let label = Printf.sprintf "%s %s" lbl name in
                   let textEdit =
                     LP.TextEdit.create ~range:(lsp_range_of_loc ident_loc)
@@ -203,7 +206,9 @@ let trustee_server _ctx = object (self)
                   in
                   let ci = LP.CompletionItem.create
                     ~label ~kind ~textEdit
-                    ~detail:(TA.Ty_env.string_of_named_object c)
+                    ~detail:(TA.Const.to_string c)
+                    (* TODO ~detail:(TS.Env.string_of_named_object c)
+                       *)
                     ()
                   in
                   Log.debug
