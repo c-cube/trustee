@@ -19,3 +19,10 @@ let merge_seq (l:t Seq.t) : t =
 
 let merge (a:t) (b:t) : t =
   object method iter_errors f = a#iter_errors f; b#iter_errors f end
+
+module Syntax = struct
+  (** Alias for {!merge} *)
+  let (++) = merge
+end
+
+include Syntax

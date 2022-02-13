@@ -73,6 +73,23 @@ let parse_string_exn ?(filename="<string>") ~notation str (p:'a parser) : 'a lis
   let self = create ~src_string:str ~notation () in
   run_exn self ~filename str p
 
+(** Parse [p], but return a localized error on failure. *)
+let try_catch_loc p =
+  let+ x = SD.try_catch p in
+  match x with
+  | Ok x -> Ok x
+  | Error err ->
+    let loc = SD.Err.loc err and err = SD.Err.to_error err in
+    Error (loc, err)
+
+let protect_err
+  : type a. mk_err:(loc:Loc.t -> Error.t -> a) -> a SD.t -> a SD.t
+  = fun ~mk_err p ->
+    let+ r = try_catch_loc p in
+    match r with
+    | Ok x -> x
+    | Error (loc,err) -> mk_err ~loc err
+
 (** Parse a variable.
     @param p_ty how to parse the type, if needed
     @param require_ty if true, a type must be provided *)
@@ -248,14 +265,10 @@ but there must be at least one variable name.
     )
 
   let top self =
-    let+ r = SD.try_catch (p_rec_ self) in
+    let+ r = try_catch_loc (p_rec_ self) in
     match r with
     | Ok x -> x
-    | Error err ->
-      (* reify error *)
-      let loc = SD.Err.loc err in
-      let err = SD.Err.to_error err in
-      E.error ~loc err
+    | Error (loc,err) -> E.error ~loc err (* reify error *)
 
   let p_var ?require_ty self = p_var ?require_ty ~p_ty:(top self) ()
 end
@@ -318,25 +331,34 @@ end = struct
   let rec meta_expr_rec_ (self:t) : E.t SD.t =
     let* v = SD.value in
     Log.debugf 5 (fun k->k"parse meta-expr from %a" Sexp.pp v);
+
+    let protect_err =
+      protect_err ~mk_err:(fun ~loc err -> E.mk ~loc @@ E.Error err)
+    in
+
     SD.try_l ~msg:"expected a meta-expression" [
 
       (* value literals *)
 
       (SD.succeeds SD.int,
+       protect_err @@
        let+ loc = SD.loc
        and+ i = SD.int in
        E.mk ~loc @@ E.Value (E.V_int i));
 
       (SD.is_atom_of "true",
+       protect_err @@
        let+ loc = SD.loc in
        E.mk ~loc @@ E.Value (E.V_bool true));
 
       (SD.is_atom_of "false",
+       protect_err @@
        let+ loc = SD.loc in
        E.mk ~loc @@ E.Value (E.V_bool false));
 
       (* string literal *)
       (SD.is_quoted_str,
+       protect_err @@
        let+ loc = SD.loc
        and+ s = SD.quoted_str in
        E.mk ~loc @@ E.Value (E.V_string s));
@@ -346,17 +368,20 @@ end = struct
          let+ l = SD.list in l==[]
        in
        is_empty,
+       protect_err @@
        let+ loc = SD.loc in
        E.mk ~loc @@ E.Value E.V_unit);
 
       (* block expression *)
       (SD.is_applied "do",
+       protect_err @@
        let+ loc = SD.loc
        and+ stmts = SD.applied "do" (block_stmt self) in
        let bl = {E.stmts} in
        E.mk ~loc (E.Block_expr bl));
 
       (SD.is_brace_list,
+       protect_err @@
        let+ loc = SD.loc
        and+ stmts = SD.brace_list_of ~what:"block statements" (block_stmt self) in
        let bl = {E.stmts} in
@@ -365,6 +390,7 @@ end = struct
       (SD.is_bracket_list,
        (* TODO: comprehensions, maybe
           "[for <var:string> <src:expr> <yield:expr> [if <guard:expr>]]"? *)
+       protect_err @@
        let+ loc = SD.loc
        and+ l = SD.bracket_list_of ~what:"meta-expressions" (meta_expr_rec_ self) in
        E.mk ~loc (E.List_lit l));
@@ -376,6 +402,7 @@ end = struct
        E.mk ~loc (E.Expr_lit e));
 
       (SD.is_applied "if",
+       protect_err @@
        let+ loc = SD.loc
        and+ e = SD.applied "if" (meta_expr_rec_ self) in
        begin match e with
@@ -389,6 +416,7 @@ end = struct
        end);
 
       (SD.is_applied "cond",
+       protect_err @@
        let* loc = SD.loc
        and* l = SD.applied "cond" SD.value in
 
@@ -415,6 +443,7 @@ end = struct
        end);
 
       (SD.is_applied "fn",
+       protect_err @@
        let* loc = SD.loc
        and* l = SD.applied "fn" SD.value in
        begin match l with
@@ -436,12 +465,14 @@ end = struct
 
       (* variable *)
       (SD.is_atom,
+       protect_err @@
        let+ loc = SD.loc
        and+ v = SD.atom in
        E.mk ~loc @@ E.Var (A.Var.make ~loc v None));
 
       (* application *)
       (SD.is_list,
+       protect_err @@
        let+ loc = SD.loc
        and+ args = SD.list_of ~what:"meta-expressions" (meta_expr_rec_ self) in
        begin match args with
@@ -458,20 +489,30 @@ end = struct
     )
 
   and block_stmt (self:t) : E.block_stmt SD.t =
+    let protect_err p =
+      let+ r = try_catch_loc p in
+      match r with
+      | Ok x -> x
+      | Error (loc,err) -> E.mk_bl ~loc @@ E.Blk_error err
+    in
+
     SD.try_l ~msg:"expected a block statement (let|return|<expr>)" [
 
       (SD.is_applied "let",
+       protect_err @@
        let* loc = SD.loc in
        let+ x, e = SD.applied2 "let" (var self) (meta_expr_rec_ self) in
        E.mk_bl ~loc @@ E.Blk_let (x, e));
 
       (SD.is_applied "return",
+       protect_err @@
        let+ loc = SD.loc
        and+ e = meta_expr_rec_ self in
        E.mk_bl ~loc @@ E.Blk_return e);
 
     ] ~else_:(
       (* fallback case is to just eval an expression *)
+      protect_err @@
       let+ loc = SD.loc
       and+ e = meta_expr_rec_ self in
       E.mk_bl ~loc @@ E.Blk_eval e
@@ -641,16 +682,26 @@ Proofs can be of various forms:
       Error (g.loc, err)
     | Error err -> Error (loc, err)
 
+  let protect_err_pr_opt = protect_err ~mk_err:(fun ~loc err -> Some (P.error ~loc err))
+  let protect_err_pr = protect_err ~mk_err:P.error
+  let protect_err_step =
+    protect_err ~mk_err:(fun ~loc err ->
+        let step = P.bl_error ~loc err in
+        GS_block_elt step)
+
   (* parser for atomic proofs (i.e. leaves) *)
   let p_atomic self : P.t option SD.t =
+
     SD.try_l ~msg:"atomic proof" [
 
       (SD.is_applied "exact",
+       protect_err_pr_opt @@
        let+ loc = SD.loc
        and+ e = SD.applied1 "exact" (P_meta_expr.top self) in
        Some (P.exact ~loc e));
 
       (SD.is_applied "by",
+       protect_err_pr_opt @@
        let+ loc = SD.loc
        and+ e, vars =
          SD.applied2 "by" (P_meta_expr.top self)
@@ -667,19 +718,12 @@ Proofs can be of various forms:
     | Ok x -> f x
 
   let rec proof_rec_ (self:t) : P.t SD.t =
-    let+ r =
-      SD.try_catch @@
-      let* a = p_atomic self in
-      match a with
-      | Some p -> SD.return p
-      | None ->
-        proof_structured_ self
-    in
-    match r with
-    | Ok x -> x
-    | Error err ->
-      let loc = SD.Err.loc err and err = SD.Err.to_error err in
-      P.error ~loc err (* reify error *)
+    protect_err_pr @@
+    let* a = p_atomic self in
+    match a with
+    | Some p -> SD.return p
+    | None ->
+      proof_structured_ self
 
   and proof_structured_ self =
     SD.with_msg ~msg:"parsing structured proof" @@
@@ -721,12 +765,14 @@ Proofs can be of various forms:
        GS_goal g);
 
       (SD.is_applied "let",
+       protect_err_step @@
        let+ loc = SD.loc
        and+ var, rhs = SD.applied2 "let" (P_meta_expr.var self) (P_meta_expr.top self) in
        let step = P.bl_let ~loc var rhs in
        GS_block_elt step);
 
       (SD.is_applied "pick",
+       protect_err_step @@
        let* loc = SD.loc
        and* var, cond, proof = SD.applied3 "pick"
            (P_expr.p_var self) (P_expr.top self) (proof_block self) in
@@ -735,6 +781,7 @@ Proofs can be of various forms:
        SD.return @@ GS_block_elt step);
 
       (SD.is_applied "have",
+       protect_err_step @@
        let* loc = SD.loc
        and* var, goal, proof = SD.applied3 "have"
            p_var (P_goal.top self) (proof_block self) in
@@ -860,7 +907,7 @@ end = struct
     Log.debugf 2 (fun k->k"parse top");
 
     let+ r =
-      SD.try_catch @@
+      try_catch_loc @@
       SD.with_msg ~msg:"parsing toplevel statement" @@
       let* v = SD.value in
       match v.Sexp.view with
@@ -872,12 +919,9 @@ end = struct
         end
       | _ -> SD.fail "expected a top statement: `(<command> <arg>*)`"
     in
-
     begin match r with
       | Ok x -> x
-      | Error err ->
-        let loc = SD.Err.loc err and err = SD.Err.to_error err in
-        A.Top.error ~loc err
+      | Error (loc,err) -> A.Top.error ~loc err
     end
 end
 
