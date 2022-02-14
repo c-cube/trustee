@@ -6,7 +6,7 @@
 ; TODO: decltype, taking arity. `decl` would take a list of parameters for polymorphic constants.
 (decl tau type)
 
-(def T [] bool $ let f := (\x: bool. x) in f = f $)
+(def T [[v _]] bool $ let f := (\x: bool. x) in f = f $)
 
 (show $ (T = T) = T $)
 
@@ -56,6 +56,9 @@
 (fixity forall (binder 12))
 
 (show $ forall (x y : tau). x = y $)
+
+; TODO: how can we parse that? do we need fixities even for S-exprs?
+;(show (forall [[x tau] [y tau]] (= x y)))
 
 ; TODO RForallSubst
 ; TODO RForallIntro

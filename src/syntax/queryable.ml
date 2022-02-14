@@ -1,5 +1,11 @@
 
-(** {1 Queryable types for the LSP server} *)
+(** Queryable types for the LSP server.
+
+    A queryable type is one that the user can query
+    in various ways, the primary one being "hover". Other ways
+    are LSP classics such as "go to definition", "infer type", etc.
+
+*)
 
 type location = Loc.t
 
