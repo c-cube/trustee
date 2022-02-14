@@ -642,6 +642,253 @@ module Make(Arg : sig
       infer_ ~reify:true Str_map.empty e
   end
 
+  module Top = struct
+    (*
+    type t = {
+      st: Typing_state.t;
+      on_show: Loc.t -> unit Fmt.printer -> unit;
+      on_error: Loc.t -> unit Fmt.printer -> unit;
+    }
+
+    let reset_ (self:t) =
+      self.st.fvars <- Str_map.empty;
+      ()
+
+    let top_decl_ ~loc self name ty : ty =
+      let ty =
+        Ty_infer.and_then_generalize self.st
+          (fun () -> Ty_infer.infer_ty self.st ty)
+      in
+      let kty = Expr.to_k_expr self.st.ctx ty in
+      let ty_vars = [] in (* FIXME: use free vars of kty? *)
+      let c = K.Expr.new_const ~def_loc:loc self.st.ctx name ty_vars kty in
+      Typing_state.declare_const self.st name {A.view=c;loc};
+      ty
+
+    let top_def_ ~loc self name (th_name:string A.with_loc option)
+        vars ret body : ty * expr * K.Thm.t =
+      (* turn [def f x y := bod] into [def f := \x y. bod] *)
+      let vars, e = Ty_infer.infer_expr_vars self.st vars body in
+      let def_rhs = Expr.lambda_l ~loc:e.loc vars e in
+      let ty_rhs = Expr.ty def_rhs in
+      (* now ensure that [f vars : ret] *)
+      let ty_ret = match ret with
+        | None -> ty_rhs
+        | Some ret ->
+          let ret = Ty_infer.infer_ty self.st ret in
+          (* [ret] should be the type of [real_def x1…xn] *)
+          let e_app =
+            Expr.app_l self.st def_rhs
+              (List.map
+                 (fun bv -> Expr.var' ~loc:bv.bv_loc (ID.name bv.bv_name) bv.bv_ty)
+                 vars)
+          in
+          Ty_infer.unif_type_with_ ~loc e_app ret;
+          ret
+      in
+      Typing_state.generalize_ty_vars self.st;
+      (* the defining equation `name = def_rhs` *)
+      let def_eq = Expr.eq (Expr.var' ~loc:name.A.loc name.A.view ty_rhs) def_rhs in
+      let th, ke =
+        K.Thm.new_basic_definition self.st.ctx ~def_loc:loc
+          (Expr.to_k_expr self.st.ctx def_eq) in
+      Typing_state.declare_const self.st name.A.view {A.view=ke;loc};
+      CCOpt.iter
+        (fun th_name -> Typing_state.define_thm self.st th_name.A.view {A.view=th;loc}) th_name;
+      ty_ret, def_rhs, th
+
+    let top_show_ self ~loc s : bool * Queryable.t list =
+      let named = Typing_state.find_named self.st s in
+      begin match named with
+        | Some (Ty_env.N_const c as n) ->
+          self.on_show loc (fun out () ->
+              Fmt.fprintf out "@[<2>expr:@ `@[%a@]`@ with type: %a@]" K.Const.pp c.A.view
+                K.Expr.pp (K.Const.ty c.A.view));
+          true, [Ty_env.name_with_def_as_q ~loc n]
+        | Some (Ty_env.N_thm th as n) ->
+          self.on_show loc (fun out () ->
+              Fmt.fprintf out "@[<2>theorem:@ %a@]" K.Thm.pp_quoted th.A.view);
+          true, [Ty_env.name_with_def_as_q ~loc n]
+        | Some (Ty_env.N_rule r as n) ->
+          self.on_show loc (fun out () ->
+              Fmt.fprintf out "@[<2>rule:@ %a@]" KProof.Rule.pp r.A.view);
+          true, [Ty_env.name_with_def_as_q ~loc n]
+        | None ->
+          self.on_show loc (fun out () -> Fmt.fprintf out "not found");
+          false, []
+      end
+
+    let top_axiom_ self name thm : expr =
+      let e =
+        Ty_infer.and_then_generalize self.st
+          (fun () -> Ty_infer.infer_expr_with_ty self.st thm Expr.bool)
+      in
+      let ke = Expr.to_k_expr self.st.ctx e in
+      let th = K.Thm.axiom self.st.ctx [] ke in
+      Typing_state.define_thm self.st name {A.view=th;loc=e.loc};
+      e
+
+    let top_proof_ self proof : Proof.t * K.Thm.t or_error =
+      (* convert proof *)
+      let pr =
+        Ty_infer.infer_proof self.st proof
+      in
+      Log.debugf 10 (fun k->k"typed proof:@ %a" Proof.pp pr);
+      let th = Proof.run
+          self.st.ctx pr
+          ~on_step_res:(fun s th ->
+              self.on_show s.Proof.s_loc
+                (fun out() -> K.Thm.pp_quoted out th))
+      in
+      pr, th
+
+    let top_goal_ ~loc self goal proof : bool * Goal.t * Proof.t =
+      let goal, kgoal = Ty_infer.infer_goal self.st goal in
+      Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp kgoal);
+      let pr, th = top_proof_ self proof in
+      begin match th with
+        | Ok th when K.Thm.is_proof_of th kgoal ->
+          self.on_show loc
+            (fun out() ->
+               Fmt.fprintf out "@[<2>goal proved@ with theorem %a@]" K.Thm.pp_quoted th);
+          true, goal, pr
+        | Ok th ->
+          self.on_error loc
+            (fun out() ->
+               Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
+                 K.Thm.pp_quoted th K.Goal.pp kgoal);
+          false, goal, pr
+        | Error e ->
+          self.on_error loc
+            (fun out() ->
+               Fmt.fprintf out "@[<2>proof is not valid@ %a@]"
+                 Trustee_error.pp e);
+          false, goal, pr
+      end
+
+    let top_thm_ ~loc self name goal proof : bool * Goal.t * Proof.t * K.Thm.t option =
+      let goal, kgoal = Ty_infer.infer_goal self.st goal in
+      Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp kgoal);
+      let pr, th = top_proof_ self proof in
+      begin match th with
+        | Ok th when K.Thm.is_proof_of th kgoal ->
+          Typing_state.define_thm self.st name {A.view=th;loc=goal.loc};
+          true, goal, pr, Some th
+        | Ok th ->
+          self.on_error loc
+            (fun out() ->
+               Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
+                 K.Thm.pp_quoted th K.Goal.pp kgoal);
+          false, goal, pr, Some th
+        | Error e ->
+          self.on_error loc
+            (fun out() ->
+               Fmt.fprintf out "@[<2>proof@ is invalid:@ %a@]"
+                 Trustee_error.pp e);
+          false, goal, pr, None
+      end
+
+    let top_ (self:t) st (idx:Index.t) : Index.t =
+      Log.debugf 2 (fun k->k"(@[TA.process-stmt@ `%a`@])" A.Top_stmt.pp st);
+      reset_ self;
+      let idx = ref idx in
+      let loc = A.Top_stmt.loc st in
+      Index.add_env idx ~loc self.st.ty_env;
+      let ok =
+        try
+          match A.Top_stmt.view st with
+          | A.Top_enter_file s ->
+            self.st.cur_file <- s;
+            true
+          | A.Top_decl { name; ty } ->
+            let ty = top_decl_ ~loc self name.view ty in
+            Index.add_q idx (name_with_def_as_q ~loc:name.loc name.view Expr.pp ty);
+            Index.add_q idx (Expr.as_queryable ty);
+            true
+          | A.Top_def { name; th_name; vars; ret; body } ->
+            let ty_ret, rhs, th = top_def_ self ~loc name th_name vars ret body in
+            Log.debugf 5 (fun k->k "top-def: theorem is %a" K.Thm.pp_quoted th);
+            Index.add_q idx (Expr.as_queryable ty_ret);
+            Index.add_q idx (Expr.as_queryable rhs);
+            true
+          | A.Top_fixity { name; fixity } ->
+            let c =
+              match Ty_env.find_const self.st.ty_env name.A.view with
+              | Some c -> c.A.view
+              | None ->
+                errorf (fun k->k"constant `%s` not in scope" name.A.view)
+            in
+            Index.add_q idx (name_with_def_as_q name.view ~loc:name.loc K.Const.pp c);
+            self.st.notation <- Notation.declare name.A.view fixity self.st.notation;
+            true
+          | A.Top_axiom {name; thm} ->
+            let th = top_axiom_ self name.A.view thm in
+            Index.add_q idx
+              (name_with_def_as_q ~loc:name.A.loc name.A.view Expr.pp th);
+            Index.add_q idx (Expr.as_queryable th);
+            true
+          | A.Top_goal { goal; proof } ->
+            let ok, goal, proof = top_goal_ ~loc self goal proof in
+            Index.add_q idx (Goal.as_queryable goal);
+            Index.add_q idx (Proof.as_queryable proof);
+            ok
+          | A.Top_theorem { name; goal; proof } ->
+            let ok, goal, proof, thm = top_thm_ ~loc self name.view goal proof in
+            Index.add_q idx
+              (match thm with
+               | None -> name_with_def_as_q name.view ~loc:name.loc Goal.pp goal
+               | Some th -> name_with_def_as_q name.view ~loc:name.loc Thm.pp_quoted th
+              );
+            Index.add_q idx (Goal.as_queryable goal);
+            Index.add_q idx (Proof.as_queryable proof);
+            ok
+          | A.Top_show s ->
+            let ok, qs = top_show_ self ~loc s.view in
+            (* add to index *)
+            List.iter (Index.add_q idx) qs;
+            ok
+          | A.Top_show_expr e ->
+            let e = Ty_infer.infer_expr self.st e in
+            self.on_show loc (fun out () ->
+                Fmt.fprintf out "@[<v>@[<2>expr:@ %a@]@ @[<2>as-kernel-expr:@ %a@]@]"
+                  Expr.pp e K.Expr.pp (Expr.to_k_expr self.st.ctx e));
+            Index.add_q idx (Expr.as_queryable e);
+            true
+          | A.Top_show_proof proof ->
+            let proof, th = top_proof_ self proof in
+            Index.add_q idx (Proof.as_queryable proof);
+            begin match th with
+              | Ok th ->
+                self.on_show loc
+                  (fun out () ->
+                     Fmt.fprintf out "@[<hv>result:@ %a@]" K.Thm.pp_quoted th);
+                true
+              | Error e ->
+                self.on_error loc e.pp;
+                false
+            end
+          | A.Top_error { msg } ->
+            self.on_error loc msg;
+            false
+        with
+        | Trustee_error.E e ->
+          self.on_error loc (fun out () -> Trustee_error.pp out e);
+          false
+      in
+      if ok then (
+        Log.debugf 1
+          (fun k->k"@[<v>@[<2>@{<green>OK@}:@ %a@]@ loc: %a@]"
+              A.Top_stmt.pp st Loc.pp (A.Top_stmt.loc st));
+      );
+      !idx
+
+    let top ~on_show ~on_error idx (st:Typing_state.t) (stmt:A.top_statement) : Index.t =
+      let state = {st; on_show; on_error} in
+      let idx = top_ state stmt idx in
+      idx
+       *)
+  end
+
 end
 
 let make (st:State.t) : (module S) =
@@ -976,251 +1223,5 @@ end
 *)
 
 (* TODO: fix that and move it into its own module?
-module Process_stmt = struct
-  type t = {
-    st: Typing_state.t;
-    on_show: Loc.t -> unit Fmt.printer -> unit;
-    on_error: Loc.t -> unit Fmt.printer -> unit;
-  }
-
-  let reset_ (self:t) =
-    self.st.fvars <- Str_map.empty;
-    ()
-
-  let top_decl_ ~loc self name ty : ty =
-    let ty =
-      Ty_infer.and_then_generalize self.st
-        (fun () -> Ty_infer.infer_ty self.st ty)
-    in
-    let kty = Expr.to_k_expr self.st.ctx ty in
-    let ty_vars = [] in (* FIXME: use free vars of kty? *)
-    let c = K.Expr.new_const ~def_loc:loc self.st.ctx name ty_vars kty in
-    Typing_state.declare_const self.st name {A.view=c;loc};
-    ty
-
-  let top_def_ ~loc self name (th_name:string A.with_loc option)
-      vars ret body : ty * expr * K.Thm.t =
-    (* turn [def f x y := bod] into [def f := \x y. bod] *)
-    let vars, e = Ty_infer.infer_expr_vars self.st vars body in
-    let def_rhs = Expr.lambda_l ~loc:e.loc vars e in
-    let ty_rhs = Expr.ty def_rhs in
-    (* now ensure that [f vars : ret] *)
-    let ty_ret = match ret with
-      | None -> ty_rhs
-      | Some ret ->
-        let ret = Ty_infer.infer_ty self.st ret in
-        (* [ret] should be the type of [real_def x1…xn] *)
-        let e_app =
-          Expr.app_l self.st def_rhs
-            (List.map
-               (fun bv -> Expr.var' ~loc:bv.bv_loc (ID.name bv.bv_name) bv.bv_ty)
-               vars)
-        in
-        Ty_infer.unif_type_with_ ~loc e_app ret;
-        ret
-    in
-    Typing_state.generalize_ty_vars self.st;
-    (* the defining equation `name = def_rhs` *)
-    let def_eq = Expr.eq (Expr.var' ~loc:name.A.loc name.A.view ty_rhs) def_rhs in
-    let th, ke =
-      K.Thm.new_basic_definition self.st.ctx ~def_loc:loc
-        (Expr.to_k_expr self.st.ctx def_eq) in
-    Typing_state.declare_const self.st name.A.view {A.view=ke;loc};
-    CCOpt.iter
-      (fun th_name -> Typing_state.define_thm self.st th_name.A.view {A.view=th;loc}) th_name;
-    ty_ret, def_rhs, th
-
-  let top_show_ self ~loc s : bool * Queryable.t list =
-    let named = Typing_state.find_named self.st s in
-    begin match named with
-      | Some (Ty_env.N_const c as n) ->
-        self.on_show loc (fun out () ->
-            Fmt.fprintf out "@[<2>expr:@ `@[%a@]`@ with type: %a@]" K.Const.pp c.A.view
-              K.Expr.pp (K.Const.ty c.A.view));
-        true, [Ty_env.name_with_def_as_q ~loc n]
-      | Some (Ty_env.N_thm th as n) ->
-        self.on_show loc (fun out () ->
-            Fmt.fprintf out "@[<2>theorem:@ %a@]" K.Thm.pp_quoted th.A.view);
-        true, [Ty_env.name_with_def_as_q ~loc n]
-      | Some (Ty_env.N_rule r as n) ->
-        self.on_show loc (fun out () ->
-            Fmt.fprintf out "@[<2>rule:@ %a@]" KProof.Rule.pp r.A.view);
-        true, [Ty_env.name_with_def_as_q ~loc n]
-      | None ->
-        self.on_show loc (fun out () -> Fmt.fprintf out "not found");
-        false, []
-    end
-
-  let top_axiom_ self name thm : expr =
-    let e =
-      Ty_infer.and_then_generalize self.st
-        (fun () -> Ty_infer.infer_expr_with_ty self.st thm Expr.bool)
-    in
-    let ke = Expr.to_k_expr self.st.ctx e in
-    let th = K.Thm.axiom self.st.ctx [] ke in
-    Typing_state.define_thm self.st name {A.view=th;loc=e.loc};
-    e
-
-  let top_proof_ self proof : Proof.t * K.Thm.t or_error =
-    (* convert proof *)
-    let pr =
-      Ty_infer.infer_proof self.st proof
-    in
-    Log.debugf 10 (fun k->k"typed proof:@ %a" Proof.pp pr);
-    let th = Proof.run
-        self.st.ctx pr
-        ~on_step_res:(fun s th ->
-            self.on_show s.Proof.s_loc
-              (fun out() -> K.Thm.pp_quoted out th))
-    in
-    pr, th
-
-  let top_goal_ ~loc self goal proof : bool * Goal.t * Proof.t =
-    let goal, kgoal = Ty_infer.infer_goal self.st goal in
-    Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp kgoal);
-    let pr, th = top_proof_ self proof in
-    begin match th with
-      | Ok th when K.Thm.is_proof_of th kgoal ->
-        self.on_show loc
-          (fun out() ->
-             Fmt.fprintf out "@[<2>goal proved@ with theorem %a@]" K.Thm.pp_quoted th);
-        true, goal, pr
-      | Ok th ->
-        self.on_error loc
-          (fun out() ->
-             Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
-               K.Thm.pp_quoted th K.Goal.pp kgoal);
-        false, goal, pr
-      | Error e ->
-        self.on_error loc
-          (fun out() ->
-             Fmt.fprintf out "@[<2>proof is not valid@ %a@]"
-               Trustee_error.pp e);
-        false, goal, pr
-    end
-
-  let top_thm_ ~loc self name goal proof : bool * Goal.t * Proof.t * K.Thm.t option =
-    let goal, kgoal = Ty_infer.infer_goal self.st goal in
-    Log.debugf 5 (fun k->k"inferred goal:@ %a" K.Goal.pp kgoal);
-    let pr, th = top_proof_ self proof in
-    begin match th with
-      | Ok th when K.Thm.is_proof_of th kgoal ->
-        Typing_state.define_thm self.st name {A.view=th;loc=goal.loc};
-        true, goal, pr, Some th
-      | Ok th ->
-        self.on_error loc
-          (fun out() ->
-             Fmt.fprintf out "@[<2>proof@ yields theorem %a@ but goal was %a@]"
-               K.Thm.pp_quoted th K.Goal.pp kgoal);
-        false, goal, pr, Some th
-      | Error e ->
-        self.on_error loc
-          (fun out() ->
-             Fmt.fprintf out "@[<2>proof@ is invalid:@ %a@]"
-               Trustee_error.pp e);
-        false, goal, pr, None
-    end
-
-  let top_ (self:t) st (idx:Index.t) : Index.t =
-    Log.debugf 2 (fun k->k"(@[TA.process-stmt@ `%a`@])" A.Top_stmt.pp st);
-    reset_ self;
-    let idx = ref idx in
-    let loc = A.Top_stmt.loc st in
-    Index.add_env idx ~loc self.st.ty_env;
-    let ok =
-      try
-        match A.Top_stmt.view st with
-        | A.Top_enter_file s ->
-          self.st.cur_file <- s;
-          true
-        | A.Top_decl { name; ty } ->
-          let ty = top_decl_ ~loc self name.view ty in
-          Index.add_q idx (name_with_def_as_q ~loc:name.loc name.view Expr.pp ty);
-          Index.add_q idx (Expr.as_queryable ty);
-          true
-        | A.Top_def { name; th_name; vars; ret; body } ->
-          let ty_ret, rhs, th = top_def_ self ~loc name th_name vars ret body in
-          Log.debugf 5 (fun k->k "top-def: theorem is %a" K.Thm.pp_quoted th);
-          Index.add_q idx (Expr.as_queryable ty_ret);
-          Index.add_q idx (Expr.as_queryable rhs);
-          true
-        | A.Top_fixity { name; fixity } ->
-          let c =
-            match Ty_env.find_const self.st.ty_env name.A.view with
-            | Some c -> c.A.view
-            | None ->
-              errorf (fun k->k"constant `%s` not in scope" name.A.view)
-          in
-          Index.add_q idx (name_with_def_as_q name.view ~loc:name.loc K.Const.pp c);
-          self.st.notation <- Notation.declare name.A.view fixity self.st.notation;
-          true
-        | A.Top_axiom {name; thm} ->
-          let th = top_axiom_ self name.A.view thm in
-          Index.add_q idx
-            (name_with_def_as_q ~loc:name.A.loc name.A.view Expr.pp th);
-          Index.add_q idx (Expr.as_queryable th);
-          true
-        | A.Top_goal { goal; proof } ->
-          let ok, goal, proof = top_goal_ ~loc self goal proof in
-          Index.add_q idx (Goal.as_queryable goal);
-          Index.add_q idx (Proof.as_queryable proof);
-          ok
-        | A.Top_theorem { name; goal; proof } ->
-          let ok, goal, proof, thm = top_thm_ ~loc self name.view goal proof in
-          Index.add_q idx
-            (match thm with
-             | None -> name_with_def_as_q name.view ~loc:name.loc Goal.pp goal
-             | Some th -> name_with_def_as_q name.view ~loc:name.loc Thm.pp_quoted th
-            );
-          Index.add_q idx (Goal.as_queryable goal);
-          Index.add_q idx (Proof.as_queryable proof);
-          ok
-        | A.Top_show s ->
-          let ok, qs = top_show_ self ~loc s.view in
-          (* add to index *)
-          List.iter (Index.add_q idx) qs;
-          ok
-        | A.Top_show_expr e ->
-          let e = Ty_infer.infer_expr self.st e in
-          self.on_show loc (fun out () ->
-              Fmt.fprintf out "@[<v>@[<2>expr:@ %a@]@ @[<2>as-kernel-expr:@ %a@]@]"
-                Expr.pp e K.Expr.pp (Expr.to_k_expr self.st.ctx e));
-          Index.add_q idx (Expr.as_queryable e);
-          true
-        | A.Top_show_proof proof ->
-          let proof, th = top_proof_ self proof in
-          Index.add_q idx (Proof.as_queryable proof);
-          begin match th with
-            | Ok th ->
-              self.on_show loc
-                (fun out () ->
-                   Fmt.fprintf out "@[<hv>result:@ %a@]" K.Thm.pp_quoted th);
-              true
-            | Error e ->
-              self.on_error loc e.pp;
-              false
-          end
-        | A.Top_error { msg } ->
-          self.on_error loc msg;
-          false
-      with
-      | Trustee_error.E e ->
-        self.on_error loc (fun out () -> Trustee_error.pp out e);
-        false
-    in
-    if ok then (
-      Log.debugf 1
-        (fun k->k"@[<v>@[<2>@{<green>OK@}:@ %a@]@ loc: %a@]"
-            A.Top_stmt.pp st Loc.pp (A.Top_stmt.loc st));
-    );
-    !idx
-
-  let top ~on_show ~on_error idx (st:Typing_state.t) (stmt:A.top_statement) : Index.t =
-    let state = {st; on_show; on_error} in
-    let idx = top_ state stmt idx in
-    idx
-end
-
-let process_stmt = Process_stmt.top
    *)
 

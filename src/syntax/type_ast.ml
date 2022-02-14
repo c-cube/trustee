@@ -507,7 +507,7 @@ module Meta_expr = struct
     match self.view with
     | Value v -> pp_value out v
     | Const_accessor (c, acc) ->
-      (* FIXME 
+      (* FIXME
       Fmt.fprintf out "%a'%a" Const.pp c pp_accessor acc *)
       assert false
     | Var v -> Var.pp out v
@@ -742,7 +742,6 @@ module Proof = struct
 end
 *)
 
-(* TODO
 (** Toplevel statements *)
 module Top = struct
   type t = view with_loc
@@ -751,13 +750,10 @@ module Top = struct
     | Def of {
         name: Const.t;
         vars: Expr.var list;
-        ret: Expr.ty option;
+        ret: Expr.ty;
         body: Expr.t;
       }
-    | Decl of {
-        name: Const.t;
-        ty: Expr.ty;
-      }
+    | Decl of Const.t
     | Fixity of {
         name: Const.t;
         fixity: fixity;
@@ -766,6 +762,9 @@ module Top = struct
         name: Const.t;
         thm: Expr.t;
       }
+    | Show of Expr.t
+    | Error of Error.t (** Parse error *)
+   (*  TODO
     | Goal of {
         goal: Goal.t;
         proof: Proof.block;
@@ -775,9 +774,8 @@ module Top = struct
         goal: Goal.t;
         proof: Proof.block;
       } (** Theorem + proof *)
-    | Show of Expr.t
     | Eval of Meta_expr.t
-    | Error of Error.t (** Parse error *)
+       *)
 
   (* TODO  | Top_def_ty of string *)
   (* TODO: | Top_def_proof_rule *)
@@ -787,38 +785,36 @@ module Top = struct
   let[@inline] view st = st.view
   let[@inline] loc st = st.loc
   let pp out (self:t) : unit =
-    let pp_ty_opt out ty = match ty with
-      | None -> Fmt.string out "_"
-      | Some ty -> Expr.pp out ty
-    in
     match self.view with
     | Enter_file f ->
       Fmt.fprintf out "(@[enter_file %S@])" f
     | Def { name; vars=[]; ret; body } ->
       Fmt.fprintf out "(@[<1>def %a ()@ %a@ %a@])"
-        Const.pp name pp_ty_opt ret Expr.pp body
+        Const.pp name Expr.pp ret Expr.pp body
     | Def { name; vars; ret; body } ->
       Fmt.fprintf out "(@[<1>def %a (@[%a@]) %a@ %a@])"
         Const.pp name (pp_list Expr.pp_var_ty) vars
-        pp_ty_opt ret Expr.pp body
+        Expr.pp ret Expr.pp body
     | Decl { name; ty } ->
       Fmt.fprintf out "(@[<1>decl %a@ %a@])"
-        Const.pp name Expr.pp ty
+        Name.pp name Expr.pp ty
     | Fixity {name; fixity} ->
       Fmt.fprintf out "(@[<1>fixity %a %a@])"
         Const.pp name Fixity.pp_syntax fixity
     | Axiom { name; thm } ->
       Fmt.fprintf out "(@[<1>axiom %a@ %a@])"
         Const.pp name Expr.pp thm
+    | Show e -> Fmt.fprintf out "(@[<1>show@ %a@])" Expr.pp e
+    | Error e -> Fmt.fprintf out "(@[<hov1>error@ @[%a@]@])" Error.pp e
+    (*
     | Goal { goal; proof } ->
       Fmt.fprintf out "(@[@[<hv1>goal %a {@ %a@]@ }@])"
         Goal.pp goal Proof.pp_block proof
     | Theorem { name; goal; proof } ->
       Fmt.fprintf out "(@[<hv>@[<2>theorem %a@ %a {@ %a@]@ }@])"
         Const.pp name Goal.pp goal Proof.pp_block proof
-    | Show e -> Fmt.fprintf out "(@[<1>show@ %a@])" Expr.pp e
     | Eval e -> Fmt.fprintf out "(@[<1>eval@ %a@])" Meta_expr.pp e
-    | Error e -> Fmt.fprintf out "(@[<hov1>error@ @[%a@]@])" Error.pp e
+    *)
 
   let to_string = Fmt.to_string pp
   let pp_quoted = Fmt.within "`" "`" pp
@@ -827,14 +823,15 @@ module Top = struct
   let enter_file ~loc f : t = make ~loc (Enter_file f)
   let def ~loc name vars ret body : t =
     make ~loc (Def {name; ret; vars; body})
-  let decl ~loc name ty : t = make ~loc (Decl {name; ty})
+  let decl ~loc c : t = make ~loc (Decl c)
   let fixity ~loc name f : t = make ~loc (Fixity {name; fixity=f})
   let axiom ~loc name e : t = make ~loc (Axiom {name; thm=e})
+  let show ~loc e : t = make ~loc (Show e)
+  let error ~loc e : t = make ~loc (Error e)
+      (* TODO
   let goal ~loc goal proof : t = make ~loc (Goal {goal; proof})
   let theorem ~loc name g p : t = make ~loc (Theorem{name; goal=g; proof=p})
-  let show ~loc e : t = make ~loc (Show e)
   let eval ~loc e : t = make ~loc (Eval e)
-  let error ~loc e : t = make ~loc (Error e)
+         *)
 end
-   *)
 

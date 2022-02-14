@@ -27,7 +27,7 @@ let lsp_range_of_loc (l:TS.Loc.t) : Range.t =
 type parsed_buffer = {
   penv: TS.Notation.Ref.t;
   env: TS.Env.t;
-  idx: TS.Index.t;
+  index: TS.Index.t;
 }
 
 let ident_under_pos ~file (s:string) (pos:TS.Position.t) : (string * TS.Loc.t) option =
@@ -86,6 +86,7 @@ let trustee_server _ctx =
 
       let all_errors =
         PA.Top.error_set_l stmts
+        (* TODO: collect errors in Type_ast *)
       in
 
       let diags =
@@ -96,7 +97,9 @@ let trustee_server _ctx =
         |> ref
       in
 
-      (* TODO: collect errors in Type_ast *)
+      let state = TS.Type_infer.State.create ~env:TS.Env.empty () in
+      let (module TI) = TS.Type_infer.make state in
+
       (* TODO: collect show/eval results *)
       (* TODO
       let tyst = TA.Typing_state.create _ctx in
@@ -130,6 +133,11 @@ let trustee_server _ctx =
 
       let diags = !diags in
 
+      (* TODO: infer top statements, get error set + queryable from it,
+         save queryables into document *)
+
+      (* TODO: save buffers *)
+
       Log.debug (fun k->k"send back %d diagnostics" (List.length diags));
       notify_back#send_diagnostic diags
 
@@ -152,13 +160,13 @@ let trustee_server _ctx =
     method! on_req_hover ~notify_back:_ ~id:_ ~uri ~pos (_d:Linol.doc_state) : _ option =
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
-      | {idx; _} ->
+      | {index; _} ->
         let pos = pos_of_lsp_pos pos in
         Log.debug
           (fun k->k"lookup in idx (size %d) at pos %a"
-              (TS.Index.size idx) TS.Position.pp pos);
+              (TS.Index.size index) TS.Position.pp pos);
         let r =
-          match TS.Index.find idx pos with
+          match TS.Index.find index pos with
           | [] -> None
           | q :: _ ->
             Log.debug (fun k->k"found %a" q#pp ());
@@ -174,13 +182,13 @@ let trustee_server _ctx =
     method! on_req_definition ~notify_back:_ ~id:_ ~uri ~pos _st : _ option =
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
-      | {idx;_} ->
+      | {index;_} ->
         let pos = pos_of_lsp_pos pos in
         Log.debug
           (fun k->k"lookup for def in idx (size %d) at pos %a"
-              (TS.Index.size idx) TS.Position.pp pos);
+              (TS.Index.size index) TS.Position.pp pos);
         let r =
-          match TS.Index.find idx pos with
+          match TS.Index.find index pos with
           | [] -> None
           | q :: _ ->
             match q#def_loc with
@@ -198,7 +206,7 @@ let trustee_server _ctx =
     method! on_req_completion ~notify_back:_ ~id:_ ~uri ~pos ~ctx:_ doc_st : _ option =
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
-      | {idx;_} ->
+      | {index;_} ->
         let pos = pos_of_lsp_pos pos in
         Log.debug (fun k->k"completion at %a" TS.Position.pp pos);
         (* find token under the cursor, if any *)
@@ -207,7 +215,7 @@ let trustee_server _ctx =
           | Some (ident, ident_loc) ->
             Log.debug (fun k->k"req-completion: ident `%s`" ident);
 
-            let tyenv = TS.Index.find_ty_env idx pos in
+            let tyenv = TS.Index.find_ty_env index pos in
             Log.debug (fun k->k"req-completion: env@ %a" TS.Env.pp tyenv);
 
             let compls =
