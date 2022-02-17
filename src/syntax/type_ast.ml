@@ -298,8 +298,8 @@ module Expr = struct
     | _ -> e
 
   (** Iterate on immediate subterms *)
-  let iter ~f ~f_bind b_acc (e:expr) : unit =
-    Option.iter (fun u -> f b_acc u) e.ty;
+  let iter ?(rec_ty=true) ~f ~f_bind b_acc (e:expr) : unit =
+    if rec_ty then Option.iter (fun u -> f b_acc u) e.ty;
     match view e with
     | Kind | Type | Const {args=[];_} | Meta _
     | Var _ | BVar _ | Error _ -> ()
@@ -321,6 +321,26 @@ module Expr = struct
         b_acc bs
       in
       f b_acc bod
+
+  let iter' ?rec_ty ~f (e:t) : unit =
+    iter ?rec_ty ~f:(fun () x -> f x) ~f_bind:(fun () _ -> ()) () e
+
+  let rec iter_errors yield e =
+    let recurse e = iter_errors yield e in
+    match view e with
+    | Error err -> yield (e.loc,err)
+    | _ -> iter' e ~f:recurse
+
+  let error_set (e:t) : Error_set.t =
+    object method iter_errors k = iter_errors k e end
+
+  let rec as_queryable (e:t) : Queryable.t = object
+    inherit Queryable.t
+    method pp out () = pp out e
+    method loc = e.loc
+    method children yield =
+      iter' ~rec_ty:false e ~f:(fun e -> yield (as_queryable e))
+  end
 end
 
 type expr = Expr.t
@@ -833,5 +853,38 @@ module Top = struct
   let theorem ~loc name g p : t = make ~loc (Theorem{name; goal=g; proof=p})
   let eval ~loc e : t = make ~loc (Eval e)
          *)
+
+  let iter_ ~f_expr ~f_goal ~f_proof (self:t) : unit =
+    begin match view self with
+      | Show e -> f_expr e
+
+      | _ -> ()
+    end
+
+  let iter_errors f (self:t) : unit =
+    iter_ self
+      ~f_expr:(Expr.iter_errors f)
+      ~f_goal:ignore (* TODO *)
+      ~f_proof:ignore (* TODO *)
+
+  let error_set self : Error_set.t =
+    object method iter_errors f = iter_errors f self end
+  let error_set_l (l:t list) : Error_set.t =
+    object method iter_errors f = List.iter (iter_errors f) l end
+
+  let as_queryable (self:t) : Queryable.t = object
+    inherit Queryable.t
+    method pp out () = pp out self
+    method loc = self.loc
+    method! children yield =
+      let map_yield f e = yield (f e) in
+      iter_ self ~f_expr:(map_yield Expr.as_queryable)
+      ~f_goal:ignore (* TODO *)
+      ~f_proof:ignore (* TODO *)
+
+    (* TODO: children *)
+    (* TODO: def_loc *)
+    (* TODO: defining *)
+  end
 end
 
