@@ -84,9 +84,29 @@ let trustee_server _ctx =
       in
       Log.debug (fun k->k "for %s: parsed %d statements" d (List.length stmts));
 
+      let state = TS.Type_infer.State.create ~env:TS.Env.empty () in
+      let (module TI) = TS.Type_infer.make state in
+
+      let index = ref TS.Index.empty in
+      let typed_stmts =
+        CCList.flat_map
+          (fun st ->
+             let l = TI.Top.infer_reify st in
+             let env = TS.Type_infer.State.env state in
+             TS.Index.add_env index env ~loc:st.loc;
+             List.iter (fun sub ->
+                 TS.Index.add_q index (TA.Top.as_queryable sub))
+               l;
+             l
+          )
+          stmts
+      in
+      Log.debug (fun k->k"for %s: typed %d statements" d (List.length typed_stmts));
+
       let all_errors =
-        PA.Top.error_set_l stmts
-        (* TODO: collect errors in Type_ast *)
+        let open TS.Error_set.Syntax in
+        PA.Top.error_set_l stmts ++
+        TA.Top.error_set_l typed_stmts
       in
 
       let diags =
@@ -96,9 +116,6 @@ let trustee_server _ctx =
         |> Iter.to_list
         |> ref
       in
-
-      let state = TS.Type_infer.State.create ~env:TS.Env.empty () in
-      let (module TI) = TS.Type_infer.make state in
 
       (* TODO: collect show/eval results *)
       (* TODO
@@ -132,14 +149,14 @@ let trustee_server _ctx =
          *)
 
       let diags = !diags in
-
-      (* TODO: infer top statements, get error set + queryable from it,
-         save queryables into document *)
-
-      (* TODO: save buffers *)
-
       Log.debug (fun k->k"send back %d diagnostics" (List.length diags));
-      notify_back#send_diagnostic diags
+      notify_back#send_diagnostic diags;
+
+      (* save results of analysing buffer *)
+      let env = TS.Type_infer.State.env state in
+      let index = !index in
+      Hashtbl.replace buffers d {penv=notation; env; index};
+      ()
 
     method on_notif_doc_did_open ~notify_back d ~content : unit =
       Log.debug (fun k->k "did open %s (%d bytes)" d.uri (String.length content));
@@ -158,6 +175,7 @@ let trustee_server _ctx =
     (* ## requests ## *)
 
     method! on_req_hover ~notify_back:_ ~id:_ ~uri ~pos (_d:Linol.doc_state) : _ option =
+      Log.debug (fun k->k"req hover at uri=%s pos=%d:%d" uri pos.line pos.character);
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
       | {index; _} ->
