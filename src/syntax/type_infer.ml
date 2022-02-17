@@ -3,6 +3,7 @@
 open Common_
 module A = Parse_ast
 module TA = Type_ast
+module Log = Trustee_core.Log
 
 type expr = TA.expr
 type ty = TA.ty
@@ -105,6 +106,11 @@ module type S = sig
   module Expr : sig
     val infer : A.Expr.t -> TA.Expr.t or_error
     val infer_reify : A.Expr.t -> TA.Expr.t
+  end
+
+  module Top : sig
+    val infer : A.Top.t -> TA.Top.t list or_error
+    val infer_reify : A.Top.t -> TA.Top.t list
   end
 end
 
@@ -643,6 +649,23 @@ module Make(Arg : sig
   end
 
   module Top = struct
+    let infer_ ~reify (top:A.Top.t) : TA.Top.t list =
+      let loc = A.Top.loc top in
+      begin match A.Top.view top with
+        | A.Top.Show e ->
+          let e = Expr.infer_ ~reify Str_map.empty e in
+          [TA.Top.show ~loc e]
+
+        | _ ->
+          Log.debugf 1 (fun k->k"TODO: handle %a" A.Top.pp top);
+          []
+      end
+
+    let infer top =
+      try Ok (infer_ ~reify:false top)
+      with Or_error.E (loc,err) -> Error (loc, err)
+
+    let infer_reify top = infer_ ~reify:true top
     (*
     type t = {
       st: Typing_state.t;
