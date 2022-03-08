@@ -19,3 +19,4 @@ module Thm = Kernel.Thm
 module Subst = Kernel.Subst
 module Var = Kernel.Var
 
+module VM = VM
