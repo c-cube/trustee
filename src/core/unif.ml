@@ -1,4 +1,5 @@
 
+open Sigs
 module K = Kernel
 module Su = K.Subst
 module E = K.Expr
@@ -118,8 +119,4 @@ let alpha_equiv ?subst a b =
   with Fail -> None
 
 let is_alpha_equiv ?subst a b : bool =
-  CCOpt.is_some (alpha_equiv ?subst a b)
-
-
-
-
+  Option.is_some (alpha_equiv ?subst a b)

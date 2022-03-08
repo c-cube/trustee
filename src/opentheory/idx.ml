@@ -28,7 +28,6 @@ let list_dir dir : t =
   let interp_by_name = Str_tbl.create 32 in
   let articles = Str_tbl.create 8 in
   let g = CCIO.File.walk dir in
-  let module E = Trustee_error in
 
   let parse_thy file =
     let dir = Filename.dirname file in

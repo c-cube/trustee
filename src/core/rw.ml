@@ -251,8 +251,8 @@ module AC_rule = struct
     let module Th = K.Thm in
     (* TODO: polymorphism? *)
 
-    let[@inline] app_l = E.app_l ctx in
-    let[@inline] app_eq = E.app_eq ctx in
+    let[@inline] app_l f l = E.app_l ctx f l in
+    let[@inline] app_eq a b = E.app_eq ctx a b in
 
     let tau = E.ty_exn f |> E.return_ty in
     let x = E.var_name ctx "x" tau in
