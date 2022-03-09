@@ -7,6 +7,7 @@ module Name = Name
 (* FIXME module Proof = Proof *)
 module Error = Error
 module Error_intf = Error_intf
+module Vec = Vec
 
 module Conv = Conv
 module Unif = Unif
