@@ -2,3 +2,8 @@
   (name trustee_core)
   (public_name trustee.core)
   (libraries containers iter unix))
+
+(rule
+  (targets VM_instr.ml)
+  (deps (:exe ./tools/mkinstr.exe))
+  (action (with-stdout-to %{targets} (run %{exe}))))
