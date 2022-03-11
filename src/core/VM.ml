@@ -11,28 +11,41 @@ module Types_ = struct
     stack: value Vec.t;
     (** Operand stack. *)
 
-    mutable chunk : chunk; (** current chunk *)
-    mutable ip: int; (** current offset in chunk *)
+    call_stack : chunk Vec.t;
+    (** Chunks currently being evaluated. The active chunk is the one
+        on top. *)
 
-    return_stack_chunk : chunk Vec.t;
-    (** Value of [chunk] for chunks lower in the call stack. *)
+    mutable ip: int;
+    (** Instruction pointer for topmost chunk in {!call_stack} *)
 
-    return_stack_ip : int Vec.t;
-    (** Value of [ip] for chunks lower in the call stack.
-        [size return_stack_chunk = size return_stack_ip] *)
+    call_restore_ip : int Vec.t;
+    (** IP for all items in [call_stack] except the last. *)
 
-    call_slot_start : int Vec.t;
-    (** maps [i] to the beginning of the slice of [slots]
+    call_reg_start : int Vec.t;
+    (** maps [i] to the beginning of the slice of [regs]
         for frame [i]. The length of the slice is computed
-        from [call[i].c_n_slots]. *)
+        from [call[i].c_n_regs] if it's a chunk, and 0
+        if it's a primitive. *)
 
-    slots: value Vec.t;
-    (** Stack of slots for local register manipulation *)
+    call_prim: primitive Vec.t;
+    (** Primitives currently being evaluated *)
 
-    env: env Vec.t;
-    (** Stack of environments. Lookup walks down the stack, but modification is
-        only done on top one. *)
+    regs: value Vec.t;
+    (** Stack of register value. Each call frame has its own
+        local register. *)
+
+    env: env;
+    (** Logical environment. The VM cannot modify it. *)
   }
+
+  and call_item =
+    | C_chunk of {
+        c: chunk;
+        mutable ip: int;
+        (** Value of [ip] in that chunk *)
+      }
+
+    | C_prim of primitive
 
   and value =
     | Nil
@@ -46,26 +59,27 @@ module Types_ = struct
     | Subst of K.Subst.t
     | Theory of K.Theory.t
     | Chunk of chunk
+    | Prim of primitive
+
+  (** Primitive implemented in OCaml *)
+  and primitive = {
+    pr_name: string;
+    pr_eval: vm -> unit;
+  }
 
   (* list of instructions; the atomic block of code *)
   and chunk = {
     c_instrs: instr array;
     (** Instructions *)
 
-    c_n_slots: int;
-    (** Number of slots to allocate for this chunk *)
+    c_n_regs: int;
+    (** Number of regs to allocate for this chunk *)
 
     c_locals: value array;
     (** Local values, used by some instructions *)
   }
 
-  (* instruction *)
-  and instr = {
-    i_exec: vm -> unit;
-    i_name: string;
-    i_doc: string;
-    i_operands: unit -> value array;
-  }
+  and instr = VM_instr.t
 
   and env = {
     env: value Str_map.t;
@@ -89,24 +103,21 @@ module Types_ = struct
     | Subst x -> K.Subst.pp out x
     | Theory x -> K.Theory.pp out x
     | Chunk c -> pp_chunk out c
+    | Prim p -> pp_prim out p
 
   and pp_chunk out (self:chunk) : unit =
     let ppi ppx out (i,x) = Fmt.fprintf out "%-8d %a" i ppx x in
     Fmt.fprintf out "@[<v2>chunk[%d] {@ %a@ :locals@ %a@;<1 -2>}@]"
-      self.c_n_slots
-      (pp_arri @@ ppi pp_instr) self.c_instrs
+      self.c_n_regs
+      (pp_arri @@ ppi VM_instr.pp) self.c_instrs
       (pp_arri @@ ppi pp_value) self.c_locals
 
-  and pp_instr out (self:instr) : unit =
-    let ops = self.i_operands() in
-    if Array.length ops = 0 then Fmt.string out self.i_name
-    else (
-      Fmt.fprintf out "(@[%s" self.i_name;
-      Array.iter (fun o -> Fmt.fprintf out "@ %a" pp_value o) ops;
-      Fmt.fprintf out "@])";
-    )
-
+  and pp_prim out (p:primitive) : unit =
+    Fmt.string out p.pr_name
 end
+
+(** Instructions *)
+module Instr = VM_instr
 
 module Value = struct
   open Types_
@@ -138,9 +149,10 @@ module Value = struct
     | Subst s1, Subst s2 -> K.Subst.equal s1 s2
     | Theory th1, Theory th2 -> th1 == th2
     | Chunk c1, Chunk c2 -> c1 == c2
+    | Prim p1, Prim p2 -> p1.pr_name = p2.pr_name
     | (Bool _ | Int _ | String _ | Array _
       | Expr _ | Thm _ | Var _ | Subst _ |
-       Theory _ | Nil | Chunk _), _ -> false
+       Theory _ | Nil | Chunk _ | Prim _), _ -> false
 end
 
 module Env = struct
@@ -167,7 +179,7 @@ module Chunk = struct
 
   (* empty chunk, does nothing *)
   let dummy : t = {
-    c_n_slots=0;
+    c_n_regs=0;
     c_locals=[||];
     c_instrs=[||];
   }
@@ -185,15 +197,15 @@ module VM_ = struct
      an instruction. *)
   exception Stop_exec
 
-  let create() : t = {
+  let create (env:Env.t) : t = {
     stack=Vec.make 128 Value.nil;
+    call_stack=Vec.make 12 Chunk.dummy;
+    call_restore_ip=Vec.make 12 0;
+    call_prim=Vec.create ();
     ip=0;
-    chunk=Chunk.dummy;
-    return_stack_chunk=Vec.create();
-    return_stack_ip=Vec.create();
-    call_slot_start=Vec.create();
-    slots=Vec.make 32 Value.nil;
-    env=Vec.create();
+    call_reg_start=Vec.create();
+    regs=Vec.make 32 Value.nil;
+    env;
   }
 
   let[@inline] push_val (self:t) v = Vec.push self.stack v
@@ -222,57 +234,63 @@ module VM_ = struct
 
   (* reset state entirely *)
   let reset (self:t) : unit =
-    let { stack;
-          ip=_; chunk=_;
-          return_stack_chunk; return_stack_ip;
-          call_slot_start; slots; env } = self in
+    let { stack; call_stack; ip=_; call_prim=_;
+          call_restore_ip; call_reg_start; regs; env } = self in
     self.ip <- 0;
-    self.chunk <- Chunk.dummy;
+    Vec.clear self.call_stack;
+    Vec.clear self.call_restore_ip;
     Vec.clear stack;
-    Vec.clear return_stack_chunk;
-    Vec.clear return_stack_ip;
-    Vec.clear call_slot_start;
-    Vec.clear slots;
-    Vec.clear env;
+    Vec.clear call_reg_start;
+    Vec.clear self.call_prim;
+    Vec.clear regs;
     ()
 
   let enter_chunk (self:t) (c:chunk) : unit =
-    if self.chunk != Chunk.dummy then (
-      (* when we exit, restore current state *)
-      Vec.push self.return_stack_chunk self.chunk;
-      Vec.push self.return_stack_ip self.ip;
+    if not (Vec.is_empty self.call_stack) then (
+      Vec.push self.call_restore_ip self.ip;
     );
+    Vec.push self.call_stack c;
     self.ip <- 0;
-    self.chunk <- c;
-    (* allocate slots for [c] *)
-    Vec.push self.call_slot_start (Vec.size self.slots);
-    for _j = 1 to c.c_n_slots do
-      Vec.push self.slots Value.nil
+    (* allocate regs for [c] *)
+    Vec.push self.call_reg_start (Vec.size self.regs);
+    for _j = 1 to c.c_n_regs do
+      Vec.push self.regs Value.nil
     done
 
   let pop_chunk (self:t) : unit =
-    if Vec.is_empty self.return_stack_ip then (
-      if self.chunk == Chunk.dummy then (
-        Error.fail "vm.pop_chunk: empty call stack"
-      );
-      self.chunk <- Chunk.dummy;
-      self.ip <- 0;
-    ) else (
-      self.chunk <- Vec.pop_exn self.return_stack_chunk;
-      self.ip <- Vec.pop_exn self.return_stack_ip;
+    let _ = Vec.pop_exn self.call_stack in
+    if not (Vec.is_empty self.call_restore_ip) then (
+      assert (not (Vec.is_empty self.call_stack));
+      self.ip <- Vec.pop_exn self.call_restore_ip;
     )
 
-  let get_slot (self:t) (i:int) : Value.t =
-    let n = self.chunk.c_n_slots in
-    if i >= n then Error.failf (fun k->k"vm.get_slot %d: chunk only has %d slots" i n);
-    let off = Vec.last_exn self.call_slot_start in
-    Vec.get self.slots (off + i)
+  let eval_prim (self:t) (p:primitive) : unit =
+    let len = Vec.size self.call_stack in
+    Vec.push self.call_prim p;
+    p.pr_eval self;
+    let len' = Vec.size self.call_stack in
+    if len' <> len then (
+      Error.failf (fun k->k"vm.eval-prim: call stack changed (size %d->%d)" len len');
+    );
+    begin match Vec.pop self.call_prim with
+      | Some p' -> assert (p == p');
+      | _ ->
+        Error.fail "vm.eval-prim: mismatched current primitive"
+    end
 
-  let set_slot (self:t) (i:int) v : unit =
-    let n = self.chunk.c_n_slots in
-    if i >= n then Error.failf (fun k->k"vm.set_slot %d: chunk only has %d slots" i n);
-    let off = Vec.last_exn self.call_slot_start in
-    Vec.set self.slots (off + i) v
+  let rload (self:t) (i:int) : Value.t =
+    let c = Vec.last_exn self.call_stack in
+    let n = c.c_n_regs in
+    if i >= n then Error.fail"vm.rload: invalid register";
+    let off = Vec.last_exn self.call_reg_start in
+    Vec.get self.regs (off + i)
+
+  let rstore (self:t) (i:int) v : unit =
+    let c = Vec.last_exn self.call_stack in
+    let n = c.c_n_regs in
+    if i >= n then Error.fail "vm.rstore: not enough registers";
+    let off = Vec.last_exn self.call_reg_start in
+    Vec.set self.regs (off + i) v
 
   (* TODO: debug function, to print current state of VM
      including stacks *)
@@ -281,215 +299,134 @@ module VM_ = struct
     let continue = ref true in
     try
       while !continue do
-
         let ip = self.ip in
         assert (ip >= 0);
-        let c = self.chunk in
+        let c = Vec.last_exn self.call_stack in
 
-        if ip < Array.length c.c_instrs then (
-          (* execute current instruction *)
+        if ip >= Array.length c.c_instrs then (
+          (* done with chunk *)
+          pop_chunk self;
+          if Vec.is_empty self.call_stack then (
+            continue := false; (* all done *)
+          )
+        ) else (
+          (* execute current instruction in [c] *)
           let instr = Array.unsafe_get c.c_instrs ip in
           self.ip <- self.ip + 1; (* preemptively advance by 1 *)
-          instr.i_exec self;
 
-        ) else (
-          (* done with chunk *)
-          if Vec.is_empty self.return_stack_ip then (
-            continue := false; (* all done *)
-          ) else (
-            (* return to caller *)
-            self.ip <- Vec.pop_exn self.return_stack_ip;
-            self.chunk <- Vec.pop_exn self.return_stack_chunk;
-          )
+          match instr with
+          | Nop -> ()
+          | Ret -> pop_chunk self
+          | Drop -> ignore (pop_val_exn self : Value.t)
+          | Exch -> swap_val self
+          | Extract i -> extract_ self i
+
+          | Int i -> push_val self (Value.int i)
+          | Bool b -> push_val self (Value.bool b)
+          | Nil -> push_val self Value.nil
+
+          | Call ->
+            let c = pop_val_exn self in
+            begin match c with
+              | Chunk c -> enter_chunk self c
+              | Prim p -> eval_prim self p
+              | _ -> Error.failf (fun k->k"call: expected a chunk,@ got %a" Value.pp c)
+            end;
+
+          | Rstore i ->
+            let v = pop_val_exn self in
+            rstore self i v
+
+          | Rload i ->
+            let v = rload self i in
+            push_val self v
+
+          | Lload i ->
+            if i < Array.length c.c_locals then (
+              let v = Array.get c.c_locals i in
+              push_val self v
+            ) else Error.fail"vm.lload: invalid index"
+
+          | Not ->
+            let a = pop_val_exn self in
+            begin match a with
+              | Bool b -> push_val self (Value.bool (not b))
+              | _ -> Error.fail "self.not: type error"
+            end
+
+          | Add ->
+            let b = pop_val_exn self in
+            let a = pop_val_exn self in
+            begin match a, b with
+              | Int a, Int b ->
+                push_val self (Value.int (a+b))
+              | _ -> Error.fail "self.add: type error"
+            end
+
+          | Add1 ->
+            let a = pop_val_exn self in
+            begin match a with
+              | Int a -> push_val self (Value.int (a+1))
+              | _ -> Error.fail "self.add1: type error"
+            end
+
+          | Sub ->
+            let b = pop_val_exn self in
+            let a = pop_val_exn self in
+            begin match a, b with
+              | Int a, Int b ->
+                push_val self (Value.int (a-b))
+              | _ -> Error.fail "self.sub: type error"
+            end
+          | Sub1 ->
+            let a = pop_val_exn self in
+            begin match a with
+              | Int a -> push_val self (Value.int (a-1))
+              | _ -> Error.fail "self.sub1: type error"
+            end
+
+          | Jeq ip ->
+
+            let b = pop_val_exn self in
+            let a = pop_val_exn self in
+            if Value.equal a b then self.ip <- ip
+
+
+          | Jlt ip ->
+            let b = pop_val_exn self in
+            let a = pop_val_exn self in
+            begin match a, b with
+              | Int a, Int b -> if a < b then self.ip <- ip;
+              | _ -> Error.fail "self.jlt: type error"
+            end
+
+          | Jleq ip ->
+
+            let b = pop_val_exn self in
+            let a = pop_val_exn self in
+            begin match a, b with
+              | Int a, Int b -> if a <= b then self.ip <- ip;
+              | _ -> Error.fail "self.jleq: type error"
+            end
+          | Jmp ip ->
+            self.ip <- ip
         )
       done
     with Stop_exec ->
       ()
 end
 
-(* instructions *)
-module Instr = struct
-  open Types_
-  type t = instr
-  let pp = pp_instr
-
-  let op0_ () = [||]
-
-  let[@inline] make_ ~name ~doc ~ops exec : t =
-    { i_name=name; i_operands=ops; i_doc=doc; i_exec=exec; }
-
-  (** Call the given chunk *)
-  let call (c:chunk) : t =
-    make_ ~name:"call" ~ops:op0_
-      ~doc:"(chunk -- ) Pop and call the chunk that is on top of the stack"
-      (fun vm ->
-         let c = VM_.pop_val_exn vm in
-         match c with
-         | Chunk c -> VM_.enter_chunk vm c
-         | _ -> Error.failf (fun k->k"call: expected a chunk,@ got %a" Value.pp c)
-      )
-
-  let ret : t =
-    make_ ~name:"ret" ~ops:op0_ ~doc:"return from current chunk"
-      (fun vm -> VM_.pop_chunk vm)
-
-  let drop : t =
-    make_ ~name:"drop" ~ops:op0_
-      ~doc:"(a -- ) drop value on top of stack, discarding it"
-      (fun vm -> ignore (VM_.pop_val_exn vm : Value.t))
-
-  let exch : t =
-    make_ ~name:"exch" ~ops:op0_
-      ~doc:"(a b -- b a) exchange the two top values of the stack"
-      (fun vm -> VM_.swap_val vm)
-
-  let extract i : t =
-    make_ ~name:"exch"
-      ~doc:"(vs -- vs vs[-i]) extract i-th value, where 0 is top of the stack"
-      ~ops:(fun () -> [|Value.int i|])
-      (fun vm -> VM_.extract_ vm i)
-
-  let set_reg i : t =
-    make_ ~name:"set_reg"
-      ~doc:"(x -- ) Pop value and move it to register i"
-      ~ops:(fun () -> [|Value.int i|])
-      (fun vm ->
-         let v = VM_.pop_val_exn vm in
-         VM_.set_slot vm i v)
-
-  let get_reg i : t =
-    make_ ~name:"get_reg"
-      ~doc:"( -- x) Get value from register i and push it onto stack"
-      ~ops:(fun () -> [|Value.int i|])
-      (fun vm ->
-         let v = VM_.get_slot vm i in
-         VM_.push_val vm v)
-
-  let get_local i : t =
-    make_ ~name:"get_local"
-      ~ops:(fun () -> [|Value.int i|])
-      ~doc:"( -- x) Get i-th local value of current chunk and push it onto stack"
-      (fun vm ->
-         let c = vm.chunk in
-         if i < Array.length c.c_locals then (
-           let v = Array.get c.c_locals i in
-           VM_.push_val vm v
-         ) else Error.fail"vm.get_local: invalid index"
-      )
-
-  let int (i:int) : t =
-    let v = Value.int i in
-    make_ ~name:"int" ~ops:(fun () -> [|v|])
-      ~doc:"Push an integer on the stack"
-      (fun vm -> VM_.push_val vm v)
-
-  let bool b : t =
-    let v = Value.bool b in
-    make_ ~name:"bool" ~ops:(fun () -> [|v|])
-      ~doc:"Push a boolean on the stack"
-      (fun vm -> VM_.push_val vm v)
-
-  let nil : t =
-    make_ ~name:"bool" ~ops:op0_
-      ~doc:"Push nil on the stack"
-      (fun vm -> VM_.push_val vm Value.nil)
-
-  let not : t =
-    make_ ~name:"not " ~ops:op0_
-      ~doc:"(a -- not(a)) Negate top value"
-      (fun vm ->
-         let a = VM_.pop_val_exn vm in
-         match a with
-         | Bool b -> VM_.push_val vm (Value.bool (not b))
-         | _ -> Error.fail "vm.not: type error"
-      )
-
-  let add1 : t =
-    make_ ~name:"add1" ~ops:op0_
-      ~doc:"(a -- a+1) Increment top of stack"
-      (fun vm ->
-         let a = VM_.pop_val_exn vm in
-         match a with
-         | Int a -> VM_.push_val vm (Value.int (a+1))
-         | _ -> Error.fail "vm.add1: type error"
-      )
-
-  let add : t =
-    make_ ~name:"add" ~ops:op0_
-      ~doc:"(a b -- a+b) Pop two values, adds them"
-      (fun vm ->
-         let b = VM_.pop_val_exn vm in
-         let a = VM_.pop_val_exn vm in
-         match a, b with
-         | Int a, Int b ->
-           VM_.push_val vm (Value.int (a+b))
-         | _ -> Error.fail "vm.add: type error"
-      )
-
-  let sub : t =
-    make_ ~name:"sub" ~ops:op0_
-      ~doc:"(a b -- a-b) Pop two values, subtract them"
-      (fun vm ->
-         let b = VM_.pop_val_exn vm in
-         let a = VM_.pop_val_exn vm in
-         match a, b with
-         | Int a, Int b ->
-           VM_.push_val vm (Value.int (a-b))
-         | _ -> Error.fail "vm.sub: type error"
-      )
-
-  let jeq (ip:int) : t =
-    make_ ~name:"jeq" ~ops:(fun () -> [| Value.int ip |])
-      ~doc:"(a b -- ) Pop two values; if a = b then set IP"
-      (fun vm ->
-         let b = VM_.pop_val_exn vm in
-         let a = VM_.pop_val_exn vm in
-         if Value.equal a b then vm.ip <- ip
-      )
-
-  let jlt (ip:int) : t =
-    make_ ~name:"jlt" ~ops:(fun () -> [| Value.int ip |])
-      ~doc:"(a b -- ) Pop two integer values; if a < b then set IP"
-      (fun vm ->
-         let b = VM_.pop_val_exn vm in
-         let a = VM_.pop_val_exn vm in
-         match a, b with
-         | Int a, Int b -> if a < b then vm.ip <- ip;
-         | _ -> Error.fail "vm.jlt: type error"
-      )
-
-  let jleq (ip:int) : t =
-    make_ ~name:"jleq" ~ops:(fun () -> [| Value.int ip |])
-      ~doc:"(a b -- ) Pop two integer values; if a <= b then set IP"
-      (fun vm ->
-         let b = VM_.pop_val_exn vm in
-         let a = VM_.pop_val_exn vm in
-         match a, b with
-         | Int a, Int b -> if a <= b then vm.ip <- ip;
-         | _ -> Error.fail "vm.jleq: type error"
-      )
-
-  let jump (ip:int) : t =
-    make_ ~name:"jump" ~ops:(fun () -> [| Value.int ip |])
-      ~doc:"( -- ) Set IP unconditionally"
-      (fun vm -> vm.ip <- ip)
-
-  let nop : t =
-    make_ ~name:"nop" ~ops:op0_
-      ~doc:"( -- ) Do nothing"
-      (fun _vm -> ())
-
-end
+(* TODO: chunk builder, with vecs inside, expose create/reset/add_instr/add_local *)
+(* TODO: expose instructions so that ITP can use its own syntax for VM? *)
+(* TODO: basic parser + chunk assembler? from Sexp? *)
 
 type t = Types_.vm
 
 let create ?(env=Env.empty) () : t =
-  let vm = VM_.create() in
-  Vec.push vm.env env;
+  let vm = VM_.create env in
   vm
 
-let get_env (self:t) =
-  Vec.last_exn self.env
+let get_env (self:t) = self.env
 
 let reset = VM_.reset
 let push = VM_.push_val

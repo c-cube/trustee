@@ -15,6 +15,8 @@ module K = Kernel
 
 type 'a vec
 
+module Instr = VM_instr
+
 (** Values manipulated by the VM. *)
 module Value : sig
   type t
