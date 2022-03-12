@@ -17,6 +17,8 @@ type 'a vec
 
 module Instr = VM_instr
 
+type vm
+
 (** Values manipulated by the VM. *)
 module Value : sig
   type t
@@ -68,6 +70,19 @@ module Chunk : sig
   val pp : t Fmt.printer
 end
 
+(** Chunk of executable bytecode *)
+module Primitive : sig
+  type t
+  val pp : t Fmt.printer
+  val name : t -> string
+
+  (** Make a new primitive. *)
+  val make :
+    name:string ->
+    eval:(vm -> unit) ->
+    unit -> t
+end
+
 (** Basic syntax.
 
     This syntax is, for now, only intended for testing and possibly as
@@ -75,17 +90,21 @@ end
 module Parser : sig
   type t
 
-  val of_string : string -> t
+  val create :
+    ?prims:Primitive.t Str_map.t ->
+    string -> t
 
   val parse : t -> (Chunk.t, Error.t) result
 end
 
-type t
+type t = vm
 (** Virtual machine *)
 
 val create : ?env:Env.t -> unit -> t
 
 val get_env : t -> Env.t
+
+val set_env : t -> Env.t -> unit
 
 val reset : t -> unit
 
@@ -97,6 +116,12 @@ val pop_exn : t -> Value.t
 
 val run : t -> Chunk.t -> unit
 
-val parse_string : string -> (Chunk.t, Error.t) result
+val dump : t Fmt.printer
 
-val parse_string_exn : string -> Chunk.t
+val parse_string :
+  ?prims:Primitive.t Str_map.t ->
+  string -> (Chunk.t, Error.t) result
+
+val parse_string_exn :
+  ?prims:Primitive.t Str_map.t ->
+  string -> Chunk.t
