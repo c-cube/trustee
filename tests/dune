@@ -8,9 +8,9 @@
 
 (rule
   (targets run_qtest.ml)
-  (deps (glob_files "../src/core/*.ml")) ; (glob_files ../src/**/*.ml{,i})))
+  (deps (:files (glob_files "../src/core/*.ml")) (:preamble test_preamble.ml.txt))
   (mode fallback)
-  (action (run qtest extract --preamble "open Trustee_core;;" %{deps} -o %{targets})))
+  (action (run qtest extract --preamble-file %{preamble} %{files} -o %{targets})))
 
 (rule
  (alias    runtest)
