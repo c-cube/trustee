@@ -210,7 +210,7 @@ module VM_ = struct
 
   let[@inline] push_val (self:t) v = Vec.push self.stack v
   let[@inline] pop_val (self:t) = Vec.pop self.stack
-  let pop_val_exn (self:t) : Value.t =
+  let[@inline] pop_val_exn (self:t) : Value.t =
     if Vec.is_empty self.stack then (
       Error.fail"vm.pop: operand stack is empty";
     );
@@ -225,7 +225,7 @@ module VM_ = struct
     Vec.push self.stack v1;
     Vec.push self.stack v2
 
-  let extract_ (self:t) i =
+  let[@inline] extract_ (self:t) i =
     if i >= Vec.size self.stack then (
       Error.fail"vm.extract: operand stack too small";
     );
@@ -320,6 +320,13 @@ module VM_ = struct
           | Drop -> ignore (pop_val_exn self : Value.t)
           | Exch -> swap_val self
           | Extract i -> extract_ self i
+
+          | Dup ->
+            if Vec.is_empty self.stack then (
+              Error.fail "vm.dup: stack underflow"
+            );
+            let v = Vec.last_exn self.stack in
+            push_val self v
 
           | Int i -> push_val self (Value.int i)
           | Bool b -> push_val self (Value.bool b)
