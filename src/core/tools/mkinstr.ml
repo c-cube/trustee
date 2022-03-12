@@ -31,6 +31,9 @@ let instrs: (string*arg list*doc) list = [
   "jlt", [Int], "(a b -- ) Pop two integer values; if a < b then set IP=<offset>";
   "jleq", [Int], "(a b -- ) Pop two integer values; if a <= b then set IP=<offset>";
   "jmp", [Int], "( -- ) Set IP=<offset> unconditionally";
+  "memenv", [], "(str -- bool) Pop a string, returns `true` iff this name is bound in env";
+  "getenv", [], "(str -- v) Pop a string, returns the value with this name in env. Fails if not present";
+  "qenv", [], "(str -- v bool) Pop a string, returns `v, true` if `v` is the value with this name in env, `nil, false` otherwise.";
 ]
 
 let emit_ty (name,args,doc) =
