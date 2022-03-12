@@ -1,7 +1,6 @@
 
 open Sigs
 module K = Kernel
-module Str_map = CCMap.Make(String)
 
 type 'a vec = 'a Vec.t
 
@@ -34,8 +33,8 @@ module Types_ = struct
     (** Stack of register value. Each call frame has its own
         local register. *)
 
-    env: env;
-    (** Logical environment. The VM cannot modify it. *)
+    mutable env: env;
+    (** Logical environment. The VM itself cannot modify it. *)
   }
 
   and call_item =
@@ -85,36 +84,42 @@ module Types_ = struct
     env: value Str_map.t;
   } [@@unboxed]
 
-  let pp_vec ppx out v =
-    Fmt.fprintf out "[@[%a@]]" (pp_iter ~sep:", " ppx) (Vec.to_iter v)
-  let pp_arri ppx out a =
-    Fmt.fprintf out "[@[%a@]]" (pp_iter ~sep:", " ppx)
+  let pp_vec ?(sep=", ") ppx out v =
+    Fmt.fprintf out "%a" (pp_iter ~sep ppx) (Vec.to_iter v)
+  let pp_arri ?(sep=", ") ppx out a =
+    Fmt.fprintf out "%a" (pp_iter ~sep ppx)
       (Iter.of_array_i a)
 
-  let rec pp_value out = function
+  let rec pp_value ~short out = function
     | Nil -> Fmt.string out "nil"
     | Bool x -> Fmt.bool out x
     | Int x -> Fmt.int out x
     | String x -> Fmt.fprintf out "%S" x
-    | Array x -> pp_vec pp_value out x
+    | Array x ->
+      Fmt.fprintf out "[@[%a@]]" (pp_vec ~sep:", " @@ pp_value ~short) x
     | Expr x -> K.Expr.pp out x
     | Thm x -> K.Thm.pp out x
     | Var x -> K.Var.pp out x
     | Subst x -> K.Subst.pp out x
     | Theory x -> K.Theory.pp out x
-    | Chunk c -> pp_chunk out c
+    | Chunk c ->
+      if short then Fmt.string out "<chunk>" else pp_chunk out c
     | Prim p -> pp_prim out p
 
-  and pp_chunk out (self:chunk) : unit =
-    let ppi ppx out (i,x) = Fmt.fprintf out "%-8d %a" i ppx x in
+  and pp_chunk ?ip out (self:chunk) : unit =
+    let ppi ppx out (i,x) =
+      let ptr = match ip with Some i' when i=i' -> ">" | _ -> " " in
+      Fmt.fprintf out "%s%-8d %a" ptr i ppx x in
     Fmt.fprintf out "@[<v2>chunk[%d] {@ %a@ :locals@ %a@;<1 -2>}@]"
       self.c_n_regs
-      (pp_arri @@ ppi VM_instr.pp) self.c_instrs
-      (pp_arri @@ ppi pp_value) self.c_locals
+      (pp_arri ~sep:"" @@ ppi VM_instr.pp) self.c_instrs
+      (pp_arri ~sep:"" @@ ppi @@ pp_value ~short:true) self.c_locals
 
   and pp_prim out (p:primitive) : unit =
-    Fmt.string out p.pr_name
+    Fmt.fprintf out "<prim %s>" p.pr_name
 end
+
+type vm = Types_.vm
 
 (** Instructions *)
 module Instr = VM_instr
@@ -134,8 +139,10 @@ module Value = struct
   let subst (x:K.Subst.t) : t = Subst x
   let theory (x:K.Theory.t) : t = Theory x
   let chunk c : t = Chunk c
+  let prim p : t = Prim p
 
-  let pp = pp_value
+  let pp = pp_value ~short:false
+  let pp_short = pp_value ~short:true
   let show = Fmt.to_string pp
 
   let rec equal a b = match a, b with
@@ -177,7 +184,8 @@ end
 module Chunk = struct
   open Types_
   type t = chunk
-  let pp = pp_chunk
+  let pp out c = pp_chunk out c
+  let pp_at ~ip out c = pp_chunk ~ip out c
 
   (* empty chunk, does nothing *)
   let dummy : t = {
@@ -185,6 +193,16 @@ module Chunk = struct
     c_locals=[||];
     c_instrs=[||];
   }
+end
+
+module Primitive = struct
+  open Types_
+  type t = primitive
+
+  let[@inline] name p = p.pr_name
+  let pp = pp_prim
+  let make ~name ~eval () : t =
+    { pr_name=name; pr_eval=eval; }
 end
 
 (* internal handling of the VM *)
@@ -294,8 +312,31 @@ module VM_ = struct
     let off = Vec.last_exn self.call_reg_start in
     Vec.set self.regs (off + i) v
 
-  (* TODO: debug function, to print current state of VM
-     including stacks *)
+  let dump out (self:t) : unit =
+    let {
+      stack; call_stack; ip; call_restore_ip;
+      call_reg_start; call_prim;
+      regs; env=_ } = self in
+    Fmt.fprintf out "@[<v2>VM {@ ";
+    Fmt.fprintf out "@[call stack: %d frames@]@," (Vec.size call_stack);
+    if not (Vec.is_empty call_stack) then (
+      Fmt.fprintf out "@[<v>top chunk:@ ";
+      Chunk.pp_at ~ip out (Vec.last_exn call_stack);
+      Fmt.fprintf out "@]@,";
+    );
+
+    Fmt.fprintf out "@[<v2>operand stack:@ ";
+    Vec.iteri (fun i v ->
+        if i>0 then Fmt.fprintf out "@,";
+        Fmt.fprintf out "[%d]: %a" i Value.pp_short v)
+      stack;
+    Fmt.fprintf out "@]@,";
+
+    ignore regs;
+    ignore call_reg_start;
+    ignore regs; (* TODO: display them for current frame *)
+
+    Fmt.fprintf out "@;<1 -2>}@]"
 
   let run (self:t) =
     let continue = ref true in
@@ -515,20 +556,24 @@ module Parser = struct
   module CB = Chunk_builder_
 
   type t = {
-    str: string
-  } [@@unboxed]
+    str: string;
+    prims: Primitive.t Str_map.t;
+  }
 
-  let of_string (str:string) : t = {str}
+  let create ?(prims=Str_map.empty) (str:string) : t =
+    {str; prims}
 
   type st = {
     buf: Lexing.lexbuf;
+    prims: Primitive.t Str_map.t;
     cb: CB.t;
     delayed: (unit -> unit) Vec.t; (* set instructions based on labels *)
     mutable labels: int Str_map.t; (* offset of labels *)
   }
 
-  let create_st buf : st =
+  let create_st prims buf : st =
     { buf;
+      prims;
       cb = CB.create();
       delayed=Vec.create();
       labels=Str_map.empty;
@@ -650,13 +695,22 @@ module Parser = struct
         | "memenv" -> CB.add_instr self.cb Instr.Memenv
         | "getenv" -> CB.add_instr self.cb Instr.Getenv
         | "qenv" -> CB.add_instr self.cb Instr.Qenv
-        | _ -> Error.failf (fun k->k"unknown instruction %S" str)
+        | _ ->
+          begin match Str_map.find_opt str self.prims with
+            | Some p ->
+              (* load primitive *)
+              let n = CB.add_local self.cb (Value.prim p) in
+              CB.add_instr self.cb (Instr.Lload n);
+              CB.add_instr self.cb Instr.Call;
+            | None ->
+              Error.failf (fun k->k"unknown instruction/prim %S" str)
+          end
       end;
       recurse()
 
     | VM_lex.LBRACE ->
       (* parse sub-chunk *)
-      let st' = create_st self.buf in
+      let st' = create_st self.prims self.buf in
       begin match parse_into st' with
         | `Eoi -> Error.fail "expected '}'"
         | `Rbrace ->
@@ -671,7 +725,7 @@ module Parser = struct
 
   let parse (self:t) : _ result =
     let buf = Lexing.from_string ~with_positions:false self.str in
-    let st = create_st buf in
+    let st = create_st self.prims buf in
 
     begin match parse_into st with
       | `Eoi ->
@@ -686,7 +740,6 @@ module Parser = struct
 end
 
 (* TODO: expose instructions so that ITP can use its own syntax for VM? *)
-(* TODO: basic parser + chunk assembler? from Sexp? *)
 
 type t = Types_.vm
 
@@ -694,7 +747,8 @@ let create ?(env=Env.empty) () : t =
   let vm = VM_.create env in
   vm
 
-let get_env (self:t) = self.env
+let[@inline] get_env (self:t) = self.env
+let[@inline] set_env (self:t) e = self.env <- e
 
 let reset = VM_.reset
 let push = VM_.push_val
@@ -704,13 +758,14 @@ let run self c =
   VM_.enter_chunk self c;
   VM_.run self
 
+let dump = VM_.dump
 
-let parse_string s : _ result =
-  let p = Parser.of_string s in
+let parse_string ?prims s : _ result =
+  let p = Parser.create ?prims s in
   Parser.parse p
 
-let parse_string_exn s : Chunk.t =
-  match parse_string s with
+let parse_string_exn ?prims s : Chunk.t =
+  match parse_string ?prims s with
   | Ok c -> c
   | Error e -> Error.raise e
 

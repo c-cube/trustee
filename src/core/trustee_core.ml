@@ -21,3 +21,5 @@ module Subst = Kernel.Subst
 module Var = Kernel.Var
 
 module VM = VM
+
+module Str_map = Sigs.Str_map
