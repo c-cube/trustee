@@ -161,6 +161,10 @@ module Value = struct
     | (Bool _ | Int _ | String _ | Array _
       | Expr _ | Thm _ | Var _ | Subst _ |
        Theory _ | Nil | Chunk _ | Prim _), _ -> false
+
+  let[@inline] as_str = function String x -> Some x | _ -> None
+  let[@inline] as_bool = function Bool x -> Some x | _ -> None
+  let[@inline] as_int = function Int x -> Some x | _ -> None
 end
 
 module Env = struct
@@ -325,12 +329,14 @@ module VM_ = struct
       Fmt.fprintf out "@]@,";
     );
 
-    Fmt.fprintf out "@[<v2>operand stack:@ ";
-    Vec.iteri (fun i v ->
-        if i>0 then Fmt.fprintf out "@,";
-        Fmt.fprintf out "[%d]: %a" i Value.pp_short v)
-      stack;
-    Fmt.fprintf out "@]@,";
+    if not (Vec.is_empty self.stack) then (
+      Fmt.fprintf out "@[<v2>operand stack: [@ ";
+      Vec.iteri (fun i v ->
+          if i>0 then Fmt.fprintf out "@,";
+          Fmt.fprintf out "[%d]: %a" i Value.pp_short v)
+        stack;
+      Fmt.fprintf out "@;<1 -2>]@]";
+    );
 
     ignore regs;
     ignore call_reg_start;

@@ -39,6 +39,10 @@ module Value : sig
   val equal : t -> t -> bool
   val pp : t Fmt.printer
   val show : t -> string
+
+  val as_str : t -> string option
+  val as_bool : t -> bool option
+  val as_int : t -> int option
 end
 
 (** Environment for the virtual machine.
