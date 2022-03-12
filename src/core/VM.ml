@@ -136,6 +136,7 @@ module Value = struct
   let chunk c : t = Chunk c
 
   let pp = pp_value
+  let show = Fmt.to_string pp
 
   let rec equal a b = match a, b with
     | Nil, Nil -> true
@@ -167,6 +168,7 @@ module Env = struct
     Fmt.fprintf out "@[<1>env {@ %a@ @;<0 -1>}@]"
       (pp_iter ~sep:";" pp_pair) (Str_map.to_iter self.env)
 
+  let[@inline] mem k self = Str_map.mem k self.env
   let[@inline] add s v self : t = {env=Str_map.add s v self.env}
   let[@inline] find s self = Str_map.find_opt s self.env
   let[@inline] iter self = Str_map.to_iter self.env
@@ -358,7 +360,7 @@ module VM_ = struct
             let a = pop_val_exn self in
             begin match a with
               | Bool b -> push_val self (Value.bool (not b))
-              | _ -> Error.fail "self.not: type error"
+              | _ -> Error.fail "vm.not: type error"
             end
 
           | Add ->
@@ -367,14 +369,14 @@ module VM_ = struct
             begin match a, b with
               | Int a, Int b ->
                 push_val self (Value.int (a+b))
-              | _ -> Error.fail "self.add: type error"
+              | _ -> Error.fail "vm.add: type error"
             end
 
           | Add1 ->
             let a = pop_val_exn self in
             begin match a with
               | Int a -> push_val self (Value.int (a+1))
-              | _ -> Error.fail "self.add1: type error"
+              | _ -> Error.fail "vm.add1: type error"
             end
 
           | Sub ->
@@ -383,13 +385,13 @@ module VM_ = struct
             begin match a, b with
               | Int a, Int b ->
                 push_val self (Value.int (a-b))
-              | _ -> Error.fail "self.sub: type error"
+              | _ -> Error.fail "vm.sub: type error"
             end
           | Sub1 ->
             let a = pop_val_exn self in
             begin match a with
               | Int a -> push_val self (Value.int (a-1))
-              | _ -> Error.fail "self.sub1: type error"
+              | _ -> Error.fail "vm.sub1: type error"
             end
 
           | Jeq ip ->
@@ -404,7 +406,7 @@ module VM_ = struct
             let a = pop_val_exn self in
             begin match a, b with
               | Int a, Int b -> if a < b then self.ip <- ip;
-              | _ -> Error.fail "self.jlt: type error"
+              | _ -> Error.fail "vm.jlt: type error"
             end
 
           | Jleq ip ->
@@ -413,10 +415,46 @@ module VM_ = struct
             let a = pop_val_exn self in
             begin match a, b with
               | Int a, Int b -> if a <= b then self.ip <- ip;
-              | _ -> Error.fail "self.jleq: type error"
+              | _ -> Error.fail "vm.jleq: type error"
             end
+
           | Jmp ip ->
             self.ip <- ip
+
+          | Memenv ->
+            let key = pop_val_exn self in
+            begin match key with
+              | String v ->
+                let b = Value.bool (Env.mem v self.env) in
+                push_val self b
+              | _ -> Error.fail "vm.memenv: required a string"
+            end
+
+          | Getenv ->
+            let key = pop_val_exn self in
+            begin match key with
+              | String v ->
+                begin match Env.find v self.env with
+                  | Some x -> push_val self x
+                  | None -> Error.fail "vm.getenv: key not present"
+                end
+              | _ -> Error.fail "vm.getenv: required a string"
+            end
+
+          | Qenv ->
+            let key = pop_val_exn self in
+            begin match key with
+              | String v ->
+                begin match Env.find v self.env with
+                  | Some x ->
+                    push_val self x;
+                    push_val self (Value.bool true);
+                  | None ->
+                    push_val self Value.nil;
+                    push_val self (Value.bool false);
+                end
+              | _ -> Error.fail "vm.qenv: required a string"
+            end
         )
       done
     with Stop_exec ->
