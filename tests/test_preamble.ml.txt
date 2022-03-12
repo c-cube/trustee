@@ -1,0 +1,6 @@
+
+open Trustee_core;;
+
+(* we don't link these *)
+module VM_instr = struct end;;
+module VM_lex = struct end;;
