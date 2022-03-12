@@ -1,3 +1,14 @@
 
+; generate instructions for the VM
 (executable
+  (modules mkinstr)
   (name mkinstr))
+
+; basic repl for the VM
+(executable
+  (name vm_repl)
+  (modules vm_repl readline)
+  (libraries (select readline.ml from
+               (linenoise -> readline.linenoise.ml)
+               ( -> readline.basic.ml))
+             containers trustee.core))
