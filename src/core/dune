@@ -7,3 +7,5 @@
   (targets VM_instr.ml)
   (deps (:exe ./tools/mkinstr.exe))
   (action (with-stdout-to %{targets} (run %{exe}))))
+
+(ocamllex (modules VM_lex))

@@ -461,7 +461,230 @@ module VM_ = struct
       ()
 end
 
-(* TODO: chunk builder, with vecs inside, expose create/reset/add_instr/add_local *)
+(* chunk builder. temporary structure to construct chunks. *)
+module Chunk_builder_ = struct
+  open Types_
+  type t = {
+    cb_instrs: instr Vec.t; (** Instructions *)
+    mutable cb_n_regs: int; (** Number of regs to allocate for this chunk *)
+    cb_locals: value Vec.t; (** Local values, used by some instructions *)
+  }
+
+  let create() : t =
+    { cb_instrs=Vec.create(); cb_n_regs=0; cb_locals=Vec.create(); }
+
+  let reset (self:t) : unit =
+    let {cb_instrs; cb_locals; cb_n_regs=_} = self in
+    self.cb_n_regs <- 0;
+    Vec.clear cb_instrs;
+    Vec.clear cb_locals;
+    ()
+
+  let to_chunk (self:t) : chunk =
+    { c_instrs=Vec.to_array self.cb_instrs;
+      c_n_regs=self.cb_n_regs;
+      c_locals=Vec.to_array self.cb_locals; }
+
+  let[@inline] add_local (self:t) (v:value) : int =
+    let i = Vec.size self.cb_locals in
+    Vec.push self.cb_locals v;
+    i
+
+  let add_instr self (i:instr) : unit =
+    Vec.push self.cb_instrs i;
+    begin match i with
+      | Rstore i | Rload i -> self.cb_n_regs <- max (i+1) self.cb_n_regs
+      | Nop | Call | Ret | Dup | Drop | Exch | Extract _
+      | Lload _ | Int _ | Memenv | Getenv | Qenv
+      | Bool _ | Nil | Not | Add | Add1 | Sub | Sub1 | Jeq _ | Jlt _
+      | Jleq _ | Jmp _ -> ()
+    end
+
+  (* current position in the list of instructions *)
+  let cur_pos (self:t) : int =
+    Vec.size self.cb_instrs
+
+  (* set an instruction after the fact *)
+  let set_instr (self:t) i (instr:instr) : unit =
+    assert (i < Vec.size self.cb_instrs);
+    Vec.set self.cb_instrs i instr
+end
+
+module Parser = struct
+  open Types_
+  module CB = Chunk_builder_
+
+  type t = {
+    str: string
+  } [@@unboxed]
+
+  let of_string (str:string) : t = {str}
+
+  type st = {
+    buf: Lexing.lexbuf;
+    cb: CB.t;
+    delayed: (unit -> unit) Vec.t; (* set instructions based on labels *)
+    mutable labels: int Str_map.t; (* offset of labels *)
+  }
+
+  let create_st buf : st =
+    { buf;
+      cb = CB.create();
+      delayed=Vec.create();
+      labels=Str_map.empty;
+    }
+
+  let exact self what tok =
+    let tok' = VM_lex.token self.buf in
+    if tok <> tok' then Error.failf (fun k->k"expected %s" what)
+
+  let int self = match VM_lex.token self.buf with
+    | VM_lex.INT i -> int_of_string i
+    | _ -> Error.fail "expected integer"
+  let label self = match VM_lex.token self.buf with
+    | VM_lex.COLON_STR s -> s
+    | _ -> Error.fail "expected label (e.g. `:foo`)"
+
+  let between_angle self p =
+    exact self "'<'" VM_lex.LANGLE;
+    let x=p self in
+    exact self "'>'" VM_lex.RANGLE;
+    x
+
+  let rec parse_into (self:st) : [`Eoi | `Rbrace] =
+    let[@inline] recurse() = parse_into self in
+
+    let finalize() =
+      Vec.iter (fun d -> d()) self.delayed;
+      Vec.clear self.delayed
+    in
+
+    (* call [f] with the address of [lbl] *)
+    let with_label lbl f =
+      Vec.push self.delayed
+        (fun () ->
+           match Str_map.find_opt lbl self.labels with
+           | None -> Error.failf (fun k->k"cannot find label %S" lbl)
+           | Some i -> f i)
+    in
+
+    match VM_lex.token self.buf with
+    | VM_lex.QUOTED_STR s ->
+      let n = CB.add_local self.cb (Value.string s) in
+      CB.add_instr self.cb (Instr.Lload n);
+      recurse()
+
+    | VM_lex.COLON_STR lbl ->
+      (* remember position of label *)
+      self.labels <- Str_map.add lbl (CB.cur_pos self.cb) self.labels;
+      recurse();
+
+    | VM_lex.LPAREN -> Error.fail "syntax error"
+    | VM_lex.RPAREN -> Error.fail "syntax error"
+    | VM_lex.LBRACKET -> Error.fail "syntax error"
+    | VM_lex.RBRACKET -> Error.fail "syntax error"
+    | VM_lex.LANGLE -> Error.fail "syntax error"
+    | VM_lex.RANGLE -> Error.fail "syntax error"
+
+    | VM_lex.INT i ->
+      let i = int_of_string i in
+      CB.add_instr self.cb (Instr.Int i);
+      recurse()
+
+    | VM_lex.ATOM str ->
+      begin match str with
+        | "nop" -> CB.add_instr self.cb Instr.Nop
+        | "call" -> CB.add_instr self.cb Instr.Call
+        | "ret" -> CB.add_instr self.cb Instr.Ret
+        | "dup" -> CB.add_instr self.cb Instr.Dup
+        | "drop" -> CB.add_instr self.cb Instr.Drop
+        | "exch" -> CB.add_instr self.cb Instr.Exch
+        | "extract" ->
+          let i = between_angle self int in
+          CB.add_instr self.cb (Instr.Extract i)
+        | "rstore" ->
+          let i = between_angle self int in
+          CB.add_instr self.cb (Instr.Rstore i)
+        | "rload" ->
+          let i = between_angle self int in
+          CB.add_instr self.cb (Instr.Rload i)
+        | "lload" ->
+          let i = between_angle self int in
+          CB.add_instr self.cb (Instr.Lload i)
+        | "true" -> CB.add_instr self.cb (Instr.Bool true)
+        | "false" -> CB.add_instr self.cb (Instr.Bool false)
+        | "nil" -> CB.add_instr self.cb Instr.Nil
+        | "not" ->  CB.add_instr self.cb Instr.Not
+        | "add" -> CB.add_instr self.cb Instr.Add
+        | "add1" -> CB.add_instr self.cb Instr.Add1
+        | "sub" -> CB.add_instr self.cb Instr.Sub
+        | "sub1" -> CB.add_instr self.cb Instr.Sub1
+        | "jeq" ->
+          let lbl = between_angle self label in
+          let cur_pos = CB.cur_pos self.cb in
+          CB.add_instr self.cb Instr.Nop;
+          with_label lbl (fun lbl_pos ->
+              CB.set_instr self.cb cur_pos (Instr.Jeq lbl_pos))
+
+        | "jlt" ->
+          let lbl = between_angle self label in
+          let cur_pos = CB.cur_pos self.cb in
+          CB.add_instr self.cb Instr.Nop;
+          with_label lbl (fun lbl_pos ->
+              CB.set_instr self.cb cur_pos (Instr.Jlt lbl_pos))
+
+        | "jleq" ->
+          let lbl = between_angle self label in
+          let cur_pos = CB.cur_pos self.cb in
+          CB.add_instr self.cb Instr.Nop;
+          with_label lbl (fun lbl_pos ->
+              CB.set_instr self.cb cur_pos (Instr.Jleq lbl_pos))
+
+        | "jmp" ->
+          let lbl = between_angle self label in
+          let cur_pos = CB.cur_pos self.cb in
+          CB.add_instr self.cb Instr.Nop;
+          with_label lbl (fun lbl_pos ->
+              CB.set_instr self.cb cur_pos (Instr.Jmp lbl_pos))
+
+        | "memenv" -> CB.add_instr self.cb Instr.Memenv
+        | "getenv" -> CB.add_instr self.cb Instr.Getenv
+        | "qenv" -> CB.add_instr self.cb Instr.Qenv
+        | _ -> Error.failf (fun k->k"unknown instruction %S" str)
+      end;
+      recurse()
+
+    | VM_lex.LBRACE ->
+      (* parse sub-chunk *)
+      let st' = create_st self.buf in
+      begin match parse_into st' with
+        | `Eoi -> Error.fail "expected '}'"
+        | `Rbrace ->
+          (* finish sub-chunk, put it into locals *)
+          let c = CB.to_chunk st'.cb in
+          let n = CB.add_local self.cb (Value.chunk c) in
+          CB.add_instr self.cb (Instr.Lload n);
+          recurse()
+      end
+    | VM_lex.RBRACE -> finalize(); `Rbrace
+    | VM_lex.EOI -> finalize(); `Eoi
+
+  let parse (self:t) : _ result =
+    let buf = Lexing.from_string ~with_positions:false self.str in
+    let st = create_st buf in
+
+    begin match parse_into st with
+      | `Eoi ->
+        let c = CB.to_chunk st.cb in
+        Ok c
+      | `Rbrace -> Error.fail "unterminated input"
+      | exception Error.E err -> Error err
+      | exception Failure msg -> Error (Error.make msg)
+      | exception e ->
+        Error (Error.of_exn e)
+    end
+end
+
 (* TODO: expose instructions so that ITP can use its own syntax for VM? *)
 (* TODO: basic parser + chunk assembler? from Sexp? *)
 
@@ -476,7 +699,25 @@ let get_env (self:t) = self.env
 let reset = VM_.reset
 let push = VM_.push_val
 let pop = VM_.pop_val
+let pop_exn = VM_.pop_val_exn
 let run self c =
   VM_.enter_chunk self c;
   VM_.run self
 
+
+let parse_string s : _ result =
+  let p = Parser.of_string s in
+  Parser.parse p
+
+let parse_string_exn s : Chunk.t =
+  match parse_string s with
+  | Ok c -> c
+  | Error e -> Error.raise e
+
+(*$R
+  let c = parse_string_exn "42 2 add" in
+  let vm = create () in
+  run vm c;
+  let v = pop_exn vm in
+  assert_equal ~cmp:Value.equal ~printer:Value.show (Value.int 44) v
+    *)

@@ -36,6 +36,7 @@ module Value : sig
 
   val equal : t -> t -> bool
   val pp : t Fmt.printer
+  val show : t -> string
 end
 
 (** Environment for the virtual machine.
@@ -67,6 +68,18 @@ module Chunk : sig
   val pp : t Fmt.printer
 end
 
+(** Basic syntax.
+
+    This syntax is, for now, only intended for testing and possibly as
+    an internal compilation target. *)
+module Parser : sig
+  type t
+
+  val of_string : string -> t
+
+  val parse : t -> (Chunk.t, Error.t) result
+end
+
 type t
 (** Virtual machine *)
 
@@ -80,5 +93,10 @@ val push : t -> Value.t -> unit
 
 val pop : t -> Value.t option
 
+val pop_exn : t -> Value.t
+
 val run : t -> Chunk.t -> unit
 
+val parse_string : string -> (Chunk.t, Error.t) result
+
+val parse_string_exn : string -> Chunk.t
