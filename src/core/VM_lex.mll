@@ -73,7 +73,7 @@ let printable_char = [^ '\n']
 let alpha = ['a'-'z' 'A'-'Z']
 let num = ['0'-'9']
 let alphanum = alpha | num
-let id = alpha alphanum+
+let id = alpha alphanum*
 let string_item =
   ([^ '"' '\\'] | "\\\"" | "\\\\" | "\\b" | "\\n" | "\\t" | "\\r")
 let string = '"' string_item* '"'
