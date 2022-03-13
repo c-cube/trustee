@@ -339,7 +339,7 @@ module VM_ = struct
     Fmt.fprintf out "@[call stack: %d frames@]" (Vec.size call_stack);
     if not (Vec.is_empty call_stack) then (
       let c = Vec.last_exn call_stack in
-      Fmt.fprintf out "@,@[<v2>top chunk:@ ";
+      Fmt.fprintf out "@,@[<v2>top chunk: {@ ";
       Chunk.pp_at ~ip out c;
 
       (* print registers *)
@@ -350,7 +350,7 @@ module VM_ = struct
         done;
       );
 
-      Fmt.fprintf out "@]";
+      Fmt.fprintf out "@;<1 -2>}@]";
     );
 
     if Vec.is_empty self.stack then (
@@ -762,6 +762,19 @@ module Parser = struct
       | exception e ->
         Error (Error.of_exn e)
     end
+
+  let needs_more (str:string) : bool =
+    let n_brace = ref 0 in
+
+    let buf = Lexing.from_string ~with_positions:false str in
+    let rec loop () =
+      match VM_lex.token buf with
+      | VM_lex.EOI -> !n_brace > 0 (* unclosed { *)
+      | VM_lex.LBRACE -> incr n_brace; loop()
+      | VM_lex.RBRACE -> decr n_brace; loop()
+      | _ -> loop()
+    in
+    loop()
 end
 
 (* TODO: expose instructions so that ITP can use its own syntax for VM? *)

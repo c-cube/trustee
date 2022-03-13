@@ -105,6 +105,8 @@ module Parser : sig
     ?prims:Primitive.t Str_map.t ->
     string -> t
 
+  val needs_more : string -> bool
+
   val parse : t -> (Chunk.t, Error.t) result
 end
 
