@@ -113,6 +113,12 @@ type t = vm
 
 val create : ?env:Env.t -> unit -> t
 
+val set_debug_hook : t -> (t -> Instr.t -> unit) -> unit
+(** Set a debug hook that is called before each instruction *)
+
+val clear_debug_hook : t -> unit
+(** Remove debug hook *)
+
 val get_env : t -> Env.t
 
 val set_env : t -> Env.t -> unit

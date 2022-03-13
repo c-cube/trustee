@@ -23,10 +23,11 @@ let instrs: (string*arg list*doc) list = [
   "bool", [Bool], "( -- b) Push boolean <b> on the stack";
   "nil", [], "( -- nil) Push nil on the stack";
   "not", [], "(a -- not(a)) Negate top value";
-  "add", [], "(a b -- a+b) Pop two values, adds them";
-  "add1", [], "(a -- a+1) Increment top of stack";
-  "sub", [], "(a b -- a-b) Pop two values, subtract them";
-  "sub1", [], "(a -- a-1) Decrement top of stack";
+  "add", [], "(a b -- a+b) Pop two integer values, adds them";
+  "add1", [], "(a -- a+1) Increment integer on top of stack";
+  "sub", [], "(a b -- a-b) Pop two integer values, subtract them";
+  "sub1", [], "(a -- a-1) Decrement integer on top of stack";
+  "mult", [], "(a b -- a*b) Pop two integer values, multiply them";
   "eq", [], "(a b -- ) Pop two values; push boolean (a==b)";
   "lt", [], "(a b -- ) Pop two integer values; push boolean (a < b)";
   "leq", [], "(a b -- ) Pop two integer values; push boolean (a <= b)";

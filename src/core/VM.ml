@@ -20,12 +20,6 @@ module Types_ = struct
     call_restore_ip : int Vec.t;
     (** IP for all items in [call_stack] except the last. *)
 
-    call_reg_start : int Vec.t;
-    (** maps [i] to the beginning of the slice of [regs]
-        for frame [i]. The length of the slice is computed
-        from [call[i].c_n_regs] if it's a chunk, and 0
-        if it's a primitive. *)
-
     call_prim: primitive Vec.t;
     (** Primitives currently being evaluated *)
 
@@ -35,6 +29,8 @@ module Types_ = struct
 
     mutable env: env;
     (** Logical environment. The VM itself cannot modify it. *)
+
+    mutable debug_hook: (vm -> instr -> unit) option;
   }
 
   and call_item =
@@ -107,13 +103,24 @@ module Types_ = struct
     | Prim p -> pp_prim out p
 
   and pp_chunk ?ip out (self:chunk) : unit =
-    let ppi ppx out (i,x) =
+    let pp_instr out i =
+      VM_instr.pp out i;
+      begin match i with
+        | Lload n ->
+          let local = self.c_locals.(n) in
+          Fmt.fprintf out " ; %a" (pp_value ~short:true) local
+        | _ -> ()
+      end
+    in
+    let ppi pre ppx out (i,x) =
+      Fmt.fprintf out "%s%-8d %a" pre i ppx x in
+    let ppi_ip ppx out (i,x) =
       let ptr = match ip with Some i' when i=i' -> ">" | _ -> " " in
-      Fmt.fprintf out "%s%-8d %a" ptr i ppx x in
-    Fmt.fprintf out "@[<v2>chunk[%d] {@ %a@ :locals@ %a@;<1 -2>}@]"
+      ppi ptr ppx out (i,x) in
+    Fmt.fprintf out "@[<v2>chunk[%d regs] {@ %a@ :locals@ %a@;<1 -2>}@]"
       self.c_n_regs
-      (pp_arri ~sep:"" @@ ppi VM_instr.pp) self.c_instrs
-      (pp_arri ~sep:"" @@ ppi @@ pp_value ~short:true) self.c_locals
+      (pp_arri ~sep:"" @@ ppi_ip pp_instr) self.c_instrs
+      (pp_arri ~sep:"" @@ ppi "" @@ pp_value ~short:true) self.c_locals
 
   and pp_prim out (p:primitive) : unit =
     Fmt.fprintf out "<prim %s>" p.pr_name
@@ -235,9 +242,9 @@ module VM_ = struct
     call_restore_ip=Vec.make 12 0;
     call_prim=Vec.create ();
     ip=0;
-    call_reg_start=Vec.create();
     regs=Vec.make 32 Value.nil;
     env;
+    debug_hook=None;
   }
 
   let[@inline] push_val (self:t) v = Vec.push self.stack v
@@ -267,12 +274,11 @@ module VM_ = struct
   (* reset state entirely *)
   let reset (self:t) : unit =
     let { stack; call_stack; ip=_; call_prim=_;
-          call_restore_ip; call_reg_start; regs; env } = self in
+          call_restore_ip; regs; env } = self in
     self.ip <- 0;
     Vec.clear self.call_stack;
     Vec.clear self.call_restore_ip;
     Vec.clear stack;
-    Vec.clear call_reg_start;
     Vec.clear self.call_prim;
     Vec.clear regs;
     ()
@@ -284,13 +290,15 @@ module VM_ = struct
     Vec.push self.call_stack c;
     self.ip <- 0;
     (* allocate regs for [c] *)
-    Vec.push self.call_reg_start (Vec.size self.regs);
     for _j = 1 to c.c_n_regs do
       Vec.push self.regs Value.nil
     done
 
   let pop_chunk (self:t) : unit =
-    let _ = Vec.pop_exn self.call_stack in
+    let c = Vec.pop_exn self.call_stack in
+    if c.c_n_regs > 0 then (
+      Vec.shrink self.regs (Vec.size self.regs - c.c_n_regs);
+    );
     if not (Vec.is_empty self.call_restore_ip) then (
       assert (not (Vec.is_empty self.call_stack));
       self.ip <- Vec.pop_exn self.call_restore_ip;
@@ -314,27 +322,35 @@ module VM_ = struct
     let c = Vec.last_exn self.call_stack in
     let n = c.c_n_regs in
     if i >= n then Error.fail"vm.rload: invalid register";
-    let off = Vec.last_exn self.call_reg_start in
-    Vec.get self.regs (off + i)
+    Vec.get self.regs (Vec.size self.regs - n + i)
 
   let rstore (self:t) (i:int) v : unit =
     let c = Vec.last_exn self.call_stack in
     let n = c.c_n_regs in
     if i >= n then Error.fail "vm.rstore: not enough registers";
-    let off = Vec.last_exn self.call_reg_start in
-    Vec.set self.regs (off + i) v
+    Vec.set self.regs (Vec.size self.regs - n + i) v
 
   let dump out (self:t) : unit =
     let {
       stack; call_stack; ip; call_restore_ip;
-      call_reg_start; call_prim;
+      call_prim;
       regs; env=_ } = self in
     Fmt.fprintf out "@[<v2>VM {@ ";
     Fmt.fprintf out "@[call stack: %d frames@]" (Vec.size call_stack);
     if not (Vec.is_empty call_stack) then (
-      Fmt.fprintf out "@,@[<v>top chunk:@ ";
-      Chunk.pp_at ~ip out (Vec.last_exn call_stack);
-      Fmt.fprintf out "@]@,";
+      let c = Vec.last_exn call_stack in
+      Fmt.fprintf out "@,@[<v2>top chunk:@ ";
+      Chunk.pp_at ~ip out c;
+
+      (* print registers *)
+      if c.c_n_regs > 0 then (
+        for i=0 to c.c_n_regs-1 do
+          let v = Vec.get self.regs (Vec.size self.regs - c.c_n_regs + i) in
+          Fmt.fprintf out "@,reg[%d]: %a" i Value.pp_short v;
+        done;
+      );
+
+      Fmt.fprintf out "@]";
     );
 
     if Vec.is_empty self.stack then (
@@ -347,10 +363,6 @@ module VM_ = struct
         stack;
       Fmt.fprintf out "@;<1 -2>]@]";
     );
-
-    ignore regs;
-    ignore call_reg_start;
-    ignore regs; (* TODO: display them for current frame *)
 
     Fmt.fprintf out "@;<1 -2>}@]"
 
@@ -371,6 +383,12 @@ module VM_ = struct
         ) else (
           (* execute current instruction in [c] *)
           let instr = Array.unsafe_get c.c_instrs ip in
+
+          begin match self.debug_hook with
+            | None -> ()
+            | Some h -> h self instr;
+          end;
+
           self.ip <- self.ip + 1; (* preemptively advance by 1 *)
 
           match instr with
@@ -437,6 +455,11 @@ module VM_ = struct
           | Sub1 ->
             let a = pop_val_exn self |> Value.to_int_exn in
             push_val self (Value.int (a-1))
+
+          | Mult ->
+            let b = pop_val_exn self |> Value.to_int_exn in
+            let a = pop_val_exn self |> Value.to_int_exn in
+            push_val self (Value.int (a * b))
 
           | Eq ->
             let b = pop_val_exn self in
@@ -538,7 +561,7 @@ module Chunk_builder_ = struct
     Vec.push self.cb_instrs i;
     begin match i with
       | Rstore i | Rload i -> self.cb_n_regs <- max (i+1) self.cb_n_regs
-      | Nop | Call | Ret | Dup | Drop | Exch | Extract _
+      | Nop | Call | Ret | Dup | Drop | Exch | Extract _ | Mult
       | Lload _ | Int _ | Memenv | Getenv | Qenv | Bool _ | Nil | Not | Add |
       Add1 | Sub | Sub1 | Eq | Leq | Lt | Jif _ | Jifn _ | Jmp _ -> ()
     end
@@ -666,6 +689,7 @@ module Parser = struct
         | "add1" -> CB.add_instr self.cb Instr.Add1
         | "sub" -> CB.add_instr self.cb Instr.Sub
         | "sub1" -> CB.add_instr self.cb Instr.Sub1
+        | "mult" -> CB.add_instr self.cb Instr.Mult
         | "leq" -> CB.add_instr self.cb Instr.Leq
         | "lt" -> CB.add_instr self.cb Instr.Lt
         | "eq" -> CB.add_instr self.cb Instr.Eq
@@ -759,6 +783,8 @@ let run self c =
   VM_.enter_chunk self c;
   VM_.run self
 
+let set_debug_hook vm h = vm.Types_.debug_hook <- Some h
+let clear_debug_hook vm = vm.Types_.debug_hook <- None
 let dump = VM_.dump
 
 let parse_string ?prims s : _ result =
