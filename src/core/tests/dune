@@ -1,0 +1,11 @@
+
+(rule
+  (targets t1.trvm.out)
+  (deps (:repl ../tools/vm_repl.exe) (:file t1.trvm))
+  (package trustee)
+  (action (with-stdout-to %{targets} (with-stdin-from %{file} (run %{repl} --raw)))))
+
+(rule
+  (alias runtest)
+  (package trustee)
+  (action (diff t1.trvm.expected t1.trvm.out)))
