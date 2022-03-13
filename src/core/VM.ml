@@ -162,9 +162,17 @@ module Value = struct
       | Expr _ | Thm _ | Var _ | Subst _ |
        Theory _ | Nil | Chunk _ | Prim _), _ -> false
 
-  let[@inline] as_str = function String x -> Some x | _ -> None
-  let[@inline] as_bool = function Bool x -> Some x | _ -> None
-  let[@inline] as_int = function Int x -> Some x | _ -> None
+
+  type 'a conv_to = t -> 'a option
+  type 'a conv_to_exn = t -> 'a
+
+  let[@inline] to_str = function String x -> Some x | _ -> None
+  let[@inline] to_bool = function Bool x -> Some x | _ -> None
+  let[@inline] to_int = function Int x -> Some x | _ -> None
+
+  let[@inline] to_str_exn = function String x -> x | _ -> Error.fail "expected string"
+  let[@inline] to_bool_exn = function Bool x -> x | _ -> Error.fail "expected bool"
+  let[@inline] to_int_exn = function Int x -> x | _ -> Error.fail "expected int"
 end
 
 module Env = struct
@@ -322,15 +330,17 @@ module VM_ = struct
       call_reg_start; call_prim;
       regs; env=_ } = self in
     Fmt.fprintf out "@[<v2>VM {@ ";
-    Fmt.fprintf out "@[call stack: %d frames@]@," (Vec.size call_stack);
+    Fmt.fprintf out "@[call stack: %d frames@]" (Vec.size call_stack);
     if not (Vec.is_empty call_stack) then (
-      Fmt.fprintf out "@[<v>top chunk:@ ";
+      Fmt.fprintf out "@,@[<v>top chunk:@ ";
       Chunk.pp_at ~ip out (Vec.last_exn call_stack);
       Fmt.fprintf out "@]@,";
     );
 
-    if not (Vec.is_empty self.stack) then (
-      Fmt.fprintf out "@[<v2>operand stack: [@ ";
+    if Vec.is_empty self.stack then (
+      Fmt.fprintf out "@,operand stack: []"
+    ) else (
+      Fmt.fprintf out "@,@[<v2>operand stack: [@ ";
       Vec.iteri (fun i v ->
           if i>0 then Fmt.fprintf out "@,";
           Fmt.fprintf out "[%d]: %a" i Value.pp_short v)
@@ -411,59 +421,46 @@ module VM_ = struct
             end
 
           | Add ->
-            let b = pop_val_exn self in
-            let a = pop_val_exn self in
-            begin match a, b with
-              | Int a, Int b ->
-                push_val self (Value.int (a+b))
-              | _ -> Error.fail "vm.add: type error"
-            end
+            let b = pop_val_exn self |> Value.to_int_exn in
+            let a = pop_val_exn self |> Value.to_int_exn in
+            push_val self (Value.int (a+b))
 
           | Add1 ->
-            let a = pop_val_exn self in
-            begin match a with
-              | Int a -> push_val self (Value.int (a+1))
-              | _ -> Error.fail "vm.add1: type error"
-            end
+            let a = pop_val_exn self |> Value.to_int_exn in
+            push_val self (Value.int (a+1))
 
           | Sub ->
-            let b = pop_val_exn self in
-            let a = pop_val_exn self in
-            begin match a, b with
-              | Int a, Int b ->
-                push_val self (Value.int (a-b))
-              | _ -> Error.fail "vm.sub: type error"
-            end
+            let b = pop_val_exn self |> Value.to_int_exn in
+            let a = pop_val_exn self |> Value.to_int_exn in
+            push_val self (Value.int (a-b))
+
           | Sub1 ->
-            let a = pop_val_exn self in
-            begin match a with
-              | Int a -> push_val self (Value.int (a-1))
-              | _ -> Error.fail "vm.sub1: type error"
-            end
+            let a = pop_val_exn self |> Value.to_int_exn in
+            push_val self (Value.int (a-1))
 
-          | Jeq ip ->
-
+          | Eq ->
             let b = pop_val_exn self in
             let a = pop_val_exn self in
-            if Value.equal a b then self.ip <- ip
+            push_val self (Value.bool (Value.equal a b))
+
+          | Leq ->
+            let b = pop_val_exn self |> Value.to_int_exn in
+            let a = pop_val_exn self |> Value.to_int_exn in
+            push_val self (Value.bool (a <= b))
+
+          | Lt ->
+            let b = pop_val_exn self |> Value.to_int_exn in
+            let a = pop_val_exn self |> Value.to_int_exn in
+            push_val self (Value.bool (a < b))
+
+          | Jif ip ->
+            let x = pop_val_exn self |> Value.to_bool_exn in
+            if x then self.ip <- ip;
 
 
-          | Jlt ip ->
-            let b = pop_val_exn self in
-            let a = pop_val_exn self in
-            begin match a, b with
-              | Int a, Int b -> if a < b then self.ip <- ip;
-              | _ -> Error.fail "vm.jlt: type error"
-            end
-
-          | Jleq ip ->
-
-            let b = pop_val_exn self in
-            let a = pop_val_exn self in
-            begin match a, b with
-              | Int a, Int b -> if a <= b then self.ip <- ip;
-              | _ -> Error.fail "vm.jleq: type error"
-            end
+          | Jifn ip ->
+            let x = pop_val_exn self |> Value.to_bool_exn in
+            if not x then self.ip <- ip;
 
           | Jmp ip ->
             self.ip <- ip
@@ -542,9 +539,8 @@ module Chunk_builder_ = struct
     begin match i with
       | Rstore i | Rload i -> self.cb_n_regs <- max (i+1) self.cb_n_regs
       | Nop | Call | Ret | Dup | Drop | Exch | Extract _
-      | Lload _ | Int _ | Memenv | Getenv | Qenv
-      | Bool _ | Nil | Not | Add | Add1 | Sub | Sub1 | Jeq _ | Jlt _
-      | Jleq _ | Jmp _ -> ()
+      | Lload _ | Int _ | Memenv | Getenv | Qenv | Bool _ | Nil | Not | Add |
+      Add1 | Sub | Sub1 | Eq | Leq | Lt | Jif _ | Jifn _ | Jmp _ -> ()
     end
 
   (* current position in the list of instructions *)
@@ -670,26 +666,23 @@ module Parser = struct
         | "add1" -> CB.add_instr self.cb Instr.Add1
         | "sub" -> CB.add_instr self.cb Instr.Sub
         | "sub1" -> CB.add_instr self.cb Instr.Sub1
-        | "jeq" ->
-          let lbl = between_angle self label in
-          let cur_pos = CB.cur_pos self.cb in
-          CB.add_instr self.cb Instr.Nop;
-          with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (Instr.Jeq lbl_pos))
+        | "leq" -> CB.add_instr self.cb Instr.Leq
+        | "lt" -> CB.add_instr self.cb Instr.Lt
+        | "eq" -> CB.add_instr self.cb Instr.Eq
 
-        | "jlt" ->
+        | "jif" ->
           let lbl = between_angle self label in
           let cur_pos = CB.cur_pos self.cb in
           CB.add_instr self.cb Instr.Nop;
           with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (Instr.Jlt lbl_pos))
+              CB.set_instr self.cb cur_pos (Instr.Jif lbl_pos))
 
-        | "jleq" ->
+        | "jifn" ->
           let lbl = between_angle self label in
           let cur_pos = CB.cur_pos self.cb in
           CB.add_instr self.cb Instr.Nop;
           with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (Instr.Jleq lbl_pos))
+              CB.set_instr self.cb cur_pos (Instr.Jifn lbl_pos))
 
         | "jmp" ->
           let lbl = between_angle self label in
@@ -701,7 +694,9 @@ module Parser = struct
         | "memenv" -> CB.add_instr self.cb Instr.Memenv
         | "getenv" -> CB.add_instr self.cb Instr.Getenv
         | "qenv" -> CB.add_instr self.cb Instr.Qenv
+
         | _ ->
+          (* look for a primitive of that name *)
           begin match Str_map.find_opt str self.prims with
             | Some p ->
               (* load primitive *)
