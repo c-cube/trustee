@@ -27,9 +27,11 @@ let instrs: (string*arg list*doc) list = [
   "add1", [], "(a -- a+1) Increment top of stack";
   "sub", [], "(a b -- a-b) Pop two values, subtract them";
   "sub1", [], "(a -- a-1) Decrement top of stack";
-  "jeq", [Int], "(a b -- ) Pop two values; if a = b then set IP=<offset>";
-  "jlt", [Int], "(a b -- ) Pop two integer values; if a < b then set IP=<offset>";
-  "jleq", [Int], "(a b -- ) Pop two integer values; if a <= b then set IP=<offset>";
+  "eq", [], "(a b -- ) Pop two values; push boolean (a==b)";
+  "lt", [], "(a b -- ) Pop two integer values; push boolean (a < b)";
+  "leq", [], "(a b -- ) Pop two integer values; push boolean (a <= b)";
+  "jif", [Int], "(bool -- ) Pop a boolean; if true, then set IP=<offset>";
+  "jifn", [Int], "(bool -- ) Pop a boolean; if false, then set IP=<offset>";
   "jmp", [Int], "( -- ) Set IP=<offset> unconditionally";
   "memenv", [], "(str -- bool) Pop a string, returns `true` iff this name is bound in env";
   "getenv", [], "(str -- v) Pop a string, returns the value with this name in env. Fails if not present";

@@ -18,10 +18,7 @@ let dump =
 let setenv =
   VM.Primitive.make ~name:"setenv"
     ~eval:(fun vm ->
-        let key = match VM.Value.as_str @@ VM.pop_exn vm with
-          | Some s -> s
-          | None -> Error.fail "expected a string key"
-        in
+        let key = VM.pop_exn vm |> VM.Value.to_str_exn in
         let v = VM.pop_exn vm in
         Fmt.printf "assigning %s@." key;
         let env = VM.get_env vm |> VM.Env.add key v in

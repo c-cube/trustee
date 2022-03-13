@@ -40,9 +40,16 @@ module Value : sig
   val pp : t Fmt.printer
   val show : t -> string
 
-  val as_str : t -> string option
-  val as_bool : t -> bool option
-  val as_int : t -> int option
+  type 'a conv_to = t -> 'a option
+  type 'a conv_to_exn = t -> 'a
+
+  val to_str : string conv_to
+  val to_bool : bool conv_to
+  val to_int : int conv_to
+
+  val to_str_exn : string conv_to_exn
+  val to_bool_exn : bool conv_to_exn
+  val to_int_exn : int conv_to_exn
 end
 
 (** Environment for the virtual machine.
