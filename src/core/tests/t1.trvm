@@ -1,0 +1,6 @@
+; basic factorial, using env-based recursion (!)
+
+set fact { rstore<0> 1 rload<0> lt jif<:l1> 1 ret :l1 rload<0> sub1 "fact" getenv call rload<0> mult }
+
+5 "fact" getenv call
+show
