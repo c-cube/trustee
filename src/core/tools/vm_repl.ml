@@ -73,6 +73,27 @@ let main () =
       Printf.eprintf "exception: %s\n%!" (Printexc.to_string e)
   in
 
+  (* multi-line "set" *)
+  let read_set line =
+
+    let _, rest = CCString.Split.left_exn ~by:" " line in
+    let name, rest = CCString.Split.left_exn ~by:" " rest in
+    let name = String.trim name in
+
+    let buf = Buffer.create 32 in
+    Buffer.add_string buf rest;
+    while VM.Parser.needs_more (Buffer.contents buf) do
+      match Readline.read_line ".. " |> Option.map String.trim with
+      | None -> raise End_of_file
+      | Some "" -> ()
+      | Some s ->
+        if !readline then Readline.hist_add s;
+        Buffer.add_char buf '\n';
+        Buffer.add_string buf s
+    done;
+    name, Buffer.contents buf
+  in
+
   let continue = ref true in
   while !continue do
     match Readline.read_line "> " |> Option.map String.trim with
@@ -82,14 +103,11 @@ let main () =
 
     | Some "reset" -> VM.reset vm;
     | Some "dump" -> Fmt.printf "%a@." VM.dump vm;
-    | Some ("help" as str) -> Readline.hist_add str; print_endline help;
+    | Some ("help" as str) -> if !readline then Readline.hist_add str; print_endline help;
 
     | Some line when CCString.prefix ~pre:"set " line ->
-      Readline.hist_add line;
-
-      let _, rest = CCString.Split.left_exn ~by:" " line in
-      let name, rest = CCString.Split.left_exn ~by:" " rest in
-      let name = String.trim name in
+      if !readline then Readline.hist_add line;
+      let name, rest = read_set line in
 
       begin match parse_str rest with
         | None -> ()
@@ -108,13 +126,14 @@ let main () =
       end;
 
     | Some line ->
-      Readline.hist_add line;
+      if !readline then Readline.hist_add line;
 
       begin match parse_str line with
         | None ->()
         | Some c -> eval_chunk ~vm c
       end
     | None -> continue := false
+    | exception End_of_file -> continue := false
     | exception Sys.Break -> continue := false
   done;
   ()
