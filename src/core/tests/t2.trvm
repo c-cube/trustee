@@ -1,0 +1,17 @@
+
+; basic factorial with a loop
+
+set fact {
+  rstore<0>
+  1 rstore<1> ; sum = 1
+  :loop
+    rload<0> 1 leq ; n <= 1
+  jif<:ret>
+    rload<0> rload<1> mult rstore<1> ; sum *= n
+    rload<0> sub1 rstore<0> ; n--
+    jmp<:loop>
+  :ret rload<1> ret
+}
+
+5 "fact" getenv call
+show

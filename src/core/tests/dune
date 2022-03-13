@@ -9,3 +9,14 @@
   (alias runtest)
   (package trustee)
   (action (diff t1.trvm.expected t1.trvm.out)))
+
+(rule
+  (targets t2.trvm.out)
+  (deps (:repl ../tools/vm_repl.exe) (:file t2.trvm))
+  (package trustee)
+  (action (with-stdout-to %{targets} (with-stdin-from %{file} (run %{repl} --raw)))))
+
+(rule
+  (alias runtest)
+  (package trustee)
+  (action (diff t2.trvm.expected t2.trvm.out)))
