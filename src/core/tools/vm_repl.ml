@@ -1,6 +1,7 @@
 
 module Fmt = CCFormat
 open Trustee_core
+module K = Kernel
 
 let show =
   VM.Primitive.make ~name:"show"
@@ -51,7 +52,8 @@ let debug_hook vm i =
   Fmt.eprintf "@[<2>exec `%a`@ in %a@]@." VM.Instr.pp i VM.dump vm
 
 let main () =
-  let vm = VM.create() in
+  let ctx = K.Ctx.create() in
+  let vm = VM.create ~ctx () in
   if !debug then VM.set_debug_hook vm debug_hook;
 
   let parse_str str =
@@ -114,7 +116,7 @@ let main () =
         | Some c ->
 
           (* run [c] in a different VM to get the value *)
-          let vm' = VM.create ~env:(VM.get_env vm) () in
+          let vm' = VM.create ~ctx ~env:(VM.get_env vm) () in
           if !debug then VM.set_debug_hook vm' debug_hook;
 
           eval_chunk ~vm:vm' c;

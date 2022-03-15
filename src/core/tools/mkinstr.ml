@@ -2,13 +2,15 @@
 (* generate some code for the VM instructions *)
 
 let pf = Printf.printf
-type arg =
+
+(** Opcode argument *)
+type op_arg =
   | Int
   | Bool
 
 type doc=string
 
-let instrs: (string*arg list*doc) list = [
+let instrs: (string*op_arg list*doc) list = [
   "nop", [], "( -- ) Do nothing";
   "call", [], "(chunk -- ) Pop and call the chunk or primitive that is on top of the stack";
   "ret", [], "( -- ) Return from current chunk";
@@ -37,6 +39,13 @@ let instrs: (string*arg list*doc) list = [
   "memenv", [], "(str -- bool) Pop a string, returns `true` iff this name is bound in env";
   "getenv", [], "(str -- v) Pop a string, returns the value with this name in env. Fails if not present";
   "qenv", [], "(str -- v bool) Pop a string, returns `v, true` if `v` is the value with this name in env, `nil, false` otherwise.";
+  "var", [], "(str ty -- var) Pop a string and a type, pushes a variable.";
+  "evar", [], "(var -- expr) Pop a name and a type, return variable.";
+  "eapp", [], "(f e -- expr) Pop expressions `f` and `e`, pushes `f e`.";
+  "elam", [], "(var expr -- expr) Pops variable `v` and body `e`, and pushes `λv. e`.";
+  "econst", [], "(c array[ty] -- expr) Pops constant and type arguments, pushes expression.";
+  "econst0", [], "(c -- expr) Pops nullary constant, pushes expression.";
+  "econst1", [], "(c ty -- expr) Pops unary constant and parameter, pushes expression.";
 ]
 
 let emit_ty (name,args,doc) =
