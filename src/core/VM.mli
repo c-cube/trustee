@@ -113,7 +113,10 @@ end
 type t = vm
 (** Virtual machine *)
 
-val create : ?env:Env.t -> unit -> t
+val create :
+  ?env:Env.t ->
+  ctx:K.Ctx.t ->
+  unit -> t
 
 val set_debug_hook : t -> (t -> Instr.t -> unit) -> unit
 (** Set a debug hook that is called before each instruction *)

@@ -30,6 +30,9 @@ module Types_ = struct
     mutable env: env;
     (** Logical environment. The VM itself cannot modify it. *)
 
+    ctx: K.Ctx.t;
+    (** Logical context *)
+
     mutable debug_hook: (vm -> instr -> unit) option;
   }
 
@@ -51,6 +54,7 @@ module Types_ = struct
     | Expr of K.Expr.t
     | Thm of K.Thm.t
     | Var of K.Var.t
+    | Const of K.Const.t
     | Subst of K.Subst.t
     | Theory of K.Theory.t
     | Chunk of chunk
@@ -96,6 +100,7 @@ module Types_ = struct
     | Expr x -> K.Expr.pp out x
     | Thm x -> K.Thm.pp out x
     | Var x -> K.Var.pp out x
+    | Const x -> K.Const.pp out x
     | Subst x -> K.Subst.pp out x
     | Theory x -> K.Theory.pp out x
     | Chunk c ->
@@ -143,6 +148,7 @@ module Value = struct
   let expr (x:K.Expr.t) : t = Expr x
   let thm (x:K.Thm.t) : t = Thm x
   let var (x:K.Var.t) : t = Var x
+  let const (x:K.Const.t) : t = Const x
   let subst (x:K.Subst.t) : t = Subst x
   let theory (x:K.Theory.t) : t = Theory x
   let chunk c : t = Chunk c
@@ -161,11 +167,12 @@ module Value = struct
     | Expr e1, Expr e2 -> K.Expr.equal e1 e2
     | Thm th1, Thm th2 -> K.Thm.equal th1 th2
     | Var v1, Var v2 -> K.Var.equal v1 v2
+    | Const c1, Const c2 -> K.Const.equal c1 c2
     | Subst s1, Subst s2 -> K.Subst.equal s1 s2
     | Theory th1, Theory th2 -> th1 == th2
     | Chunk c1, Chunk c2 -> c1 == c2
     | Prim p1, Prim p2 -> p1.pr_name = p2.pr_name
-    | (Bool _ | Int _ | String _ | Array _
+    | (Bool _ | Int _ | String _ | Array _ | Const _
       | Expr _ | Thm _ | Var _ | Subst _ |
        Theory _ | Nil | Chunk _ | Prim _), _ -> false
 
@@ -176,10 +183,22 @@ module Value = struct
   let[@inline] to_str = function String x -> Some x | _ -> None
   let[@inline] to_bool = function Bool x -> Some x | _ -> None
   let[@inline] to_int = function Int x -> Some x | _ -> None
+  let[@inline] to_expr = function Expr x -> Some x | _ -> None
+  let[@inline] to_thm = function Thm x -> Some x | _ -> None
+  let[@inline] to_var = function Var x -> Some x | _ -> None
+  let[@inline] to_const = function Const x -> Some x | _ -> None
+  let[@inline] to_array = function Array x -> Some x | _ -> None
+  let[@inline] to_subst = function Subst x -> Some x | _ -> None
 
   let[@inline] to_str_exn = function String x -> x | _ -> Error.fail "expected string"
   let[@inline] to_bool_exn = function Bool x -> x | _ -> Error.fail "expected bool"
   let[@inline] to_int_exn = function Int x -> x | _ -> Error.fail "expected int"
+  let[@inline] to_expr_exn = function Expr x -> x | _ -> Error.fail "expected expr"
+  let[@inline] to_thm_exn = function Thm x -> x | _ -> Error.fail "expected thm"
+  let[@inline] to_var_exn = function Var x -> x | _ -> Error.fail "expected var"
+  let[@inline] to_const_exn = function Const x -> x | _ -> Error.fail "expected const"
+  let[@inline] to_array_exn = function Array x -> x | _ -> Error.fail "expected array"
+  let[@inline] to_subst_exn = function Subst x -> x | _ -> Error.fail "expected subst"
 end
 
 module Env = struct
@@ -236,7 +255,7 @@ module VM_ = struct
      an instruction. *)
   exception Stop_exec
 
-  let create (env:Env.t) : t = {
+  let create (env:Env.t) ~ctx : t = {
     stack=Vec.make 128 Value.nil;
     call_stack=Vec.make 12 Chunk.dummy;
     call_restore_ip=Vec.make 12 0;
@@ -244,6 +263,7 @@ module VM_ = struct
     ip=0;
     regs=Vec.make 32 Value.nil;
     env;
+    ctx;
     debug_hook=None;
   }
 
@@ -522,6 +542,51 @@ module VM_ = struct
                 end
               | _ -> Error.fail "vm.qenv: required a string"
             end
+
+          | Var ->
+            let ty = pop_val_exn self |> Value.to_expr_exn in
+            let str = pop_val_exn self |> Value.to_str_exn in
+            let v = K.Var.make str ty in
+            push_val self (Value.var v)
+
+          | Evar ->
+            let v = pop_val_exn self |> Value.to_var_exn in
+            let e = K.Expr.var self.ctx v in
+            push_val self (Value.expr e)
+
+          | Eapp ->
+            let arg = pop_val_exn self |> Value.to_expr_exn in
+            let f = pop_val_exn self |> Value.to_expr_exn in
+            let e = K.Expr.app self.ctx f arg in
+            push_val self (Value.expr e)
+
+          | Elam ->
+            let bod = pop_val_exn self |> Value.to_expr_exn in
+            let v = pop_val_exn self |> Value.to_var_exn in
+            let e = K.Expr.lambda self.ctx v bod in
+            push_val self (Value.expr e)
+
+          | Econst ->
+            let args =
+              pop_val_exn self |> Value.to_array_exn
+              |> Vec.to_list
+              |> List.map Value.to_expr_exn
+            in
+            let c = pop_val_exn self |> Value.to_const_exn in
+            let e = K.Expr.const self.ctx c args in
+            push_val self (Value.expr e)
+
+          | Econst0 ->
+            let c = pop_val_exn self |> Value.to_const_exn in
+            let e = K.Expr.const self.ctx c [] in
+            push_val self (Value.expr e)
+
+          | Econst1 ->
+            let ty0 = pop_val_exn self |> Value.to_expr_exn in
+            let c = pop_val_exn self |> Value.to_const_exn in
+            let e = K.Expr.const self.ctx c [ty0] in
+            push_val self (Value.expr e)
+
         )
       done
     with Stop_exec ->
@@ -563,7 +628,8 @@ module Chunk_builder_ = struct
       | Rstore i | Rload i -> self.cb_n_regs <- max (i+1) self.cb_n_regs
       | Nop | Call | Ret | Dup | Drop | Exch | Extract _ | Mult
       | Lload _ | Int _ | Memenv | Getenv | Qenv | Bool _ | Nil | Not | Add |
-      Add1 | Sub | Sub1 | Eq | Leq | Lt | Jif _ | Jifn _ | Jmp _ -> ()
+      Add1 | Sub | Sub1 | Eq | Leq | Lt | Jif _ | Jifn _ | Jmp _
+      | Eapp | Var | Evar | Elam | Econst | Econst0 | Econst1 -> ()
     end
 
   (* current position in the list of instructions *)
@@ -781,8 +847,8 @@ end
 
 type t = Types_.vm
 
-let create ?(env=Env.empty) () : t =
-  let vm = VM_.create env in
+let create ?(env=Env.empty) ~ctx () : t =
+  let vm = VM_.create env ~ctx in
   vm
 
 let[@inline] get_env (self:t) = self.env
@@ -809,9 +875,14 @@ let parse_string_exn ?prims s : Chunk.t =
   | Ok c -> c
   | Error e -> Error.raise e
 
+(*$inject
+  let ctx = K.Ctx.create()
+  let vm = create ~ctx ()
+*)
+
 (*$R
   let c = parse_string_exn "42 2 add" in
-  let vm = create () in
+  reset vm;
   run vm c;
   let v = pop_exn vm in
   assert_equal ~cmp:Value.equal ~printer:Value.show (Value.int 44) v
