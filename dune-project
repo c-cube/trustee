@@ -8,6 +8,7 @@
 (homepage "https://github.com/c-cube/trustee/")
 (source (github "c-cube/trustee"))
 (bug_reports "https://github.com/c-cube/trustee/issues")
+(version 0.1)
 
 (package
   (name trustee)
@@ -55,8 +56,8 @@
   (depends
     (dune (>= "2.0"))
     (containers (and (>= 3.0) (< 4.0)))
-    (trustee (= "version"))
-    (trustee-itp (= "version"))
+    (trustee (= :version))
+    (trustee-itp (= :version))
     lsp
     logs
     (linol (and (>= 0.4) (< 0.5)))
