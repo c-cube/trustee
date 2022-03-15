@@ -25,7 +25,7 @@ jobs:
     - run: opam pin -n .
     - run: opam depext -yt trustee trustee-itp trustee-opentheory trustee-lsp
     - run: opam install -t . --deps-only
-    - run: opam exec -- dune build -p trustee
-    - run: opam exec -- dune runtest -p trustee
+    - run: opam exec -- dune build -p trustee,trustee-itp,trustee-opentheory
+    - run: opam exec -- dune runtest -p trustee,trustee-itp,trustee-opentheory
       if: ${{ matrix.os == 'ubuntu-latest'}}
     - run: opam exec -- dune build -p trustee,trustee-itp,trustee-opentheory,trustee-lsp
