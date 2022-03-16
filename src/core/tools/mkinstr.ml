@@ -46,6 +46,16 @@ let instrs: (string*op_arg list*doc) list = [
   "econst", [], "(c array[ty] -- expr) Pops constant and type arguments, pushes expression.";
   "econst0", [], "(c -- expr) Pops nullary constant, pushes expression.";
   "econst1", [], "(c ty -- expr) Pops unary constant and parameter, pushes expression.";
+  "thabs", [], "(th var -- th) Pops `|- t=u` and `v`, pushes `|- \v.t=\v.u`.";
+  "thcongr", [], "(th th -- th) Pops `|- f=g` and `|- a=b`, pushes `|- f a=g b`.";
+  "thass", [], "(expr -- th) Pops `e`, pushes `e |- e`.";
+  "thcut", [], "(th th -- th) Pops th2, th1, pushes `cut th1 th2`.";
+  "threfl", [], "(e -- th) Pops `e`, pushes `|- e=e`.";
+  "thsym", [], "(th -- th) Pops `|- a=b`, pushes `|- b=a`.";
+  "thtrans", [], "(th th -- th) Pops th2, th1, pushes `trans th1 th2`.";
+  "thbeq", [], "(th th -- th) Pops th2, th1, pushes `bool_eq th1 th2`.";
+  "thbeqi", [], "(th th -- th) Pops th2, th1, pushes `bool_eq_intro th1 th2`.";
+  "thbeta", [], "(expr -- th) Pops `(\x. t) u`, pushes `|- (\x.t) u = t[x:=u]`.";
 ]
 
 let emit_ty (name,args,doc) =

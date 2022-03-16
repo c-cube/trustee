@@ -587,7 +587,63 @@ module VM_ = struct
             let e = K.Expr.const self.ctx c [ty0] in
             push_val self (Value.expr e)
 
+          | Thabs ->
+            let v = pop_val_exn self |> Value.to_var_exn in
+            let th = pop_val_exn self |> Value.to_thm_exn in
+            let th = K.Thm.abs self.ctx v th in
+            push_val self (Value.thm th)
+
+          | Thcongr ->
+            let th2 = pop_val_exn self |> Value.to_thm_exn in
+            let th1 = pop_val_exn self |> Value.to_thm_exn in
+            let th = K.Thm.congr self.ctx th1 th2 in
+            push_val self (Value.thm th)
+
+          | Thass ->
+            let e = pop_val_exn self |> Value.to_expr_exn in
+            let th = K.Thm.assume self.ctx e in
+            push_val self (Value.thm th)
+
+          | Thcut ->
+            let th2 = pop_val_exn self |> Value.to_thm_exn in
+            let th1 = pop_val_exn self |> Value.to_thm_exn in
+            let th = K.Thm.cut self.ctx th1 th2 in
+            push_val self (Value.thm th)
+
+          | Threfl ->
+            let e = pop_val_exn self |> Value.to_expr_exn in
+            let th = K.Thm.refl self.ctx e in
+            push_val self (Value.thm th)
+
+          | Thsym ->
+            let th = pop_val_exn self |> Value.to_thm_exn in
+            let th = K.Thm.sym self.ctx th in
+            push_val self (Value.thm th)
+
+          | Thtrans ->
+            let th2 = pop_val_exn self |> Value.to_thm_exn in
+            let th1 = pop_val_exn self |> Value.to_thm_exn in
+            let th = K.Thm.trans self.ctx th1 th2 in
+            push_val self (Value.thm th)
+
+          | Thbeq ->
+            let th2 = pop_val_exn self |> Value.to_thm_exn in
+            let th1 = pop_val_exn self |> Value.to_thm_exn in
+            let th = K.Thm.bool_eq self.ctx th1 th2 in
+            push_val self (Value.thm th)
+
+          | Thbeqi ->
+            let th2 = pop_val_exn self |> Value.to_thm_exn in
+            let th1 = pop_val_exn self |> Value.to_thm_exn in
+            let th = K.Thm.bool_eq_intro self.ctx th1 th2 in
+            push_val self (Value.thm th)
+
+          | Thbeta ->
+            let e = pop_val_exn self |> Value.to_expr_exn in
+            let th = K.Thm.beta_conv self.ctx e in
+            push_val self (Value.thm th)
         )
+
       done
     with Stop_exec ->
       ()
@@ -626,10 +682,7 @@ module Chunk_builder_ = struct
     Vec.push self.cb_instrs i;
     begin match i with
       | Rstore i | Rload i -> self.cb_n_regs <- max (i+1) self.cb_n_regs
-      | Nop | Call | Ret | Dup | Drop | Exch | Extract _ | Mult
-      | Lload _ | Int _ | Memenv | Getenv | Qenv | Bool _ | Nil | Not | Add |
-      Add1 | Sub | Sub1 | Eq | Leq | Lt | Jif _ | Jifn _ | Jmp _
-      | Eapp | Var | Evar | Elam | Econst | Econst0 | Econst1 -> ()
+      | _ -> ()
     end
 
   (* current position in the list of instructions *)
