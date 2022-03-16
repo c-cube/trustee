@@ -17,7 +17,8 @@ let instrs: (string*op_arg list*doc) list = [
   "dup", [], "(a -- a a) drop value on top of stack, discarding it";
   "drop", [], "(a -- ) drop value on top of stack, discarding it";
   "exch", [], "(a b -- b a) exchange the two top values of the stack";
-  "extract", [Int], "(vs -- vs vs[-i]) extract <i>-th value, where 0 is top of the stack. `extract 0` is `dup`.";
+  "extract", [Int], "(vs -- vs vs[-i]) extract <i>-th value, where 0 is top of the stack.\n\
+                     `extract 0` is `dup`.";
   "rstore", [Int], "(x -- ) Pop value and store it into register <i>";
   "rload", [Int], "( -- x) Load value from register <i> and push it onto stack";
   "lload", [Int], "( -- x) Load i-th local value of current chunk and push it onto stack";
@@ -37,15 +38,29 @@ let instrs: (string*op_arg list*doc) list = [
   "jifn", [Int], "(bool -- ) Pop a boolean; if false, then set IP=<offset>";
   "jmp", [Int], "( -- ) Set IP=<offset> unconditionally";
   "memenv", [], "(str -- bool) Pop a string, returns `true` iff this name is bound in env";
-  "getenv", [], "(str -- v) Pop a string, returns the value with this name in env. Fails if not present";
-  "qenv", [], "(str -- v bool) Pop a string, returns `v, true` if `v` is the value with this name in env, `nil, false` otherwise.";
+  "getenv", [], "(str -- v) Pop a string, returns the value with this name in env.\n\
+                 Fails if not present";
+  "qenv", [], "(str -- any? bool) Pop a string, returns `v, true` \
+               if `v` is the value with this name in env, `nil, false` otherwise.";
+  "type", [], "( -- type) Pushes the kind `type`.";
   "var", [], "(str ty -- var) Pop a string and a type, pushes a variable.";
+  "vty", [], "(var -- ty) Pop a variable, pushes its type.";
+  "tyarr", [], "(ty ty -- ty) Pops types `a` and `b, pushes `a -> b`.";
   "evar", [], "(var -- expr) Pop a name and a type, return variable.";
   "eapp", [], "(f e -- expr) Pop expressions `f` and `e`, pushes `f e`.";
   "elam", [], "(var expr -- expr) Pops variable `v` and body `e`, and pushes `λv. e`.";
-  "econst", [], "(c array[ty] -- expr) Pops constant and type arguments, pushes expression.";
+  "econst", [], "(c []ty -- expr) Pops constant and type arguments, pushes expression.";
   "econst0", [], "(c -- expr) Pops nullary constant, pushes expression.";
   "econst1", [], "(c ty -- expr) Pops unary constant and parameter, pushes expression.";
+  "deapp", [], "(expr -- expr? expr? bool) Pops expression, returns `f a true` \
+                if it's `f a`, pushes `nil nil false` otherwise.";
+  "delam", [], "(expr -- var? expr? bool) Pops expression, returns `v bod true` \
+                if it's `\v.bod`, `nil nil false` otherwise.";
+  "devar", [], "(expr -- var? bool) Pops expression, returns `v true` \
+                if it's variable `v`, `nil false` otherwise.";
+  "deconst", [], "(expr -- const? []ty? bool) Pops expression, returns \
+                  `c args true` if it's `c` applied to arguments `args`; \
+                  returns `nil nil false` otherwise..";
   "thabs", [], "(th var -- th) Pops `|- t=u` and `v`, pushes `|- \v.t=\v.u`.";
   "thcongr", [], "(th th -- th) Pops `|- f=g` and `|- a=b`, pushes `|- f a=g b`.";
   "thass", [], "(expr -- th) Pops `e`, pushes `e |- e`.";
@@ -56,6 +71,7 @@ let instrs: (string*op_arg list*doc) list = [
   "thbeq", [], "(th th -- th) Pops th2, th1, pushes `bool_eq th1 th2`.";
   "thbeqi", [], "(th th -- th) Pops th2, th1, pushes `bool_eq_intro th1 th2`.";
   "thbeta", [], "(expr -- th) Pops `(\x. t) u`, pushes `|- (\x.t) u = t[x:=u]`.";
+  "dth", [], "(th -- []expr expr) Pops `F |- e`, pushes array `F` and conclusion `e`.";
 ]
 
 let emit_ty (name,args,doc) =
