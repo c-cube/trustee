@@ -142,6 +142,8 @@ module Value = struct
 
   let nil : t = Nil
   let bool b : t = Bool b
+  let true_ = bool true
+  let false_ = bool false
   let int (x:int) : t = Int x
   let string (x:string) : t = String x
   let array (x:t vec) : t = Array x
@@ -543,11 +545,23 @@ module VM_ = struct
               | _ -> Error.fail "vm.qenv: required a string"
             end
 
+          | Type ->
+            push_val self (Value.expr @@ K.Expr.type_ self.ctx)
+
+          | Tyarr ->
+            let b = pop_val_exn self |> Value.to_expr_exn in
+            let a = pop_val_exn self |> Value.to_expr_exn in
+            push_val self (Value.expr @@ K.Expr.arrow self.ctx a b)
+
           | Var ->
             let ty = pop_val_exn self |> Value.to_expr_exn in
             let str = pop_val_exn self |> Value.to_str_exn in
             let v = K.Var.make str ty in
             push_val self (Value.var v)
+
+          | Vty ->
+            let v = pop_val_exn self |> Value.to_var_exn in
+            push_val self (Value.expr @@ K.Var.ty v);
 
           | Evar ->
             let v = pop_val_exn self |> Value.to_var_exn in
@@ -586,6 +600,58 @@ module VM_ = struct
             let c = pop_val_exn self |> Value.to_const_exn in
             let e = K.Expr.const self.ctx c [ty0] in
             push_val self (Value.expr e)
+
+          | Devar ->
+            let e = pop_val_exn self |> Value.to_expr_exn in
+            begin match K.Expr.view e with
+              | K.E_var v ->
+                push_val self (Value.var v);
+                push_val self Value.true_;
+              | _ ->
+                push_val self Value.nil;
+                push_val self Value.false_;
+            end;
+
+          | Deapp ->
+            let e = pop_val_exn self |> Value.to_expr_exn in
+            begin match K.Expr.view e with
+              | K.E_app (f,a) ->
+                push_val self (Value.expr f);
+                push_val self (Value.expr a);
+                push_val self Value.true_;
+              | _ ->
+                push_val self Value.nil;
+                push_val self Value.nil;
+                push_val self Value.false_;
+            end;
+
+          | Delam ->
+            let e = pop_val_exn self |> Value.to_expr_exn in
+            begin match K.Expr.view e with
+              | K.E_lam _ ->
+                let v, bod = K.Expr.open_lambda_exn self.ctx e in
+                push_val self (Value.var v);
+                push_val self (Value.expr bod);
+                push_val self Value.true_;
+              | _ ->
+                push_val self Value.nil;
+                push_val self Value.nil;
+                push_val self Value.false_;
+            end;
+
+          | Deconst ->
+            let e = pop_val_exn self |> Value.to_expr_exn in
+            begin match K.Expr.view e with
+              | K.E_const (c,args) ->
+                push_val self (Value.const c);
+                let args = args |> List.map Value.expr |> Vec.of_list in
+                push_val self (Value.array args);
+                push_val self Value.true_;
+              | _ ->
+                push_val self Value.nil;
+                push_val self Value.nil;
+                push_val self Value.false_;
+            end;
 
           | Thabs ->
             let v = pop_val_exn self |> Value.to_var_exn in
@@ -642,6 +708,14 @@ module VM_ = struct
             let e = pop_val_exn self |> Value.to_expr_exn in
             let th = K.Thm.beta_conv self.ctx e in
             push_val self (Value.thm th)
+
+          | Dth ->
+            let th = pop_val_exn self |> Value.to_thm_exn in
+            let hyps =
+              K.Thm.hyps_sorted_l th |> List.map Value.expr |> Vec.of_list in
+            push_val self (Value.array hyps);
+            let concl = K.Thm.concl th in
+            push_val self (Value.expr concl);
         )
 
       done
