@@ -1,14 +1,14 @@
 ; basic factorial, using env-based recursion (!)
 
 set fact {
-  rstore<0>
-  1 rload<0> lt ; n > 1
-  jif<:l1>
+  (rstore 0)
+  1 (rload 0) lt ; n > 1
+  (jif :l1)
     1 ret
   :l1
-    rload<0> sub1
+    (rload 0) sub1
       "fact" getenv call ; fact (n-1)
-    rload<0> mult ; *n
+    (rload 0) mult ; *n
 }
 
 5 "fact" getenv call

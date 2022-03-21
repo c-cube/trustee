@@ -879,12 +879,6 @@ module Parser = struct
     | VM_lex.COLON_STR s -> s
     | _ -> Error.fail "expected label (e.g. `:foo`)"
 
-  let between_angle (self:st) p =
-    exact self "'<'" VM_lex.LANGLE;
-    let x=p self in
-    exact self "'>'" VM_lex.RANGLE;
-    x
-
   (** Parse a chunk into [self.cb] *)
   let rec parse_chunk_into_ (self:st) : [`Eoi | `Rbrace] =
     let[@inline] recurse() = parse_chunk_into_ self in
@@ -914,7 +908,58 @@ module Parser = struct
       self.labels <- Str_map.add lbl (CB.cur_pos self.cb) self.labels;
       recurse();
 
-    | VM_lex.LPAREN -> Error.fail "syntax error"
+    | VM_lex.LPAREN ->
+      let str = atom self in
+      begin match str with
+        | "extract" ->
+          let i = int self in
+          rparen self;
+          CB.add_instr self.cb (Instr.Extract i)
+
+        | "rstore" ->
+          let i = int self in
+          rparen self;
+          CB.add_instr self.cb (Instr.Rstore i)
+
+        | "rload" ->
+          let i = int self in
+          rparen self;
+          CB.add_instr self.cb (Instr.Rload i)
+
+        | "lload" ->
+          let i = int self in
+          rparen self;
+          CB.add_instr self.cb (Instr.Lload i)
+
+        | "jif" ->
+          let lbl = label self in
+          rparen self;
+          let cur_pos = CB.cur_pos self.cb in
+          CB.add_instr self.cb Instr.Nop;
+          with_label lbl (fun lbl_pos ->
+              CB.set_instr self.cb cur_pos (Instr.Jif lbl_pos))
+
+        | "jifn" ->
+          let lbl = label self in
+          rparen self;
+          let cur_pos = CB.cur_pos self.cb in
+          CB.add_instr self.cb Instr.Nop;
+          with_label lbl (fun lbl_pos ->
+              CB.set_instr self.cb cur_pos (Instr.Jifn lbl_pos))
+
+        | "jmp" ->
+          let lbl = label self in
+          rparen self;
+          let cur_pos = CB.cur_pos self.cb in
+          CB.add_instr self.cb Instr.Nop;
+          with_label lbl (fun lbl_pos ->
+              CB.set_instr self.cb cur_pos (Instr.Jmp lbl_pos))
+
+        | _ ->
+          Error.failf (fun k->k"invalid instruction %S" str)
+      end;
+      recurse ()
+
     | VM_lex.RPAREN -> Error.fail "syntax error"
     | VM_lex.LBRACKET -> Error.fail "syntax error"
     | VM_lex.RBRACKET -> Error.fail "syntax error"
@@ -934,18 +979,6 @@ module Parser = struct
         | "dup" -> CB.add_instr self.cb Instr.Dup
         | "drop" -> CB.add_instr self.cb Instr.Drop
         | "exch" -> CB.add_instr self.cb Instr.Exch
-        | "extract" ->
-          let i = between_angle self int in
-          CB.add_instr self.cb (Instr.Extract i)
-        | "rstore" ->
-          let i = between_angle self int in
-          CB.add_instr self.cb (Instr.Rstore i)
-        | "rload" ->
-          let i = between_angle self int in
-          CB.add_instr self.cb (Instr.Rload i)
-        | "lload" ->
-          let i = between_angle self int in
-          CB.add_instr self.cb (Instr.Lload i)
         | "true" -> CB.add_instr self.cb (Instr.Bool true)
         | "false" -> CB.add_instr self.cb (Instr.Bool false)
         | "nil" -> CB.add_instr self.cb Instr.Nil
@@ -958,27 +991,6 @@ module Parser = struct
         | "leq" -> CB.add_instr self.cb Instr.Leq
         | "lt" -> CB.add_instr self.cb Instr.Lt
         | "eq" -> CB.add_instr self.cb Instr.Eq
-
-        | "jif" ->
-          let lbl = between_angle self label in
-          let cur_pos = CB.cur_pos self.cb in
-          CB.add_instr self.cb Instr.Nop;
-          with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (Instr.Jif lbl_pos))
-
-        | "jifn" ->
-          let lbl = between_angle self label in
-          let cur_pos = CB.cur_pos self.cb in
-          CB.add_instr self.cb Instr.Nop;
-          with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (Instr.Jifn lbl_pos))
-
-        | "jmp" ->
-          let lbl = between_angle self label in
-          let cur_pos = CB.cur_pos self.cb in
-          CB.add_instr self.cb Instr.Nop;
-          with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (Instr.Jmp lbl_pos))
 
         | "memenv" -> CB.add_instr self.cb Instr.Memenv
         | "getenv" -> CB.add_instr self.cb Instr.Getenv
