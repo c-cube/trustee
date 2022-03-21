@@ -245,6 +245,69 @@ module Primitive = struct
     { pr_name=name; pr_eval=eval; }
 end
 
+module Stanzas = struct
+  type t = {
+    view: view;
+  }
+
+  and view =
+    | Declare of {
+        name: Name.t;
+        ty_chunk: Chunk.t;
+        mutable ty: K.ty option;
+      }
+
+    | Define of {
+        name: Name.t;
+        body_chunk: Chunk.t;
+        mutable ty: K.ty option;
+        mutable body: K.expr option;
+      }
+
+    | Proof of proof
+
+    | Define_meta of {
+        name: string;
+        chunk: Chunk.t;
+      }
+
+  and proof = {
+    pr_goal_chunk: Chunk.t;
+    mutable pr_goal: K.Goal.t option;
+    pr_def: proof_def;
+  }
+
+  and proof_def =
+    | PR_chunk of {
+        chunk: Chunk.t;
+        mutable thm: K.Thm.t option;
+      }
+    | PR_steps of {
+        steps: (string * proof) Vec.t;
+        ret: proof;
+      }
+
+  let[@inline] view self = self.view
+
+  let rec pp out (self:t) : unit =
+    match view self with
+    | Declare {name; _} -> Fmt.fprintf out "(@[declare %a@])" Name.pp name
+    | Define {name; _} -> Fmt.fprintf out "(@[define %a@])" Name.pp name
+    | Define_meta {name; chunk} ->
+      Fmt.fprintf out "(@[define-meta `%s`@ :chunk %a@])"
+        name Chunk.pp chunk
+    | Proof pr -> pp_proof out pr
+
+  and pp_proof out (self:proof) : unit =
+    match self.pr_def with
+    | PR_chunk _ -> Fmt.string out "<chunk>"
+    | PR_steps {steps; ret} ->
+      let pp_step out (name,step) =
+        Fmt.fprintf out "(@[%s := %a@])" name pp_proof self in
+      Fmt.fprintf out "(@[steps %a@ :ret %a@])"
+        (Vec.pp ~sep:" " pp_step) steps pp_proof ret
+end
+
 (* internal handling of the VM *)
 module VM_ = struct
   open Types_

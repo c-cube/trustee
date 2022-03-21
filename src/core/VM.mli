@@ -94,6 +94,77 @@ module Primitive : sig
     unit -> t
 end
 
+(** Low level proof/meta stanzas.
+
+    These stanzas provide the basic building blocks for interacting with
+    all of Trustee's kernel. A low level proof file is composed of many of
+    these stanzas.
+
+    Stanzas rely on VM chunks to define and manipulate logic objects (expressions,
+    theorems, substitutions, etc.); however, chunks cannot perform side effects,
+    only take and return values, which are then injected into the global
+    environment by their containing stanzas.
+
+    In that way, a proof file is, at a high level, declarative. Just looking
+    at the stanzas is enough to see what is defined or proved, and where it is.
+    Evaluating chunks only has local impact.
+*)
+module Stanzas : sig
+  type t
+  (** A single stanza *)
+
+  type view = private
+    | Declare of {
+        name: Name.t;
+        ty_chunk: Chunk.t;
+        mutable ty: K.ty option;
+      }
+
+    | Define of {
+        name: Name.t;
+        body_chunk: Chunk.t;
+        mutable ty: K.ty option;
+        mutable body: K.expr option;
+      }
+
+    | Proof of proof
+
+    | Define_meta of {
+        name: string;
+        chunk: Chunk.t;
+      } (** Define a meta-level chunk *)
+
+  and proof = private {
+    pr_goal_chunk: Chunk.t;
+    mutable pr_goal: K.Goal.t option;
+    pr_def: proof_def;
+  }
+  (** Structured proof *)
+
+  (** Definition of a proof.
+
+      Proofs are structured, they can be either an atomic chunk
+      that returns a theorem;
+      or a series of steps that can use
+      previous steps in a DAG-like fashion.
+  *)
+  and proof_def = private
+    | PR_chunk of {
+        chunk: Chunk.t;
+        mutable thm: K.Thm.t option;
+      }
+    | PR_steps of {
+        steps: (string * proof) Vec.t;
+        ret: proof;
+      }
+
+  val view : t -> view
+  (** Examine the stanza *)
+
+  val pp : t Fmt.printer
+  (** Pretty print *)
+end
+
 (** Basic syntax.
 
     This syntax is, for now, only intended for testing and possibly as
