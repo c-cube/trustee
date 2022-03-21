@@ -109,7 +109,7 @@ end
     at the stanzas is enough to see what is defined or proved, and where it is.
     Evaluating chunks only has local impact.
 *)
-module Stanzas : sig
+module Stanza : sig
   type t
   (** A single stanza *)
 
@@ -178,7 +178,9 @@ module Parser : sig
 
   val needs_more : string -> bool
 
-  val parse : t -> (Chunk.t, Error.t) result
+  val parse_chunk : t -> (Chunk.t, Error.t) result
+
+  val parse_stanzas : t -> (Stanza.t Vec.t, Error.t) result
 end
 
 type t = vm
