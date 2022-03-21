@@ -190,6 +190,11 @@ val create :
   ?env:Env.t ->
   ctx:K.Ctx.t ->
   unit -> t
+(** Create a new VM.
+    @param ctx the logical context to use to create expressions and
+    theorems
+    @param env current environment for values in scope.
+*)
 
 val set_debug_hook : t -> (t -> Instr.t -> unit) -> unit
 (** Set a debug hook that is called before each instruction *)
@@ -212,6 +217,8 @@ val pop_exn : t -> Value.t
 val run : t -> Chunk.t -> unit
 
 val dump : t Fmt.printer
+(** Debug printer for the VM.
+    Output is not specified, and not guaranteed to be stable. *)
 
 val parse_string :
   ?prims:Primitive.t Str_map.t ->
