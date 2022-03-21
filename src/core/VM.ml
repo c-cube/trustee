@@ -245,7 +245,7 @@ module Primitive = struct
     { pr_name=name; pr_eval=eval; }
 end
 
-module Stanzas = struct
+module Stanza = struct
   type t = {
     view: view;
   }
@@ -288,6 +288,7 @@ module Stanzas = struct
       }
 
   let[@inline] view self = self.view
+  let[@inline] make view : t = {view}
 
   let rec pp out (self:t) : unit =
     match view self with
@@ -860,25 +861,33 @@ module Parser = struct
       labels=Str_map.empty;
     }
 
-  let exact self what tok =
+  let exact (self:st) what tok =
     let tok' = VM_lex.token self.buf in
     if tok <> tok' then Error.failf (fun k->k"expected %s" what)
 
-  let int self = match VM_lex.token self.buf with
+  let rparen self = exact self "')'" VM_lex.RPAREN
+
+  let int (self:st) = match VM_lex.token self.buf with
     | VM_lex.INT i -> int_of_string i
     | _ -> Error.fail "expected integer"
+
+  let atom self = match VM_lex.token self.buf with
+    | VM_lex.ATOM s -> s
+    | _ -> Error.fail "expected atom"
+
   let label self = match VM_lex.token self.buf with
     | VM_lex.COLON_STR s -> s
     | _ -> Error.fail "expected label (e.g. `:foo`)"
 
-  let between_angle self p =
+  let between_angle (self:st) p =
     exact self "'<'" VM_lex.LANGLE;
     let x=p self in
     exact self "'>'" VM_lex.RANGLE;
     x
 
-  let rec parse_into (self:st) : [`Eoi | `Rbrace] =
-    let[@inline] recurse() = parse_into self in
+  (** Parse a chunk into [self.cb] *)
+  let rec parse_chunk_into_ (self:st) : [`Eoi | `Rbrace] =
+    let[@inline] recurse() = parse_chunk_into_ self in
 
     let finalize() =
       Vec.iter (fun d -> d()) self.delayed;
@@ -992,7 +1001,7 @@ module Parser = struct
     | VM_lex.LBRACE ->
       (* parse sub-chunk *)
       let st' = create_st self.prims self.buf in
-      begin match parse_into st' with
+      begin match parse_chunk_into_ st' with
         | `Eoi -> Error.fail "expected '}'"
         | `Rbrace ->
           (* finish sub-chunk, put it into locals *)
@@ -1003,12 +1012,39 @@ module Parser = struct
       end
     | VM_lex.RBRACE -> finalize(); `Rbrace
     | VM_lex.EOI -> finalize(); `Eoi
+  ;;
 
-  let parse (self:t) : _ result =
+  let rec parse_stanza_ (self:st) : Stanza.t option =
+    match VM_lex.token self.buf with
+    | VM_lex.EOI -> None
+    | VM_lex.LPAREN ->
+      let a = atom self in
+      begin match a with
+        | "meta" ->
+          let name = atom self in
+          CB.reset self.cb;
+          begin match parse_chunk_into_ self with
+            | `Rbrace ->
+              let c = CB.to_chunk self.cb in
+              let stanza = Stanza.make @@ Stanza.Define_meta {name; chunk=c} in
+              Some stanza
+            | `Eoi -> Error.fail "unexpected EOF"
+          end
+
+        | "declare" -> assert false
+
+        | "define" -> assert false
+
+        | "proof" -> assert false
+
+        | _ -> Error.failf (fun k->k"unknown stanza %S" a)
+      end
+    | _ -> Error.fail "syntax error"
+
+  let parse_chunk (self:t) : _ result =
     let buf = Lexing.from_string ~with_positions:false self.str in
     let st = create_st self.prims buf in
-
-    begin match parse_into st with
+    begin match parse_chunk_into_ st with
       | `Eoi ->
         let c = CB.to_chunk st.cb in
         Ok c
@@ -1018,6 +1054,19 @@ module Parser = struct
       | exception e ->
         Error (Error.of_exn e)
     end
+
+  let parse_stanzas (self:t) : (_ Vec.t, _) result =
+    let buf = Lexing.from_string ~with_positions:false self.str in
+    let st = create_st self.prims buf in
+    let vec = Vec.create() in
+    let rec loop() = match parse_stanza_ st with
+      | None -> Ok vec
+      | Some stanza ->
+        Vec.push vec stanza;
+        loop()
+      | exception Error.E err -> Error err
+    in
+    loop()
 
   let needs_more (str:string) : bool =
     let n_brace = ref 0 in
@@ -1058,7 +1107,7 @@ let dump = VM_.dump
 
 let parse_string ?prims s : _ result =
   let p = Parser.create ?prims s in
-  Parser.parse p
+  Parser.parse_chunk p
 
 let parse_string_exn ?prims s : Chunk.t =
   match parse_string ?prims s with
