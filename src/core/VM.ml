@@ -271,6 +271,10 @@ module Stanza = struct
         chunk: Chunk.t;
       }
 
+    | Eval_meta of {
+        chunk: Chunk.t;
+      }
+
   and proof = {
     pr_goal_chunk: Chunk.t;
     mutable pr_goal: K.Goal.t option;
@@ -298,6 +302,8 @@ module Stanza = struct
       Fmt.fprintf out "(@[define-meta `%s`@ :chunk %a@])"
         name Chunk.pp chunk
     | Proof pr -> pp_proof out pr
+    | Eval_meta {chunk} ->
+      Fmt.fprintf out "(@[eval-meta@ %a@])" Chunk.pp chunk
 
   and pp_proof out (self:proof) : unit =
     match self.pr_def with
@@ -1029,6 +1035,7 @@ module Parser = struct
   let rec parse_stanza_ (self:st) : Stanza.t option =
     match VM_lex.token self.buf with
     | VM_lex.EOI -> None
+
     | VM_lex.LPAREN ->
       let a = atom self in
       begin match a with
@@ -1040,7 +1047,17 @@ module Parser = struct
               let c = CB.to_chunk self.cb in
               let stanza = Stanza.make @@ Stanza.Define_meta {name; chunk=c} in
               Some stanza
-            | `Eoi -> Error.fail "unexpected EOF"
+            | `Eoi -> Error.fail "unexpected EOF in `meta`"
+          end
+
+        | "eval" ->
+          CB.reset self.cb;
+          begin match parse_chunk_into_ self with
+            | `Rbrace ->
+              let c = CB.to_chunk self.cb in
+              let stanza = Stanza.make @@ Stanza.Eval_meta {chunk=c} in
+              Some stanza
+            | `Eoi -> Error.fail "unexpected EOF in `eval`"
           end
 
         | "declare" -> assert false

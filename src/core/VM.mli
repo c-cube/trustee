@@ -134,6 +134,10 @@ module Stanza : sig
         chunk: Chunk.t;
       } (** Define a meta-level chunk *)
 
+    | Eval_meta of {
+        chunk: Chunk.t;
+      }
+
   and proof = private {
     pr_goal_chunk: Chunk.t;
     mutable pr_goal: K.Goal.t option;
