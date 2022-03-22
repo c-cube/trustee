@@ -852,6 +852,7 @@ module Parser = struct
     {str; prims}
 
   type st = {
+    mutable tok: VM_lex.token;
     buf: Lexing.lexbuf;
     prims: Primitive.t Str_map.t;
     cb: CB.t;
@@ -859,34 +860,45 @@ module Parser = struct
     mutable labels: int Str_map.t; (* offset of labels *)
   }
 
-  let create_st prims buf : st =
-    { buf;
+  let create_st ?tok prims buf : st =
+    let tok = match tok with
+      | Some t -> t
+      | None -> VM_lex.token buf
+    in
+    { tok;
+      buf;
       prims;
       cb = CB.create();
       delayed=Vec.create();
       labels=Str_map.empty;
     }
 
+  (* consume current token *)
+  let consume (self:st) : unit =
+    (*Format.eprintf "consume %a@." VM_lex.pp_tok self.tok;*)
+    self.tok <- VM_lex.token self.buf
+
   let exact (self:st) what tok =
-    let tok' = VM_lex.token self.buf in
-    if tok <> tok' then Error.failf (fun k->k"expected %s" what)
+    let tok' = self.tok in
+    if tok <> tok' then Error.failf (fun k->k"expected %s" what);
+    consume self
 
   let rparen self = exact self "')'" VM_lex.RPAREN
 
-  let int (self:st) = match VM_lex.token self.buf with
-    | VM_lex.INT i -> int_of_string i
+  let int (self:st) = match self.tok with
+    | VM_lex.INT i -> consume self; int_of_string i
     | _ -> Error.fail "expected integer"
 
-  let atom self = match VM_lex.token self.buf with
-    | VM_lex.ATOM s -> s
+  let atom self = match self.tok with
+    | VM_lex.ATOM s -> consume self; s
     | _ -> Error.fail "expected atom"
 
-  let label self = match VM_lex.token self.buf with
-    | VM_lex.COLON_STR s -> s
+  let label self = match self.tok with
+    | VM_lex.COLON_STR s -> consume self; s
     | _ -> Error.fail "expected label (e.g. `:foo`)"
 
   (** Parse a chunk into [self.cb] *)
-  let rec parse_chunk_into_ (self:st) : [`Eoi | `Rbrace] =
+  let rec parse_chunk_into_ (self:st) : [`Eoi | `Rparen | `Rbrace] =
     let[@inline] recurse() = parse_chunk_into_ self in
 
     let finalize() =
@@ -903,18 +915,21 @@ module Parser = struct
            | Some i -> f i)
     in
 
-    match VM_lex.token self.buf with
+    match self.tok with
     | VM_lex.QUOTED_STR s ->
+      consume self;
       let n = CB.add_local self.cb (Value.string s) in
       CB.add_instr self.cb (Instr.Lload n);
       recurse()
 
     | VM_lex.COLON_STR lbl ->
+      consume self;
       (* remember position of label *)
       self.labels <- Str_map.add lbl (CB.cur_pos self.cb) self.labels;
       recurse();
 
     | VM_lex.LPAREN ->
+      consume self;
       let str = atom self in
       begin match str with
         | "extract" ->
@@ -966,18 +981,19 @@ module Parser = struct
       end;
       recurse ()
 
-    | VM_lex.RPAREN -> Error.fail "syntax error"
     | VM_lex.LBRACKET -> Error.fail "syntax error"
     | VM_lex.RBRACKET -> Error.fail "syntax error"
     | VM_lex.LANGLE -> Error.fail "syntax error"
     | VM_lex.RANGLE -> Error.fail "syntax error"
 
     | VM_lex.INT i ->
+      consume self;
       let i = int_of_string i in
       CB.add_instr self.cb (Instr.Int i);
       recurse()
 
     | VM_lex.ATOM str ->
+      consume self;
       begin match str with
         | "nop" -> CB.add_instr self.cb Instr.Nop
         | "call" -> CB.add_instr self.cb Instr.Call
@@ -1017,23 +1033,28 @@ module Parser = struct
       recurse()
 
     | VM_lex.LBRACE ->
+      consume self;
       (* parse sub-chunk *)
-      let st' = create_st self.prims self.buf in
+      let st' = create_st ~tok:self.tok self.prims self.buf in
       begin match parse_chunk_into_ st' with
         | `Eoi -> Error.fail "expected '}'"
+        | `Rparen -> Error.fail "expected '}', got ')'"
         | `Rbrace ->
+          consume self;
           (* finish sub-chunk, put it into locals *)
           let c = CB.to_chunk st'.cb in
           let n = CB.add_local self.cb (Value.chunk c) in
           CB.add_instr self.cb (Instr.Lload n);
           recurse()
       end
+
+    | VM_lex.RPAREN -> finalize(); `Rparen
     | VM_lex.RBRACE -> finalize(); `Rbrace
     | VM_lex.EOI -> finalize(); `Eoi
   ;;
 
   let rec parse_stanza_ (self:st) : Stanza.t option =
-    match VM_lex.token self.buf with
+    match self.tok with
     | VM_lex.EOI -> None
 
     | VM_lex.LPAREN ->
@@ -1043,7 +1064,7 @@ module Parser = struct
           let name = atom self in
           CB.reset self.cb;
           begin match parse_chunk_into_ self with
-            | `Rbrace ->
+            | `Rbrace | `Rparen ->
               let c = CB.to_chunk self.cb in
               let stanza = Stanza.make @@ Stanza.Define_meta {name; chunk=c} in
               Some stanza
@@ -1051,9 +1072,15 @@ module Parser = struct
           end
 
         | "eval" ->
+          consume self;
           CB.reset self.cb;
           begin match parse_chunk_into_ self with
             | `Rbrace ->
+              consume self;
+              let c = CB.to_chunk self.cb in
+              let stanza = Stanza.make @@ Stanza.Eval_meta {chunk=c} in
+              Some stanza
+            | `Rparen ->
               let c = CB.to_chunk self.cb in
               let stanza = Stanza.make @@ Stanza.Eval_meta {chunk=c} in
               Some stanza
@@ -1077,7 +1104,7 @@ module Parser = struct
       | `Eoi ->
         let c = CB.to_chunk st.cb in
         Ok c
-      | `Rbrace -> Error.fail "unterminated input"
+      | `Rbrace | `Rparen -> Error.fail "unterminated input"
       | exception Error.E err -> Error err
       | exception Failure msg -> Error (Error.make msg)
       | exception e ->

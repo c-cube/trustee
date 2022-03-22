@@ -25,6 +25,21 @@
 
   let error _buf str = failwith str
 
+  let pp_tok out = function
+    | ATOM s -> Format.fprintf out "(atom %S)" s
+    | QUOTED_STR s -> Format.fprintf out "(quoted_str %S)" s
+    | COLON_STR s -> Format.fprintf out "(colon_str %S)" s
+    | INT s -> Format.fprintf out "(int %s)" s
+    | LPAREN -> Format.pp_print_string out "'('"
+    | RPAREN -> Format.pp_print_string out "')'"
+    | LBRACKET -> Format.pp_print_string out "'['"
+    | RBRACKET -> Format.pp_print_string out "']'"
+    | LBRACE -> Format.pp_print_string out "'{'"
+    | RBRACE -> Format.pp_print_string out "'}'"
+    | LANGLE -> Format.pp_print_string out "'<'"
+    | RANGLE -> Format.pp_print_string out "'>'"
+    | EOI -> Format.pp_print_string out "eoi"
+
   (* remove quotes + unescape *)
   let remove_quotes lexbuf s =
     assert (s.[0] = '"' && s.[String.length s - 1] = '"');
