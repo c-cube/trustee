@@ -56,8 +56,16 @@ let main () =
   let vm = VM.create ~ctx () in
   if !debug then VM.set_debug_hook vm debug_hook;
 
-  let parse_str str =
-    match VM.parse_string ~prims str  with
+  let parse_stanza_str str =
+    match VM.parse_stanza_string ~prims str  with
+    | Error err ->
+      Fmt.printf "Error: %a@." Error.pp err;
+      None
+    | Ok c -> Some c
+  in
+
+  let parse_chunk_str str =
+    match VM.parse_chunk_string ~prims str  with
     | Error err ->
       Fmt.printf "Error: %a@." Error.pp err;
       None
@@ -75,15 +83,9 @@ let main () =
       Printf.eprintf "exception: %s\n%!" (Printexc.to_string e)
   in
 
-  (* multi-line "set" *)
-  let read_set line =
-
-    let _, rest = CCString.Split.left_exn ~by:" " line in
-    let name, rest = CCString.Split.left_exn ~by:" " rest in
-    let name = String.trim name in
-
+  let read_multiline line0 =
     let buf = Buffer.create 32 in
-    Buffer.add_string buf rest;
+    Buffer.add_string buf line0;
     while VM.Parser.needs_more (Buffer.contents buf) do
       match Readline.read_line ".. " |> Option.map String.trim with
       | None -> raise End_of_file
@@ -93,7 +95,7 @@ let main () =
         Buffer.add_char buf '\n';
         Buffer.add_string buf s
     done;
-    name, Buffer.contents buf
+    Buffer.contents buf
   in
 
   let continue = ref true in
@@ -107,32 +109,36 @@ let main () =
     | Some "dump" -> Fmt.printf "%a@." VM.dump vm;
     | Some ("help" as str) -> if !readline then Readline.hist_add str; print_endline help;
 
-    | Some line when CCString.prefix ~pre:"set " line ->
+    | Some line when CCString.prefix ~pre:"(" line ->
       if !readline then Readline.hist_add line;
-      let name, rest = read_set line in
+      let code = read_multiline line in
 
-      begin match parse_str rest with
+      begin match parse_stanza_str code with
         | None -> ()
-        | Some c ->
+        | Some stanza ->
 
           (* run [c] in a different VM to get the value *)
           let vm' = VM.create ~ctx ~env:(VM.get_env vm) () in
           if !debug then VM.set_debug_hook vm' debug_hook;
 
+          (* TODO
           eval_chunk ~vm:vm' c;
+             *)
+          Format.eprintf "parsed stanza %a@." VM.Stanza.pp stanza;
 
+          (* TODO
           (* assign result of evaluation to [k] *)
           let v = VM.pop_exn vm' in
           VM.set_env vm (VM.get_env vm |> VM.Env.add name v);
-          Fmt.printf "defined %S@." name;
+             *)
       end;
 
     | Some line ->
       if !readline then Readline.hist_add line;
 
-      begin match parse_str line with
+      begin match parse_chunk_str line with
         | None ->()
-        | Some c -> eval_chunk ~vm c
+        | Some c -> eval_chunk ~vm c (* TODO *)
       end
     | None -> continue := false
     | exception End_of_file -> continue := false

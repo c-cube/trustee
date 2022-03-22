@@ -1,6 +1,7 @@
 ; basic factorial, using env-based recursion (!)
 
-set fact {
+; function definition
+(meta fact {
   (rstore 0)
   1 (rload 0) lt ; n > 1
   (jif :l1)
@@ -9,7 +10,10 @@ set fact {
     (rload 0) sub1
       "fact" getenv call ; fact (n-1)
     (rload 0) mult ; *n
-}
+})
 
-5 "fact" getenv call
-show
+(eval 5 "fact" getenv call show)
+
+; constant definition
+(meta fact5 5 "fact" getenv call)
+(eval "fact5" getenv show)

@@ -1,7 +1,7 @@
 
 ; basic factorial with a loop
 
-set fact {
+(meta fact {
   (rstore 0)
   1 (rstore 1) ; sum = 1
   :loop
@@ -11,7 +11,6 @@ set fact {
     (rload 0) sub1 (rstore 0) ; n--
     (jmp :loop)
   :ret (rload 1) ret
-}
+})
 
-5 "fact" getenv call
-show
+(eval 5 "fact" getenv call show)

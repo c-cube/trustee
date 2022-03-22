@@ -884,6 +884,7 @@ module Parser = struct
     consume self
 
   let rparen self = exact self "')'" VM_lex.RPAREN
+  let rbrace self = exact self "'}'" VM_lex.RBRACE
 
   let int (self:st) = match self.tok with
     | VM_lex.INT i -> consume self; int_of_string i
@@ -898,7 +899,7 @@ module Parser = struct
     | _ -> Error.fail "expected label (e.g. `:foo`)"
 
   (** Parse a chunk into [self.cb] *)
-  let rec parse_chunk_into_ (self:st) : [`Eoi | `Rparen | `Rbrace] =
+  let rec parse_chunk_into_ (self:st) : unit =
     let[@inline] recurse() = parse_chunk_into_ self in
 
     let finalize() =
@@ -1036,21 +1037,21 @@ module Parser = struct
       consume self;
       (* parse sub-chunk *)
       let st' = create_st ~tok:self.tok self.prims self.buf in
-      begin match parse_chunk_into_ st' with
-        | `Eoi -> Error.fail "expected '}'"
-        | `Rparen -> Error.fail "expected '}', got ')'"
-        | `Rbrace ->
-          consume self;
-          (* finish sub-chunk, put it into locals *)
-          let c = CB.to_chunk st'.cb in
-          let n = CB.add_local self.cb (Value.chunk c) in
-          CB.add_instr self.cb (Instr.Lload n);
-          recurse()
-      end
+      begin
+        parse_chunk_into_ st';
+        self.tok <- st'.tok;
+      end;
+      Format.eprintf "now finishing chunk@.";
+      rbrace self;
+      (* finish sub-chunk, put it into locals *)
+      let c = CB.to_chunk st'.cb in
+      let n = CB.add_local self.cb (Value.chunk c) in
+      CB.add_instr self.cb (Instr.Lload n);
+      recurse()
 
-    | VM_lex.RPAREN -> finalize(); `Rparen
-    | VM_lex.RBRACE -> finalize(); `Rbrace
-    | VM_lex.EOI -> finalize(); `Eoi
+    | VM_lex.RPAREN -> finalize();
+    | VM_lex.RBRACE -> finalize();
+    | VM_lex.EOI -> finalize();
   ;;
 
   let rec parse_stanza_ (self:st) : Stanza.t option =
@@ -1058,34 +1059,26 @@ module Parser = struct
     | VM_lex.EOI -> None
 
     | VM_lex.LPAREN ->
+      consume self;
       let a = atom self in
       begin match a with
         | "meta" ->
           let name = atom self in
           CB.reset self.cb;
-          begin match parse_chunk_into_ self with
-            | `Rbrace | `Rparen ->
-              let c = CB.to_chunk self.cb in
-              let stanza = Stanza.make @@ Stanza.Define_meta {name; chunk=c} in
-              Some stanza
-            | `Eoi -> Error.fail "unexpected EOF in `meta`"
-          end
+          parse_chunk_into_ self;
+          rparen self;
+          let c = CB.to_chunk self.cb in
+          let stanza = Stanza.make @@ Stanza.Define_meta {name; chunk=c} in
+          Some stanza
 
         | "eval" ->
           consume self;
           CB.reset self.cb;
-          begin match parse_chunk_into_ self with
-            | `Rbrace ->
-              consume self;
-              let c = CB.to_chunk self.cb in
-              let stanza = Stanza.make @@ Stanza.Eval_meta {chunk=c} in
-              Some stanza
-            | `Rparen ->
-              let c = CB.to_chunk self.cb in
-              let stanza = Stanza.make @@ Stanza.Eval_meta {chunk=c} in
-              Some stanza
-            | `Eoi -> Error.fail "unexpected EOF in `eval`"
-          end
+          parse_chunk_into_ self;
+          rparen self;
+          let c = CB.to_chunk self.cb in
+          let stanza = Stanza.make @@ Stanza.Eval_meta {chunk=c} in
+          Some stanza
 
         | "declare" -> assert false
 
@@ -1100,16 +1093,27 @@ module Parser = struct
   let parse_chunk (self:t) : _ result =
     let buf = Lexing.from_string ~with_positions:false self.str in
     let st = create_st self.prims buf in
-    begin match parse_chunk_into_ st with
-      | `Eoi ->
+    begin match
+        parse_chunk_into_ st;
+        st.tok
+      with
+      | VM_lex.EOI ->
+        consume st;
         let c = CB.to_chunk st.cb in
         Ok c
-      | `Rbrace | `Rparen -> Error.fail "unterminated input"
+      | _ -> Error (Error.make "unterminated input")
       | exception Error.E err -> Error err
       | exception Failure msg -> Error (Error.make msg)
       | exception e ->
         Error (Error.of_exn e)
     end
+
+  let parse_stanza (self:t) : (Stanza.t, _) result =
+    let buf = Lexing.from_string ~with_positions:false self.str in
+    let st = create_st self.prims buf in
+    match parse_stanza_ st with
+    | None -> Error (Error.make "expected stanza")
+    | Some st -> Ok st
 
   let parse_stanzas (self:t) : (_ Vec.t, _) result =
     let buf = Lexing.from_string ~with_positions:false self.str in
@@ -1124,15 +1128,24 @@ module Parser = struct
     in
     loop()
 
+  type st_item = BRACE | PAR | BRACKET
+
   let needs_more (str:string) : bool =
-    let n_brace = ref 0 in
+    let st: st_item Stack.t = Stack.create() in
 
     let buf = Lexing.from_string ~with_positions:false str in
     let rec loop () =
+      let check_pop x =
+        not (Stack.is_empty st) && Stack.pop st = x
+      in
       match VM_lex.token buf with
-      | VM_lex.EOI -> !n_brace > 0 (* unclosed { *)
-      | VM_lex.LBRACE -> incr n_brace; loop()
-      | VM_lex.RBRACE -> decr n_brace; loop()
+      | VM_lex.EOI -> not (Stack.is_empty st) (* unclosed { *)
+      | VM_lex.LPAREN -> Stack.push PAR st; loop()
+      | VM_lex.RPAREN -> check_pop PAR && loop()
+      | VM_lex.LBRACKET -> Stack.push BRACKET st; loop()
+      | VM_lex.RBRACKET -> check_pop BRACKET && loop()
+      | VM_lex.LBRACE -> Stack.push BRACE st; loop()
+      | VM_lex.RBRACE -> check_pop BRACE && loop()
       | _ -> loop()
     in
     loop()
@@ -1161,14 +1174,24 @@ let set_debug_hook vm h = vm.Types_.debug_hook <- Some h
 let clear_debug_hook vm = vm.Types_.debug_hook <- None
 let dump = VM_.dump
 
-let parse_string ?prims s : _ result =
+let parse_chunk_string ?prims s : _ result =
   let p = Parser.create ?prims s in
   Parser.parse_chunk p
 
-let parse_string_exn ?prims s : Chunk.t =
-  match parse_string ?prims s with
+let parse_chunk_string_exn ?prims s : Chunk.t =
+  match parse_chunk_string ?prims s with
   | Ok c -> c
   | Error e -> Error.raise e
+
+let parse_stanza_string ?prims s : _ result =
+  let p = Parser.create ?prims s in
+  Parser.parse_stanza p
+
+let parse_stanza_string_exn ?prims s : Stanza.t =
+  match parse_stanza_string ?prims s with
+  | Ok c -> c
+  | Error e -> Error.raise e
+
 
 (*$inject
   let ctx = K.Ctx.create()
