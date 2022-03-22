@@ -224,10 +224,18 @@ val dump : t Fmt.printer
 (** Debug printer for the VM.
     Output is not specified, and not guaranteed to be stable. *)
 
-val parse_string :
+val parse_chunk_string :
   ?prims:Primitive.t Str_map.t ->
   string -> (Chunk.t, Error.t) result
 
-val parse_string_exn :
+val parse_chunk_string_exn :
   ?prims:Primitive.t Str_map.t ->
   string -> Chunk.t
+
+val parse_stanza_string :
+  ?prims:Primitive.t Str_map.t ->
+  string -> (Stanza.t, Error.t) result
+
+val parse_stanza_string_exn :
+  ?prims:Primitive.t Str_map.t ->
+  string -> Stanza.t
