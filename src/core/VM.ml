@@ -122,10 +122,10 @@ module Types_ = struct
     let ppi_ip ppx out (i,x) =
       let ptr = match ip with Some i' when i=i' -> ">" | _ -> " " in
       ppi ptr ppx out (i,x) in
-    Fmt.fprintf out "@[<v2>chunk[%d regs] {@ %a@ :locals@ %a@;<1 -2>}@]"
+    Fmt.fprintf out "@[<v2>chunk[%d regs] {@ :instrs@ %a@ :locals@ %a@;<1 -2>}@]"
       self.c_n_regs
       (pp_arri ~sep:"" @@ ppi_ip pp_instr) self.c_instrs
-      (pp_arri ~sep:"" @@ ppi "" @@ pp_value ~short:true) self.c_locals
+      (pp_arri ~sep:"" @@ ppi " " @@ pp_value ~short:false) self.c_locals
 
   and pp_prim out (p:primitive) : unit =
     Fmt.fprintf out "<prim %s>" p.pr_name
