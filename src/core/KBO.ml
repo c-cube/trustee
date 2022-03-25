@@ -75,7 +75,7 @@ module KBO_ = struct
      contains the variable `s` *)
   let rec balance_weight st (e:E.t) (s:_ option) ~pos : bool =
     begin match E.view e with
-      | E.E_kind | E.E_type | E.E_arrow _ | E.E_bound_var _ ->
+      | E.E_kind | E.E_type | E.E_arrow _ | E.E_bound_var _ | E.E_box _ ->
         if pos then incr_wb_ st else decr_wb_ st; false
       | E.E_const (c,_) ->
         let wc = st.params.weight (K.Const.name c) in

@@ -18,6 +18,7 @@ type expr_view =
   | E_app of expr * expr
   | E_lam of string * expr * expr
   | E_arrow of expr * expr
+  | E_box of sequent (* reified sequent *)
 
 and expr = {
   e_view: expr_view;
@@ -40,6 +41,13 @@ and bvar = {
 and ty = expr
 
 and name = Name.t
+
+and expr_set = expr Int_map.t
+
+and sequent = {
+  concl: expr;
+  hyps: expr_set;
+}
 
 and const = {
   c_name: name;
@@ -68,6 +76,13 @@ let[@inline] var_eq v1 v2 = v1.v_name = v2.v_name && expr_eq v1.v_ty v2.v_ty
 let[@inline] var_hash v1 = H.combine3 5 (H.string v1.v_name) (expr_hash v1.v_ty)
 let[@inline] var_pp out v1 = Fmt.string out v1.v_name
 
+let[@inline] sequent_eq s1 s2 =
+  expr_eq s1.concl s2.concl &&
+  Int_map.equal ~eq:expr_eq s1.hyps s2.hyps
+let[@inline] sequent_hash s =
+  H.combine3 193 (expr_hash s.concl)
+    (H.iter expr_hash @@ Iter.map snd @@ Int_map.to_iter s.hyps)
+
 let const_def_eq a b =
   match a, b with
   | C_def_gen i, C_def_gen j -> i=j
@@ -94,10 +109,39 @@ module Const_hashcons = Hashcons.Make(struct
     let on_new _ = ()
   end)
 
-module Expr_set = CCSet.Make(struct
-    type t = expr
-    let compare = expr_compare
-    end)
+module Expr_set = struct
+  type t = expr_set
+  let empty : t = Int_map.empty
+  let is_empty = Int_map.is_empty
+  let iter k (self:t) = Int_map.iter (fun _ x -> k x) self
+  let size = Int_map.cardinal
+  let equal = Int_map.equal ~eq:expr_eq
+  let singleton e = Int_map.singleton e.e_id e
+  let mem e self = Int_map.mem e.e_id self
+  let add e self = Int_map.add e.e_id e self
+  let remove e self = Int_map.remove e.e_id self
+  let to_list self = Int_map.fold (fun _ x l -> x :: l) self []
+  let to_iter (self:t) k = Int_map.iter (fun _ x -> k x) self
+  let of_list l : t =
+    List.fold_left (fun m e -> Int_map.add e.e_id e m) Int_map.empty l
+  let of_iter i : t =
+    Iter.fold (fun m e -> Int_map.add e.e_id e m) Int_map.empty i
+  let map f self =
+    Int_map.fold
+      (fun _ e acc -> add (f e) acc)
+      self empty
+  let union a b : t =
+    Int_map.union (fun _ e1 e2 -> assert (expr_eq e1 e2); e1) a b
+  let exists f self =
+    try
+      Int_map.iter (fun _ e -> if not (f e) then raise_notrace Exit) self; false
+    with Exit -> true
+  let subset a b =
+    try
+      Int_map.iter (fun i _ -> if not (Int_map.mem i b) then raise_notrace Exit) a;
+      true
+    with Exit -> false
+end
 
 (* open an application *)
 let unfold_app (e:expr) : expr * expr list =
@@ -109,6 +153,16 @@ let unfold_app (e:expr) : expr * expr list =
   aux [] e
 
 let __pp_ids = ref false
+
+let pp_seq_ ~pp_expr out seq =
+  let {hyps; concl} = seq in
+  if Int_map.is_empty hyps then (
+    Fmt.fprintf out "@[|- %a@]" pp_expr concl
+  ) else (
+    Fmt.fprintf out "@[<hv>%a@ |- %a@]"
+      (pp_iter pp_expr) (Int_map.to_iter hyps |> Iter.map snd)
+      pp_expr concl
+  )
 
 (* debug printer *)
 let expr_pp_with_ ~max_depth out (e:expr) : unit =
@@ -141,6 +195,8 @@ let expr_pp_with_ ~max_depth out (e:expr) : unit =
         | _ ->
           Fmt.fprintf out "%a@ %a" pp' f (pp_list pp') args
       end
+    | E_box seq ->
+      pp_seq_ ~pp_expr:(loop 0 ~depth:0 []) out seq
     | E_lam ("", _ty, bod) ->
       Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp' _ty
         (loop (k+1) ~depth:(depth+1) (""::names)) bod
@@ -179,8 +235,10 @@ module Expr_hashcons = Hashcons.Make(struct
           expr_eq ty1 ty2 && expr_eq bod1 bod2
         | E_arrow(a1,b1), E_arrow(a2,b2) ->
           expr_eq a1 a2 && expr_eq b1 b2
+        | E_box seq1, E_box seq2 ->
+          sequent_eq seq1 seq2
         | (E_kind | E_type | E_const _ | E_var _ | E_bound_var _
-          | E_app _ | E_lam _ | E_arrow _), _ -> false
+          | E_app _ | E_lam _ | E_arrow _ | E_box _), _ -> false
       end
 
     let hash e : int =
@@ -192,6 +250,7 @@ module Expr_hashcons = Hashcons.Make(struct
       | E_var v -> H.combine2 30 (var_hash v)
       | E_bound_var v -> H.combine3 40 (H.int v.bv_idx) (expr_hash v.bv_ty)
       | E_app (f,a) -> H.combine3 50 (expr_hash f) (expr_hash a)
+      | E_box seq -> sequent_hash seq
       | E_lam (_,ty,bod) ->
         H.combine3 60 (expr_hash ty) (expr_hash bod)
       | E_arrow (a,b) -> H.combine3 80 (expr_hash a) (expr_hash b)
@@ -213,8 +272,7 @@ module Name_k_map = CCMap.Make(struct
   end)
 
 type thm = {
-  th_concl: expr;
-  th_hyps: Expr_set.t;
+  th_seq: sequent;
   mutable th_flags: int; (* [bool flags|ctx uid] *)
   mutable th_theory: theory option;
 }
@@ -341,6 +399,7 @@ module Expr = struct
     | E_app of t * t
     | E_lam of string * t * t
     | E_arrow of t * t
+    | E_box of sequent
 
   let[@inline] ty e = Lazy.force e.e_ty
   let[@inline] view e = e.e_view
@@ -367,7 +426,7 @@ module Expr = struct
     | _ ->
       Option.iter (f false) (ty e);
       match view e with
-      | E_kind | E_type | E_const _ -> assert false
+      | E_kind | E_type | E_const _ | E_box _ -> assert false
       | E_var v -> f false v.v_ty
       | E_bound_var v -> f false v.bv_ty
       | E_app (hd,a) -> f false hd; f false a
@@ -394,7 +453,7 @@ module Expr = struct
       | Some d -> db_depth d
     in
     let d2 = match view e with
-      | E_kind | E_type | E_const _ | E_var _ -> 0
+      | E_kind | E_type | E_const _ | E_var _ | E_box _ -> 0
       | E_bound_var v -> v.bv_idx+1
       | E_app (a,b) | E_arrow (a,b) -> max (db_depth a) (db_depth b)
       | E_lam (_, ty,bod) ->
@@ -409,7 +468,7 @@ module Expr = struct
     end ||
     begin match view e with
       | E_var _ -> true
-      | E_kind | E_type | E_bound_var _ -> false
+      | E_box _ | E_kind | E_type | E_bound_var _ -> false
       | E_const (_, args) -> List.exists has_fvars args
       | E_app (a,b) | E_arrow (a,b) -> has_fvars a || has_fvars b
       | E_lam (_,ty,bod) -> has_fvars ty || has_fvars bod
@@ -456,7 +515,7 @@ module Expr = struct
   (* map immediate subterms *)
   let[@inline] map ctx ~f (e:t) : t =
     match view e with
-    | E_kind | E_type | E_const (_,[]) -> e
+    | E_kind | E_type | E_const (_,[]) | E_box _ -> e
     | _ ->
       let ty' = lazy (
         match e.e_ty with
@@ -492,7 +551,7 @@ module Expr = struct
           let b' = f false b in
           if a==a' && b==b' then e
           else make_ ctx (E_arrow (a', b')) ty'
-        | E_kind | E_type -> assert false
+        | E_kind | E_type | E_box _ -> assert false
       end
 
   exception IsSub
@@ -864,7 +923,7 @@ module Expr = struct
   end
 
   module Map = CCMap.Make(AsKey)
-  module Set = Expr_set
+  module Set = CCSet.Make(AsKey)
   module Tbl = CCHashtbl.Make(AsKey)
 
   let iter_dag ~f e : unit =
@@ -959,22 +1018,26 @@ end
 
 
 (** {2 Toplevel goals} *)
-module Goal = struct
-  type t = {
-    hyps: Expr.Set.t;
+module Sequent = struct
+  type t = sequent = {
     concl: Expr.t;
+    hyps: expr_set;
   }
 
+  let equal = sequent_eq
+  let hash = sequent_hash
   let make hyps concl : t = {hyps; concl}
-  let make_l h c = make (Expr.Set.of_list h) c
-  let make_nohyps c : t = make Expr.Set.empty c
+  let make_l h c = make (Expr_set.of_list h) c
+  let make_nohyps c : t = make Expr_set.empty c
 
   let[@inline] concl g = g.concl
+  let[@inline] n_hyps self = Int_map.cardinal self.hyps
   let[@inline] hyps g = g.hyps
-  let[@inline] hyps_iter g = Expr.Set.to_iter g.hyps
+  let[@inline] hyps_iter g = Expr_set.to_iter g.hyps
+  let[@inline] hyps_l g = Expr_set.to_list g.hyps
 
   let pp out (self:t) : unit =
-    if Expr.Set.is_empty self.hyps then (
+    if Expr_set.is_empty self.hyps then (
       Fmt.fprintf out "@[?-@ %a@]" Expr.pp self.concl
     ) else (
       Fmt.fprintf out "@[<hv>%a@ ?-@ %a@]"
@@ -1065,22 +1128,20 @@ end
 module Thm = struct
   type t = thm
 
-  let[@inline] concl self = self.th_concl
-  let[@inline] hyps_ self = self.th_hyps
-  let[@inline] hyps_iter self k = Expr_set.iter k self.th_hyps
-  let[@inline] hyps_l self = Expr_set.elements self.th_hyps
+  let[@inline] concl self = self.th_seq.concl
+  let[@inline] sequent self = self.th_seq
+  let[@inline] hyps_ self = self.th_seq.hyps
+  let[@inline] hyps_iter self k = Expr_set.iter k self.th_seq.hyps
+  let[@inline] hyps_l self = Expr_set.to_list self.th_seq.hyps
   let hyps_sorted_l = hyps_l
-  let[@inline] has_hyps self = not (Expr_set.is_empty self.th_hyps)
-  let n_hyps self = Expr_set.cardinal self.th_hyps
+  let[@inline] has_hyps self = not (Expr_set.is_empty self.th_seq.hyps)
+  let n_hyps self = Expr_set.size self.th_seq.hyps
 
   let[@inline] equal a b =
-    Expr.equal a.th_concl b.th_concl &&
-    Expr_set.equal a.th_hyps b.th_hyps &&
+    Sequent.equal a.th_seq b.th_seq &&
     Option.equal Stdlib.(==) a.th_theory b.th_theory
 
-  let hash (self:t) =
-    CCHash.combine2 (Expr.hash self.th_concl)
-      (CCHash.iter Expr.hash @@ Expr_set.to_iter self.th_hyps)
+  let hash (self:t) = Sequent.hash self.th_seq
 
   type 'a with_ctx = ctx -> 'a
 
@@ -1098,15 +1159,16 @@ module Thm = struct
   let to_string = Fmt.to_string pp
   let pp_quoted = Fmt.within "`" "`" pp
 
-  let is_proof_of self (g:Goal.t) : bool =
-    Expr.equal self.th_concl (Goal.concl g) &&
-    Expr_set.subset self.th_hyps (Goal.hyps g)
+  let is_proof_of self (g:Sequent.t) : bool =
+    Expr.equal self.th_seq.concl (Sequent.concl g) &&
+    Expr_set.subset self.th_seq.hyps (Sequent.hyps g)
 
   (** {3 Deduction rules} *)
 
   let make_ ctx hyps concl : t =
     let th_flags = ctx.ctx_uid in
-    { th_flags; th_concl=concl; th_hyps=hyps; th_theory=None }
+    let th_seq = Sequent.make hyps concl in
+    { th_flags; th_seq; th_theory=None }
 
   let is_bool_ ctx e : bool =
     let ty = Expr.ty_exn e in
@@ -1118,12 +1180,12 @@ module Thm = struct
     if not (is_bool_ ctx e) then (
       Error.fail "assume takes a boolean"
     );
-    make_ ctx (Expr.Set.singleton e) e
+    make_ ctx (Expr_set.singleton e) e
 
   let axiom ctx hyps e : t =
     Error.guard (fun err ->
-        let g = Goal.make_l hyps e in
-        Error.wrapf "in axiom `@[%a@]`:" Goal.pp g err) @@ fun () ->
+        let g = Sequent.make_l hyps e in
+        Error.wrapf "in axiom `@[%a@]`:" Sequent.pp g err) @@ fun () ->
     ctx_check_e_uid ctx e;
     if not ctx.ctx_axioms_allowed then (
       Error.fail "the context does not accept new axioms, see `pledge_no_more_axioms`"
@@ -1131,9 +1193,9 @@ module Thm = struct
     if not (is_bool_ ctx e && List.for_all (is_bool_ ctx) hyps) then (
       Error.fail "axiom takes a boolean"
     );
-    make_ ctx (Expr.Set.of_list hyps) e
+    make_ ctx (Expr_set.of_list hyps) e
 
-  let merge_hyps_ = Expr.Set.union
+  let merge_hyps_ = Expr_set.union
 
   let cut ctx th1 th2 : t =
     Error.guard
@@ -1142,12 +1204,12 @@ module Thm = struct
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     let b = concl th1 in
-    let hyps = merge_hyps_ (hyps_ th1) (Expr.Set.remove b (hyps_ th2)) in
+    let hyps = merge_hyps_ (hyps_ th1) (Expr_set.remove b (hyps_ th2)) in
     make_ ctx hyps (concl th2)
 
   let refl ctx e : t =
     ctx_check_e_uid ctx e;
-    make_ ctx Expr.Set.empty (Expr.app_eq ctx e e)
+    make_ ctx Expr_set.empty (Expr.app_eq ctx e e)
 
   let congr ctx th1 th2 : t =
     Error.guard
@@ -1176,7 +1238,7 @@ module Thm = struct
         Error.failf(fun k->k"subst: variable %a@ is bound to non-closed term %a"
                   Var.pp v Expr.pp t)
     end;
-    let hyps = hyps_ th |> Expr.Set.map (fun e -> Expr.subst ~recursive ctx e s) in
+    let hyps = hyps_ th |> Expr_set.map (fun e -> Expr.subst ~recursive ctx e s) in
     let concl = Expr.subst ~recursive ctx (concl th) s in
     make_ ctx hyps concl
 
@@ -1239,8 +1301,8 @@ module Thm = struct
     let e2 = concl th2 in
     let hyps =
       merge_hyps_
-        (Expr.Set.remove e1 (hyps_ th2))
-        (Expr.Set.remove e2 (hyps_ th1))
+        (Expr_set.remove e1 (hyps_ th2))
+        (Expr_set.remove e2 (hyps_ th1))
     in
     make_ ctx hyps (Expr.app_eq ctx e1 e2)
 
@@ -1253,7 +1315,7 @@ module Thm = struct
        | E_lam (_, ty_v, body) ->
          assert (Expr.equal ty_v (Expr.ty_exn a)); (* else `app` would have failed *)
          let rhs = Expr.subst_db_0 ctx body ~by:a in
-         make_ ctx Expr.Set.empty (Expr.app_eq ctx e rhs)
+         make_ ctx Expr_set.empty (Expr.app_eq ctx e rhs)
        | _ ->
          Error.failf (fun k->k"not a redex: function %a is not a lambda" Expr.pp f)
       )
@@ -1264,13 +1326,13 @@ module Thm = struct
     Error.guard (Error.wrapf "@[<2>in abs :var %a `@[%a@]`:" Var.pp v pp th) @@ fun () ->
     ctx_check_th_uid ctx th;
     ctx_check_e_uid ctx v.v_ty;
-    match Expr.unfold_eq th.th_concl with
+    match Expr.unfold_eq th.th_seq.concl with
     | Some (a,b) ->
       let is_in_hyp hyp = Iter.mem ~eq:Var.equal v (Expr.free_vars_iter hyp) in
-      if Expr.Set.exists is_in_hyp th.th_hyps then (
+      if Expr_set.exists is_in_hyp th.th_seq.hyps then (
         Error.failf (fun k->k"variable `%a` occurs in an hypothesis@ of %a" Var.pp v pp th);
       );
-      make_ ctx th.th_hyps
+      make_ ctx th.th_seq.hyps
         (Expr.app_eq ctx (Expr.lambda ctx v a) (Expr.lambda ctx v b))
     | None -> Error.failf (fun k->k"conclusion of `%a`@ is not an equation" pp th)
 
@@ -1305,7 +1367,7 @@ module Thm = struct
 
       let c = Expr.new_const ctx (Var.name x_var) ty_vars_l (Var.ty x_var) in
       let c_e = Expr.const ctx c (List.map (Expr.var ctx) ty_vars_l) in
-      let th = make_ ctx Expr.Set.empty (Expr.app_eq ctx c_e rhs) in
+      let th = make_ ctx Expr_set.empty (Expr.app_eq ctx c_e rhs) in
       th, c
 
   let new_basic_type_definition ctx
@@ -1384,7 +1446,7 @@ module Thm = struct
       let abs = Expr.const ctx c_abs ty_vars_expr_l in
       let abs_t = Expr.app ctx abs t in
       let eqn = Expr.app_eq ctx abs_t abs_x in
-      make_ ctx Expr.Set.empty eqn
+      make_ ctx Expr_set.empty eqn
     in
 
     let repr_x = Var.make "x" ty in
@@ -1397,7 +1459,7 @@ module Thm = struct
       let t2 = Expr.app ctx repr t1 in
       let eq_t2_x = Expr.app_eq ctx t2 repr_x in
       let phi_x = Expr.app ctx phi repr_x in
-      make_ ctx Expr.Set.empty (Expr.app_eq ctx phi_x eq_t2_x)
+      make_ ctx Expr_set.empty (Expr.app_eq ctx phi_x eq_t2_x)
     in
 
     {New_ty_def.
@@ -1436,7 +1498,7 @@ module Theory = struct
     if not (Thm.is_bool_ ctx concl && List.for_all (Thm.is_bool_ ctx) hyps) then (
       Error.fail "Theory.assume: all terms must be booleans"
     );
-    let hyps = Expr.Set.of_list hyps in
+    let hyps = Expr_set.of_list hyps in
     {(Thm.make_ ctx hyps concl) with th_theory=Some self}
 
   let assume_const_ self (c:const) : unit =
@@ -1609,11 +1671,11 @@ module Theory = struct
     (* instantiate a whole theorem *)
     let inst_thm_ (self:state) (th:thm) : thm =
       let hyps =
-        Expr.Set.to_iter th.th_hyps
+        Expr_set.to_iter th.th_seq.hyps
         |> Iter.map (inst_t_ self)
-        |> Expr.Set.of_iter
+        |> Expr_set.of_iter
       in
-      let concl = inst_t_ self th.th_concl in
+      let concl = inst_t_ self th.th_seq.concl in
       Thm.make_ self.ctx hyps concl
 
     let inst_theory_ (self:state) (th:theory) : theory =
@@ -1649,15 +1711,7 @@ module Theory = struct
     end)
 
   (* index theorems by [hyps |- concl] *)
-  module Thm_tbl = CCHashtbl.Make(struct
-      type t = thm
-      let equal th1 th2 =
-        Expr.equal th1.th_concl th2.th_concl &&
-        Expr.Set.equal th1.th_hyps th2.th_hyps
-      let hash th =
-        H.(combine3 192 (Expr.hash th.th_concl)
-             (iter Expr.hash (Expr.Set.to_iter th.th_hyps)))
-    end)
+  module Thm_tbl = CCHashtbl.Make(Thm)
 
   let compose ?(interp=Name.Map.empty) l th : t =
     Log.debugf 2
