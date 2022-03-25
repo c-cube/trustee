@@ -867,6 +867,10 @@ module Expr = struct
 
   let arrow_l ctx l ret : t = CCList.fold_right (arrow ctx) l ret
 
+  let box ctx seq : t =
+    let ty = Lazy.from_val (Some (bool ctx)) in
+    make_ ctx (E_box seq) ty
+
   let lambda_db ctx ~name ~ty_v bod : t =
     ctx_check_e_uid ctx ty_v;
     ctx_check_e_uid ctx bod;
@@ -1165,10 +1169,13 @@ module Thm = struct
 
   (** {3 Deduction rules} *)
 
-  let make_ ctx hyps concl : t =
+  let make_seq_ ctx seq : t =
     let th_flags = ctx.ctx_uid in
+    { th_flags; th_seq=seq; th_theory=None }
+
+  let make_ ctx hyps concl : t =
     let th_seq = Sequent.make hyps concl in
-    { th_flags; th_seq; th_theory=None }
+    make_seq_ ctx th_seq
 
   let is_bool_ ctx e : bool =
     let ty = Expr.ty_exn e in
@@ -1465,6 +1472,15 @@ module Thm = struct
     {New_ty_def.
       tau; c_repr; c_abs; fvars=ty_vars_l; repr_x;
       repr_thm; abs_x; abs_thm}
+
+  let box ctx (th: t) : t =
+    let box = Expr.box ctx th.th_seq in
+    make_ ctx Expr_set.empty box
+
+  let assume_box ctx (seq:sequent) : t =
+    let box = Expr.box ctx seq in
+    let seq' = {seq with hyps=Expr_set.add box seq.hyps} in
+    make_seq_ ctx seq'
 end
 
 module Theory = struct

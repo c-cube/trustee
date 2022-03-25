@@ -205,6 +205,7 @@ module Expr : sig
   val lambda_db : (name:string -> ty_v:ty -> t -> t) with_ctx
   val arrow : (t -> t -> t) with_ctx
   val arrow_l : (t list -> t -> t) with_ctx
+  val box : (sequent -> t) with_ctx
 
   val map : (f:(bool -> t -> t) -> t -> t) with_ctx
 
@@ -359,7 +360,6 @@ module Thm : sig
       returns a theorem `|- x=t` where `x` is now a constant, along with
       the constant `x`.  *)
 
-
   val new_basic_type_definition :
     (?ty_vars:ty_var list ->
     name:string ->
@@ -383,6 +383,23 @@ module Thm : sig
 
       @param ty_var if provided, use the type variables in the given order.
       It must be the exact set of free variables of [thm_inhabited].
+  *)
+
+  val box : (thm -> thm) with_ctx
+  (** [box (A1…An |- B)] is the new theorem [|- box(A1…An |- B)].
+      It can be used to discharge assumptions from other theorems
+      that assumed (A1…An|-B) to be true. *)
+
+  val assume_box : (sequent -> thm) with_ctx
+  (** [assume_box (A1…An ?- B)] takes a sequent, and makes a conditional
+      theorem out of it.
+
+      The result is [box(A1…An |- B), A1, …, An |- B]. This is {b almost},
+      but not quite, the original sequent, except for the additional box
+      hypothesis. One can use this result, as if  [A1…An |- B] was proved,
+      and proceeed; later, the box can be discharged by proving [A1…An |- b]
+      and using {!box}, and then using {!cut} to remove the box in
+      the hypothesis.
   *)
 end
 
