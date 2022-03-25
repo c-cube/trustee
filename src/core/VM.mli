@@ -52,36 +52,13 @@ module Value : sig
   val to_int_exn : int conv_to_exn
 end
 
-(** Environment for the virtual machine.
-
-    The VM executes instructions in an environment that contains both
-    logical values (expressions, theorems, etc.) and other non-logical
-    values (integers, booleans, arrays, etc.). These environments are
-    persistent and can be stacked (so that modifications are local only).
-*)
-module Env : sig
-
-  type t
-  (** A persistent env *)
-
-  val empty : t
-
-  val pp : t Fmt.printer
-
-  val add : string -> Value.t -> t -> t
-
-  val find : string -> t -> Value.t option
-
-  val iter : t -> (string * Value.t) Iter.t
-end
-
-(** Chunk of executable bytecode *)
+(** Chunk of executable bytecode. *)
 module Chunk : sig
   type t
   val pp : t Fmt.printer
 end
 
-(** Chunk of executable bytecode *)
+(** Primitive function, implemented in OCaml. *)
 module Primitive : sig
   type t
   val pp : t Fmt.printer
@@ -92,6 +69,22 @@ module Primitive : sig
     name:string ->
     eval:(vm -> unit) ->
     unit -> t
+end
+
+(** An identifier for a stanza in a file.
+    This should be stable when parsing the same file several times,
+    and can be used to "name" nameless items such as "eval". *)
+module Stanza_id : sig
+  type t =
+    | Name of Name.t
+    | Pos of int
+    | Namespace of string * t
+
+  include Sigs.EQ with type t := t
+  include Sigs.HASH with type t := t
+  include Sigs.PP with type t := t
+
+  module Tbl : CCHashtbl.S with type key = t
 end
 
 (** Low level proof/meta stanzas.
@@ -127,7 +120,10 @@ module Stanza : sig
         mutable body: K.expr option;
       }
 
-    | Proof of proof
+    | Prove of {
+        name: Name.t;
+        proof: proof;
+      }
 
     | Define_meta of {
         name: string;
@@ -135,6 +131,7 @@ module Stanza : sig
       } (** Define a meta-level chunk *)
 
     | Eval_meta of {
+        (* TODO: some kind of positional name, like a foo.bar.eval.42? *)
         chunk: Chunk.t;
       }
 
@@ -179,6 +176,8 @@ module Parser : sig
   val create :
     ?prims:Primitive.t Str_map.t ->
     string -> t
+  (** [create ?prims str] creates a parser that will parse [str],
+      using [prims] as the additional primitives *)
 
   val needs_more : string -> bool
 
@@ -187,11 +186,60 @@ module Parser : sig
   val parse_stanzas : t -> (Stanza.t Vec.t, Error.t) result
 end
 
+(* TODO
+(** Environment for the virtual machine.
+
+    The VM executes instructions in an environment that contains both
+    logical values (expressions, theorems, etc.) and other non-logical
+    values (integers, booleans, arrays, etc.). These environments are
+    persistent and can be stacked (so that modifications are local only).
+*)
+module Env : sig
+
+  type t
+  (** A persistent env *)
+
+  val empty : t
+
+  val pp : t Fmt.printer
+
+  val add : string -> Value.t -> t -> t
+
+  val find : string -> t -> Value.t option
+
+  val iter : t -> (string * Value.t) Iter.t
+end
+*)
+
+(** Evaluation graph, holding the environment for the virtual machine.
+
+    The VM executes instructions in an environment that contains both
+    logical values (expressions, theorems, etc.) and other non-logical
+    values (integers, booleans, arrays, etc.).
+*)
+module Eval_graph : sig
+  type t
+
+  val create : unit -> t
+
+    (* TODO
+
+  val add : t -> string -> Value.t -> unit
+
+  val get_stanza : t -> string -> Stanza.t option
+
+  val get : t -> string -> Value.t option
+
+  val get_exn : t -> string -> Value.t
+
+  val iter : t -> Stanza.t Iter.t
+       *)
+end
+
 type t = vm
 (** Virtual machine *)
 
 val create :
-  ?env:Env.t ->
   ctx:K.Ctx.t ->
   unit -> t
 (** Create a new VM.
@@ -206,10 +254,6 @@ val set_debug_hook : t -> (t -> Instr.t -> unit) -> unit
 val clear_debug_hook : t -> unit
 (** Remove debug hook *)
 
-val get_env : t -> Env.t
-
-val set_env : t -> Env.t -> unit
-
 val reset : t -> unit
 
 val push : t -> Value.t -> unit
@@ -218,7 +262,15 @@ val pop : t -> Value.t option
 
 val pop_exn : t -> Value.t
 
-val run : t -> Chunk.t -> unit
+val run :
+  t -> Chunk.t ->
+  getenv:(string -> Value.t option) ->
+  unit
+
+val eval_stanza :
+  t -> Stanza.t ->
+  eg:Eval_graph.t ->
+  unit
 
 val dump : t Fmt.printer
 (** Debug printer for the VM.

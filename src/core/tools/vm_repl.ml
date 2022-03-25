@@ -16,19 +16,7 @@ let dump =
     ~eval:(fun vm -> Fmt.printf "%a@." VM.dump vm)
     ()
 
-let setenv =
-  VM.Primitive.make ~name:"setenv"
-    ~eval:(fun vm ->
-        let key = VM.pop_exn vm |> VM.Value.to_str_exn in
-        let v = VM.pop_exn vm in
-        Fmt.printf "assigning %s@." key;
-        let env = VM.get_env vm |> VM.Env.add key v in
-        VM.set_env vm env;
-    )
-    ()
-
 let prims = [
-  setenv;
   show;
   dump;
 ] |> List.map (fun p -> VM.Primitive.name p, p)
@@ -52,6 +40,7 @@ let debug_hook vm i =
   Fmt.eprintf "@[<2>exec `%a`@ in %a@]@." VM.Instr.pp i VM.dump vm
 
 let main () =
+  let env = ref VM.Env.empty in
   let ctx = K.Ctx.create() in
   let vm = VM.create ~ctx () in
   if !debug then VM.set_debug_hook vm debug_hook;
@@ -72,10 +61,10 @@ let main () =
     | Ok c -> Some c
   in
 
-  let eval_chunk ~vm c =
+  let eval_chunk ~env ~vm c =
     if !debug then Fmt.eprintf "### eval chunk@.";
     try
-      VM.run vm c;
+      VM.run vm c ~getenv:(VM.Env.get !env);
     with
     | Error.E err ->
       Fmt.eprintf "%a@." Error.pp err;
@@ -118,7 +107,7 @@ let main () =
         | Some stanza ->
 
           (* run [c] in a different VM to get the value *)
-          let vm' = VM.create ~ctx ~env:(VM.get_env vm) () in
+          let vm' = VM.create ~ctx () in
           if !debug then VM.set_debug_hook vm' debug_hook;
 
           (* TODO
@@ -138,7 +127,7 @@ let main () =
 
       begin match parse_chunk_str line with
         | None ->()
-        | Some c -> eval_chunk ~vm c (* TODO *)
+        | Some c -> eval_chunk ~vm ~env c
       end
     | None -> continue := false
     | exception End_of_file -> continue := false
