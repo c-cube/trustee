@@ -27,9 +27,6 @@ module Types_ = struct
     (** Stack of register value. Each call frame has its own
         local register. *)
 
-    mutable env: env;
-    (** Logical environment. The VM itself cannot modify it. *)
-
     ctx: K.Ctx.t;
     (** Logical context *)
 
@@ -218,7 +215,14 @@ module Env = struct
   let[@inline] mem k self = Str_map.mem k self.env
   let[@inline] add s v self : t = {env=Str_map.add s v self.env}
   let[@inline] find s self = Str_map.find_opt s self.env
+  let[@inline] get self s = Str_map.find_opt s self.env
   let[@inline] iter self = Str_map.to_iter self.env
+end
+
+(* TODO *)
+module Eval_graph = struct
+  type t = unit
+  let create () : t = ()
 end
 
 module Chunk = struct
@@ -245,10 +249,59 @@ module Primitive = struct
     { pr_name=name; pr_eval=eval; }
 end
 
+module Stanza_id = struct
+  type t =
+    | Name of Name.t
+    | Pos of int
+    | Namespace of string * t
+
+  let of_string (str:string) : t = Name (Name.make str)
+  let pos (i:int) : t = Pos i
+  let namespace s n : t = Namespace (s,n)
+
+  let rec equal a b : bool =
+    match a, b with
+    | Name n1, Name n2 -> Name.equal n1 n2
+    | Pos i, Pos j -> i=j
+    | Namespace (n1,i1), Namespace (n2,i2) ->
+      n1=n2 && equal i1 i2
+    | (Name _ | Pos _ | Namespace _), _ -> false
+
+  let rec hash a =
+    let module H = CCHash in
+    match a with
+    | Name n -> H.combine2 10 (Name.hash n)
+    | Pos x -> H.combine2 20 (H.int x)
+    | Namespace (n,x) -> H.combine3 30 (H.string n) (hash x)
+
+  let rec pp out self = match self with
+    | Name n -> Name.pp out n
+    | Pos i -> Fmt.int out i
+    | Namespace(n,x) -> Fmt.fprintf out "%s.%a" n pp x
+
+  let to_string = Fmt.to_string pp
+
+  module As_key = struct
+    type nonrec t = t
+    let equal = equal
+    let hash = hash
+  end
+
+  module Tbl = CCHashtbl.Make(As_key)
+end
+
 module Stanza = struct
   type t = {
+    id: Stanza_id.t;
     view: view;
   }
+
+  (* TODO:
+     - Namespace of t list
+     - Import of "file"
+
+     also have (linkenv "name") as instruction
+  *)
 
   and view =
     | Declare of {
@@ -264,7 +317,10 @@ module Stanza = struct
         mutable body: K.expr option;
       }
 
-    | Proof of proof
+    | Prove of {
+        name: Name.t;
+        proof: proof;
+      }
 
     | Define_meta of {
         name: string;
@@ -292,7 +348,7 @@ module Stanza = struct
       }
 
   let[@inline] view self = self.view
-  let[@inline] make view : t = {view}
+  let[@inline] make ~id view : t = {view; id}
 
   let rec pp out (self:t) : unit =
     match view self with
@@ -301,7 +357,8 @@ module Stanza = struct
     | Define_meta {name; chunk} ->
       Fmt.fprintf out "(@[define-meta `%s`@ :chunk %a@])"
         name Chunk.pp chunk
-    | Proof pr -> pp_proof out pr
+    | Prove {name; proof} ->
+      Fmt.fprintf out "(@[prove %a@ %a@])" Name.pp name pp_proof proof
     | Eval_meta {chunk} ->
       Fmt.fprintf out "(@[eval-meta@ %a@])" Chunk.pp chunk
 
@@ -327,14 +384,13 @@ module VM_ = struct
      an instruction. *)
   exception Stop_exec
 
-  let create (env:Env.t) ~ctx : t = {
+  let create ~ctx : t = {
     stack=Vec.make 128 Value.nil;
     call_stack=Vec.make 12 Chunk.dummy;
     call_restore_ip=Vec.make 12 0;
     call_prim=Vec.create ();
     ip=0;
     regs=Vec.make 32 Value.nil;
-    env;
     ctx;
     debug_hook=None;
   }
@@ -366,7 +422,7 @@ module VM_ = struct
   (* reset state entirely *)
   let reset (self:t) : unit =
     let { stack; call_stack; ip=_; call_prim=_;
-          call_restore_ip; regs; env } = self in
+          call_restore_ip; regs; } = self in
     self.ip <- 0;
     Vec.clear self.call_stack;
     Vec.clear self.call_restore_ip;
@@ -426,7 +482,7 @@ module VM_ = struct
     let {
       stack; call_stack; ip; call_restore_ip;
       call_prim;
-      regs; env=_ } = self in
+      regs; } = self in
     Fmt.fprintf out "@[<v2>VM {@ ";
     Fmt.fprintf out "@[call stack: %d frames@]" (Vec.size call_stack);
     if not (Vec.is_empty call_stack) then (
@@ -458,7 +514,7 @@ module VM_ = struct
 
     Fmt.fprintf out "@;<1 -2>}@]"
 
-  let run (self:t) =
+  let run (self:t) ~(getenv : string -> value option) : unit =
     let continue = ref true in
     try
       while !continue do
@@ -584,7 +640,7 @@ module VM_ = struct
             let key = pop_val_exn self in
             begin match key with
               | String v ->
-                let b = Value.bool (Env.mem v self.env) in
+                let b = Value.bool (getenv v |> Option.is_some) in
                 push_val self b
               | _ -> Error.fail "vm.memenv: required a string"
             end
@@ -593,7 +649,7 @@ module VM_ = struct
             let key = pop_val_exn self in
             begin match key with
               | String v ->
-                begin match Env.find v self.env with
+                begin match getenv v with
                   | Some x -> push_val self x
                   | None -> Error.fail "vm.getenv: key not present"
                 end
@@ -604,7 +660,7 @@ module VM_ = struct
             let key = pop_val_exn self in
             begin match key with
               | String v ->
-                begin match Env.find v self.env with
+                begin match getenv v with
                   | Some x ->
                     push_val self x;
                     push_val self (Value.bool true);
@@ -856,6 +912,7 @@ module Parser = struct
     buf: Lexing.lexbuf;
     prims: Primitive.t Str_map.t;
     cb: CB.t;
+    mutable n : int; (* to give IDs *)
     delayed: (unit -> unit) Vec.t; (* set instructions based on labels *)
     mutable labels: int Str_map.t; (* offset of labels *)
   }
@@ -869,9 +926,15 @@ module Parser = struct
       buf;
       prims;
       cb = CB.create();
+      n = 0;
       delayed=Vec.create();
       labels=Str_map.empty;
     }
+
+  let new_pos_id_ (self:st) : Stanza_id.t =
+    let id = Stanza_id.(Pos self.n) in
+    self.n <- self.n + 1;
+    id
 
   (* consume current token *)
   let consume (self:st) : unit =
@@ -1068,7 +1131,9 @@ module Parser = struct
           parse_chunk_into_ self;
           rparen self;
           let c = CB.to_chunk self.cb in
-          let stanza = Stanza.make @@ Stanza.Define_meta {name; chunk=c} in
+          let id = Stanza_id.of_string name in
+          let stanza =
+            Stanza.make ~id @@ Stanza.Define_meta {name; chunk=c} in
           Some stanza
 
         | "eval" ->
@@ -1077,7 +1142,9 @@ module Parser = struct
           parse_chunk_into_ self;
           rparen self;
           let c = CB.to_chunk self.cb in
-          let stanza = Stanza.make @@ Stanza.Eval_meta {chunk=c} in
+          let stanza =
+            let id = new_pos_id_ self in
+            Stanza.make ~id @@ Stanza.Eval_meta {chunk=c} in
           Some stanza
 
         | "declare" -> assert false
@@ -1155,20 +1222,25 @@ end
 
 type t = Types_.vm
 
-let create ?(env=Env.empty) ~ctx () : t =
-  let vm = VM_.create env ~ctx in
+let create ~ctx () : t =
+  let vm = VM_.create ~ctx in
   vm
-
-let[@inline] get_env (self:t) = self.env
-let[@inline] set_env (self:t) e = self.env <- e
 
 let reset = VM_.reset
 let push = VM_.push_val
 let pop = VM_.pop_val
 let pop_exn = VM_.pop_val_exn
-let run self c =
+
+let run self c ~getenv =
   VM_.enter_chunk self c;
-  VM_.run self
+  VM_.run self ~getenv
+
+let eval_stanza (self:t) (stanza:Stanza.t) ~eg:_ : unit =
+  assert false
+    (* TODO: allocate eval_graph
+  let rec eval 
+       *)
+
 
 let set_debug_hook vm h = vm.Types_.debug_hook <- Some h
 let clear_debug_hook vm = vm.Types_.debug_hook <- None
