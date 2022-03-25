@@ -205,9 +205,19 @@ module Expr : sig
   val lambda_db : (name:string -> ty_v:ty -> t -> t) with_ctx
   val arrow : (t -> t -> t) with_ctx
   val arrow_l : (t list -> t -> t) with_ctx
+
   val box : (sequent -> t) with_ctx
+  (** [box (A1…An |- b)] is a term that wraps the sequent
+      in an opaque box, which is equal only to itself.
+      Boxes can be useful to carry assumptions around before eventually
+      resolving them, using {!Thm.box} and {!Thm.assume_box}.
+
+      We denote [box (A1…An |- b)] by [ « A1…An |- B » ].
+  *)
 
   val map : (f:(bool -> t -> t) -> t -> t) with_ctx
+  (** [map ~f t] maps [f] over the immediate subterms, giving
+      it [true] if it enters a binder, [false] if not. *)
 
   val db_shift: (t -> int -> t) with_ctx
 
@@ -386,20 +396,20 @@ module Thm : sig
   *)
 
   val box : (thm -> thm) with_ctx
-  (** [box (A1…An |- B)] is the new theorem [|- box(A1…An |- B)].
+  (** [box (A1…An |- B)] is the new theorem [|- « A1…An |- B »].
       It can be used to discharge assumptions from other theorems
-      that assumed (A1…An|-B) to be true. *)
+      that assumed [A1…An|-B] to be true. *)
 
   val assume_box : (sequent -> thm) with_ctx
   (** [assume_box (A1…An ?- B)] takes a sequent, and makes a conditional
       theorem out of it.
 
-      The result is [box(A1…An |- B), A1, …, An |- B]. This is {b almost},
+      The result is [« A1…An |- B », A1, …, An |- B]. This is {b almost},
       but not quite, the original sequent, except for the additional box
-      hypothesis. One can use this result, as if  [A1…An |- B] was proved,
-      and proceeed; later, the box can be discharged by proving [A1…An |- b]
-      and using {!box}, and then using {!cut} to remove the box in
-      the hypothesis.
+      hypothesis. One can use this result, as if [A1…An |- B] was proved,
+      and proceeed; later, the box can be discharged by proving
+      [A1…An |- b] and using {!box}, and then using {!cut} to remove
+      the box [« A1…An |- B»] in the hypothesis.
   *)
 end
 
