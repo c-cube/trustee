@@ -32,7 +32,7 @@
   (license MIT)
   (depends
     (dune (>= "2.0"))
-    (containers (and (>= 3.0) (< 4.0)))
+    (containers (and (>= 3.6) (< 4.0)))
     (trustee (= :version))
     (odoc :with-doc)))
 

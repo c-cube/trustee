@@ -79,9 +79,9 @@ let parse ~dir : t P.t =
     )
   and pitems acc =
     P.skip_white *>
-    ((P.try_ P.eoi *> P.return (List.rev acc))
-     <|> (P.try_ (P.char '}') *> P.return (List.rev acc))
-     <|> (P.try_ pkey >>= fun key ->
+    ((P.eoi *> P.return (List.rev acc))
+     <|> ((P.char '}') *> P.return (List.rev acc))
+     <|> (pkey >>= fun key ->
           pitem key >>= fun i ->
           pitems (i::acc))
      <?> "expected items")
