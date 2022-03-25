@@ -333,7 +333,7 @@ module Stanza = struct
 
   and proof = {
     pr_goal_chunk: Chunk.t;
-    mutable pr_goal: K.Goal.t option;
+    mutable pr_goal: K.Sequent.t option;
     pr_def: proof_def;
   }
 

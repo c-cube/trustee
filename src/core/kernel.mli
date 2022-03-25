@@ -22,6 +22,17 @@ type bvar = {
   bv_ty: ty;
 }
 
+type expr_set
+(** A set of expressions. *)
+
+(** A sequent [hyps |- concl]. It does not necessarily represent
+    a valid theorem; it can also represent an hypothesis,
+    or a goal. *)
+type sequent = private {
+  concl: expr;
+  hyps: expr_set;
+}
+
 (** Main view on expressions *)
 type expr_view =
   | E_kind
@@ -32,6 +43,7 @@ type expr_view =
   | E_app of expr * expr
   | E_lam of string * expr * expr
   | E_arrow of expr * expr
+  | E_box of sequent (* reified sequent *)
 
 module Name = Name
 
@@ -123,6 +135,7 @@ module Expr : sig
     | E_app of t * t
     | E_lam of string * expr * expr
     | E_arrow of expr * expr
+    | E_box of sequent (* reified sequent *)
 
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
@@ -206,24 +219,20 @@ module Expr : sig
       @raise Error.Error if the term is not a lambda. *)
 end
 
-(** {2 Toplevel goals} *)
-
-(** Goals
-
-    A goal is simply a conjecture that does not have been proved yet.
-    It might therefore be invalid. *)
-module Goal : sig
-  type t = private {
-    hyps: Expr.Set.t;
-    concl: Expr.t;
+module Sequent : sig
+  type t = sequent = private {
+    concl: expr;
+    hyps: expr_set;
   }
 
-  val make : Expr.Set.t -> Expr.t -> t
+  val make : expr_set -> Expr.t -> t
   val make_l : Expr.t list -> Expr.t -> t
   val make_nohyps : Expr.t -> t
 
   val concl : t -> Expr.t
-  val hyps : t -> Expr.Set.t
+  val hyps : t -> expr_set
+  val n_hyps : t -> int
+  val hyps_l : t -> Expr.t list
   val hyps_iter : t -> Expr.t iter
 
   include Sigs.PP with type t := t
@@ -275,6 +284,9 @@ module Thm : sig
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
 
+  (** View theorem as a sequent. *)
+  val sequent : t -> Sequent.t
+
   val hyps_iter : t -> expr iter
 
   val hyps_l : t -> expr list
@@ -291,7 +303,7 @@ module Thm : sig
 
   (* TODO: store proofs optionally *)
 
-  val is_proof_of : t -> Goal.t -> bool
+  val is_proof_of : t -> Sequent.t -> bool
   (** Is this theorem a proof of the given goal? *)
 
   type 'a with_ctx = ctx -> 'a

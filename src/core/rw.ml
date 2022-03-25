@@ -42,7 +42,7 @@ let bottom_up (conv:conv) : conv =
 
   and loop_uncached e : rw_step =
     match E.view e with
-    | E.E_kind | E.E_type | E.E_arrow _ -> Same
+    | E.E_kind | E.E_type | E.E_arrow _ | E.E_box _ -> Same
     | E.E_app (f, x) ->
       let r_f = loop f in
       let r_x = loop x in

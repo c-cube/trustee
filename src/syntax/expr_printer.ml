@@ -9,6 +9,7 @@ type ('t, 'ty) view =
   | Const of Name.t * 'ty list
   | Lambda of Name.t * 'ty * 't
   | Lambda_db of Name.t option * 'ty * 't
+  | Box of 't list * 't
 
 module type EXPR = sig
   type ty
@@ -128,6 +129,12 @@ module Make(E : EXPR)
       | Lambda_db (Some v, ty, bod) ->
         Fmt.fprintf out "(@[\\%a:@[%a@].@ %a@])" Name.pp v pp_ty ty
           (pp_rec_ 0 (k+1) (Some v::names)) bod
+      | Box ([],c) ->
+        Fmt.fprintf out "@[|- %a@]" (pp_rec_ 0 k names) c
+      | Box (hyps,c) ->
+        Fmt.fprintf out "@[<hv>%a@ |- %a@]"
+          (pp_list @@ pp_rec_ 0 k names) hyps
+          (pp_rec_ 0 k names) c
 
     (* wrap in () if [p>p']; call [k (max p p')] to print the expr *)
     and wrap_ p p' out k =
@@ -159,5 +166,7 @@ module Pp_k_expr
       | E.E_lam (s, ty, bod) ->
         let name = if s="" then None else Some (Name.make s) in
         Lambda_db (name, ty, bod)
+      | E.E_box seq ->
+        Box (K.Sequent.hyps_l seq, K.Sequent.concl seq)
       | E.E_kind | E.E_type | E.E_arrow _ -> assert false
   end)

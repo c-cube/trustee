@@ -58,7 +58,7 @@ let unif_rec_ subst a b : subst =
       let subst = loop subst ty1 ty2 in
       loop subst bod1 bod2
     | (E.E_kind | E.E_type | E.E_app _ | E.E_arrow _
-      | E.E_const _ | E.E_bound_var _ | E.E_lam _), _ ->
+      | E.E_const _ | E.E_bound_var _ | E.E_lam _ | E.E_box _), _ ->
       raise Fail
   in
   loop subst a b
@@ -98,7 +98,7 @@ let match_rec_ subst a b : subst =
       let subst = loop subst ty1 ty2 in
       loop subst bod1 bod2
     | (E.E_kind | E.E_type | E.E_app _ | E.E_arrow _
-      | E.E_const _ | E.E_bound_var _ | E.E_lam _), _ ->
+      | E.E_const _ | E.E_bound_var _ | E.E_lam _ | E.E_box _), _ ->
       raise Fail
   in
   loop subst a b
