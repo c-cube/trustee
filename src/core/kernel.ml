@@ -631,11 +631,6 @@ module Expr = struct
       )
 
     and loop_uncached_ k (e:t) : t =
-      let ty = lazy (
-        match e.e_ty with
-        | lazy None -> None
-        | lazy (Some ty) -> Some (loop 0 ty)
-      ) in
       match view e with
       | _ when not (has_fvars e) -> e (* nothing to subst in *)
       | E_var v when is_eq_to_type v.v_ty ->
@@ -654,21 +649,6 @@ module Expr = struct
             if recursive then loop 0 u else u
           | exception Not_found -> var ctx v
         end
-      | E_const (_, []) -> e
-      | E_const (c, args) ->
-        (* subst in args, thus changing the whole term's type *)
-        let ty = lazy (Some (loop k (ty_exn e))) in
-        mk_const_ ctx c (List.map (loop k) args) ty
-      | E_app (hd, a) ->
-        let hd' = loop k hd in
-        let a' = loop k a in
-        if hd==hd' && a'==a then e
-        else make_ ctx (E_app (hd',a')) ty
-      | E_arrow (a, b) ->
-        let a' = loop k a in
-        let b' = loop k b in
-        if a==a' && b'==b then e
-        else make_ ctx (E_arrow (a',b')) ty
       | _ ->
         map ctx e ~f:(fun inb u -> loop (if inb then k+1 else k) u)
     in
