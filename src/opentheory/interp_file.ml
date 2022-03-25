@@ -26,9 +26,9 @@ open P
 let p_white_ =
   fix @@ fun self ->
   skip_white *>
-  ((try_ eoi)
+  ((eoi)
    <|>
-   (try_ (char '#') *> P.skip_chars (function '\n' -> false | _ -> true) *> self)
+   ((char '#') *> P.skip_chars (function '\n' -> false | _ -> true) *> self)
    <|> return ())
 
 let p_quoted : string P.t =
@@ -36,12 +36,12 @@ let p_quoted : string P.t =
 
 let parse_item : item P.t =
   p_white_ *>
-  ((try_ (string "type ") *> skip_white *>
+  (((string "type ") *> skip_white *>
     p_quoted >>= fun s ->
     skip_white *> string "as" *> skip_white *>
     p_quoted >|= fun t -> I_ty(s,t))
    <|>
-   (try_ (string "const ") *> skip_white *>
+   ((string "const ") *> skip_white *>
     p_quoted >>= fun s ->
     skip_white *> string "as" *> skip_white *>
     p_quoted >|= fun t -> I_const(s,t))
@@ -49,7 +49,7 @@ let parse_item : item P.t =
 
 let parse : _ P.t =
   p_white_ *>
-  ((try_ eoi *> return [])
+  ((eoi *> return [])
    <|>
    (many parse_item <* eoi))
 
