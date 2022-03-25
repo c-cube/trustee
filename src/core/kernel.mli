@@ -249,19 +249,19 @@ module New_ty_def : sig
     (** List of type variables *)
 
     c_abs: const;
-    (** Function from the general type to `tau` *)
+    (** Function from the general type to [tau] *)
 
     c_repr: const;
-    (** Function from `tau` back to the general type *)
+    (** Function from [tau] back to the general type *)
 
     abs_thm: thm;
-    (** `abs_thm` is `|- abs (repr x) = x` *)
+    (** [abs_thm] is [|- abs (repr x) = x] *)
 
     abs_x: var;
     (** Variable used in [abs_thm] *)
 
     repr_thm: thm;
-    (** `repr_thm` is `|- Phi x <=> repr (abs x) = x` *)
+    (** [repr_thm] is [|- Phi x <=> repr (abs x) = x] *)
 
     repr_x: var;
     (** Variable used in [repr_thm] *)
@@ -312,53 +312,53 @@ module Thm : sig
   (** {3 Deduction rules} *)
 
   val assume : (expr -> t) with_ctx
-  (** `assume e` returns `e |- e`. *)
+  (** [assume e] returns [e |- e]. *)
 
   val axiom : (expr list -> expr -> t) with_ctx
-  (** `axiom hyps e` is `hyps |- e`. Fails if [pledge_no_more_axioms] was called *)
+  (** [axiom hyps e] is [hyps |- e]. Fails if [pledge_no_more_axioms] was called *)
 
   val cut : (t -> t -> t) with_ctx
-  (** `cut (F1 |- b) (F2, b |- c)` is `F1, F2 |- c`.
-      Fails if `b` does not occur {b syntactically} in the hypothesis of
+  (** [cut (F1 |- b) (F2, b |- c)] is [F1, F2 |- c].
+      Fails if [b] does not occur {b syntactically} in the hypothesis of
       the second theorem. *)
 
   val refl : (expr -> t) with_ctx
-  (** `refl e` returns `|- e=e` *)
+  (** [refl e] returns [|- e=e] *)
 
   val congr : (t -> t -> t) with_ctx
-  (** `congr (|- f=g) (|- t=u)` is `|- (f t) = (g u)` *)
+  (** [congr (|- f=g) (|- t=u)] is [|- (f t) = (g u)] *)
 
   val subst : recursive:bool -> (t -> Subst.t -> t) with_ctx
-  (** `subst (A |- t) \sigma` is `A\sigma |- t\sigma` *)
+  (** [subst (A |- t) \sigma] is [A\sigma |- t\sigma] *)
 
   val sym : (t -> t) with_ctx
-  (** `sym (|- t=u)` is `|- u=t` *)
+  (** [sym (|- t=u)] is [|- u=t] *)
 
   val trans : (t -> t -> t) with_ctx
-  (** trans (F1 |- t=u)` `(F2 |- u=v)` is `F1, F2 |- t=v` *)
+  (** trans (F1 |- t=u)] [(F2 |- u=v)] is [F1, F2 |- t=v] *)
 
   val bool_eq : (t -> t -> t) with_ctx
-  (** `bool_eq (F1 |- a) (F2 |- a=b)` is `F1, F2 |- b`.
+  (** [bool_eq (F1 |- a) (F2 |- a=b)] is [F1, F2 |- b].
       This is the boolean equivalent of transitivity. *)
 
   val bool_eq_intro : (t -> t -> t) with_ctx
-    (** `bool_eq_intro (F1, a |- b) (F2, b |- a)` is `F1, F2 |- b=a`.
-        This is a way of building a boolean `a=b` from proofs of
-        `a|-b` and `b|-a`. *)
+    (** [bool_eq_intro (F1, a |- b) (F2, b |- a)] is [F1, F2 |- b=a].
+        This is a way of building a boolean [a=b] from proofs of
+        [a|-b] and [b|-a]. *)
 
   val beta_conv : (expr -> t) with_ctx
-  (** `beta_conv ((λx.u) a)` is `|- (λx.u) a = u[x:=a]`.
+  (** [beta_conv ((λx.u) a)] is [|- (λx.u) a = u[x:=a]].
       Fails if the term is not a beta-redex. *)
 
   val abs : (var -> t -> t) with_ctx
-  (** `abs (F |- a=b) x` is `F |- (\x. a) = (\x. b)`
-      fails if `x` occurs in `F`. *)
+  (** [abs (F |- a=b) x] is [F |- (\x. a) = (\x. b)]
+      fails if [x] occurs in [F]. *)
 
   val new_basic_definition : (expr -> t * const) with_ctx
-  (** `new_basic_definition (x=t)` where `x` is a variable and `t` a term
+  (** [new_basic_definition (x=t)] where [x] is a variable and [t] a term
       with a closed type,
-      returns a theorem `|- x=t` where `x` is now a constant, along with
-      the constant `x`.  *)
+      returns a theorem [|- x=t] where [x] is now a constant, along with
+      the constant [x].  *)
 
   val new_basic_type_definition :
     (?ty_vars:ty_var list ->
@@ -371,15 +371,15 @@ module Thm : sig
   (** Introduce a new type operator.
 
       Here, too, we follow HOL light:
-      `new_basic_type_definition(tau, abs, repr, inhabited)`
-      where `inhabited` is the theorem `|- Phi x` with `x : ty`,
-      defines a new type operator named `tau` and two functions,
-      `abs : ty -> tau` and `repr: tau -> ty`.
+      [new_basic_type_definition(tau, abs, repr, inhabited)]
+      where [inhabited] is the theorem [|- Phi x] with [x : ty],
+      defines a new type operator named [tau] and two functions,
+      [abs : ty -> tau] and [repr: tau -> ty].
 
-      It returns a struct `New_ty_def.t` containing `tau, absthm, reprthm`, where:
-      - `tau` is the new (possibly parametrized) type operator
-      - `absthm` is `|- abs (repr x) = x`
-      - `reprthm` is `|- Phi x <=> repr (abs x) = x`
+      It returns a struct [New_ty_def.t] containing [tau, absthm, reprthm], where:
+      - [tau] is the new (possibly parametrized) type operator
+      - [absthm] is [|- abs (repr x) = x]
+      - [reprthm] is [|- Phi x <=> repr (abs x) = x]
 
       @param ty_var if provided, use the type variables in the given order.
       It must be the exact set of free variables of [thm_inhabited].
