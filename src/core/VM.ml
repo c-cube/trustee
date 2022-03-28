@@ -77,10 +77,6 @@ module Types_ = struct
 
   and instr = VM_instr.t
 
-  and env = {
-    env: value Str_map.t;
-  } [@@unboxed]
-
   let pp_vec ?(sep=", ") ppx out v =
     Fmt.fprintf out "%a" (pp_iter ~sep ppx) (Vec.to_iter v)
   let pp_arri ?(sep=", ") ppx out a =
@@ -200,15 +196,18 @@ module Value = struct
   let[@inline] to_subst_exn = function Subst x -> x | _ -> Error.fail "expected subst"
 end
 
-module Env = struct
+module Scoping_env = struct
   open Types_
-  type t = env
+  type t = {
+    (* maps name in scope to absolute symbolic references *)
+    env: Sym_ptr.t Str_map.t;
+  } [@@unboxed]
 
   let empty : t = {env=Str_map.empty}
 
-  let pp out self =
+  let pp out (self:t) =
     let pp_pair out (s,v) =
-      Fmt.fprintf out "@[%s := %a@]" s Value.pp v in
+      Fmt.fprintf out "@[%s := %a@]" s Sym_ptr.pp v in
     Fmt.fprintf out "@[<1>env {@ %a@ @;<0 -1>}@]"
       (pp_iter ~sep:";" pp_pair) (Str_map.to_iter self.env)
 
@@ -249,50 +248,9 @@ module Primitive = struct
     { pr_name=name; pr_eval=eval; }
 end
 
-module Stanza_id = struct
-  type t =
-    | Name of Name.t
-    | Pos of int
-    | Namespace of string * t
-
-  let of_string (str:string) : t = Name (Name.make str)
-  let pos (i:int) : t = Pos i
-  let namespace s n : t = Namespace (s,n)
-
-  let rec equal a b : bool =
-    match a, b with
-    | Name n1, Name n2 -> Name.equal n1 n2
-    | Pos i, Pos j -> i=j
-    | Namespace (n1,i1), Namespace (n2,i2) ->
-      n1=n2 && equal i1 i2
-    | (Name _ | Pos _ | Namespace _), _ -> false
-
-  let rec hash a =
-    let module H = CCHash in
-    match a with
-    | Name n -> H.combine2 10 (Name.hash n)
-    | Pos x -> H.combine2 20 (H.int x)
-    | Namespace (n,x) -> H.combine3 30 (H.string n) (hash x)
-
-  let rec pp out self = match self with
-    | Name n -> Name.pp out n
-    | Pos i -> Fmt.int out i
-    | Namespace(n,x) -> Fmt.fprintf out "%s.%a" n pp x
-
-  let to_string = Fmt.to_string pp
-
-  module As_key = struct
-    type nonrec t = t
-    let equal = equal
-    let hash = hash
-  end
-
-  module Tbl = CCHashtbl.Make(As_key)
-end
-
 module Stanza = struct
   type t = {
-    id: Stanza_id.t;
+    id: Sym_ptr.t;
     view: view;
   }
 
@@ -307,14 +265,11 @@ module Stanza = struct
     | Declare of {
         name: Name.t;
         ty_chunk: Chunk.t;
-        mutable ty: K.ty option;
       }
 
     | Define of {
         name: Name.t;
         body_chunk: Chunk.t;
-        mutable ty: K.ty option;
-        mutable body: K.expr option;
       }
 
     | Prove of {
@@ -333,14 +288,12 @@ module Stanza = struct
 
   and proof = {
     pr_goal_chunk: Chunk.t;
-    mutable pr_goal: K.Sequent.t option;
     pr_def: proof_def;
   }
 
   and proof_def =
     | PR_chunk of {
-        chunk: Chunk.t;
-        mutable thm: K.Thm.t option;
+        thm_chunk: Chunk.t;
       }
     | PR_steps of {
         steps: (string * proof) Vec.t;
@@ -514,7 +467,7 @@ module VM_ = struct
 
     Fmt.fprintf out "@;<1 -2>}@]"
 
-  let run (self:t) ~(getenv : string -> value option) : unit =
+  let run (self:t) : unit =
     let continue = ref true in
     try
       while !continue do
@@ -636,40 +589,8 @@ module VM_ = struct
           | Jmp ip ->
             self.ip <- ip
 
-          | Memenv ->
-            let key = pop_val_exn self in
-            begin match key with
-              | String v ->
-                let b = Value.bool (getenv v |> Option.is_some) in
-                push_val self b
-              | _ -> Error.fail "vm.memenv: required a string"
-            end
-
-          | Getenv ->
-            let key = pop_val_exn self in
-            begin match key with
-              | String v ->
-                begin match getenv v with
-                  | Some x -> push_val self x
-                  | None -> Error.fail "vm.getenv: key not present"
-                end
-              | _ -> Error.fail "vm.getenv: required a string"
-            end
-
-          | Qenv ->
-            let key = pop_val_exn self in
-            begin match key with
-              | String v ->
-                begin match getenv v with
-                  | Some x ->
-                    push_val self x;
-                    push_val self (Value.bool true);
-                  | None ->
-                    push_val self Value.nil;
-                    push_val self (Value.bool false);
-                end
-              | _ -> Error.fail "vm.qenv: required a string"
-            end
+          | Link sref ->
+            assert false
 
           | Type ->
             push_val self (Value.expr @@ K.Expr.type_ self.ctx)
@@ -905,10 +826,11 @@ module Parser = struct
   }
 
   let create ?(prims=Str_map.empty) (str:string) : t =
-    {str; prims}
+    { str; prims; }
 
   type st = {
     mutable tok: VM_lex.token;
+    mutable env: Scoping_env.t;
     buf: Lexing.lexbuf;
     prims: Primitive.t Str_map.t;
     cb: CB.t;
@@ -917,13 +839,14 @@ module Parser = struct
     mutable labels: int Str_map.t; (* offset of labels *)
   }
 
-  let create_st ?tok prims buf : st =
+  let create_st ?tok prims buf ~env : st =
     let tok = match tok with
       | Some t -> t
       | None -> VM_lex.token buf
     in
     { tok;
       buf;
+      env;
       prims;
       cb = CB.create();
       n = 0;
@@ -931,8 +854,8 @@ module Parser = struct
       labels=Str_map.empty;
     }
 
-  let new_pos_id_ (self:st) : Stanza_id.t =
-    let id = Stanza_id.(Pos self.n) in
+  let new_pos_id_ (self:st) : Sym_ptr.t =
+    let id = Sym_ptr.pos self.n in
     self.n <- self.n + 1;
     id
 
@@ -952,6 +875,10 @@ module Parser = struct
   let int (self:st) = match self.tok with
     | VM_lex.INT i -> consume self; int_of_string i
     | _ -> Error.fail "expected integer"
+
+  let quoted_str (self:st) = match self.tok with
+    | VM_lex.QUOTED_STR s -> consume self; s
+    | _ -> Error.fail "expected quoted string"
 
   let atom self = match self.tok with
     | VM_lex.ATOM s -> consume self; s
@@ -1016,6 +943,15 @@ module Parser = struct
           rparen self;
           CB.add_instr self.cb (Instr.Lload i)
 
+        | "link" ->
+          let s = quoted_str self in
+          begin match Scoping_env.find s self.env with
+            | None ->
+              Error.failf (fun k->k"link: cannot find %S in environment" s)
+            | Some ptr ->
+              CB.add_instr self.cb (Instr.Link ptr)
+          end
+
         | "jif" ->
           let lbl = label self in
           rparen self;
@@ -1078,10 +1014,6 @@ module Parser = struct
         | "lt" -> CB.add_instr self.cb Instr.Lt
         | "eq" -> CB.add_instr self.cb Instr.Eq
 
-        | "memenv" -> CB.add_instr self.cb Instr.Memenv
-        | "getenv" -> CB.add_instr self.cb Instr.Getenv
-        | "qenv" -> CB.add_instr self.cb Instr.Qenv
-
         | _ ->
           (* look for a primitive of that name *)
           begin match Str_map.find_opt str self.prims with
@@ -1099,7 +1031,7 @@ module Parser = struct
     | VM_lex.LBRACE ->
       consume self;
       (* parse sub-chunk *)
-      let st' = create_st ~tok:self.tok self.prims self.buf in
+      let st' = create_st ~tok:self.tok ~env:self.env self.prims self.buf in
       begin
         parse_chunk_into_ st';
         self.tok <- st'.tok;
@@ -1131,7 +1063,7 @@ module Parser = struct
           parse_chunk_into_ self;
           rparen self;
           let c = CB.to_chunk self.cb in
-          let id = Stanza_id.of_string name in
+          let id = Sym_ptr.str name in
           let stanza =
             Stanza.make ~id @@ Stanza.Define_meta {name; chunk=c} in
           Some stanza
@@ -1147,19 +1079,19 @@ module Parser = struct
             Stanza.make ~id @@ Stanza.Eval_meta {chunk=c} in
           Some stanza
 
-        | "declare" -> assert false
+        | "declare" -> assert false (* TODO *)
 
-        | "define" -> assert false
+        | "define" -> assert false (* TODO *)
 
-        | "proof" -> assert false
+        | "proof" -> assert false (* TODO *)
 
         | _ -> Error.failf (fun k->k"unknown stanza %S" a)
       end
     | _ -> Error.fail "syntax error"
 
-  let parse_chunk (self:t) : _ result =
+  let parse_chunk (self:t) ~env : _ result =
     let buf = Lexing.from_string ~with_positions:false self.str in
-    let st = create_st self.prims buf in
+    let st = create_st self.prims buf ~env in
     begin match
         parse_chunk_into_ st;
         st.tok
@@ -1175,25 +1107,27 @@ module Parser = struct
         Error (Error.of_exn e)
     end
 
-  let parse_stanza (self:t) : (Stanza.t, _) result =
+  let parse_stanza (self:t) ~env : Scoping_env.t * (Stanza.t, _) result =
     let buf = Lexing.from_string ~with_positions:false self.str in
-    let st = create_st self.prims buf in
+    let st = create_st self.prims buf ~env in
     match parse_stanza_ st with
-    | None -> Error (Error.make "expected stanza")
-    | Some st -> Ok st
+    | exception Error.E err -> st.env, Error err
+    | None -> st.env, Error (Error.make "expected stanza")
+    | Some stanza -> st.env, Ok stanza
 
-  let parse_stanzas (self:t) : (_ Vec.t, _) result =
+  let parse_stanzas (self:t) ~env : Scoping_env.t * (_ Vec.t, _) result =
     let buf = Lexing.from_string ~with_positions:false self.str in
-    let st = create_st self.prims buf in
+    let st = create_st self.prims buf ~env in
     let vec = Vec.create() in
-    let rec loop() = match parse_stanza_ st with
-      | None -> Ok vec
+    let rec loop () =
+      match parse_stanza_ st with
+      | None -> st.env, Ok vec
       | Some stanza ->
         Vec.push vec stanza;
-        loop()
-      | exception Error.E err -> Error err
+        loop ()
+      | exception Error.E err -> env, Error err
     in
-    loop()
+    loop ()
 
   type st_item = BRACE | PAR | BRACKET
 
@@ -1231,14 +1165,14 @@ let push = VM_.push_val
 let pop = VM_.pop_val
 let pop_exn = VM_.pop_val_exn
 
-let run self c ~getenv =
+let run self c =
   VM_.enter_chunk self c;
-  VM_.run self ~getenv
+  VM_.run self
 
 let eval_stanza (self:t) (stanza:Stanza.t) ~eg:_ : unit =
   assert false
     (* TODO: allocate eval_graph
-  let rec eval 
+  let rec eval
        *)
 
 
@@ -1246,23 +1180,23 @@ let set_debug_hook vm h = vm.Types_.debug_hook <- Some h
 let clear_debug_hook vm = vm.Types_.debug_hook <- None
 let dump = VM_.dump
 
-let parse_chunk_string ?prims s : _ result =
+let parse_chunk_string ?prims env s : _ result =
   let p = Parser.create ?prims s in
-  Parser.parse_chunk p
+  Parser.parse_chunk ~env p
 
-let parse_chunk_string_exn ?prims s : Chunk.t =
-  match parse_chunk_string ?prims s with
+let parse_chunk_string_exn ?prims env s : Chunk.t =
+  match parse_chunk_string ?prims env s with
   | Ok c -> c
   | Error e -> Error.raise e
 
-let parse_stanza_string ?prims s : _ result =
+let parse_stanza_string ?prims env s : _ * _ result =
   let p = Parser.create ?prims s in
-  Parser.parse_stanza p
+  Parser.parse_stanza ~env p
 
-let parse_stanza_string_exn ?prims s : Stanza.t =
-  match parse_stanza_string ?prims s with
-  | Ok c -> c
-  | Error e -> Error.raise e
+let parse_stanza_string_exn ?prims env s : _ * Stanza.t =
+  match parse_stanza_string ?prims env s with
+  | env, Ok c -> env, c
+  | _env, Error e -> Error.raise e
 
 
 (*$inject
@@ -1271,9 +1205,9 @@ let parse_stanza_string_exn ?prims s : Stanza.t =
 *)
 
 (*$R
-  let c = parse_string_exn "42 2 add" in
+  let c = parse_string_exn "42 2 add" ~env:Scoping_env.empty in
   reset vm;
   run vm c;
   let v = pop_exn vm in
   assert_equal ~cmp:Value.equal ~printer:Value.show (Value.int 44) v
-    *)
+*)

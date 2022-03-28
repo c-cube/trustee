@@ -8,12 +8,12 @@
     1 ret
   :l1
     (rload 0) sub1
-      "fact" getenv call ; fact (n-1)
+      (link "fact") call ; fact (n-1)
     (rload 0) mult ; *n
 })
 
-(eval 5 "fact" getenv call show)
+(eval 5 (link "fact") call show)
 
 ; constant definition
-(meta fact5 5 "fact" getenv call)
+(meta fact5 5 (link "fact") call)
 (eval "fact5" getenv show)

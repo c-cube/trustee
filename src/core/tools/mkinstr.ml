@@ -7,6 +7,7 @@ let pf = Printf.printf
 type op_arg =
   | Int
   | Bool
+  | Sym_ptr
 
 type doc=string
 
@@ -37,11 +38,7 @@ let instrs: (string*op_arg list*doc) list = [
   "jif", [Int], "(bool -- ) Pop a boolean; if true, then set IP=<offset>";
   "jifn", [Int], "(bool -- ) Pop a boolean; if false, then set IP=<offset>";
   "jmp", [Int], "( -- ) Set IP=<offset> unconditionally";
-  "memenv", [], "(str -- bool) Pop a string, returns `true` iff this name is bound in env";
-  "getenv", [], "(str -- v) Pop a string, returns the value with this name in env.\n\
-                 Fails if not present";
-  "qenv", [], "(str -- any? bool) Pop a string, returns `v, true` \
-               if `v` is the value with this name in env, `nil, false` otherwise.";
+  "link", [Sym_ptr], "( -- x) Pushes the value obtained from value in the environment";
   "type", [], "( -- type) Pushes the kind `type`.";
   "var", [], "(str ty -- var) Pop a string and a type, pushes a variable.";
   "vty", [], "(var -- ty) Pop a variable, pushes its type.";
@@ -81,7 +78,7 @@ let emit_ty (name,args,doc) =
   if nargs>1 then pf " of (";
   List.iteri (fun i ty ->
       if i>0 then pf " * ";
-      match ty with Int -> pf "int" | Bool -> pf "bool")
+      match ty with Int -> pf "int" | Bool -> pf "bool" | Sym_ptr -> pf "Sym_ptr.t")
     args;
   if nargs>1 then pf ")";
   pf " (** %s *)" doc;
@@ -103,9 +100,16 @@ let emit_pp (name,args,doc) =
     List.iteri (fun _i ty ->
         pf " ";
         match ty with
-        | Int -> pf "%%d" | Bool -> pf "%%b") args;
+        | Int -> pf "%%d"
+        | Bool -> pf "%%b"
+        | Sym_ptr -> pf "%%a"
+      ) args;
     pf {|)"|};
-    List.iteri (fun i _ -> pf "x%d" i) args;
+    List.iteri (fun i ty ->
+        match ty with
+        | Int | Bool -> pf "x%d" i
+        | Sym_ptr -> pf "Sym_ptr.pp x%d" i
+      ) args;
   );
   pf "\n"
 

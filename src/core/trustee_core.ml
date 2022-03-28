@@ -20,6 +20,7 @@ module Thm = Kernel.Thm
 module Subst = Kernel.Subst
 module Var = Kernel.Var
 
+module Sym_ptr = Sym_ptr
 module VM = VM
 
 module Str_map = Sigs.Str_map

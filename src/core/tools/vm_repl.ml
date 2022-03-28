@@ -39,24 +39,29 @@ let readline = ref true
 let debug_hook vm i =
   Fmt.eprintf "@[<2>exec `%a`@ in %a@]@." VM.Instr.pp i VM.dump vm
 
+let pp_err err =
+  Fmt.eprintf "%a@." Error.pp err
+
 let main () =
-  let env = ref VM.Env.empty in
   let ctx = K.Ctx.create() in
   let vm = VM.create ~ctx () in
+  let env = ref VM.Scoping_env.empty in
   if !debug then VM.set_debug_hook vm debug_hook;
 
   let parse_stanza_str str =
-    match VM.parse_stanza_string ~prims str  with
+    let e, r = VM.parse_stanza_string ~prims !env str in
+    env := e;
+    match r with
     | Error err ->
-      Fmt.printf "Error: %a@." Error.pp err;
+      pp_err err;
       None
     | Ok c -> Some c
   in
 
   let parse_chunk_str str =
-    match VM.parse_chunk_string ~prims str  with
+    match VM.parse_chunk_string ~prims !env str with
     | Error err ->
-      Fmt.printf "Error: %a@." Error.pp err;
+      pp_err err;
       None
     | Ok c -> Some c
   in
@@ -64,10 +69,10 @@ let main () =
   let eval_chunk ~env ~vm c =
     if !debug then Fmt.eprintf "### eval chunk@.";
     try
-      VM.run vm c ~getenv:(VM.Env.get !env);
+      VM.run vm c;
     with
     | Error.E err ->
-      Fmt.eprintf "%a@." Error.pp err;
+      pp_err err;
     | e ->
       Printf.eprintf "exception: %s\n%!" (Printexc.to_string e)
   in
@@ -132,16 +137,21 @@ let main () =
     | None -> continue := false
     | exception End_of_file -> continue := false
     | exception Sys.Break -> continue := false
+    | exception Error.E err ->
+      pp_err err;
   done;
   ()
 
 let () =
   Sys.catch_break true;
 
+  let color = ref true in
   let args = [
     "--raw", Arg.Clear readline, " disable readline";
     "--debug", Arg.Set debug, " enable debug";
+    "-nc", Arg.Clear color, " disable colored output";
   ] |> Arg.align in
   Arg.parse args ignore "repl [opt*]";
+  if !color then Fmt.set_color_default true;
 
   if !readline then Readline.with_ main else main()

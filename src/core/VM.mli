@@ -71,22 +71,6 @@ module Primitive : sig
     unit -> t
 end
 
-(** An identifier for a stanza in a file.
-    This should be stable when parsing the same file several times,
-    and can be used to "name" nameless items such as "eval". *)
-module Stanza_id : sig
-  type t =
-    | Name of Name.t
-    | Pos of int
-    | Namespace of string * t
-
-  include Sigs.EQ with type t := t
-  include Sigs.HASH with type t := t
-  include Sigs.PP with type t := t
-
-  module Tbl : CCHashtbl.S with type key = t
-end
-
 (** Low level proof/meta stanzas.
 
     These stanzas provide the basic building blocks for interacting with
@@ -110,14 +94,11 @@ module Stanza : sig
     | Declare of {
         name: Name.t;
         ty_chunk: Chunk.t;
-        mutable ty: K.ty option;
       }
 
     | Define of {
         name: Name.t;
         body_chunk: Chunk.t;
-        mutable ty: K.ty option;
-        mutable body: K.expr option;
       }
 
     | Prove of {
@@ -137,7 +118,6 @@ module Stanza : sig
 
   and proof = private {
     pr_goal_chunk: Chunk.t;
-    mutable pr_goal: K.Sequent.t option;
     pr_def: proof_def;
   }
   (** Structured proof *)
@@ -151,8 +131,7 @@ module Stanza : sig
   *)
   and proof_def = private
     | PR_chunk of {
-        chunk: Chunk.t;
-        mutable thm: K.Thm.t option;
+        thm_chunk: Chunk.t;
       }
     | PR_steps of {
         steps: (string * proof) Vec.t;
@@ -164,6 +143,25 @@ module Stanza : sig
 
   val pp : t Fmt.printer
   (** Pretty print *)
+end
+
+(** Scoping environment for the virtual machine.
+
+    This maps local names in scope to symbolic references.
+*)
+module Scoping_env : sig
+  type t
+  (** A persistent env *)
+
+  val empty : t
+
+  val pp : t Fmt.printer
+
+  val add : string -> Sym_ptr.t -> t -> t
+
+  val find : string -> t -> Sym_ptr.t option
+
+  val iter : t -> (string * Sym_ptr.t) Iter.t
 end
 
 (** Basic syntax.
@@ -181,35 +179,12 @@ module Parser : sig
 
   val needs_more : string -> bool
 
-  val parse_chunk : t -> (Chunk.t, Error.t) result
+  val parse_chunk : t -> env:Scoping_env.t -> (Chunk.t, Error.t) result
 
-  val parse_stanzas : t -> (Stanza.t Vec.t, Error.t) result
+  val parse_stanzas :
+    t -> env:Scoping_env.t ->
+    Scoping_env.t * (Stanza.t Vec.t, Error.t) result
 end
-
-(* TODO
-(** Environment for the virtual machine.
-
-    The VM executes instructions in an environment that contains both
-    logical values (expressions, theorems, etc.) and other non-logical
-    values (integers, booleans, arrays, etc.). These environments are
-    persistent and can be stacked (so that modifications are local only).
-*)
-module Env : sig
-
-  type t
-  (** A persistent env *)
-
-  val empty : t
-
-  val pp : t Fmt.printer
-
-  val add : string -> Value.t -> t -> t
-
-  val find : string -> t -> Value.t option
-
-  val iter : t -> (string * Value.t) Iter.t
-end
-*)
 
 (** Evaluation graph, holding the environment for the virtual machine.
 
@@ -264,7 +239,6 @@ val pop_exn : t -> Value.t
 
 val run :
   t -> Chunk.t ->
-  getenv:(string -> Value.t option) ->
   unit
 
 val eval_stanza :
@@ -278,16 +252,16 @@ val dump : t Fmt.printer
 
 val parse_chunk_string :
   ?prims:Primitive.t Str_map.t ->
-  string -> (Chunk.t, Error.t) result
+  Scoping_env.t -> string -> (Chunk.t, Error.t) result
 
 val parse_chunk_string_exn :
   ?prims:Primitive.t Str_map.t ->
-  string -> Chunk.t
+  Scoping_env.t -> string -> Chunk.t
 
 val parse_stanza_string :
   ?prims:Primitive.t Str_map.t ->
-  string -> (Stanza.t, Error.t) result
+  Scoping_env.t -> string -> Scoping_env.t * (Stanza.t, Error.t) result
 
 val parse_stanza_string_exn :
   ?prims:Primitive.t Str_map.t ->
-  string -> Stanza.t
+  Scoping_env.t -> string -> Scoping_env.t * Stanza.t
