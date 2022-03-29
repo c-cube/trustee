@@ -45,20 +45,20 @@ let instrs: (string*op_arg list*doc) list = [
   "tyarr", [], "(ty ty -- ty) Pops types `a` and `b, pushes `a -> b`.";
   "evar", [], "(var -- expr) Pop a name and a type, return variable.";
   "eapp", [], "(f e -- expr) Pop expressions `f` and `e`, pushes `f e`.";
-  "elam", [], "(var expr -- expr) Pops variable `v` and body `e`, and pushes `λv. e`.";
+  "elam", [], "(var expr -- expr) Pops variable `v` and body `e`, and pushes `\\v. e`.";
   "econst", [], "(c []ty -- expr) Pops constant and type arguments, pushes expression.";
   "econst0", [], "(c -- expr) Pops nullary constant, pushes expression.";
   "econst1", [], "(c ty -- expr) Pops unary constant and parameter, pushes expression.";
   "deapp", [], "(expr -- expr? expr? bool) Pops expression, returns `f a true` \
                 if it's `f a`, pushes `nil nil false` otherwise.";
   "delam", [], "(expr -- var? expr? bool) Pops expression, returns `v bod true` \
-                if it's `\v.bod`, `nil nil false` otherwise.";
+                if it's `\\v.bod`, `nil nil false` otherwise.";
   "devar", [], "(expr -- var? bool) Pops expression, returns `v true` \
                 if it's variable `v`, `nil false` otherwise.";
   "deconst", [], "(expr -- const? []ty? bool) Pops expression, returns \
                   `c args true` if it's `c` applied to arguments `args`; \
                   returns `nil nil false` otherwise..";
-  "thabs", [], "(th var -- th) Pops `|- t=u` and `v`, pushes `|- \v.t=\v.u`.";
+  "thabs", [], {|(th var -- th) Pops `|- t=u` and `v`, pushes `|- \v.t=\v.u`.|};
   "thcongr", [], "(th th -- th) Pops `|- f=g` and `|- a=b`, pushes `|- f a=g b`.";
   "thass", [], "(expr -- th) Pops `e`, pushes `e |- e`.";
   "thcut", [], "(th th -- th) Pops th2, th1, pushes `cut th1 th2`.";
@@ -67,7 +67,7 @@ let instrs: (string*op_arg list*doc) list = [
   "thtrans", [], "(th th -- th) Pops th2, th1, pushes `trans th1 th2`.";
   "thbeq", [], "(th th -- th) Pops th2, th1, pushes `bool_eq th1 th2`.";
   "thbeqi", [], "(th th -- th) Pops th2, th1, pushes `bool_eq_intro th1 th2`.";
-  "thbeta", [], "(expr -- th) Pops `(\x. t) u`, pushes `|- (\x.t) u = t[x:=u]`.";
+  "thbeta", [], {|(expr -- th) Pops `(\x. t) u`, pushes `|- (\x.t) u = t[x:=u]`.|};
   "dth", [], "(th -- []expr expr) Pops `F |- e`, pushes array `F` and conclusion `e`.";
 ]
 
