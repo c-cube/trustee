@@ -4,7 +4,7 @@
   (libraries containers iter unix))
 
 (rule
-  (targets VM_instr.ml)
+  (targets VM_instr_.ml)
   (deps (:exe ./tools/mkinstr.exe))
   (action (with-stdout-to %{targets} (run %{exe}))))
 

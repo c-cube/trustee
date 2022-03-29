@@ -7,7 +7,7 @@ let pf = Printf.printf
 type op_arg =
   | Int
   | Bool
-  | Sym_ptr
+  | Thunk
 
 type doc=string
 
@@ -38,7 +38,7 @@ let instrs: (string*op_arg list*doc) list = [
   "jif", [Int], "(bool -- ) Pop a boolean; if true, then set IP=<offset>";
   "jifn", [Int], "(bool -- ) Pop a boolean; if false, then set IP=<offset>";
   "jmp", [Int], "( -- ) Set IP=<offset> unconditionally";
-  "link", [Sym_ptr], "( -- x) Pushes the value obtained from value in the environment";
+  "tforce", [Thunk], "( -- x) Evalutes thunk and pushes the value onto the stack";
   "type", [], "( -- type) Pushes the kind `type`.";
   "var", [], "(str ty -- var) Pop a string and a type, pushes a variable.";
   "vty", [], "(var -- ty) Pop a variable, pushes its type.";
@@ -78,7 +78,7 @@ let emit_ty (name,args,doc) =
   if nargs>1 then pf " of (";
   List.iteri (fun i ty ->
       if i>0 then pf " * ";
-      match ty with Int -> pf "int" | Bool -> pf "bool" | Sym_ptr -> pf "Sym_ptr.t")
+      match ty with Int -> pf "int" | Bool -> pf "bool" | Thunk -> pf "'thunk")
     args;
   if nargs>1 then pf ")";
   pf " (** %s *)" doc;
@@ -102,21 +102,21 @@ let emit_pp (name,args,doc) =
         match ty with
         | Int -> pf "%%d"
         | Bool -> pf "%%b"
-        | Sym_ptr -> pf "%%a"
+        | Thunk -> pf "%%a"
       ) args;
     pf {|)"|};
     List.iteri (fun i ty ->
         match ty with
         | Int | Bool -> pf "x%d" i
-        | Sym_ptr -> pf "Sym_ptr.pp x%d" i
+        | Thunk -> pf "pp_thunk x%d" i
       ) args;
   );
   pf "\n"
 
 let () =
-  pf "type t =\n";
+  pf "type 'thunk t =\n";
   List.iter emit_ty instrs;
   pf "\n";
-  pf "let pp out (i:t) : unit = match i with\n";
+  pf "let pp pp_thunk out (i:_ t) : unit = match i with\n";
   List.iter emit_pp instrs;
 
