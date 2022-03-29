@@ -1,19 +1,19 @@
 ; basic factorial, using env-based recursion (!)
 
 ; function definition
-(meta fact {
+(meta "fact" {
   (rstore 0)
   1 (rload 0) lt ; n > 1
   (jif :l1)
     1 ret
   :l1
     (rload 0) sub1
-      (link "fact") call ; fact (n-1)
+      (tforce "fact") call ; fact (n-1)
     (rload 0) mult ; *n
 })
 
-(eval 5 (link "fact") call show)
+(eval 5 (tforce "fact") call show)
 
 ; constant definition
-(meta fact5 5 (link "fact") call)
-(eval "fact5" getenv show)
+(meta "fact5" 5 (tforce "fact") call)
+(eval (tforce "fact5") show)
