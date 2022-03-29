@@ -15,9 +15,8 @@ module K = Kernel
 
 type 'a vec
 
-module Instr = VM_instr
-
 type vm
+type thunk
 
 (** Values manipulated by the VM. *)
 module Value : sig
@@ -52,16 +51,22 @@ module Value : sig
   val to_int_exn : int conv_to_exn
 end
 
+(** Instructions for the VM *)
+module Instr : sig
+  type t = thunk VM_instr_.t
+  include Sigs.PP with type t := t
+end
+
 (** Chunk of executable bytecode. *)
 module Chunk : sig
   type t
-  val pp : t Fmt.printer
+  include PP with type t := t
 end
 
 (** Primitive function, implemented in OCaml. *)
 module Primitive : sig
   type t
-  val pp : t Fmt.printer
+  include PP with type t := t
   val name : t -> string
 
   (** Make a new primitive. *)
@@ -69,6 +74,14 @@ module Primitive : sig
     name:string ->
     eval:(vm -> unit) ->
     unit -> t
+end
+
+(** Thunks.
+
+    A thunk is a delayed/lazy computation of some {!Chunk.t}. *)
+module Thunk : sig
+  type t
+  include PP with type t := t
 end
 
 (** Low level proof/meta stanzas.
@@ -93,49 +106,40 @@ module Stanza : sig
   type view = private
     | Declare of {
         name: Name.t;
-        ty_chunk: Chunk.t;
+        ty: Thunk.t;
       }
 
     | Define of {
         name: Name.t;
-        body_chunk: Chunk.t;
+        body: Thunk.t;
       }
 
     | Prove of {
         name: Name.t;
-        proof: proof;
+        deps: (string * [`Eager | `Lazy] * Name.t) list;
+        goal: Thunk.t; (* sequent *)
+        proof: Thunk.t; (* thm *)
       }
+      (** Proof a goal using a chunk and some dependencies.
+          Dependencies are previous "Prove" steps and each dependency
+          [local, kind, name] can be either:
+
+          - {b eager}, in which case we have to prove the step [name]
+            and we bind the [local] name to the {b theorem} proved
+            at [name]; or:
+          - {b lazy}, in which case we just compute the goal of the
+            step [name] and we bind [local] to the {b box} of that goal.
+            A later step will have to resolve the result with the actual
+            boxed proof of the step at [name].
+        *)
 
     | Define_meta of {
         name: string;
-        chunk: Chunk.t;
+        value: Thunk.t;
       } (** Define a meta-level chunk *)
 
     | Eval_meta of {
-        (* TODO: some kind of positional name, like a foo.bar.eval.42? *)
-        chunk: Chunk.t;
-      }
-
-  and proof = private {
-    pr_goal_chunk: Chunk.t;
-    pr_def: proof_def;
-  }
-  (** Structured proof *)
-
-  (** Definition of a proof.
-
-      Proofs are structured, they can be either an atomic chunk
-      that returns a theorem;
-      or a series of steps that can use
-      previous steps in a DAG-like fashion.
-  *)
-  and proof_def = private
-    | PR_chunk of {
-        thm_chunk: Chunk.t;
-      }
-    | PR_steps of {
-        steps: (string * proof) Vec.t;
-        ret: proof;
+        value: Thunk.t;
       }
 
   val view : t -> view
@@ -147,7 +151,7 @@ end
 
 (** Scoping environment for the virtual machine.
 
-    This maps local names in scope to symbolic references.
+    This environment contains local names, and is required for parsing.
 *)
 module Scoping_env : sig
   type t
@@ -156,12 +160,6 @@ module Scoping_env : sig
   val empty : t
 
   val pp : t Fmt.printer
-
-  val add : string -> Sym_ptr.t -> t -> t
-
-  val find : string -> t -> Sym_ptr.t option
-
-  val iter : t -> (string * Sym_ptr.t) Iter.t
 end
 
 (** Basic syntax.
@@ -184,31 +182,6 @@ module Parser : sig
   val parse_stanzas :
     t -> env:Scoping_env.t ->
     Scoping_env.t * (Stanza.t Vec.t, Error.t) result
-end
-
-(** Evaluation graph, holding the environment for the virtual machine.
-
-    The VM executes instructions in an environment that contains both
-    logical values (expressions, theorems, etc.) and other non-logical
-    values (integers, booleans, arrays, etc.).
-*)
-module Eval_graph : sig
-  type t
-
-  val create : unit -> t
-
-    (* TODO
-
-  val add : t -> string -> Value.t -> unit
-
-  val get_stanza : t -> string -> Stanza.t option
-
-  val get : t -> string -> Value.t option
-
-  val get_exn : t -> string -> Value.t
-
-  val iter : t -> Stanza.t Iter.t
-       *)
 end
 
 type t = vm
@@ -241,9 +214,14 @@ val run :
   t -> Chunk.t ->
   unit
 
+val eval_thunk :
+  K.Ctx.t ->
+  Thunk.t ->
+  (Value.t, Error.t) result
+(** Evaluate a thunk (and possibly its dependencies, recursively) *)
+
 val eval_stanza :
   t -> Stanza.t ->
-  eg:Eval_graph.t ->
   unit
 
 val dump : t Fmt.printer

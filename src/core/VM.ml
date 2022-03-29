@@ -33,6 +33,19 @@ module Types_ = struct
     mutable debug_hook: (vm -> instr -> unit) option;
   }
 
+  and thunk = {
+    mutable th_st: thunk_state
+  }
+
+  and thunk_state =
+    | Th_ok of value
+    | Th_err of Error.t
+    | Th_lazy of chunk
+    | Th_suspended of {
+        c: chunk;
+        vm: vm;
+      }
+
   and call_item =
     | C_chunk of {
         c: chunk;
@@ -75,7 +88,7 @@ module Types_ = struct
     (** Local values, used by some instructions *)
   }
 
-  and instr = VM_instr.t
+  and instr = thunk VM_instr_.t
 
   let pp_vec ?(sep=", ") ppx out v =
     Fmt.fprintf out "%a" (pp_iter ~sep ppx) (Vec.to_iter v)
@@ -100,9 +113,18 @@ module Types_ = struct
       if short then Fmt.string out "<chunk>" else pp_chunk out c
     | Prim p -> pp_prim out p
 
+  and pp_thunk_state out = function
+    | Th_ok v -> Fmt.fprintf out "(@[ok %a@])" (pp_value ~short:true) v
+    | Th_err e -> Fmt.fprintf out "(@[err %a@])" Error.pp e
+    | Th_lazy _ -> Fmt.string out "(lazy)"
+    | Th_suspended _c -> Fmt.string out "(suspended)"
+
+  and pp_thunk out (self:thunk) =
+    Fmt.fprintf out "(@[thunk@ :st %a@])" pp_thunk_state self.th_st
+
   and pp_chunk ?ip out (self:chunk) : unit =
     let pp_instr out i =
-      VM_instr.pp out i;
+      VM_instr_.pp pp_thunk out i;
       begin match i with
         | Lload n ->
           let local = self.c_locals.(n) in
@@ -125,9 +147,16 @@ module Types_ = struct
 end
 
 type vm = Types_.vm
+type thunk = Types_.thunk
 
-(** Instructions *)
-module Instr = VM_instr
+(* auto generated instructions *)
+module Instr = struct
+  open Types_
+  type t = instr
+
+  let pp = VM_instr_.pp pp_thunk
+  let to_string = Fmt.to_string pp
+end
 
 module Value = struct
   open Types_
@@ -196,38 +225,11 @@ module Value = struct
   let[@inline] to_subst_exn = function Subst x -> x | _ -> Error.fail "expected subst"
 end
 
-module Scoping_env = struct
-  open Types_
-  type t = {
-    (* maps name in scope to absolute symbolic references *)
-    env: Sym_ptr.t Str_map.t;
-  } [@@unboxed]
-
-  let empty : t = {env=Str_map.empty}
-
-  let pp out (self:t) =
-    let pp_pair out (s,v) =
-      Fmt.fprintf out "@[%s := %a@]" s Sym_ptr.pp v in
-    Fmt.fprintf out "@[<1>env {@ %a@ @;<0 -1>}@]"
-      (pp_iter ~sep:";" pp_pair) (Str_map.to_iter self.env)
-
-  let[@inline] mem k self = Str_map.mem k self.env
-  let[@inline] add s v self : t = {env=Str_map.add s v self.env}
-  let[@inline] find s self = Str_map.find_opt s self.env
-  let[@inline] get self s = Str_map.find_opt s self.env
-  let[@inline] iter self = Str_map.to_iter self.env
-end
-
-(* TODO *)
-module Eval_graph = struct
-  type t = unit
-  let create () : t = ()
-end
-
 module Chunk = struct
   open Types_
   type t = chunk
   let pp out c = pp_chunk out c
+  let to_string = Fmt.to_string pp
   let pp_at ~ip out c = pp_chunk ~ip out c
 
   (* empty chunk, does nothing *)
@@ -244,86 +246,151 @@ module Primitive = struct
 
   let[@inline] name p = p.pr_name
   let pp = pp_prim
+  let to_string = Fmt.to_string pp
   let make ~name ~eval () : t =
     { pr_name=name; pr_eval=eval; }
 end
 
+module Thunk = struct
+  open Types_
+  type t = thunk
+
+  let[@inline] state self = self.th_st
+  let resolved self = match state self with
+    | Th_ok _ | Th_err _ -> true
+    | Th_lazy _ | Th_suspended _ -> false
+
+  let get_result_exn self = match state self with
+    | Th_ok v -> Stdlib.Ok v
+    | Th_err e -> Stdlib.Error e
+    | Th_suspended _ | Th_lazy _ -> assert false
+
+  let pp_state = pp_thunk_state
+  let pp = pp_thunk
+  let to_string = Fmt.to_string pp
+
+  let make c : t = {th_st=Th_lazy c}
+end
+
+module Scoping_env = struct
+  open Types_
+  type t = {
+    values: Thunk.t Str_map.t;
+    (* TODO: do we need that? *)
+    goals: Thunk.t Str_map.t;
+    proofs: Thunk.t Str_map.t;
+  }
+
+  let empty : t = {
+    values=Str_map.empty;
+    goals=Str_map.empty;
+    proofs=Str_map.empty;
+  }
+
+  let pp out (self:t) =
+    let pp_pair out (s,v) =
+      Fmt.fprintf out "@[%s := %a@]" s Thunk.pp v in
+    Fmt.fprintf out
+      "(@[env@ :values (@[%a@])@ :goals (@[%a@])@ :proofs (@[%a@])@])"
+      (pp_iter ~sep:";" pp_pair) (Str_map.to_iter self.values)
+      (pp_iter ~sep:";" pp_pair) (Str_map.to_iter self.goals)
+      (pp_iter ~sep:";" pp_pair) (Str_map.to_iter self.proofs)
+
+  let[@inline] mem k self = Str_map.mem k self.values
+  let[@inline] add s v self : t = {self with values=Str_map.add s v self.values}
+  let[@inline] find s self = Str_map.find_opt s self.values
+  let[@inline] get self s = Str_map.find_opt s self.values
+  let[@inline] iter self = Str_map.to_iter self.values
+end
+
+(* TODO: remove
+(* a stack used to evaluate thunks on demand *)
+module Eval_stack_ : sig
+  type t
+  val create : unit -> t
+  val is_empty : t -> bool
+  val push : t -> Thunk.t -> unit
+  val pop_exn : t -> Thunk.t
+  val size : t -> int
+  val pp : t Fmt.printer
+end = struct
+  type t = {
+    stack: Thunk.t Vec.t;
+  }
+
+  let create() : t = {stack=Vec.create()}
+  let is_empty self = Vec.is_empty self.stack
+  let push self x = Vec.push self.stack x
+  let pop_exn self = Vec.pop_exn self.stack
+  let size self = Vec.size self.stack
+  let pp out (self:t) =
+    Fmt.fprintf out "(@[eval-stack@ [@[%a@]]@])"
+      (pp_iter Thunk.pp) (Vec.to_iter self.stack)
+end
+   *)
+
 module Stanza = struct
+  type view =
+    | Declare of {
+        name: Name.t;
+        ty: Thunk.t;
+      }
+
+    | Define of {
+        name: Name.t;
+        body: Thunk.t;
+      }
+
+    | Prove of {
+        name: Name.t;
+        deps: (string * [`Eager | `Lazy] * Name.t) list;
+        goal: Thunk.t; (* sequent *)
+        proof: Thunk.t; (* thm *)
+      }
+
+    | Define_meta of {
+        name: string;
+        value: Thunk.t;
+      } (** Define a meta-level value *)
+
+    | Eval_meta of {
+        value: Thunk.t;
+      }
+
   type t = {
     id: Sym_ptr.t;
     view: view;
   }
 
-  (* TODO:
-     - Namespace of t list
-     - Import of "file"
-
-     also have (linkenv "name") as instruction
-  *)
-
-  and view =
-    | Declare of {
-        name: Name.t;
-        ty_chunk: Chunk.t;
-      }
-
-    | Define of {
-        name: Name.t;
-        body_chunk: Chunk.t;
-      }
-
-    | Prove of {
-        name: Name.t;
-        proof: proof;
-      }
-
-    | Define_meta of {
-        name: string;
-        chunk: Chunk.t;
-      }
-
-    | Eval_meta of {
-        chunk: Chunk.t;
-      }
-
-  and proof = {
-    pr_goal_chunk: Chunk.t;
-    pr_def: proof_def;
-  }
-
-  and proof_def =
-    | PR_chunk of {
-        thm_chunk: Chunk.t;
-      }
-    | PR_steps of {
-        steps: (string * proof) Vec.t;
-        ret: proof;
-      }
-
   let[@inline] view self = self.view
   let[@inline] make ~id view : t = {view; id}
 
-  let rec pp out (self:t) : unit =
+  let pp out (self:t) : unit =
     match view self with
-    | Declare {name; _} -> Fmt.fprintf out "(@[declare %a@])" Name.pp name
-    | Define {name; _} -> Fmt.fprintf out "(@[define %a@])" Name.pp name
-    | Define_meta {name; chunk} ->
+    | Declare {name; ty} ->
+      Fmt.fprintf out "(@[declare %a@ :ty %a@])" Name.pp name Thunk.pp ty
+    | Define {name; body} ->
+      Fmt.fprintf out "(@[define %a@ :body %a@])" Name.pp name Thunk.pp body
+    | Define_meta {name; value} ->
       Fmt.fprintf out "(@[define-meta `%s`@ :chunk %a@])"
-        name Chunk.pp chunk
-    | Prove {name; proof} ->
-      Fmt.fprintf out "(@[prove %a@ %a@])" Name.pp name pp_proof proof
-    | Eval_meta {chunk} ->
-      Fmt.fprintf out "(@[eval-meta@ %a@])" Chunk.pp chunk
-
-  and pp_proof out (self:proof) : unit =
-    match self.pr_def with
-    | PR_chunk _ -> Fmt.string out "<chunk>"
-    | PR_steps {steps; ret} ->
-      let pp_step out (name,step) =
-        Fmt.fprintf out "(@[%s := %a@])" name pp_proof self in
-      Fmt.fprintf out "(@[steps %a@ :ret %a@])"
-        (Vec.pp ~sep:" " pp_step) steps pp_proof ret
+        name Thunk.pp value
+    | Prove {name; deps; goal; proof} ->
+      let pp_dep out (s,kind,n) =
+        let skind = match kind with `Eager -> ":eager" | `Lazy -> ":lazy" in
+        Fmt.fprintf out "(@[%s %s %a@ :goal %a@ :proof %a@])"
+          s skind Name.pp n Thunk.pp goal Thunk.pp proof
+      in
+      Fmt.fprintf out "(@[prove %a@ :deps (@[%a@])@])"
+        Name.pp name (pp_list pp_dep) deps
+    | Eval_meta {value} ->
+      Fmt.fprintf out "(@[eval-meta@ %a@])" Thunk.pp value
 end
+
+(** Exceptions raised to suspend a computation so as to compute
+    a required thunk *)
+
+exception Suspend_and_eval_chunk of Thunk.t * Chunk.t
+exception Suspend_and_resume of Thunk.t * Chunk.t * vm
 
 (* internal handling of the VM *)
 module VM_ = struct
@@ -589,8 +656,21 @@ module VM_ = struct
           | Jmp ip ->
             self.ip <- ip
 
-          | Link sref ->
-            assert false
+          | Tforce th ->
+            begin match Thunk.state th with
+              | Th_err err -> raise (Error.E err)
+              | Th_ok x ->
+                push_val self x;
+
+              | Th_lazy c ->
+                self.ip <- ip; (* suspend *)
+                raise (Suspend_and_eval_chunk (th,c))
+
+              | Th_suspended {c;vm} ->
+                self.ip <- ip; (* suspend *)
+                raise (Suspend_and_resume (th,c,vm))
+
+            end;
 
           | Type ->
             push_val self (Value.expr @@ K.Expr.type_ self.ctx)
@@ -890,6 +970,7 @@ module Parser = struct
 
   (** Parse a chunk into [self.cb] *)
   let rec parse_chunk_into_ (self:st) : unit =
+    let module I = VM_instr_ in
     let[@inline] recurse() = parse_chunk_into_ self in
 
     let finalize() =
@@ -910,7 +991,7 @@ module Parser = struct
     | VM_lex.QUOTED_STR s ->
       consume self;
       let n = CB.add_local self.cb (Value.string s) in
-      CB.add_instr self.cb (Instr.Lload n);
+      CB.add_instr self.cb (I.Lload n);
       recurse()
 
     | VM_lex.COLON_STR lbl ->
@@ -926,55 +1007,55 @@ module Parser = struct
         | "extract" ->
           let i = int self in
           rparen self;
-          CB.add_instr self.cb (Instr.Extract i)
+          CB.add_instr self.cb (I.Extract i)
 
         | "rstore" ->
           let i = int self in
           rparen self;
-          CB.add_instr self.cb (Instr.Rstore i)
+          CB.add_instr self.cb (I.Rstore i)
 
         | "rload" ->
           let i = int self in
           rparen self;
-          CB.add_instr self.cb (Instr.Rload i)
+          CB.add_instr self.cb (I.Rload i)
 
         | "lload" ->
           let i = int self in
           rparen self;
-          CB.add_instr self.cb (Instr.Lload i)
+          CB.add_instr self.cb (I.Lload i)
 
-        | "link" ->
+        | "tforce" ->
           let s = quoted_str self in
           begin match Scoping_env.find s self.env with
             | None ->
-              Error.failf (fun k->k"link: cannot find %S in environment" s)
+              Error.failf (fun k->k"tforce: cannot find %S in environment" s)
             | Some ptr ->
-              CB.add_instr self.cb (Instr.Link ptr)
+              CB.add_instr self.cb (I.Tforce ptr)
           end
 
         | "jif" ->
           let lbl = label self in
           rparen self;
           let cur_pos = CB.cur_pos self.cb in
-          CB.add_instr self.cb Instr.Nop;
+          CB.add_instr self.cb I.Nop;
           with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (Instr.Jif lbl_pos))
+              CB.set_instr self.cb cur_pos (I.Jif lbl_pos))
 
         | "jifn" ->
           let lbl = label self in
           rparen self;
           let cur_pos = CB.cur_pos self.cb in
-          CB.add_instr self.cb Instr.Nop;
+          CB.add_instr self.cb I.Nop;
           with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (Instr.Jifn lbl_pos))
+              CB.set_instr self.cb cur_pos (I.Jifn lbl_pos))
 
         | "jmp" ->
           let lbl = label self in
           rparen self;
           let cur_pos = CB.cur_pos self.cb in
-          CB.add_instr self.cb Instr.Nop;
+          CB.add_instr self.cb I.Nop;
           with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (Instr.Jmp lbl_pos))
+              CB.set_instr self.cb cur_pos (I.Jmp lbl_pos))
 
         | _ ->
           Error.failf (fun k->k"invalid instruction %S" str)
@@ -989,30 +1070,30 @@ module Parser = struct
     | VM_lex.INT i ->
       consume self;
       let i = int_of_string i in
-      CB.add_instr self.cb (Instr.Int i);
+      CB.add_instr self.cb (I.Int i);
       recurse()
 
     | VM_lex.ATOM str ->
       consume self;
       begin match str with
-        | "nop" -> CB.add_instr self.cb Instr.Nop
-        | "call" -> CB.add_instr self.cb Instr.Call
-        | "ret" -> CB.add_instr self.cb Instr.Ret
-        | "dup" -> CB.add_instr self.cb Instr.Dup
-        | "drop" -> CB.add_instr self.cb Instr.Drop
-        | "exch" -> CB.add_instr self.cb Instr.Exch
-        | "true" -> CB.add_instr self.cb (Instr.Bool true)
-        | "false" -> CB.add_instr self.cb (Instr.Bool false)
-        | "nil" -> CB.add_instr self.cb Instr.Nil
-        | "not" ->  CB.add_instr self.cb Instr.Not
-        | "add" -> CB.add_instr self.cb Instr.Add
-        | "add1" -> CB.add_instr self.cb Instr.Add1
-        | "sub" -> CB.add_instr self.cb Instr.Sub
-        | "sub1" -> CB.add_instr self.cb Instr.Sub1
-        | "mult" -> CB.add_instr self.cb Instr.Mult
-        | "leq" -> CB.add_instr self.cb Instr.Leq
-        | "lt" -> CB.add_instr self.cb Instr.Lt
-        | "eq" -> CB.add_instr self.cb Instr.Eq
+        | "nop" -> CB.add_instr self.cb I.Nop
+        | "call" -> CB.add_instr self.cb I.Call
+        | "ret" -> CB.add_instr self.cb I.Ret
+        | "dup" -> CB.add_instr self.cb I.Dup
+        | "drop" -> CB.add_instr self.cb I.Drop
+        | "exch" -> CB.add_instr self.cb I.Exch
+        | "true" -> CB.add_instr self.cb (I.Bool true)
+        | "false" -> CB.add_instr self.cb (I.Bool false)
+        | "nil" -> CB.add_instr self.cb I.Nil
+        | "not" ->  CB.add_instr self.cb I.Not
+        | "add" -> CB.add_instr self.cb I.Add
+        | "add1" -> CB.add_instr self.cb I.Add1
+        | "sub" -> CB.add_instr self.cb I.Sub
+        | "sub1" -> CB.add_instr self.cb I.Sub1
+        | "mult" -> CB.add_instr self.cb I.Mult
+        | "leq" -> CB.add_instr self.cb I.Leq
+        | "lt" -> CB.add_instr self.cb I.Lt
+        | "eq" -> CB.add_instr self.cb I.Eq
 
         | _ ->
           (* look for a primitive of that name *)
@@ -1020,8 +1101,8 @@ module Parser = struct
             | Some p ->
               (* load primitive *)
               let n = CB.add_local self.cb (Value.prim p) in
-              CB.add_instr self.cb (Instr.Lload n);
-              CB.add_instr self.cb Instr.Call;
+              CB.add_instr self.cb (I.Lload n);
+              CB.add_instr self.cb I.Call;
             | None ->
               Error.failf (fun k->k"unknown instruction/prim %S" str)
           end
@@ -1041,13 +1122,18 @@ module Parser = struct
       (* finish sub-chunk, put it into locals *)
       let c = CB.to_chunk st'.cb in
       let n = CB.add_local self.cb (Value.chunk c) in
-      CB.add_instr self.cb (Instr.Lload n);
+      CB.add_instr self.cb (I.Lload n);
       recurse()
 
     | VM_lex.RPAREN -> finalize();
     | VM_lex.RBRACE -> finalize();
     | VM_lex.EOI -> finalize();
   ;;
+
+  let parse_chunk_ (self:st) : Chunk.t =
+    CB.reset self.cb;
+    parse_chunk_into_ self;
+    CB.to_chunk self.cb
 
   let rec parse_stanza_ (self:st) : Stanza.t option =
     match self.tok with
@@ -1058,32 +1144,45 @@ module Parser = struct
       let a = atom self in
       begin match a with
         | "meta" ->
-          let name = atom self in
-          CB.reset self.cb;
-          parse_chunk_into_ self;
+          let name = quoted_str self in
+          let value = Thunk.make @@ parse_chunk_ self in
           rparen self;
-          let c = CB.to_chunk self.cb in
           let id = Sym_ptr.str name in
           let stanza =
-            Stanza.make ~id @@ Stanza.Define_meta {name; chunk=c} in
+            Stanza.make ~id @@ Stanza.Define_meta {name; value} in
           Some stanza
 
         | "eval" ->
           consume self;
-          CB.reset self.cb;
-          parse_chunk_into_ self;
+          let value = Thunk.make @@ parse_chunk_ self in
           rparen self;
-          let c = CB.to_chunk self.cb in
           let stanza =
             let id = new_pos_id_ self in
-            Stanza.make ~id @@ Stanza.Eval_meta {chunk=c} in
+            Stanza.make ~id @@ Stanza.Eval_meta {value} in
           Some stanza
 
-        | "declare" -> assert false (* TODO *)
+        | "declare" ->
+          consume self;
+          let name = quoted_str self in
+          let ty = Thunk.make @@ parse_chunk_ self in
+          rparen self;
+          let stanza =
+            let id = Sym_ptr.str name in
+            Stanza.make ~id @@ Stanza.Declare {name=Name.make name; ty} in
+          Some stanza
 
-        | "define" -> assert false (* TODO *)
+        | "define" ->
+          consume self;
+          let name = quoted_str self in
+          let body = Thunk.make @@ parse_chunk_ self in
+          rparen self;
+          let stanza =
+            let id = Sym_ptr.str name in
+            Stanza.make ~id @@ Stanza.Define {name=Name.make name; body} in
+          Some stanza
 
-        | "proof" -> assert false (* TODO *)
+        | "proof" ->
+          assert false (* TODO *)
 
         | _ -> Error.failf (fun k->k"unknown stanza %S" a)
       end
@@ -1169,7 +1268,76 @@ let run self c =
   VM_.enter_chunk self c;
   VM_.run self
 
-let eval_stanza (self:t) (stanza:Stanza.t) ~eg:_ : unit =
+let eval_thunk (ctx:K.Ctx.t) (th:Thunk.t) : (Value.t, Error.t) result =
+  let open Types_ in
+
+  let open struct
+    type eval_task =
+      | Eval_thunk of thunk
+      | Eval_chunk of thunk * chunk * vm
+  end in
+
+  let vms = Vec.create() in (* can be reused *)
+
+  let[@inline] recycle_vm_ vm =
+    VM_.reset vm;
+    Vec.push vms vm;
+  in
+  let[@inline] alloc_vm () =
+    match Vec.pop vms with
+    | Some vm -> vm
+    | None -> VM_.create ~ctx
+  in
+
+  let stack: eval_task Vec.t = Vec.create() in
+
+  Vec.push stack (Eval_thunk th);
+
+  let eval_chunk ~th ~vm ~c : unit =
+    match
+      VM_.enter_chunk vm c;
+      VM_.run vm;
+      VM_.pop_val_exn vm
+    with
+    | v ->
+      recycle_vm_ vm;
+      th.th_st <- Th_ok v
+
+    | exception Error.E err ->
+      recycle_vm_ vm;
+      th.th_st <- Th_err err;
+
+    | exception Suspend_and_eval_chunk (th',c') ->
+      (* park [c] *)
+      Vec.push stack (Eval_chunk (th, c, vm));
+      (* eval [c'] first *)
+      Vec.push stack (Eval_chunk (th', c', alloc_vm()));
+
+    | exception Suspend_and_resume (th', c', vm') ->
+      (* park [c] *)
+      Vec.push stack (Eval_chunk (th, c, vm));
+      (* resume evaluation of [c'] first in [vm'] *)
+      Vec.push stack (Eval_chunk (th', c', vm'));
+  in
+
+  while not (Vec.is_empty stack) do
+    let task = Vec.pop_exn stack in
+    match task with
+    | Eval_chunk (th,c,vm) ->
+      eval_chunk ~th ~vm ~c
+    | Eval_thunk th ->
+      begin match Thunk.state th with
+        | Th_ok _ | Th_err _ -> ()
+        | Th_lazy c ->
+          let vm = alloc_vm() in
+          eval_chunk ~th ~c ~vm
+        | Th_suspended {c; vm} ->
+          eval_chunk ~th ~c ~vm
+      end
+  done;
+  Thunk.get_result_exn th
+
+let eval_stanza (self:t) (stanza:Stanza.t) : unit =
   assert false
     (* TODO: allocate eval_graph
   let rec eval
