@@ -51,6 +51,7 @@ let main () =
   let parse_stanza_str str =
     let e, r = VM.parse_stanza_string ~prims !env str in
     env := e;
+    if !debug then Format.eprintf "new env: %a@." VM.Scoping_env.pp !env;
     match r with
     | Error err ->
       pp_err err;
@@ -103,7 +104,7 @@ let main () =
     | Some "dump" -> Fmt.printf "%a@." VM.dump vm;
     | Some ("help" as str) -> if !readline then Readline.hist_add str; print_endline help;
 
-    | Some line when CCString.prefix ~pre:"(" line ->
+    | Some line ->
       if !readline then Readline.hist_add line;
       let code = read_multiline line in
 
@@ -111,14 +112,13 @@ let main () =
         | None -> ()
         | Some stanza ->
 
+          if !debug then Format.eprintf "parsed stanza %a@." VM.Stanza.pp stanza;
+
           (* run [c] in a different VM to get the value *)
           let vm' = VM.create ~ctx () in
           if !debug then VM.set_debug_hook vm' debug_hook;
 
-          (* TODO
-          eval_chunk ~vm:vm' c;
-             *)
-          Format.eprintf "parsed stanza %a@." VM.Stanza.pp stanza;
+          VM.eval_stanza vm stanza;
 
           (* TODO
           (* assign result of evaluation to [k] *)
@@ -126,14 +126,6 @@ let main () =
           VM.set_env vm (VM.get_env vm |> VM.Env.add name v);
              *)
       end;
-
-    | Some line ->
-      if !readline then Readline.hist_add line;
-
-      begin match parse_chunk_str line with
-        | None ->()
-        | Some c -> eval_chunk ~vm ~env c
-      end
     | None -> continue := false
     | exception End_of_file -> continue := false
     | exception Sys.Break -> continue := false

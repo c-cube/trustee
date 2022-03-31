@@ -116,7 +116,7 @@ module Stanza : sig
 
     | Prove of {
         name: Name.t;
-        deps: (string * [`Eager | `Lazy] * Name.t) list;
+        deps: (Name.t * [`Eager | `Lazy] * string) list;
         goal: Thunk.t; (* sequent *)
         proof: Thunk.t; (* thm *)
       }

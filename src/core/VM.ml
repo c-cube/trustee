@@ -3,6 +3,7 @@ open Sigs
 module K = Kernel
 
 type 'a vec = 'a Vec.t
+let[@inline] (let@) f x = f x
 
 (* all types *)
 module Types_ = struct
@@ -272,37 +273,6 @@ module Thunk = struct
   let make c : t = {th_st=Th_lazy c}
 end
 
-module Scoping_env = struct
-  open Types_
-  type t = {
-    values: Thunk.t Str_map.t;
-    (* TODO: do we need that? *)
-    goals: Thunk.t Str_map.t;
-    proofs: Thunk.t Str_map.t;
-  }
-
-  let empty : t = {
-    values=Str_map.empty;
-    goals=Str_map.empty;
-    proofs=Str_map.empty;
-  }
-
-  let pp out (self:t) =
-    let pp_pair out (s,v) =
-      Fmt.fprintf out "@[%s := %a@]" s Thunk.pp v in
-    Fmt.fprintf out
-      "(@[env@ :values (@[%a@])@ :goals (@[%a@])@ :proofs (@[%a@])@])"
-      (pp_iter ~sep:";" pp_pair) (Str_map.to_iter self.values)
-      (pp_iter ~sep:";" pp_pair) (Str_map.to_iter self.goals)
-      (pp_iter ~sep:";" pp_pair) (Str_map.to_iter self.proofs)
-
-  let[@inline] mem k self = Str_map.mem k self.values
-  let[@inline] add s v self : t = {self with values=Str_map.add s v self.values}
-  let[@inline] find s self = Str_map.find_opt s self.values
-  let[@inline] get self s = Str_map.find_opt s self.values
-  let[@inline] iter self = Str_map.to_iter self.values
-end
-
 (* TODO: remove
 (* a stack used to evaluate thunks on demand *)
 module Eval_stack_ : sig
@@ -343,7 +313,7 @@ module Stanza = struct
 
     | Prove of {
         name: Name.t;
-        deps: (string * [`Eager | `Lazy] * Name.t) list;
+        deps: (Name.t * [`Eager | `Lazy] * string) list;
         goal: Thunk.t; (* sequent *)
         proof: Thunk.t; (* thm *)
       }
@@ -364,6 +334,7 @@ module Stanza = struct
 
   let[@inline] view self = self.view
   let[@inline] make ~id view : t = {view; id}
+  let[@inline] id self = self.id
 
   let pp out (self:t) : unit =
     match view self with
@@ -375,15 +346,87 @@ module Stanza = struct
       Fmt.fprintf out "(@[define-meta `%s`@ :chunk %a@])"
         name Thunk.pp value
     | Prove {name; deps; goal; proof} ->
-      let pp_dep out (s,kind,n) =
+      let pp_dep out (s,kind,ref) =
         let skind = match kind with `Eager -> ":eager" | `Lazy -> ":lazy" in
-        Fmt.fprintf out "(@[%s %s %a@ :goal %a@ :proof %a@])"
-          s skind Name.pp n Thunk.pp goal Thunk.pp proof
+        Fmt.fprintf out "(@[%a %s %s@ :goal %a@ :proof %a@])"
+          Name.pp s skind ref Thunk.pp goal Thunk.pp proof
       in
       Fmt.fprintf out "(@[prove %a@ :deps (@[%a@])@])"
         Name.pp name (pp_list pp_dep) deps
     | Eval_meta {value} ->
       Fmt.fprintf out "(@[eval-meta@ %a@])" Thunk.pp value
+end
+
+module Scoping_env = struct
+  open Types_
+
+  type entry =
+    | E_th of thunk
+    | E_prove of {
+        goal: thunk;
+        proof: thunk;
+      }
+    | E_define of { body: thunk }
+    | E_declare of { ty: thunk }
+
+  type t = {
+    entries: entry Str_map.t;
+  } [@@unboxed]
+
+  let empty : t = {
+    entries=Str_map.empty;
+  }
+
+  let pp_entry out = function
+    | E_th t -> Fmt.fprintf out "(@[thunk@ %a@])" Thunk.pp t
+    | E_prove {goal;proof} ->
+      Fmt.fprintf out "(@[prove@ :goal %a@ :proof %a@])" Thunk.pp goal Thunk.pp proof
+    | E_define {body} ->
+      Fmt.fprintf out "(@[define@ :body %a@])" Thunk.pp body
+    | E_declare {ty} ->
+      Fmt.fprintf out "(@[declare@ :ty %a@])" Thunk.pp ty
+
+  let pp out (self:t) =
+    let pp_pair out (s,v) =
+      Fmt.fprintf out "@[%s := %a@]" s pp_entry v in
+    Fmt.fprintf out
+      "(@[env@ %a@])"
+      (pp_iter ~sep:";" pp_pair) (Str_map.to_iter self.entries)
+
+  let[@inline] mk_ entries : t = {entries}
+  let[@inline] mem k self = Str_map.mem k self.entries
+  let[@inline] add s v self : t = mk_ @@ Str_map.add s v self.entries
+  let[@inline] find s self = Str_map.find_opt s self.entries
+  let[@inline] get self s = Str_map.find_opt s self.entries
+  let[@inline] iter self = Str_map.to_iter self.entries
+
+  let add_proof_dep (self:t) (name, kind, ref) : t =
+    match find ref self with
+    | Some (E_prove {goal; proof}) ->
+      (* pick which thunk we want *)
+      let th = match kind with
+        | `Eager -> proof
+        | `Lazy ->
+          (* FIXME: make a thunk that boxes this *)
+          goal
+      in
+      add (Name.to_string name) (E_th th) self
+    | Some _ -> Error.failf (fun k->k"expected %S to be a prove step" ref)
+    | None -> Error.failf (fun k->k"cannot find prove step %S in env" ref)
+
+  let add_proof_deps self l = List.fold_left add_proof_dep self l
+
+  let add_stanza (stanza:Stanza.t) (self:t) : t =
+    match Stanza.view stanza with
+    | Stanza.Define_meta {name;value} ->
+      add name (E_th value) self
+    | Stanza.Eval_meta _ -> self
+    | Stanza.Define {name; body} ->
+      add (Name.to_string name) (E_define {body}) self
+    | Stanza.Prove {name; deps=_; goal; proof} ->
+      add (Name.to_string name) (E_prove {goal;proof}) self
+    | Stanza.Declare {name; ty} ->
+      add (Name.to_string name) (E_declare {ty}) self
 end
 
 (** Exceptions raised to suspend a computation so as to compute
@@ -949,6 +992,7 @@ module Parser = struct
     if tok <> tok' then Error.failf (fun k->k"expected %s" what);
     consume self
 
+  let lparen self = exact self "'('" VM_lex.LPAREN
   let rparen self = exact self "')'" VM_lex.RPAREN
   let rbrace self = exact self "'}'" VM_lex.RBRACE
 
@@ -960,11 +1004,23 @@ module Parser = struct
     | VM_lex.QUOTED_STR s -> consume self; s
     | _ -> Error.fail "expected quoted string"
 
+  let list_of ~p (self:st) = match self.tok with
+    | VM_lex.LPAREN ->
+      consume self;
+      let rec loop acc = match self.tok with
+        | VM_lex.RPAREN ->
+          consume self; List.rev acc
+        | _ ->
+          let x = p self in loop (x::acc)
+      in
+      loop []
+    | _ -> Error.fail "expected a list"
+
   let atom self = match self.tok with
     | VM_lex.ATOM s -> consume self; s
     | _ -> Error.fail "expected atom"
 
-  let label self = match self.tok with
+  let colon_str self = match self.tok with
     | VM_lex.COLON_STR s -> consume self; s
     | _ -> Error.fail "expected label (e.g. `:foo`)"
 
@@ -1025,16 +1081,19 @@ module Parser = struct
           CB.add_instr self.cb (I.Lload i)
 
         | "tforce" ->
-          let s = quoted_str self in
-          begin match Scoping_env.find s self.env with
+          let name = quoted_str self in
+          begin match Scoping_env.find name self.env with
+            | Some (Scoping_env.E_th th) ->
+              (* evaluate thunk lazily *)
+              CB.add_instr self.cb (I.Tforce th)
+            | Some _ ->
+              Error.failf (fun k->k"tforce: expected a thunk for %S" name)
             | None ->
-              Error.failf (fun k->k"tforce: cannot find %S in environment" s)
-            | Some ptr ->
-              CB.add_instr self.cb (I.Tforce ptr)
+              Error.failf (fun k->k"tforce: cannot find %S in environment" name)
           end
 
         | "jif" ->
-          let lbl = label self in
+          let lbl = colon_str self in
           rparen self;
           let cur_pos = CB.cur_pos self.cb in
           CB.add_instr self.cb I.Nop;
@@ -1042,7 +1101,7 @@ module Parser = struct
               CB.set_instr self.cb cur_pos (I.Jif lbl_pos))
 
         | "jifn" ->
-          let lbl = label self in
+          let lbl = colon_str self in
           rparen self;
           let cur_pos = CB.cur_pos self.cb in
           CB.add_instr self.cb I.Nop;
@@ -1050,7 +1109,7 @@ module Parser = struct
               CB.set_instr self.cb cur_pos (I.Jifn lbl_pos))
 
         | "jmp" ->
-          let lbl = label self in
+          let lbl = colon_str self in
           rparen self;
           let cur_pos = CB.cur_pos self.cb in
           CB.add_instr self.cb I.Nop;
@@ -1143,7 +1202,7 @@ module Parser = struct
       consume self;
       let a = atom self in
       begin match a with
-        | "meta" ->
+        | "def" ->
           let name = quoted_str self in
           let value = Thunk.make @@ parse_chunk_ self in
           rparen self;
@@ -1181,8 +1240,37 @@ module Parser = struct
             Stanza.make ~id @@ Stanza.Define {name=Name.make name; body} in
           Some stanza
 
-        | "proof" ->
-          assert false (* TODO *)
+        | "prove" ->
+          (* [prove name (deps) goal proof] *)
+          consume self;
+          let name = quoted_str self in
+          let p_dep self =
+            lparen self;
+            let name = Name.make @@ atom self in
+            let kind = match quoted_str self with
+              | ":eager" -> `Eager
+              | ":lazy" -> `Lazy
+              | s -> Error.failf (fun k->k"expected :eager or :lazy, not %S" s)
+            in
+            let ref = quoted_str self in
+            name, kind, ref
+          in
+          let deps = list_of ~p:p_dep self in
+          let goal = Thunk.make @@ parse_chunk_ self in
+
+          let proof =
+            (* locally bind each [dep in deps] to the proper thunk in env *)
+            let local_env = Scoping_env.add_proof_deps self.env deps in
+            let old_env = self.env in
+            let@ () = Fun.protect ~finally:(fun() -> self.env <- old_env) in
+            self.env <- local_env;
+            Thunk.make @@ parse_chunk_ self
+          in
+          let stanza =
+            let id = Sym_ptr.str name in
+            Stanza.make ~id @@
+            Stanza.Prove {name=Name.make name; deps; goal; proof } in
+          Some stanza
 
         | _ -> Error.failf (fun k->k"unknown stanza %S" a)
       end
@@ -1212,7 +1300,9 @@ module Parser = struct
     match parse_stanza_ st with
     | exception Error.E err -> st.env, Error err
     | None -> st.env, Error (Error.make "expected stanza")
-    | Some stanza -> st.env, Ok stanza
+    | Some stanza ->
+      let env = Scoping_env.add_stanza stanza st.env in
+      env, Ok stanza
 
   let parse_stanzas (self:t) ~env : Scoping_env.t * (_ Vec.t, _) result =
     let buf = Lexing.from_string ~with_positions:false self.str in
@@ -1223,6 +1313,7 @@ module Parser = struct
       | None -> st.env, Ok vec
       | Some stanza ->
         Vec.push vec stanza;
+        st.env <- Scoping_env.add_stanza stanza st.env;
         loop ()
       | exception Error.E err -> env, Error err
     in
