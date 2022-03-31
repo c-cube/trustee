@@ -1,7 +1,7 @@
 
 ; basic factorial with a loop
 
-(meta fact {
+(def fact {
   (rstore 0)
   1 (rstore 1) ; sum = 1
   :loop
@@ -13,4 +13,4 @@
   :ret (rload 1) ret
 })
 
-(eval 5 "fact" getenv call show)
+(eval 5 (tforce "fact") call show)

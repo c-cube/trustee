@@ -1,7 +1,7 @@
 ; basic factorial, using env-based recursion (!)
 
 ; function definition
-(meta "fact" {
+(def "fact" {
   (rstore 0)
   1 (rload 0) lt ; n > 1
   (jif :l1)
@@ -15,5 +15,5 @@
 (eval 5 (tforce "fact") call show)
 
 ; constant definition
-(meta "fact5" 5 (tforce "fact") call)
+(def "fact5" 5 (tforce "fact") call)
 (eval (tforce "fact5") show)
