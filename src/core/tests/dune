@@ -1,9 +1,9 @@
 
 (rule
   (targets t1.trll.out)
-  (deps (:repl ../tools/vm_repl.exe) (:file t1.trll))
+  (deps (:c ../tools/vm_check.exe) (:file t1.trll))
   (package trustee)
-  (action (with-stdout-to %{targets} (with-stdin-from %{file} (run %{repl} --raw)))))
+  (action (with-stdout-to %{targets} (run %{c} %{file}))))
 
 (rule
   (alias runtest)
@@ -12,9 +12,9 @@
 
 (rule
   (targets t2.trll.out)
-  (deps (:repl ../tools/vm_repl.exe) (:file t2.trll))
+  (deps (:c ../tools/vm_check.exe) (:file t2.trll))
   (package trustee)
-  (action (with-stdout-to %{targets} (with-stdin-from %{file} (run %{repl} --raw)))))
+  (action (with-stdout-to %{targets} (run %{c} %{file}))))
 
 (rule
   (alias runtest)
