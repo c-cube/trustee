@@ -8,6 +8,7 @@ module Name = Name
 module Error = Error
 module Error_intf = Error_intf
 module Vec = Vec
+module Int_map = Int_map
 
 module Conv = Conv
 module Unif = Unif

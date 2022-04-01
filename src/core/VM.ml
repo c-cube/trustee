@@ -1514,7 +1514,7 @@ let parse_stanza_string_exn ?prims env s : _ * Stanza.t =
 *)
 
 (*$R
-  let c = parse_string_exn "42 2 add" ~env:Scoping_env.empty in
+  let c = parse_chunk_string_exn Scoping_env.empty "42 2 add" in
   reset vm;
   run vm c;
   let v = pop_exn vm in
