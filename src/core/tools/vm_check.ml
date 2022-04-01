@@ -41,24 +41,12 @@ let pp_err err =
 
 let main (files:string Vec.t) =
   let ctx = K.Ctx.create() in
-  let vm = VM.create ~ctx () in
   let env = ref VM.Scoping_env.empty in
-  if !debug then VM.set_debug_hook vm debug_hook;
 
   let eval_stanza stanza =
     if !debug then Format.eprintf "parsed stanza %a@." VM.Stanza.pp stanza;
-
-    (* run [c] in a different VM to get the value *)
-    let vm' = VM.create ~ctx () in
-    if !debug then VM.set_debug_hook vm' debug_hook;
-
-    VM.eval_stanza vm stanza;
-
-    (* TODO
-          (* assign result of evaluation to [k] *)
-          let v = VM.pop_exn vm' in
-          VM.set_env vm (VM.get_env vm |> VM.Env.add name v);
-    *)
+    let debug_hook = if !debug then Some debug_hook else None in
+    VM.eval_stanza ?debug_hook ctx stanza;
   in
 
   let read_file file =

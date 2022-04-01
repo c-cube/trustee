@@ -196,7 +196,9 @@ val create :
     @param env current environment for values in scope.
 *)
 
-val set_debug_hook : t -> (t -> Instr.t -> unit) -> unit
+type debug_hook = t -> Instr.t -> unit
+
+val set_debug_hook : t -> debug_hook -> unit
 (** Set a debug hook that is called before each instruction *)
 
 val clear_debug_hook : t -> unit
@@ -215,13 +217,21 @@ val run :
   unit
 
 val eval_thunk :
+  ?debug_hook:debug_hook ->
+  K.Ctx.t ->
+  Thunk.t ->
+  (Value.t list, Error.t) result
+(** Evaluate a thunk (and possibly its dependencies, recursively) *)
+
+val eval_thunk1 :
+  ?debug_hook:debug_hook ->
   K.Ctx.t ->
   Thunk.t ->
   (Value.t, Error.t) result
-(** Evaluate a thunk (and possibly its dependencies, recursively) *)
 
 val eval_stanza :
-  t -> Stanza.t ->
+  ?debug_hook:debug_hook ->
+  K.Ctx.t -> Stanza.t ->
   unit
 
 val dump : t Fmt.printer
