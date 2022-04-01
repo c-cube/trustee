@@ -343,7 +343,7 @@ module Stanza = struct
     | Define {name; body} ->
       Fmt.fprintf out "(@[define %a@ :body %a@])" Name.pp name Thunk.pp body
     | Define_meta {name; value} ->
-      Fmt.fprintf out "(@[define-meta `%s`@ :chunk %a@])"
+      Fmt.fprintf out "(@[def `%s`@ :chunk %a@])"
         name Thunk.pp value
     | Prove {name; deps; goal; proof} ->
       let pp_dep out (s,kind,ref) =
@@ -354,7 +354,7 @@ module Stanza = struct
       Fmt.fprintf out "(@[prove %a@ :deps (@[%a@])@])"
         Name.pp name (pp_list pp_dep) deps
     | Eval_meta {value} ->
-      Fmt.fprintf out "(@[eval-meta@ %a@])" Thunk.pp value
+      Fmt.fprintf out "(@[eval@ %a@])" Thunk.pp value
 end
 
 module Scoping_env = struct
@@ -1082,6 +1082,7 @@ module Parser = struct
 
         | "tforce" ->
           let name = quoted_str self in
+          rparen self;
           begin match Scoping_env.find name self.env with
             | Some (Scoping_env.E_th th) ->
               (* evaluate thunk lazily *)
@@ -1176,7 +1177,6 @@ module Parser = struct
         parse_chunk_into_ st';
         self.tok <- st'.tok;
       end;
-      Format.eprintf "now finishing chunk@.";
       rbrace self;
       (* finish sub-chunk, put it into locals *)
       let c = CB.to_chunk st'.cb in
@@ -1266,6 +1266,7 @@ module Parser = struct
             self.env <- local_env;
             Thunk.make @@ parse_chunk_ self
           in
+          rparen self;
           let stanza =
             let id = Sym_ptr.str name in
             Stanza.make ~id @@
@@ -1274,7 +1275,8 @@ module Parser = struct
 
         | _ -> Error.failf (fun k->k"unknown stanza %S" a)
       end
-    | _ -> Error.fail "syntax error"
+    | _tok ->
+      Error.failf (fun k->k"syntax error: unexpected %a" VM_lex.pp_tok _tok)
 
   let parse_chunk (self:t) ~env : _ result =
     let buf = Lexing.from_string ~with_positions:false self.str in
@@ -1315,7 +1317,8 @@ module Parser = struct
         Vec.push vec stanza;
         st.env <- Scoping_env.add_stanza stanza st.env;
         loop ()
-      | exception Error.E err -> env, Error err
+      | exception Error.E err ->
+        st.env, Error err
     in
     loop ()
 
@@ -1433,7 +1436,6 @@ let eval_stanza (self:t) (stanza:Stanza.t) : unit =
     (* TODO: allocate eval_graph
   let rec eval
        *)
-
 
 let set_debug_hook vm h = vm.Types_.debug_hook <- Some h
 let clear_debug_hook vm = vm.Types_.debug_hook <- None
