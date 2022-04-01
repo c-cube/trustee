@@ -14,3 +14,4 @@
 })
 
 (eval 5 (tforce "fact") call show)
+(eval 10 (tforce "fact") call)

@@ -39,7 +39,7 @@ module Types_ = struct
   }
 
   and thunk_state =
-    | Th_ok of value
+    | Th_ok of value list
     | Th_err of Error.t
     | Th_lazy of chunk
     | Th_suspended of {
@@ -115,7 +115,8 @@ module Types_ = struct
     | Prim p -> pp_prim out p
 
   and pp_thunk_state out = function
-    | Th_ok v -> Fmt.fprintf out "(@[ok %a@])" (pp_value ~short:true) v
+    | Th_ok v ->
+      Fmt.fprintf out "(@[ok %a@])" (pp_list @@ pp_value ~short:true) v
     | Th_err e -> Fmt.fprintf out "(@[err %a@])" Error.pp e
     | Th_lazy _ -> Fmt.string out "(lazy)"
     | Th_suspended _c -> Fmt.string out "(suspended)"
@@ -459,12 +460,21 @@ module VM_ = struct
   }
 
   let[@inline] push_val (self:t) v = Vec.push self.stack v
+
+  let push_vals (self:t) l = List.iter (Vec.push self.stack) l
+
   let[@inline] pop_val (self:t) = Vec.pop self.stack
+
   let[@inline] pop_val_exn (self:t) : Value.t =
     if Vec.is_empty self.stack then (
       Error.fail"vm.pop: operand stack is empty";
     );
     Vec.pop_exn self.stack
+
+  let pop_vals (self:t) : Value.t list =
+    let l = Vec.to_list self.stack in
+    Vec.clear self.stack;
+    l
 
   let swap_val (self:t) =
     if Vec.size self.stack < 2 then (
@@ -485,13 +495,14 @@ module VM_ = struct
   (* reset state entirely *)
   let reset (self:t) : unit =
     let { stack; call_stack; ip=_; call_prim=_;
-          call_restore_ip; regs; } = self in
+          call_restore_ip; regs; debug_hook=_; } = self in
     self.ip <- 0;
     Vec.clear self.call_stack;
     Vec.clear self.call_restore_ip;
     Vec.clear stack;
     Vec.clear self.call_prim;
     Vec.clear regs;
+    self.debug_hook <- None;
     ()
 
   let enter_chunk (self:t) (c:chunk) : unit =
@@ -702,8 +713,8 @@ module VM_ = struct
           | Tforce th ->
             begin match Thunk.state th with
               | Th_err err -> raise (Error.E err)
-              | Th_ok x ->
-                push_val self x;
+              | Th_ok vs ->
+                push_vals self vs;
 
               | Th_lazy c ->
                 self.ip <- ip; (* suspend *)
@@ -1212,7 +1223,6 @@ module Parser = struct
           Some stanza
 
         | "eval" ->
-          consume self;
           let value = Thunk.make @@ parse_chunk_ self in
           rparen self;
           let stanza =
@@ -1221,7 +1231,6 @@ module Parser = struct
           Some stanza
 
         | "declare" ->
-          consume self;
           let name = quoted_str self in
           let ty = Thunk.make @@ parse_chunk_ self in
           rparen self;
@@ -1231,7 +1240,6 @@ module Parser = struct
           Some stanza
 
         | "define" ->
-          consume self;
           let name = quoted_str self in
           let body = Thunk.make @@ parse_chunk_ self in
           rparen self;
@@ -1242,7 +1250,6 @@ module Parser = struct
 
         | "prove" ->
           (* [prove name (deps) goal proof] *)
-          consume self;
           let name = quoted_str self in
           let p_dep self =
             lparen self;
@@ -1349,6 +1356,12 @@ end
 
 type t = Types_.vm
 
+type debug_hook = t -> Instr.t -> unit
+
+let set_debug_hook vm h = vm.Types_.debug_hook <- Some h
+let clear_debug_hook vm = vm.Types_.debug_hook <- None
+let dump = VM_.dump
+
 let create ~ctx () : t =
   let vm = VM_.create ~ctx in
   vm
@@ -1362,7 +1375,7 @@ let run self c =
   VM_.enter_chunk self c;
   VM_.run self
 
-let eval_thunk (ctx:K.Ctx.t) (th:Thunk.t) : (Value.t, Error.t) result =
+let eval_thunk ?debug_hook (ctx:K.Ctx.t) (th:Thunk.t) : (Value.t list, Error.t) result =
   let open Types_ in
 
   let open struct
@@ -1378,9 +1391,13 @@ let eval_thunk (ctx:K.Ctx.t) (th:Thunk.t) : (Value.t, Error.t) result =
     Vec.push vms vm;
   in
   let[@inline] alloc_vm () =
-    match Vec.pop vms with
-    | Some vm -> vm
-    | None -> VM_.create ~ctx
+    let vm =
+      match Vec.pop vms with
+      | Some vm -> vm
+      | None -> VM_.create ~ctx
+    in
+    Option.iter (set_debug_hook vm) debug_hook;
+    vm
   in
 
   let stack: eval_task Vec.t = Vec.create() in
@@ -1391,11 +1408,11 @@ let eval_thunk (ctx:K.Ctx.t) (th:Thunk.t) : (Value.t, Error.t) result =
     match
       VM_.enter_chunk vm c;
       VM_.run vm;
-      VM_.pop_val_exn vm
+      VM_.pop_vals vm
     with
-    | v ->
+    | vs ->
       recycle_vm_ vm;
-      th.th_st <- Th_ok v
+      th.th_st <- Th_ok vs
 
     | exception Error.E err ->
       recycle_vm_ vm;
@@ -1431,15 +1448,46 @@ let eval_thunk (ctx:K.Ctx.t) (th:Thunk.t) : (Value.t, Error.t) result =
   done;
   Thunk.get_result_exn th
 
-let eval_stanza (self:t) (stanza:Stanza.t) : unit =
-  assert false
-    (* TODO: allocate eval_graph
-  let rec eval
-       *)
+let eval_thunk1 ?debug_hook ctx th : _ result =
+  match eval_thunk ?debug_hook ctx th with
+  | Ok [v] -> Ok v
+  | Ok vs ->
+    Error (Error.makef "eval_thunk1: expected one result, got %d" (List.length vs))
+  | Error _ as e -> e
 
-let set_debug_hook vm h = vm.Types_.debug_hook <- Some h
-let clear_debug_hook vm = vm.Types_.debug_hook <- None
-let dump = VM_.dump
+let eval_stanza ?debug_hook (ctx:K.Ctx.t) (stanza:Stanza.t) : unit =
+  let unwrap_ = function
+    | Ok v -> v
+    | Error err -> Error.raise err
+  and pp_res out = function
+    | Ok vs ->
+      List.iter (Fmt.fprintf out "@;%a" Value.pp) vs;
+    | Error err -> Fmt.fprintf out "error: %a" Error.pp err
+  and pp_res1 out = function
+    | Ok v -> Fmt.fprintf out "result: %a" Value.pp v
+    | Error err -> Fmt.fprintf out "error: %a" Error.pp err
+  in
+  begin match Stanza.view stanza with
+    | Stanza.Declare {name;ty} ->
+      (* TODO: turn into term *)
+      let ty = eval_thunk1 ?debug_hook ctx ty |> unwrap_ in
+      Fmt.printf "(@[declare %a :@ %a@])@." Name.pp name Value.pp ty
+    | Stanza.Define {name;body} ->
+      (* TODO: turn into term *)
+      let body = eval_thunk1 ?debug_hook ctx body |> unwrap_ in
+      Fmt.printf "(@[define %a :=@ %a@])@." Name.pp name Value.pp body
+    | Stanza.Prove {name; goal; proof} ->
+      let goal = eval_thunk1 ?debug_hook ctx goal |> unwrap_ in
+      let proof = eval_thunk1 ?debug_hook ctx proof in
+      Fmt.printf "(@[proof %a@ :goal %a@ :proof %a@])@."
+        Name.pp name Value.pp goal pp_res1 proof
+    | Stanza.Define_meta {name; value} ->
+      let r = eval_thunk1 ?debug_hook ctx value in
+      Fmt.printf "(@[def %s =@ %a@])@." name pp_res1 r;
+    | Stanza.Eval_meta {value} ->
+      let r = eval_thunk ?debug_hook ctx value in
+      Fmt.printf "(@[<v2>eval: %a@])@." pp_res r;
+  end
 
 let parse_chunk_string ?prims env s : _ result =
   let p = Parser.create ?prims s in
