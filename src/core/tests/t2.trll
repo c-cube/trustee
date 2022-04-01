@@ -1,7 +1,7 @@
 
 ; basic factorial with a loop
 
-(def fact {
+(def "fact" {
   (rstore 0)
   1 (rstore 1) ; sum = 1
   :loop
