@@ -27,11 +27,20 @@ let instrs: (string*op_arg list*doc) list = [
   "bool", [Bool], "( -- b) Push boolean <b> on the stack";
   "nil", [], "( -- nil) Push nil on the stack";
   "not", [], "(a -- not(a)) Negate top value";
+
+  "acreate", [], "( -- arr) Create a new array.";
+  "apush", [], "(arr x -- ) Pushes `x` onto the array.";
+  "aget", [], "(arr i -- x) Gets `a[i]`.";
+  "aset", [], "(arr i x -- ) Sets `a[i]` to `x`.";
+  "alen", [], "(arr -- n) Gets the length of the array.";
+  "aclear", [], "(arr -- ) Clear the array's content.";
+
   "add", [], "(a b -- a+b) Pop two integer values, adds them";
   "add1", [], "(a -- a+1) Increment integer on top of stack";
   "sub", [], "(a b -- a-b) Pop two integer values, subtract them";
   "sub1", [], "(a -- a-1) Decrement integer on top of stack";
   "mult", [], "(a b -- a*b) Pop two integer values, multiply them";
+
   "eq", [], "(a b -- ) Pop two values; push boolean (a==b)";
   "lt", [], "(a b -- ) Pop two integer values; push boolean (a < b)";
   "leq", [], "(a b -- ) Pop two integer values; push boolean (a <= b)";

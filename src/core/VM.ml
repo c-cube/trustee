@@ -683,6 +683,33 @@ module VM_ = struct
           | Jmp ip ->
             self.ip <- ip
 
+          | Acreate ->
+            push_val self @@ Value.array (Vec.create())
+
+          | Apush ->
+            let x = pop_val_exn self in
+            let arr = pop_val_exn self |> Value.to_array_exn in
+            Vec.push arr x
+
+          | Aget ->
+            let i = pop_val_exn self |> Value.to_int_exn in
+            let arr = pop_val_exn self |> Value.to_array_exn in
+            push_val self @@ Vec.get arr i
+
+          | Aset ->
+            let x = pop_val_exn self in
+            let i = pop_val_exn self |> Value.to_int_exn in
+            let arr = pop_val_exn self |> Value.to_array_exn in
+            Vec.set arr i x
+
+          | Alen ->
+            let arr = pop_val_exn self |> Value.to_array_exn in
+            push_val self (Value.int @@ Vec.size arr)
+
+          | Aclear ->
+            let arr = pop_val_exn self |> Value.to_array_exn in
+            Vec.clear arr
+
           | Tforce th ->
             begin match Thunk.state th with
               | Th_err err -> raise (Error.E err)
@@ -1142,8 +1169,13 @@ module Parser = struct
         | "leq" -> CB.add_instr self.cb I.Leq
         | "lt" -> CB.add_instr self.cb I.Lt
         | "eq" -> CB.add_instr self.cb I.Eq
+        | "acreate" -> CB.add_instr self.cb I.Acreate
+        | "apush" -> CB.add_instr self.cb I.Apush
+        | "aget" -> CB.add_instr self.cb I.Aget
+        | "aset" -> CB.add_instr self.cb I.Aset
+        | "alen" -> CB.add_instr self.cb I.Alen
+        | "aclear" -> CB.add_instr self.cb I.Aclear
         | "curch" ->  CB.add_instr self.cb I.Curch
-
         | _ ->
           (* look for a primitive of that name *)
           begin match Str_map.find_opt str self.prims with
