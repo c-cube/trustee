@@ -10,15 +10,14 @@ type 'a with_loc = 'a With_loc.t = {
 
 (** A constant, with location. *)
 module Const = struct
-  type t = Name.t with_loc
-  let make ~loc (name:Name.t) : t = {view=name;loc}
-  let make_str ~loc s = make ~loc (Name.make s)
+  type t = string with_loc
+  let make ~loc (name:string) : t = {view=name;loc}
 
-  let pp out (self:t) = Name.pp out self.view
-  let name (self:t) : Name.t = self.view
+  let pp out (self:t) = Fmt.string out self.view
+  let name (self:t) : string = self.view
   let loc (self:t) = self.loc
 
-  let bool : t = make_str ~loc:Loc.none "bool"
+  let bool : t = make ~loc:Loc.none "bool"
 end
 
 (** A variable, bound or free.
@@ -241,7 +240,7 @@ module Meta_ty = struct
       Fmt.fprintf out "(@[error@ %a@])" Error.pp err
 
   let const c : t = mk ~loc:c.loc (Const c)
-  let const_str ~loc s : t = const (Const.make_str ~loc s)
+  let const_str ~loc s : t = const (Const.make ~loc s)
   let arrow args ret = match args with
     | [] -> ret
     | _ ->
@@ -324,11 +323,11 @@ module Meta_expr = struct
     | P_any
     | P_var of var
     | P_cstor of {
-        c: Name.t;
+        c: string;
         args: pattern list;
       }
     | P_record of {
-        fields: (Name.t * pattern list);
+        fields: (string * pattern list);
         rest: bool; (** ".." field to ignore the rest? *)
       }
 

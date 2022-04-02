@@ -16,10 +16,10 @@ type params = {
       If false, then variables are incomparable and [a > b] implies that
       the multiset of variables of [a] contains the one of [b]. *)
 
-  precedence: Name.t -> Name.t -> int;
+  precedence: string -> string -> int;
   (** Total order on constants *)
 
-  weight : Name.t -> int;
+  weight : string -> int;
   (** Weight of constants. Must always be [>= 1]
       (we ignore the edge cases where one unary symbol can have weight 0
       for simplicity) *)

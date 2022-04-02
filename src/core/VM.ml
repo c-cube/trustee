@@ -274,47 +274,21 @@ module Thunk = struct
   let make c : t = {th_st=Th_lazy c}
 end
 
-(* TODO: remove
-(* a stack used to evaluate thunks on demand *)
-module Eval_stack_ : sig
-  type t
-  val create : unit -> t
-  val is_empty : t -> bool
-  val push : t -> Thunk.t -> unit
-  val pop_exn : t -> Thunk.t
-  val size : t -> int
-  val pp : t Fmt.printer
-end = struct
-  type t = {
-    stack: Thunk.t Vec.t;
-  }
-
-  let create() : t = {stack=Vec.create()}
-  let is_empty self = Vec.is_empty self.stack
-  let push self x = Vec.push self.stack x
-  let pop_exn self = Vec.pop_exn self.stack
-  let size self = Vec.size self.stack
-  let pp out (self:t) =
-    Fmt.fprintf out "(@[eval-stack@ [@[%a@]]@])"
-      (pp_iter Thunk.pp) (Vec.to_iter self.stack)
-end
-   *)
-
 module Stanza = struct
   type view =
     | Declare of {
-        name: Name.t;
+        name: string;
         ty: Thunk.t;
       }
 
     | Define of {
-        name: Name.t;
+        name: string;
         body: Thunk.t;
       }
 
     | Prove of {
-        name: Name.t;
-        deps: (Name.t * [`Eager | `Lazy] * string) list;
+        name: string;
+        deps: (string * [`Eager | `Lazy] * string) list;
         goal: Thunk.t; (* sequent *)
         proof: Thunk.t; (* thm *)
       }
@@ -340,20 +314,20 @@ module Stanza = struct
   let pp out (self:t) : unit =
     match view self with
     | Declare {name; ty} ->
-      Fmt.fprintf out "(@[declare %a@ :ty %a@])" Name.pp name Thunk.pp ty
+      Fmt.fprintf out "(@[declare %s@ :ty %a@])" name Thunk.pp ty
     | Define {name; body} ->
-      Fmt.fprintf out "(@[define %a@ :body %a@])" Name.pp name Thunk.pp body
+      Fmt.fprintf out "(@[define %s@ :body %a@])" name Thunk.pp body
     | Define_meta {name; value} ->
       Fmt.fprintf out "(@[def `%s`@ :chunk %a@])"
         name Thunk.pp value
     | Prove {name; deps; goal; proof} ->
       let pp_dep out (s,kind,ref) =
         let skind = match kind with `Eager -> ":eager" | `Lazy -> ":lazy" in
-        Fmt.fprintf out "(@[%a %s %s@ :goal %a@ :proof %a@])"
-          Name.pp s skind ref Thunk.pp goal Thunk.pp proof
+        Fmt.fprintf out "(@[%s %s %s@ :goal %a@ :proof %a@])"
+          s skind ref Thunk.pp goal Thunk.pp proof
       in
-      Fmt.fprintf out "(@[prove %a@ :deps (@[%a@])@])"
-        Name.pp name (pp_list pp_dep) deps
+      Fmt.fprintf out "(@[prove %s@ :deps (@[%a@])@])"
+        name (pp_list pp_dep) deps
     | Eval_meta {value} ->
       Fmt.fprintf out "(@[eval@ %a@])" Thunk.pp value
 end
@@ -411,7 +385,7 @@ module Scoping_env = struct
           (* FIXME: make a thunk that boxes this *)
           goal
       in
-      add (Name.to_string name) (E_th th) self
+      add name (E_th th) self
     | Some _ -> Error.failf (fun k->k"expected %S to be a prove step" ref)
     | None -> Error.failf (fun k->k"cannot find prove step %S in env" ref)
 
@@ -423,11 +397,11 @@ module Scoping_env = struct
       add name (E_th value) self
     | Stanza.Eval_meta _ -> self
     | Stanza.Define {name; body} ->
-      add (Name.to_string name) (E_define {body}) self
+      add name (E_define {body}) self
     | Stanza.Prove {name; deps=_; goal; proof} ->
-      add (Name.to_string name) (E_prove {goal;proof}) self
+      add name (E_prove {goal;proof}) self
     | Stanza.Declare {name; ty} ->
-      add (Name.to_string name) (E_declare {ty}) self
+      add name (E_declare {ty}) self
 end
 
 (** Exceptions raised to suspend a computation so as to compute
@@ -1240,7 +1214,7 @@ module Parser = struct
           rparen self;
           let stanza =
             let id = Sym_ptr.str name in
-            Stanza.make ~id @@ Stanza.Declare {name=Name.make name; ty} in
+            Stanza.make ~id @@ Stanza.Declare {name; ty} in
           Some stanza
 
         | "define" ->
@@ -1249,7 +1223,7 @@ module Parser = struct
           rparen self;
           let stanza =
             let id = Sym_ptr.str name in
-            Stanza.make ~id @@ Stanza.Define {name=Name.make name; body} in
+            Stanza.make ~id @@ Stanza.Define {name; body} in
           Some stanza
 
         | "prove" ->
@@ -1257,7 +1231,7 @@ module Parser = struct
           let name = quoted_str self in
           let p_dep self =
             lparen self;
-            let name = Name.make @@ atom self in
+            let name = atom self in
             let kind = match quoted_str self with
               | ":eager" -> `Eager
               | ":lazy" -> `Lazy
@@ -1281,7 +1255,7 @@ module Parser = struct
           let stanza =
             let id = Sym_ptr.str name in
             Stanza.make ~id @@
-            Stanza.Prove {name=Name.make name; deps; goal; proof } in
+            Stanza.Prove {name; deps; goal; proof } in
           Some stanza
 
         | _ -> Error.failf (fun k->k"unknown stanza %S" a)
@@ -1475,16 +1449,16 @@ let eval_stanza ?debug_hook (ctx:K.Ctx.t) (stanza:Stanza.t) : unit =
     | Stanza.Declare {name;ty} ->
       (* TODO: turn into term *)
       let ty = eval_thunk1 ?debug_hook ctx ty |> unwrap_ in
-      Fmt.printf "(@[declare %a :@ %a@])@." Name.pp name Value.pp ty
+      Fmt.printf "(@[declare %s :@ %a@])@." name Value.pp ty
     | Stanza.Define {name;body} ->
       (* TODO: turn into term *)
       let body = eval_thunk1 ?debug_hook ctx body |> unwrap_ in
-      Fmt.printf "(@[define %a :=@ %a@])@." Name.pp name Value.pp body
+      Fmt.printf "(@[define %s :=@ %a@])@." name Value.pp body
     | Stanza.Prove {name; goal; proof} ->
       let goal = eval_thunk1 ?debug_hook ctx goal |> unwrap_ in
       let proof = eval_thunk1 ?debug_hook ctx proof in
-      Fmt.printf "(@[proof %a@ :goal %a@ :proof %a@])@."
-        Name.pp name Value.pp goal pp_res1 proof
+      Fmt.printf "(@[proof %s@ :goal %a@ :proof %a@])@."
+        name Value.pp goal pp_res1 proof
     | Stanza.Define_meta {name; value} ->
       let r = eval_thunk1 ?debug_hook ctx value in
       Fmt.printf "(@[def %s =@ %a@])@." name pp_res1 r;

@@ -140,11 +140,10 @@ let mk_defined_ty_ c =
 exception FoundConst of K.const
 
 (* find constant in the theories in scope *)
-let lookup_const_in_scope_ self ~is_ty (s:string) : K.const option =
+let lookup_const_in_scope_ self ~is_ty (name:string) : K.const option =
   try
     List.iter (fun th ->
         match
-          let name = K.Name.make s in
           if is_ty then K.Theory.find_ty_const th name
           else K.Theory.find_const th name
         with

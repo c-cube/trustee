@@ -105,18 +105,18 @@ module Stanza : sig
 
   type view = private
     | Declare of {
-        name: Name.t;
+        name: string;
         ty: Thunk.t;
       }
 
     | Define of {
-        name: Name.t;
+        name: string;
         body: Thunk.t;
       }
 
     | Prove of {
-        name: Name.t;
-        deps: (Name.t * [`Eager | `Lazy] * string) list;
+        name: string;
+        deps: (string * [`Eager | `Lazy] * string) list;
         goal: Thunk.t; (* sequent *)
         proof: Thunk.t; (* thm *)
       }

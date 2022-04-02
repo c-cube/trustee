@@ -68,7 +68,7 @@ end = struct
     | "with" -> F.binder 1
     | "\\" -> F.binder 50
     | "=" -> F.infix 150
-    | _ -> Notation.find_name_or_default self.notation (Name.make s)
+    | _ -> Notation.find_name_or_default self.notation s
 
   (* parse an identifier *)
   let p_ident self : string * Loc.t =
@@ -81,7 +81,7 @@ end = struct
 
   let p_const (self:t) : A.Const.t =
     let name, loc = p_ident self in
-    A.Const.make ~loc (Name.make name)
+    A.Const.make ~loc name
 
   let expr_of_string_ (self:t) ~loc (s:string) : A.Expr.t =
     match Str_tbl.find self.bindings s with
@@ -196,7 +196,7 @@ end = struct
             | "\\" -> A.Expr.lambda ~loc vars body
             | "with" -> A.Expr.with_ ~loc vars body
             | _ ->
-              let b = A.Const.make ~loc:loc_t (Name.make s) in
+              let b = A.Const.make ~loc:loc_t s in
               A.Expr.bind ~loc b vars body
           end
         | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->

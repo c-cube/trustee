@@ -3,7 +3,6 @@ module Sigs = Sigs
 module Kernel = Kernel
 module Log = Log
 module Hashcons = Hashcons
-module Name = Name
 (* FIXME module Proof = Proof *)
 module Error = Error
 module Error_intf = Error_intf

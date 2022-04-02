@@ -247,7 +247,6 @@ let trustee_server _ctx =
               |> Iter.take 20
               |> Iter.map
                 (fun (c:TA.Const.t) ->
-                  let name = TS.Name.to_string c.name in
                   let lbl, kind = "C", LP.CompletionItemKind.Value in
                   (* TODO: handle meta variables
                   let lbl, kind = match c with
@@ -255,10 +254,10 @@ let trustee_server _ctx =
                     | TA.Ty_env.N_thm _ -> "T", LP.CompletionItemKind.Value
                   in
                      *)
-                  let label = Printf.sprintf "%s %s" lbl name in
+                  let label = Printf.sprintf "%s %s" lbl c.name in
                   let textEdit =
                     LP.TextEdit.create ~range:(lsp_range_of_loc ident_loc)
-                      ~newText:name
+                      ~newText:c.name
                   in
                   let ci = LP.CompletionItem.create
                     ~label ~kind ~textEdit

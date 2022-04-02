@@ -9,12 +9,11 @@ open Common_
 type t
 
 val make : string -> t
-val make_name : Name.t -> t
 val makef : ('a, Format.formatter, unit, t) format4 -> 'a
 val copy : t -> t
 
 val id : t -> int
-val name : t -> Name.t
+val name : t -> string
 
 include EQ with type t := t
 include HASH with type t := t

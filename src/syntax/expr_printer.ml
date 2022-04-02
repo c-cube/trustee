@@ -3,12 +3,12 @@ open Common_
 
 (** Abstract view of expressions *)
 type ('t, 'ty) view =
-  | Var of Name.t
+  | Var of string
   | Bound_var_db of int
   | App of 't * 't
-  | Const of Name.t * 'ty list
-  | Lambda of Name.t * 'ty * 't
-  | Lambda_db of Name.t option * 'ty * 't
+  | Const of string * 'ty list
+  | Lambda of string * 'ty * 't
+  | Lambda_db of string option * 'ty * 't
   | Box of 't list * 't
 
 module type EXPR = sig
@@ -51,51 +51,51 @@ module Make(E : EXPR)
         wrap_ p p' out @@ fun p -> pp_rec_ p k names out e
       in
       match E.view e with
-      | Var v -> Name.pp out v
+      | Var v -> Fmt.string out v
       (* | E_var v -> Fmt.fprintf out "(@[%s : %a@])" v.v_name pp v.v_ty *)
       | Bound_var_db idx ->
         begin match CCList.nth_opt names idx with
-          | Some (Some n) when Name.to_string n<>"" ->
-            Name.pp out n (* use name from the corresponding binder *)
+          | Some (Some n) when n<>"" ->
+            Fmt.string out n (* use name from the corresponding binder *)
           | _ ->
             if idx<k then Fmt.fprintf out "x_%d" (k-idx-1)
             else Fmt.fprintf out "%%db_%d" (idx-k)
         end
-      | Const (c,[]) -> Name.pp out c
+      | Const (c,[]) -> Fmt.string out c
       | Const (c,args) ->
-        Fmt.fprintf out "(@[%a@ %a@])" Name.pp c (pp_list pp_ty) args
+        Fmt.fprintf out "(@[%a@ %a@])" Fmt.string c (pp_list pp_ty) args
       | App _ ->
         let f, args = unfold_app e in
         let default() =
           Fmt.fprintf out "@[%a@ %a@]" (pp' (p+1)) f (pp_list (pp' (p+1))) args
         in
         begin match E.view f, args with
-          | Const (c, [_]), [a;b] when Name.to_string c = "=" ->
+          | Const (c, [_]), [a;b] when c = "=" ->
             Fmt.fprintf out "@[%a@ = %a@]" (pp' 16) a (pp' 16) b
           | Const (c,_), _::_ ->
             begin match Notation.find_name notation c, args with
               | Some (Fixity.F_infix p'), [a;b] ->
                 (* regular infix *)
                 wrap_ p p' out @@ fun p ->
-                Fmt.fprintf out "@[%a@ %a %a@]" (pp' p) a Name.pp c (pp' p) b
+                Fmt.fprintf out "@[%a@ %a %a@]" (pp' p) a Fmt.string c (pp' p) b
 
               | Some (Fixity.F_binder p'), [arg] ->
                 begin match E.view arg with
                   | Lambda (v, ty, bod) ->
                     (* [binder (\v. bod)] is printed as [binder v. bod] *)
                     wrap_ p p' out @@ fun p ->
-                    Fmt.fprintf out "@[%a %a:@[%a@].@ %a@]"
-                      Name.pp c Name.pp v pp_ty ty
+                    Fmt.fprintf out "@[%a %s:@[%a@].@ %a@]"
+                      Fmt.string c v pp_ty ty
                       (pp_rec_ p k names) bod
 
                   | Lambda_db (None, ty, bod) ->
                     wrap_ p p' out @@ fun p ->
-                    Fmt.fprintf out "(@[%a x_%d:@[%a@].@ %a@])" Name.pp c k pp_ty ty
+                    Fmt.fprintf out "(@[%a x_%d:@[%a@].@ %a@])" Fmt.string c k pp_ty ty
                       (pp_rec_ p (k+1) (None::names)) bod
 
                   | Lambda_db (Some v, ty, bod) ->
                     wrap_ p p' out @@ fun p ->
-                    Fmt.fprintf out "(@[%a %a:@[%a@].@ %a@])" Name.pp c Name.pp v pp_ty ty
+                    Fmt.fprintf out "(@[%a %s:@[%a@].@ %a@])" Fmt.string c v pp_ty ty
                       (pp_rec_ p (k+1) (Some v::names)) bod
 
                   | _ -> default()
@@ -103,15 +103,15 @@ module Make(E : EXPR)
 
               | Some (Fixity.F_left_assoc p'), [a; b] ->
                 wrap_ p p' out @@ fun p ->
-                Fmt.fprintf out "@[%a@ %a %a@]" (pp' (p+1)) a Name.pp c (pp' p) b
+                Fmt.fprintf out "@[%a@ %a %a@]" (pp' (p+1)) a Fmt.string c (pp' p) b
 
               | Some (Fixity.F_right_assoc p'), [a; b] ->
                 wrap_ p p' out @@ fun p ->
-                Fmt.fprintf out "@[%a@ %a %a@]" (pp' p) a Name.pp c (pp' (p+1)) b
+                Fmt.fprintf out "@[%a@ %a %a@]" (pp' p) a Fmt.string c (pp' (p+1)) b
 
               | Some (Fixity.F_postfix p'), [arg] ->
                 wrap_ p p' out @@ fun p ->
-                Fmt.fprintf out "@[%a@ %a@]" (pp' p) arg Name.pp c
+                Fmt.fprintf out "@[%a@ %a@]" (pp' p) arg Fmt.string c
 
               (* FIXME: handle infixr, infixl, binder *)
 
@@ -121,13 +121,13 @@ module Make(E : EXPR)
         end
       | Lambda (v, ty, bod) ->
         (* not a DB binder *)
-        Fmt.fprintf out "(@[\\%a:@[%a@].@ %a@])" Name.pp v pp_ty ty
+        Fmt.fprintf out "(@[\\%a:@[%a@].@ %a@])" Fmt.string v pp_ty ty
           (pp_rec_ 0 k names) bod
       | Lambda_db (None, ty, bod) ->
         Fmt.fprintf out "(@[\\x_%d:@[%a@].@ %a@])" k pp_ty ty
           (pp_rec_ 0 (k+1) (None::names)) bod
       | Lambda_db (Some v, ty, bod) ->
-        Fmt.fprintf out "(@[\\%a:@[%a@].@ %a@])" Name.pp v pp_ty ty
+        Fmt.fprintf out "(@[\\%a:@[%a@].@ %a@])" Fmt.string v pp_ty ty
           (pp_rec_ 0 (k+1) (Some v::names)) bod
       | Box ([],c) ->
         Fmt.fprintf out "@[|- %a@]" (pp_rec_ 0 k names) c
@@ -159,12 +159,12 @@ module Pp_k_expr
     let pp_ty _notation = E.pp
 
     let view e = match E.view e with
-      | E.E_var v -> Var (K.Name.make @@ K.Var.to_string v)
+      | E.E_var v -> Var (K.Var.to_string v)
       | E.E_app (f, a) -> App (f, a)
       | E.E_const (c, args) -> Const (K.Const.name c, args)
       | E.E_bound_var bv -> Bound_var_db bv.bv_idx
       | E.E_lam (s, ty, bod) ->
-        let name = if s="" then None else Some (Name.make s) in
+        let name = if s="" then None else Some s in
         Lambda_db (name, ty, bod)
       | E.E_box seq ->
         Box (K.Sequent.hyps_l seq, K.Sequent.concl seq)

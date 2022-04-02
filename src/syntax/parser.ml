@@ -114,7 +114,7 @@ let p_var ?(require_ty=false) ~p_ty () =
 let p_const =
   let+ loc = SD.loc
   and+ c = SD.atom in
-  A.Const.make_str ~loc c
+  A.Const.make ~loc c
 
 module P_expr : sig
   val p_var : ?require_ty:bool -> A.Expr.var parser

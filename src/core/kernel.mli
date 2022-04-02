@@ -45,8 +45,6 @@ type expr_view =
   | E_arrow of expr * expr
   | E_box of sequent (* reified sequent *)
 
-module Name = Name
-
 (** Logic constants *)
 module Const : sig
   type t = const
@@ -57,7 +55,7 @@ module Const : sig
     | C_ty_vars of ty_var list
     | C_arity of int
 
-  val name : t -> Name.t
+  val name : t -> string
   val args : t -> args
   val ty : t -> ty
 
@@ -450,15 +448,15 @@ module Theory : sig
 
   val add_theorem : t -> thm -> unit
 
-  val find_const : t -> Name.t -> const option
+  val find_const : t -> string -> const option
   (** Find a constant used or defined in this theory by its name *)
 
-  val find_ty_const : t -> Name.t -> ty_const option
+  val find_ty_const : t -> string -> ty_const option
   (** Find a type constant used or defined in this theory by its name *)
 
   (** {3 Composition} *)
 
-  type interpretation = Name.t Name.Map.t
+  type interpretation = string Str_map.t
 
   val instantiate :
     interp:interpretation ->

@@ -7,8 +7,6 @@ module H = CCHash
 let ctx_id_bits = 5
 let ctx_id_mask = (1 lsl ctx_id_bits) - 1
 
-module Name = Name
-
 type expr_view =
   | E_kind
   | E_type
@@ -40,8 +38,6 @@ and bvar = {
 
 and ty = expr
 
-and name = Name.t
-
 and expr_set = expr Int_map.t
 
 and sequent = {
@@ -50,7 +46,7 @@ and sequent = {
 }
 
 and const = {
-  c_name: name;
+  c_name: string;
   c_args: const_args;
   c_ty: ty; (* free vars = c_ty_vars *)
   c_def_id: const_def_id;
@@ -59,7 +55,7 @@ and ty_const = const
 
 and const_def_id =
   | C_def_gen of int (* generative *)
-  | C_in_theory of name (* theory name *)
+  | C_in_theory of string (* theory name *)
 
 and const_args =
   | C_ty_vars of ty_var list
@@ -86,20 +82,20 @@ let[@inline] sequent_hash s =
 let const_def_eq a b =
   match a, b with
   | C_def_gen i, C_def_gen j -> i=j
-  | C_in_theory n1, C_in_theory n2 -> Name.equal n1 n2
+  | C_in_theory n1, C_in_theory n2 -> String.equal n1 n2
   | (C_def_gen _ | C_in_theory _), _ -> false
 
 let[@inline] const_eq (c1:const) c2 : bool =
-  Name.equal c1.c_name c2.c_name &&
+  String.equal c1.c_name c2.c_name &&
   const_def_eq c1.c_def_id c2.c_def_id
 
 let const_hash c =
   let h_def =
     match c.c_def_id with
     | C_def_gen id -> H.(combine2 12 (int id))
-    | C_in_theory n -> H.(combine2 25 (Name.hash n))
+    | C_in_theory n -> H.(combine2 25 (string n))
   in
-  H.combine3 129 (Name.hash c.c_name) h_def
+  H.combine3 129 (H.string c.c_name) h_def
 
 module Const_hashcons = Hashcons.Make(struct
     type t = const
@@ -182,15 +178,15 @@ let expr_pp_with_ ~max_depth out (e:expr) : unit =
           if idx<k then Fmt.fprintf out "x_%d" (k-idx-1)
           else Fmt.fprintf out "%%db_%d" (idx-k)
       end
-    | E_const (c,[]) -> Name.pp out c.c_name
+    | E_const (c,[]) -> Fmt.string out c.c_name
     | E_const (c,args) ->
-      Fmt.fprintf out "(@[%a@ %a@])" Name.pp c.c_name (pp_list pp') args
+      Fmt.fprintf out "(@[%a@ %a@])" Fmt.string c.c_name (pp_list pp') args
     | (E_app _ | E_lam _ | E_arrow _) when depth > max_depth ->
       Fmt.fprintf out "@<1>…/%d" e.e_id
     | E_app _ ->
       let f, args = unfold_app e in
       begin match f.e_view, args with
-        | E_const (c, [_]), [a;b] when Name.equal_str c.c_name "=" ->
+        | E_const (c, [_]), [a;b] when String.equal c.c_name "=" ->
           Fmt.fprintf out "@[@[%a@]@ = @[%a@]@]" pp' a pp' b
         | _ ->
           Fmt.fprintf out "%a@ %a" pp' f (pp_list pp') args
@@ -225,7 +221,7 @@ module Expr_hashcons = Hashcons.Make(struct
         | E_kind, E_kind
         | E_type, E_type -> true
         | E_const (c1,l1), E_const (c2,l2) ->
-          Name.equal c1.c_name c2.c_name && CCList.equal expr_eq l1 l2
+          String.equal c1.c_name c2.c_name && CCList.equal expr_eq l1 l2
         | E_var v1, E_var v2 -> var_eq v1 v2
         | E_bound_var v1, E_bound_var v2 ->
           v1.bv_idx = v2.bv_idx && expr_eq v1.bv_ty v2.bv_ty
@@ -246,7 +242,7 @@ module Expr_hashcons = Hashcons.Make(struct
       | E_kind -> 11
       | E_type -> 12
       | E_const (c,l) ->
-        H.combine4 20 (Name.hash c.c_name) (expr_hash c.c_ty) (H.list expr_hash l)
+        H.combine4 20 (H.string c.c_name) (expr_hash c.c_ty) (H.list expr_hash l)
       | E_var v -> H.combine2 30 (var_hash v)
       | E_bound_var v -> H.combine3 40 (H.int v.bv_idx) (expr_hash v.bv_ty)
       | E_app (f,a) -> H.combine3 50 (expr_hash f) (expr_hash a)
@@ -266,9 +262,9 @@ type const_kind = C_ty | C_term
 
 (* special map for indexing constants, differentiating type and term constants *)
 module Name_k_map = CCMap.Make(struct
-    type t = const_kind * Name.t
+    type t = const_kind * string
     let compare (k1,c1)(k2,c2) =
-      if k1=k2 then Name.compare c1 c2 else Stdlib.compare k1 k2
+      if k1=k2 then String.compare c1 c2 else Stdlib.compare k1 k2
   end)
 
 type thm = {
@@ -281,7 +277,7 @@ type thm = {
    *)
 
 and theory = {
-  theory_name: Name.t;
+  theory_name: string;
   theory_ctx: ctx;
   mutable theory_in_constants: const Name_k_map.t;
   mutable theory_in_theorems: thm list;
@@ -302,23 +298,22 @@ and ctx = {
   mutable ctx_axioms: thm list;
   mutable ctx_axioms_allowed: bool;
 }
-(* TODO: derived rules and named rules/theorems *)
 
 let[@inline] thm_ctx_uid th : int = th.th_flags land ctx_id_mask
 
 let[@inline] ctx_check_e_uid ctx (e:expr) = assert (ctx.ctx_uid == expr_ctx_uid e)
 let[@inline] ctx_check_th_uid ctx (th:thm) = assert (ctx.ctx_uid == thm_ctx_uid th)
 
-let id_bool = Name.make "bool"
-let id_eq = Name.make "="
-let id_select = Name.make "select"
+let id_bool = "bool"
+let id_eq = "="
+let id_select = "select"
 
 module Const = struct
   type t = const
-  let[@inline] pp out c = Name.pp out c.c_name
+  let[@inline] pp out c = Fmt.string out c.c_name
   let[@inline] to_string c = Fmt.to_string pp c
   let[@inline] name c = c.c_name
-  let[@inline] equal c1 c2 = Name.equal c1.c_name c2.c_name
+  let[@inline] equal c1 c2 = String.equal c1.c_name c2.c_name
 
   type args = const_args =
     | C_ty_vars of ty_var list
@@ -332,13 +327,13 @@ module Const = struct
 
   let pp_with_ty out c =
     Fmt.fprintf out "`@[%a%a@ : %a@]`"
-      Name.pp c.c_name pp_args c.c_args expr_pp_ c.c_ty
+      Fmt.string c.c_name pp_args c.c_args expr_pp_ c.c_ty
 
   let[@inline] eq ctx = Lazy.force ctx.ctx_eq_c
   let[@inline] bool ctx = Lazy.force ctx.ctx_bool_c
   let[@inline] select ctx = Lazy.force ctx.ctx_select_c
-  let is_eq_to_bool c = Name.equal c.c_name id_bool
-  let is_eq_to_eq c = Name.equal c.c_name id_bool
+  let is_eq_to_bool c = String.equal c.c_name id_bool
+  let is_eq_to_eq c = String.equal c.c_name id_bool
 
   let[@inline] make_ ctx (c:t) : t =
     Const_hashcons.hashcons ctx.ctx_consts c
@@ -496,7 +491,7 @@ module Expr = struct
   let[@inline] is_eq_to_type e = match view e with | E_type -> true | _ -> false
   let[@inline] is_a_type e = is_eq_to_type (ty_exn e)
   let is_eq_to_bool e =
-    match view e with E_const (c,[]) -> Name.equal c.c_name id_bool | _ -> false
+    match view e with E_const (c,[]) -> String.equal c.c_name id_bool | _ -> false
   let is_a_bool e = is_eq_to_bool (ty_exn e)
 
   let bool ctx = Lazy.force ctx.ctx_bool
@@ -604,11 +599,9 @@ module Expr = struct
                but not in the type variables %a"
               Var.pp v name (Fmt.Dump.list Var.pp) ty_vars);
     end;
-    let name = Name.make name in
     new_const_ ctx name (C_ty_vars ty_vars) ty
 
   let new_ty_const ctx name n : ty_const =
-    let name = Name.make name in
     new_const_ ctx name (C_arity n) (type_ ctx)
 
   let mk_const_ ctx c args ty : t =
@@ -729,7 +722,7 @@ module Expr = struct
         if List.length args <> n then (
           Error.failf
             (fun k->k"constant %a requires %d arguments, but is applied to %d"
-                Name.pp c.c_name
+                Fmt.string c.c_name
                 n (List.length args));
         );
         Lazy.from_val (Some c.c_ty)
@@ -737,7 +730,7 @@ module Expr = struct
         if List.length args <> List.length ty_vars then (
           Error.failf
             (fun k->k"constant %a requires %d arguments, but is applied to %d"
-                Name.pp c.c_name
+                Fmt.string c.c_name
                 (List.length ty_vars) (List.length args));
         );
         lazy (
@@ -896,7 +889,7 @@ module Expr = struct
   let[@inline] unfold_eq e =
     let f, l = unfold_app e in
     match view f, l with
-    | E_const ({c_name;_}, [_]), [a;b] when Name.equal c_name id_eq -> Some(a,b)
+    | E_const ({c_name;_}, [_]), [a;b] when String.equal c_name id_eq -> Some(a,b)
     | _ -> None
 
   let[@unroll 1] rec unfold_arrow e =
@@ -1486,12 +1479,12 @@ end
 module Theory = struct
   type t = theory
 
-  let pp_name out self = Name.pp out self.theory_name
+  let pp_name out self = Fmt.string out self.theory_name
   let pp out (self:t) : unit =
     let {theory_name=name; theory_ctx=_; theory_in_constants=inc;
          theory_in_theorems=inth; theory_defined_theorems=dth;
          theory_defined_constants=dc; } = self in
-    Fmt.fprintf out "(@[<v1>theory %a" Name.pp name;
+    Fmt.fprintf out "(@[<v1>theory %a" Fmt.string name;
     Name_k_map.iter (fun _ c ->
         Fmt.fprintf out "@,(@[in-const@ %a@])" Const.pp_with_ty c)
       inc;
@@ -1520,7 +1513,7 @@ module Theory = struct
   let assume_const_ self (c:const) : unit =
     let kind = if Expr.is_eq_to_type c.c_ty then C_ty else C_term in
     if Name_k_map.mem (kind,c.c_name) self.theory_in_constants then (
-      Error.failf (fun k->k"Theory.assume_const: constant `%a` already exists" Name.pp c.c_name);
+      Error.failf (fun k->k"Theory.assume_const: constant `%a` already exists" Fmt.string c.c_name);
     );
     self.theory_in_constants <- Name_k_map.add (kind,c.c_name) c self.theory_in_constants;
     ()
@@ -1533,9 +1526,9 @@ module Theory = struct
     let kind = if Expr.is_eq_to_type c.c_ty then C_ty else C_term in
     begin match Name_k_map.get (kind,key) self.theory_defined_constants with
       | Some c' when Const.equal c c' ->
-        Log.debugf 2 (fun k->k"redef `%a`" Name.pp key);
+        Log.debugf 2 (fun k->k"redef `%a`" Fmt.string key);
       | Some _ ->
-        Error.failf (fun k->k"Theory.add_const: constant `%a` already defined" Name.pp key);
+        Error.failf (fun k->k"Theory.add_const: constant `%a` already defined" Fmt.string key);
       | None -> ()
     end;
     self.theory_defined_constants <- Name_k_map.add (kind,key) c self.theory_defined_constants
@@ -1557,7 +1550,7 @@ module Theory = struct
       | Some theory' when theory' == self -> ()
       | Some theory' ->
         Error.failf (fun k->k"Theory.add_theorem:@ %a@ already belongs in theory `%a`"
-                   Thm.pp_quoted th Name.pp theory'.theory_name);
+                   Thm.pp_quoted th Fmt.string theory'.theory_name);
     end;
     self.theory_defined_theorems <- th :: self.theory_defined_theorems
 
@@ -1569,7 +1562,6 @@ module Theory = struct
     }
 
   let mk_str_ ctx ~name : t =
-    let name = Name.make name in
     mk_ ctx ~name
 
   let with_ ctx ~name f : t =
@@ -1589,7 +1581,7 @@ module Theory = struct
       (fun (_,n) c1 c2 ->
          if not (Const.equal c1 c2) then (
            Error.failf (fun k->k"incompatible %s constant `%a`: %a vs %a"
-                      what Name.pp n Const.pp c1 Const.pp c2)
+                      what Fmt.string n Const.pp c1 Const.pp c2)
          );
          Some c1)
       m1 m2
@@ -1615,25 +1607,25 @@ module Theory = struct
     self
 
   (* interpretation: map some constants to other constants *)
-  type interpretation = Name.t Name.Map.t
+  type interpretation = string Str_map.t
 
   let pp_interp out (i:interpretation) : unit =
-    let pp_pair out (n,u) = Fmt.fprintf out "(@[`%a` =>@ `%a`@])" Name.pp n Name.pp u in
+    let pp_pair out (n,u) = Fmt.fprintf out "(@[`%s` =>@ `%s`@])" n u in
     Fmt.fprintf out "{@[%a@]}"
-      (Fmt.iter ~sep:(Fmt.return "@ ") pp_pair) (Name.Map.to_iter i)
+      (Fmt.iter ~sep:(Fmt.return "@ ") pp_pair) (Str_map.to_iter i)
 
   module Instantiate_ = struct
     type state = {
       ctx: Ctx.t;
       cache: expr Expr.Tbl.t;
       interp: interpretation;
-      find_const: Name.t -> ty:Expr.t -> const option;
+      find_const: string -> ty:Expr.t -> const option;
       (* context in which to try to reinterpret constants *)
     }
 
     let create
         ?(find_const=fun _ ~ty:_ -> None)
-        ?(interp=Name.Map.empty) ctx : state =
+        ?(interp=Str_map.empty) ctx : state =
       { ctx; interp; cache=Expr.Tbl.create 32; find_const; }
 
     (* instantiate one term *)
@@ -1662,7 +1654,7 @@ module Theory = struct
     and inst_const_ (self:state) (c:const) : const =
       let ty' = inst_t_ self c.c_ty in
       let name' =
-        try Name.Map.find c.c_name self.interp
+        try Str_map.find c.c_name self.interp
         with Not_found -> c.c_name
       in
       (* reinterpret constant? *)
@@ -1713,23 +1705,23 @@ module Theory = struct
   end
 
   let instantiate ~(interp:interpretation) th : t =
-    if Name.Map.is_empty interp then th
+    if Str_map.is_empty interp then th
     else (
       let st = Instantiate_.create ~interp th.theory_ctx in
       Instantiate_.inst_theory_ st th
     )
 
   (* index by name+ty, for constants *)
-  module Name_ty_tbl = CCHashtbl.Make(struct
-      type t = Name.t * Expr.t
-      let equal (n1,ty1) (n2,ty2) = Name.equal n1 n2 && Expr.equal ty1 ty2
-      let hash (n,ty) = H.(combine3 25 (Name.hash n) (Expr.hash ty))
+  module Str_ty_tbl = CCHashtbl.Make(struct
+      type t = string * Expr.t
+      let equal (n1,ty1) (n2,ty2) = String.equal n1 n2 && Expr.equal ty1 ty2
+      let hash (n,ty) = H.(combine3 25 (H.string n) (Expr.hash ty))
     end)
 
   (* index theorems by [hyps |- concl] *)
   module Thm_tbl = CCHashtbl.Make(Thm)
 
-  let compose ?(interp=Name.Map.empty) l th : t =
+  let compose ?(interp=Str_map.empty) l th : t =
     Log.debugf 2
       (fun k->k"(@[theory.compose@ %a@ %a@ @[:interp %a@]@])"
           Fmt.(Dump.list pp_name) l pp_name th pp_interp interp);
@@ -1742,21 +1734,21 @@ module Theory = struct
       (* reinterpret constants that are provided by [l]. For that we need
          to index them by [name,ty].
          Also gather the set of proved theorems from *)
-      let const_tbl_ = Name_ty_tbl.create 32 in
+      let const_tbl_ = Str_ty_tbl.create 32 in
       let provided_thms = Thm_tbl.create 32 in
 
       List.iter
         (fun th0 ->
-           Name_k_map.iter (fun _ c -> Name_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
+           Name_k_map.iter (fun _ c -> Str_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
              th0.theory_in_constants;
-           Name_k_map.iter (fun _ c -> Name_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
+           Name_k_map.iter (fun _ c -> Str_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
              th0.theory_defined_constants;
            List.iter (fun th -> Thm_tbl.replace provided_thms th ())
              th0.theory_defined_theorems;
         )
         l;
 
-      let find_const name ~ty = Name_ty_tbl.get const_tbl_ (name,ty) in
+      let find_const name ~ty = Str_ty_tbl.get const_tbl_ (name,ty) in
 
       let st = Instantiate_.create ~find_const ~interp ctx in
       let th = Instantiate_.inst_theory_ st th in
@@ -1765,7 +1757,7 @@ module Theory = struct
       th.theory_in_constants <-
         Name_k_map.filter
           (fun _ c ->
-            not (Name_ty_tbl.mem const_tbl_ (c.c_name,c.c_ty)))
+            not (Str_ty_tbl.mem const_tbl_ (c.c_name,c.c_ty)))
           th.theory_in_constants;
       (* remove satisfied assumptions *)
       th.theory_in_theorems <-

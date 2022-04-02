@@ -1,6 +1,6 @@
 
 open Common_
-module N_map = Name.Map
+module N_map = Str_map
 
 type fixity = Fixity.t
 type t = {
@@ -17,16 +17,16 @@ let[@inline] declare s f self = {fixs=N_map.add s f self.fixs}
 let empty = {fixs=N_map.empty}
 
 let pp out (self:t) : unit =
-  let pp_pair out (n,f) = Fmt.fprintf out "(@[%a %a@])" Name.pp n Fixity.pp f in
+  let pp_pair out (n,f) = Fmt.fprintf out "(@[%s %a@])" n Fixity.pp f in
   Fmt.fprintf out "(@[notations@ (@[%a@])@])"
     Fmt.(iter pp_pair) (N_map.to_iter self.fixs)
 
 
 let empty_hol =
   empty
-  |> declare (Name.make "=") (Fixity.infix 40)
-  |> declare (Name.make "select") (Fixity.binder 30)
-  |> declare (Name.make "==>") (Fixity.rassoc 15)
+  |> declare "=" (Fixity.infix 40)
+  |> declare "select" (Fixity.binder 30)
+  |> declare "==>" (Fixity.rassoc 15)
 
 module Ref = struct
   type notation = t

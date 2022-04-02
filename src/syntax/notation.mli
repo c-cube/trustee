@@ -16,12 +16,12 @@ val empty : t
 (* TODO: also be able to rename constants, so we can use canonical
    names like Data.Bool./\ and print as `\land` or `∧` *)
 
-val find : t -> Name.t -> fixity option
-val find_name : t -> Name.t -> fixity option
-val find_or_default : t -> Name.t -> fixity
-val find_name_or_default : t -> Name.t -> fixity
+val find : t -> string -> fixity option
+val find_name : t -> string -> fixity option
+val find_or_default : t -> string -> fixity
+val find_name_or_default : t -> string -> fixity
 
-val declare : Name.t -> fixity -> t -> t
+val declare : string -> fixity -> t -> t
 
 val pp : t Fmt.printer
 
@@ -33,10 +33,10 @@ module Ref : sig
   val create_hol : unit -> t
   val of_notation : notation -> t
 
-  val find : t -> Name.t -> fixity option
-  val find_or_default : t -> Name.t -> fixity
+  val find : t -> string -> fixity option
+  val find_or_default : t -> string -> fixity
 
-  val declare : t -> Name.t -> fixity -> unit
+  val declare : t -> string -> fixity -> unit
 
   val pp : t Fmt.printer
 end

@@ -9,21 +9,21 @@ type 'a meta_var = 'a TA.Meta_var.t
 
 
 type t = {
-  consts: const Name.Map.t; (* const -> ty *)
+  consts: const Str_map.t; (* const -> ty *)
 }
 
 let empty = {
   consts=
-    Name.Map.empty
-    |> Name.Map.add (Name.make "bool") TA.Const.bool;
+    Str_map.empty
+    |> Str_map.add "bool" TA.Const.bool;
 }
 
 let add_const (c:const) self : t =
-  { consts=Name.Map.add c.name c self.consts; }
+  { consts=Str_map.add c.name c self.consts; }
 
-let find_const n self = Name.Map.find_opt n self.consts
+let find_const n self = Str_map.find_opt n self.consts
 
-let all_consts self = Name.Map.values self.consts
+let all_consts self = Str_map.values self.consts
 
 let pp out (self:t) : unit =
   Fmt.fprintf out "(@[env";
@@ -35,29 +35,26 @@ let completions (self:t) (str:string) : _ Iter.t =
   let consts = self.consts in
   let consts =
     let small_enough n =
-      let nstr =  Name.to_string n in
-      String.compare nstr str < 0
+      String.compare n str < 0
     in
-    match Name.Map.find_first_opt small_enough consts with
+    match Str_map.find_first_opt small_enough consts with
     | None -> consts
-    | Some (n,_) -> let _, _, rhs = Name.Map.split n consts in rhs
+    | Some (n,_) -> let _, _, rhs = Str_map.split n consts in rhs
   in
   let consts =
     let too_big n =
-      let nstr =  Name.to_string n in
-      String.compare str nstr < 0 &&
-      not (CCString.prefix ~pre:str nstr)
+      String.compare str n < 0 &&
+      not (CCString.prefix ~pre:str n)
     in
-    match Name.Map.find_last_opt too_big consts with
+    match Str_map.find_last_opt too_big consts with
     | None -> consts
-    | Some (n,_) -> let lhs,_,_ = Name.Map.split n consts in lhs
+    | Some (n,_) -> let lhs,_,_ = Str_map.split n consts in lhs
   in
 
   begin
     (* iterate and check *)
-    Name.Map.to_iter consts
+    Str_map.to_iter consts
     |> Iter.filter_map
       (fun (n, c) ->
-         let nstr =  Name.to_string n in
-         if CCString.prefix ~pre:str nstr then Some c else None)
+         if CCString.prefix ~pre:str n then Some c else None)
   end

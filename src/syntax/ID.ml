@@ -2,10 +2,10 @@ open Common_
 
 type t = {
   id: int;
-  name: Name.t;
+  name: string;
 }
 
-let make_name =
+let make =
   (* TODO: use some Atomic shim instead *)
   let n = ref 0 in
   fun name ->
@@ -13,10 +13,8 @@ let make_name =
     incr n;
     x
 
-let[@inline] make name = make_name (Name.make name)
-
 let makef fmt = Fmt.ksprintf ~f:make fmt
-let[@inline] copy {name;_} = make_name name
+let[@inline] copy {name;_} = make name
 let[@inline] id id = id.id
 let[@inline] name id = id.name
 let[@inline] equal a b = a == b
@@ -29,8 +27,8 @@ let pp_id_ =
 
 let pp =
   if pp_id_
-  then fun out a -> Format.fprintf out "%a/%d" Name.pp a.name a.id
-  else fun out a -> Name.pp out a.name
+  then fun out a -> Format.fprintf out "%s/%d" a.name a.id
+  else fun out a -> Fmt.string out a.name
 
 let to_string = Fmt.to_string pp
 

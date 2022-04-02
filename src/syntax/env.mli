@@ -13,7 +13,7 @@ val empty : t
 
 val add_const : TA.Const.t -> t -> t
 
-val find_const : Name.t -> t -> TA.Const.t option
+val find_const : string -> t -> TA.Const.t option
 
 val all_consts : t -> TA.Const.t Iter.t
 

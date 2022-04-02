@@ -486,7 +486,7 @@ module Make(Arg : sig
         | AE.Var va ->
             begin match
               State.find_free_var state va.name,
-              Env.find_const (Name.make va.name) (State.env state)
+              Env.find_const va.name (State.env state)
             with
             | Some v', _ ->
               begin match va.A.Var.ty with

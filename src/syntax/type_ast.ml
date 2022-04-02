@@ -79,7 +79,7 @@ module Init_ = struct
 
   (** Logical constant *)
   and const = {
-    name: Name.t;
+    name: string;
     ty: ty;
     loc: Loc.t;
     args: const_args;
@@ -105,21 +105,21 @@ module Const = struct
     | C_vars of ty bvar list
 
   type t = Init_.const = {
-    name: Name.t;
+    name: string;
     ty: ty;
     loc: Loc.t;
     args: const_args;
   }
 
-  let pp out (self:t) = Name.pp out self.name
-  let to_string self = Name.to_string self.name
-  let[@inline] equal (a:t) (b:t) = Name.equal a.name b.name
-  let[@inline] name (self:t) : Name.t = self.name
+  let pp out (self:t) = Fmt.string out self.name
+  let to_string self = self.name
+  let[@inline] equal (a:t) (b:t) = String.equal a.name b.name
+  let[@inline] name (self:t) : string = self.name
   let[@inline] loc (self:t) = self.loc
   let[@inline] args (self:t) = self.args
 
   let make ~loc ~ty ~args name : t = {loc;ty;args;name}
-  let make_str ~loc ~ty ~args s : t = make ~loc ~ty ~args (Name.make s)
+  let make_str ~loc ~ty ~args s : t = make ~loc ~ty ~args s
 
   let bool : t = make_str ~loc:Loc.none "bool" ~ty:type_ ~args:(C_arity 0)
 end
@@ -488,11 +488,11 @@ module Meta_expr = struct
     | P_any
     | P_var of var
     | P_cstor of {
-        c: Name.t;
+        c: string;
         args: pattern list;
       }
     | P_record of {
-        fields: (Name.t * pattern list);
+        fields: (string * pattern list);
         rest: bool; (** ".." field to ignore the rest? *)
       }
 
@@ -817,7 +817,7 @@ module Top = struct
         Expr.pp ret Expr.pp body
     | Decl { name; ty } ->
       Fmt.fprintf out "(@[<1>decl %a@ %a@])"
-        Name.pp name Expr.pp ty
+        Fmt.string name Expr.pp ty
     | Fixity {name; fixity} ->
       Fmt.fprintf out "(@[<1>fixity %a %a@])"
         Const.pp name Fixity.pp_syntax fixity
