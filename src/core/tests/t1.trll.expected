@@ -1,2 +1,24 @@
-defined "fact"
+(def fact =
+ result: chunk[1 regs] {
+           :instrs
+            0        (rstore 0)
+            1        (int 1)
+            2        (rload 0)
+            3        lt
+            4        (jif 7)
+            5        (int 1)
+            6        ret
+            7        (rload 0)
+            8        sub1
+            9        curch
+            10       call
+            11       (rload 0)
+            12       mult
+           :locals
+           
+         })
 120
+(eval: )
+(def fact5 = result: 120)
+120
+(eval: )

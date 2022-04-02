@@ -7,8 +7,7 @@
   (jif :l1)
     1 ret
   :l1
-    (rload 0) sub1
-      (tforce "fact") call ; fact (n-1)
+    (rload 0) sub1 curch call ; call current chunk, i.e. fact, on (n-1)
     (rload 0) mult ; *n
 })
 
