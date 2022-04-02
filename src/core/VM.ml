@@ -702,7 +702,6 @@ module VM_ = struct
             let x = pop_val_exn self |> Value.to_bool_exn in
             if x then self.ip <- ip;
 
-
           | Jifn ip ->
             let x = pop_val_exn self |> Value.to_bool_exn in
             if not x then self.ip <- ip;
@@ -725,6 +724,10 @@ module VM_ = struct
                 raise (Suspend_and_resume (th,c,vm))
 
             end;
+
+          | Curch ->
+            (* push [c] onto the stack *)
+            push_val self (Value.chunk c);
 
           | Type ->
             push_val self (Value.expr @@ K.Expr.type_ self.ctx)
@@ -1165,6 +1168,7 @@ module Parser = struct
         | "leq" -> CB.add_instr self.cb I.Leq
         | "lt" -> CB.add_instr self.cb I.Lt
         | "eq" -> CB.add_instr self.cb I.Eq
+        | "curch" ->  CB.add_instr self.cb I.Curch
 
         | _ ->
           (* look for a primitive of that name *)

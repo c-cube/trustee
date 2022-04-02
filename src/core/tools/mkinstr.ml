@@ -39,6 +39,7 @@ let instrs: (string*op_arg list*doc) list = [
   "jifn", [Int], "(bool -- ) Pop a boolean; if false, then set IP=<offset>";
   "jmp", [Int], "( -- ) Set IP=<offset> unconditionally";
   "tforce", [Thunk], "( -- x) Evalutes thunk and pushes the value onto the stack";
+  "curch", [], "( -- c) Pushes current thunk onto the stack";
   "type", [], "( -- type) Pushes the kind `type`.";
   "var", [], "(str ty -- var) Pop a string and a type, pushes a variable.";
   "vty", [], "(var -- ty) Pop a variable, pushes its type.";
