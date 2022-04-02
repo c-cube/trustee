@@ -49,6 +49,7 @@ let instrs: (string*op_arg list*doc) list = [
   "jmp", [Int], "( -- ) Set IP=<offset> unconditionally";
   "tforce", [Thunk], "( -- x) Evalutes thunk and pushes the value onto the stack";
   "curch", [], "( -- c) Pushes current thunk onto the stack";
+
   "type", [], "( -- type) Pushes the kind `type`.";
   "var", [], "(str ty -- var) Pop a string and a type, pushes a variable.";
   "vty", [], "(var -- ty) Pop a variable, pushes its type.";
@@ -68,6 +69,10 @@ let instrs: (string*op_arg list*doc) list = [
   "deconst", [], "(expr -- const? []ty? bool) Pops expression, returns \
                   `c args true` if it's `c` applied to arguments `args`; \
                   returns `nil nil false` otherwise..";
+  "suem", [], "( -- subst) Pushes empty subst.";
+  "subinde", [], "(subst v e -- subst) Binds var `v` to expression `e`.";
+  "subindty", [], "(subst v ty -- subst) Binds var `v` to type `ty`.";
+
   "thabs", [], "(th var -- th) Pops `|- t=u` and `v`, pushes `|- \v.t=\v.u`.";
   "thcongr", [], "(th th -- th) Pops `|- f=g` and `|- a=b`, pushes `|- f a=g b`.";
   "thass", [], "(expr -- th) Pops `e`, pushes `e |- e`.";
@@ -78,6 +83,7 @@ let instrs: (string*op_arg list*doc) list = [
   "thbeq", [], "(th th -- th) Pops th2, th1, pushes `bool_eq th1 th2`.";
   "thbeqi", [], "(th th -- th) Pops th2, th1, pushes `bool_eq_intro th1 th2`.";
   "thbeta", [], "(expr -- th) Pops `(\x. t) u`, pushes `|- (\x.t) u = t[x:=u]`.";
+  "thsubst", [], "(th subst -- th) Instantiate the theorem with the substitution.";
   "dth", [], "(th -- []expr expr) Pops `F |- e`, pushes array `F` and conclusion `e`.";
 ]
 

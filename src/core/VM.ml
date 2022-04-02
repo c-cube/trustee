@@ -786,6 +786,21 @@ module VM_ = struct
             let e = K.Expr.const self.ctx c [ty0] in
             push_val self (Value.expr e)
 
+          | Suem ->
+            push_val self (Value.subst K.Subst.empty)
+
+          | Subinde ->
+            let e = pop_val_exn self |> Value.to_expr_exn in
+            let v = pop_val_exn self |> Value.to_var_exn in
+            let su = pop_val_exn self |> Value.to_subst_exn in
+            push_val self @@ Value.subst (K.Subst.bind su v e)
+
+          | Subindty ->
+            let e = pop_val_exn self |> Value.to_expr_exn in
+            let v = pop_val_exn self |> Value.to_var_exn in
+            let su = pop_val_exn self |> Value.to_subst_exn in
+            push_val self @@ Value.subst (K.Subst.bind su v e)
+
           | Devar ->
             let e = pop_val_exn self |> Value.to_expr_exn in
             begin match K.Expr.view e with
@@ -892,6 +907,12 @@ module VM_ = struct
           | Thbeta ->
             let e = pop_val_exn self |> Value.to_expr_exn in
             let th = K.Thm.beta_conv self.ctx e in
+            push_val self (Value.thm th)
+
+          | Thsubst ->
+            let su = pop_val_exn self |> Value.to_subst_exn in
+            let th = pop_val_exn self |> Value.to_thm_exn in
+            let th = K.Thm.subst ~recursive:false self.ctx th su in
             push_val self (Value.thm th)
 
           | Dth ->
@@ -1175,6 +1196,35 @@ module Parser = struct
         | "aset" -> CB.add_instr self.cb I.Aset
         | "alen" -> CB.add_instr self.cb I.Alen
         | "aclear" -> CB.add_instr self.cb I.Aclear
+        | "suem" -> CB.add_instr self.cb I.Suem;
+        | "subinde" -> CB.add_instr self.cb I.Subinde;
+        | "subindty" -> CB.add_instr self.cb I.Subindty;
+        | "type" -> CB.add_instr self.cb I.Type
+        | "var" -> CB.add_instr self.cb I.Var
+        | "vty" -> CB.add_instr self.cb I.Vty
+        | "tyarr" -> CB.add_instr self.cb I.Tyarr
+        | "evar" -> CB.add_instr self.cb I.Evar
+        | "eapp" -> CB.add_instr self.cb I.Eapp
+        | "elam" -> CB.add_instr self.cb I.Elam
+        | "econst" -> CB.add_instr self.cb I.Econst
+        | "econst0" -> CB.add_instr self.cb I.Econst0
+        | "econst1" -> CB.add_instr self.cb I.Econst1
+        | "deapp" -> CB.add_instr self.cb I.Deapp
+        | "delam" -> CB.add_instr self.cb I.Delam
+        | "devar" -> CB.add_instr self.cb I.Devar
+        | "deconst" -> CB.add_instr self.cb I.Deconst
+        | "thabs" -> CB.add_instr self.cb I.Thabs
+        | "thcongr" -> CB.add_instr self.cb I.Thcongr
+        | "thass" -> CB.add_instr self.cb I.Thass
+        | "thcut" -> CB.add_instr self.cb I.Thcut
+        | "threfl" -> CB.add_instr self.cb I.Threfl
+        | "thsym" -> CB.add_instr self.cb I.Thsym
+        | "thtrans" -> CB.add_instr self.cb I.Thtrans
+        | "thbeq" -> CB.add_instr self.cb I.Thbeq
+        | "thbeqi" -> CB.add_instr self.cb I.Thbeqi
+        | "thbeta" -> CB.add_instr self.cb I.Thbeta
+        | "thsubst" -> CB.add_instr self.cb I.Thsubst
+        | "dth" -> CB.add_instr self.cb I.Dth
         | "curch" ->  CB.add_instr self.cb I.Curch
         | _ ->
           (* look for a primitive of that name *)
