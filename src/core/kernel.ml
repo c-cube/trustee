@@ -130,7 +130,7 @@ module Expr_set = struct
     Int_map.union (fun _ e1 e2 -> assert (expr_eq e1 e2); e1) a b
   let exists f self =
     try
-      Int_map.iter (fun _ e -> if not (f e) then raise_notrace Exit) self; false
+      Int_map.iter (fun _ e -> if f e then raise_notrace Exit) self; false
     with Exit -> true
   let subset a b =
     try
