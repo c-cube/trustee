@@ -3,4 +3,4 @@
   (name trustee_opentheory)
   (public_name trustee-opentheory)
   (flags :standard -warn-error -a+8 -open Trustee_core.Sigs)
-  (libraries containers trustee.core))
+  (libraries containers trustee.core tiny_httpd))

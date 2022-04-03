@@ -34,6 +34,7 @@
     (dune (>= "2.0"))
     (containers (and (>= 3.6) (< 4.0)))
     (trustee (= :version))
+    (tiny_httpd (>= 0.12))
     (odoc :with-doc)))
 
 (package

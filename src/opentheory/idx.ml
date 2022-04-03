@@ -1,4 +1,5 @@
 
+open Common_
 type path = string
 
 (* TODO: interpretations *)
@@ -12,6 +13,14 @@ type t = {
   articles: path Str_tbl.t; (* basename -> path *)
   errors: (path * Trustee_core.Error.t) list;
 }
+
+let find_thy (self:t) name : Thy_file.t =
+  try Str_tbl.find self.thy_by_name name
+  with Not_found -> Error.failf (fun k->k"cannot find theory %S" name)
+
+let find_article self name : string =
+  try Str_tbl.find self.articles name
+  with Not_found -> Error.failf (fun k->k"cannot find article %S" name)
 
 (* gen util(s) *)
 module G = struct

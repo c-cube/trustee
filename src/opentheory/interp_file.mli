@@ -4,6 +4,7 @@
     See http://www.gilith.com/opentheory/interpretation.html
 *)
 
+open Common_
 type 'a or_error = 'a Trustee_core.Error.or_error
 
 type item =
@@ -17,6 +18,8 @@ val items_iter : t -> item Iter.t
 val is_empty : t -> bool
 
 val pp : t Fmt.printer
+
+val to_html : t -> Html.elt
 
 module P = CCParse
 

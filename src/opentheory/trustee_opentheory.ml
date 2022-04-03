@@ -5,6 +5,8 @@
     articles and theories.
     *)
 
+module Common_ = Common_
+
 module Name = Name
 module Article = Article
 module VM = VM

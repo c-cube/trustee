@@ -1,5 +1,6 @@
 
 open Trustee_core
+open Common_
 let spf = Printf.sprintf
 
 type sub = {
@@ -34,6 +35,105 @@ let pp out (self:t) : unit =
   List.iter (fun (k,v) -> Fmt.fprintf out "%s: %s@," k v) self.meta;
   List.iter (fun sub -> Fmt.fprintf out "%a@," pp_sub sub) self.subs;
   Fmt.fprintf out "@]"
+
+let sub_to_table (self:sub) =
+  let open Html in
+  [
+    sub_e @@ tr[][
+      td[][ txt "name"];
+      td[] [txt self.sub_name];
+    ];
+    (if self.imports=[] then sub_empty
+     else
+       sub_e @@ tr[] [
+         td[][txt  "imports"];
+         td[] [
+           ul[](
+             List.map
+               (fun s -> li[][txt s])
+               self.imports)
+         ];
+       ]);
+    (match self.package with
+     | None -> sub_empty
+     | Some p ->
+       sub_e @@ tr[] [
+         td[][txt  "package"];
+         td[] [ a [A.href (spf "/thy/%s" p)] [txt p] ]
+       ]);
+    (match self.article with
+     | None -> sub_empty
+     | Some art ->
+       sub_e @@ tr[] [
+         td[][txt "article"];
+         td[] [
+           a [A.href (spf "/art/%s" (H.Util.percent_encode art))]
+             [txt art]
+         ];
+       ]);
+    (if Interp_file.is_empty self.interp
+     then sub_empty
+     else
+       sub_e @@ tr[] [
+         td[][txt  "interpretation"];
+         td[] [details[][
+             summary[][txt "interpretation"];
+             Interp_file.to_html self.interp;
+           ]];
+       ]);
+  ]
+
+let sub_to_html (self:sub) : Html.elt =
+  Html.(
+    div [A.class_ "container thy_sub"][
+      table'[cls "table table-sm table-striped table-bordered"] @@
+      sub_to_table self
+    ]
+  )
+
+let to_html (self:t) : Html.elt =
+  Html.(
+    div[cls "container"][
+      h3[][ txt "theory file"];
+      table'[cls "table table-sm table-striped"][
+        sub_e @@ tr[] [
+          td[][txt "name"];
+          td[] [txt self.name];
+        ];
+        sub_e @@ tr[] [
+          td[][txt "version"];
+          td[] [txt self.version];
+        ];
+        sub_e @@ tr[] [
+          td[][txt "requires"];
+          td[] [
+            ul[] (
+              List.map (fun x -> li[][ txt x]) self.requires
+            )
+          ];
+        ];
+        sub_l (
+          List.map (fun (k,v) ->
+              tr[] [
+                td[][txtf "meta.%s" k];
+                td[] [txt v]
+              ];
+            ) self.meta
+        );
+        sub_e @@ sub_to_html self.main;
+        (if self.subs=[] then sub_empty
+         else
+           sub_e @@ tr[] [
+             td[][txt "subs"];
+             td[][
+               div [cls "container"] (
+                 List.map (fun s -> div[cls "row"][ sub_to_html s]) self.subs
+               )
+             ]
+           ]);
+      ];
+    ]
+  )
 
 let name self = self.name
 let versioned_name self = spf "%s-%s" self.name self.version
@@ -129,7 +229,7 @@ let parse ~dir : t P.t =
                 (function (I_kv ("package",s)) -> Some s | _ -> None) l
             and article =
               CCList.find_map
-                (function (I_kv ("article",s)) -> Some s | _ -> None) l
+                (function (I_kv ("article",s)) -> Some (Util.unquote_str s) | _ -> None) l
             in
             let interp =
               CCList.flat_map

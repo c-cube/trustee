@@ -1,4 +1,5 @@
 open Trustee_core
+open Common_
 type 'a or_error = 'a Trustee_core.Error.or_error
 
 type item =
@@ -18,6 +19,14 @@ let pp_item out = function
 let pp out self =
   Fmt.fprintf out "@[<v>%a@]" (Fmt.list pp_item) self
 
+let item_to_html i = Html.txtf "%a" pp_item i
+
+let to_html (self:t) =
+  Html.(
+    div["class", "interpretation"][
+      ul [] (List.map (fun i -> li[][item_to_html i]) self)
+    ]
+  )
 
 module P = CCParse
 

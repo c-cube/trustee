@@ -1,6 +1,8 @@
 
 (** {1 Theory files} *)
 
+open Common_
+
 type sub = {
   sub_name: string;
   imports: string list;
@@ -20,6 +22,9 @@ type t = {
 
 val pp_sub : sub Fmt.printer
 val pp : t Fmt.printer
+
+val sub_to_html : sub -> Html.elt
+val to_html : t -> Html.elt
 
 val equal : t -> t -> bool
 val hash : t -> int

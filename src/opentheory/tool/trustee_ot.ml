@@ -1,6 +1,6 @@
 
 open Trustee_opentheory
-
+open Common_
 module K = Trustee_core.Kernel
 module Log = Trustee_core.Log
 
@@ -50,7 +50,7 @@ let check = ref []
 let check_all = ref false
 let progress_ = ref false
 
-let main ~dir () =
+let main ~dir ~serve ~port () =
   let idx =
     let t1 = now() in
     let r = Idx.list_dir dir in
@@ -58,33 +58,46 @@ let main ~dir () =
     r
   in
   if !print then print_all idx;
-  let theories = Iter.of_list idx.Idx.theories |> Iter.map snd in
-  if !check_all then (
-    check_ idx
-      ~progress_bar:!progress_ ~names:(Iter.map Thy_file.name theories);
-  ) else if !check <> [] then (
-    check_ idx
-      ~progress_bar:!progress_ ~names:(Iter.of_list !check)
+  if serve then Serve.serve idx ~port
+  else (
+    let theories = Iter.of_list idx.Idx.theories |> Iter.map snd in
+    if !check_all then (
+      check_ idx
+        ~progress_bar:!progress_ ~names:(Iter.map Thy_file.name theories);
+    ) else if !check <> [] then (
+      check_ idx
+        ~progress_bar:!progress_ ~names:(Iter.of_list !check)
+    );
   );
   ()
+
+(* TODO: use Logs *)
 
 let () =
   let dir = ref "" in
   let color = ref true in
+  let serve = ref false in
+  let port = ref 8089 in
+  let set_debug n =
+    if n>1 then H._enable_debug true;
+    Log.set_level n
+  in
   let opts = [
-    "-dir", Arg.Set_string dir, " set opentheory directory";
-    "-print", Arg.Set print, " print the list of theories";
-    "-check", Arg.Rest (fun s->check := s :: !check), " check given theories";
-    "-check-all", Arg.Set check_all, " check all";
+    "--dir", Arg.Set_string dir, " set opentheory directory";
+    "--print", Arg.Set print, " print the list of theories";
+    "--check", Arg.Rest (fun s->check := s :: !check), " check given theories";
+    "--check-all", Arg.Set check_all, " check all";
     "-nc", Arg.Clear color, " disable colors";
-    "-d", Arg.Int Log.set_level, " set debug level";
+    "-d", Arg.Int set_debug, " set debug level";
     "--progress", Arg.Set progress_, " progress bar";
-    "-p", Arg.Set progress_, " progress bar";
+    "--serve", Arg.Set serve, " launch web server";
+    "-p", Arg.Set_int port, " set port for web server";
+    "--progress", Arg.Set progress_, " progress bar";
     "--bt", Arg.Unit (fun()->Printexc.record_backtrace true), " record backtraces";
   ] |> Arg.align in
   Arg.parse opts (fun _ -> failwith "invalid option") "trustee_ot [option*]";
   if !color then Fmt.set_color_default true;
-  try main ~dir:!dir ()
+  try main ~dir:!dir ~serve:!serve ~port:!port ()
   with Trustee_core.Error.E err as exn ->
     Fmt.eprintf "%a@." Trustee_core.Error.pp err;
     raise exn

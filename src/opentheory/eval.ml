@@ -154,7 +154,6 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
 
     | None, Some art_name ->
       (* article block *)
-      let art_name = unquote_str art_name in
       let file =
         try Str_tbl.find self.idx.Idx.articles art_name
         with Not_found ->
