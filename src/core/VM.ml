@@ -468,13 +468,13 @@ module VM_ = struct
 
   (* reset state entirely *)
   let reset (self:t) : unit =
-    let { stack; call_stack; ip=_; call_prim=_;
+    let { stack; call_stack; ip=_; call_prim;
           call_restore_ip; regs; debug_hook=_; } = self in
     self.ip <- 0;
-    Vec.clear self.call_stack;
-    Vec.clear self.call_restore_ip;
+    Vec.clear call_stack;
+    Vec.clear call_restore_ip;
     Vec.clear stack;
-    Vec.clear self.call_prim;
+    Vec.clear call_prim;
     Vec.clear regs;
     self.debug_hook <- None;
     ()
@@ -541,7 +541,7 @@ module VM_ = struct
       (* print registers *)
       if c.c_n_regs > 0 then (
         for i=0 to c.c_n_regs-1 do
-          let v = Vec.get self.regs (Vec.size self.regs - c.c_n_regs + i) in
+          let v = Vec.get regs (Vec.size regs - c.c_n_regs + i) in
           Fmt.fprintf out "@,reg[%d]: %a" i Value.pp_short v;
         done;
       );
@@ -549,7 +549,7 @@ module VM_ = struct
       Fmt.fprintf out "@;<1 -2>}@]";
     );
 
-    if Vec.is_empty self.stack then (
+    if Vec.is_empty stack then (
       Fmt.fprintf out "@,operand stack: []"
     ) else (
       Fmt.fprintf out "@,@[<v2>operand stack: [@ ";
@@ -922,6 +922,8 @@ module VM_ = struct
             push_val self (Value.array hyps);
             let concl = K.Thm.concl th in
             push_val self (Value.expr concl);
+
+          | Stopexec -> raise Stop_exec
         )
 
       done
@@ -1225,6 +1227,7 @@ module Parser = struct
         | "thbeta" -> CB.add_instr self.cb I.Thbeta
         | "thsubst" -> CB.add_instr self.cb I.Thsubst
         | "dth" -> CB.add_instr self.cb I.Dth
+        | "stopexec" -> CB.add_instr self.cb I.Stopexec
         | "curch" ->  CB.add_instr self.cb I.Curch
         | _ ->
           (* look for a primitive of that name *)

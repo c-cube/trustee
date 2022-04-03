@@ -73,7 +73,7 @@ let instrs: (string*op_arg list*doc) list = [
   "subinde", [], "(subst v e -- subst) Binds var `v` to expression `e`.";
   "subindty", [], "(subst v ty -- subst) Binds var `v` to type `ty`.";
 
-  "thabs", [], "(th var -- th) Pops `|- t=u` and `v`, pushes `|- \v.t=\v.u`.";
+  "thabs", [], {|(th var -- th) Pops `|- t=u` and `v`, pushes `|- \v.t=\v.u`.|};
   "thcongr", [], "(th th -- th) Pops `|- f=g` and `|- a=b`, pushes `|- f a=g b`.";
   "thass", [], "(expr -- th) Pops `e`, pushes `e |- e`.";
   "thcut", [], "(th th -- th) Pops th2, th1, pushes `cut th1 th2`.";
@@ -82,9 +82,10 @@ let instrs: (string*op_arg list*doc) list = [
   "thtrans", [], "(th th -- th) Pops th2, th1, pushes `trans th1 th2`.";
   "thbeq", [], "(th th -- th) Pops th2, th1, pushes `bool_eq th1 th2`.";
   "thbeqi", [], "(th th -- th) Pops th2, th1, pushes `bool_eq_intro th1 th2`.";
-  "thbeta", [], "(expr -- th) Pops `(\x. t) u`, pushes `|- (\x.t) u = t[x:=u]`.";
+  "thbeta", [], {|(expr -- th) Pops `(\x. t) u`, pushes `|- (\x.t) u = t[x:=u]`.|};
   "thsubst", [], "(th subst -- th) Instantiate the theorem with the substitution.";
   "dth", [], "(th -- []expr expr) Pops `F |- e`, pushes array `F` and conclusion `e`.";
+  "stopexec", [], "( -- ) Stop execution of this thunk.";
 ]
 
 let emit_ty (name,args,doc) =
