@@ -4,6 +4,10 @@
 open Sigs
 module H = CCHash
 
+(* NOTE: this seems slightly faster than Patricia trees,
+   if run on opentheory *)
+module Int_map = CCMap.Make(CCInt)
+
 let ctx_id_bits = 5
 let ctx_id_mask = (1 lsl ctx_id_bits) - 1
 
@@ -74,7 +78,7 @@ let[@inline] var_pp out v1 = Fmt.string out v1.v_name
 
 let[@inline] sequent_eq s1 s2 =
   expr_eq s1.concl s2.concl &&
-  Int_map.equal ~eq:expr_eq s1.hyps s2.hyps
+  Int_map.equal expr_eq s1.hyps s2.hyps
 let[@inline] sequent_hash s =
   H.combine3 193 (expr_hash s.concl)
     (H.iter expr_hash @@ Iter.map snd @@ Int_map.to_iter s.hyps)
@@ -111,7 +115,7 @@ module Expr_set = struct
   let is_empty = Int_map.is_empty
   let iter k (self:t) = Int_map.iter (fun _ x -> k x) self
   let size = Int_map.cardinal
-  let equal = Int_map.equal ~eq:expr_eq
+  let equal = Int_map.equal expr_eq
   let singleton e = Int_map.singleton e.e_id e
   let mem e self = Int_map.mem e.e_id self
   let add e self = Int_map.add e.e_id e self
@@ -127,7 +131,7 @@ module Expr_set = struct
       (fun _ e acc -> add (f e) acc)
       self empty
   let union a b : t =
-    Int_map.union (fun _ e1 e2 -> assert (expr_eq e1 e2); e1) a b
+    Int_map.union (fun _ e1 e2 -> assert (expr_eq e1 e2); Some e1) a b
   let exists f self =
     try
       Int_map.iter (fun _ e -> if f e then raise_notrace Exit) self; false
@@ -701,6 +705,7 @@ module Expr = struct
             if recursive then loop 0 u else u
           | exception Not_found -> var ctx v
         end
+      | E_const (_, []) -> e
       | _ ->
         map ctx e ~f:(fun inb u -> loop (if inb then k+1 else k) u)
     in
@@ -1175,7 +1180,7 @@ module Thm = struct
     Expr.equal (Expr.bool ctx) ty
 
   let assume ctx (e:Expr.t) : t =
-    Error.guard (Error.wrapf "in assume `@[%a@]`:" Expr.pp e) @@ fun () ->
+    Error.guard (fun err -> Error.wrapf "in assume `@[%a@]`:" Expr.pp e err) @@ fun () ->
     ctx_check_e_uid ctx e;
     if not (is_bool_ ctx e) then (
       Error.fail "assume takes a boolean"
@@ -1199,7 +1204,7 @@ module Thm = struct
 
   let cut ctx th1 th2 : t =
     Error.guard
-      (Error.wrapf "@[<2>in cut@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2)
+      (fun e -> Error.wrapf "@[<2>in cut@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2 e)
     @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
@@ -1213,7 +1218,7 @@ module Thm = struct
 
   let congr ctx th1 th2 : t =
     Error.guard
-      (Error.wrapf "@[<2>in congr@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2)
+      (fun err -> Error.wrapf "@[<2>in congr@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2 err)
     @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
@@ -1243,7 +1248,7 @@ module Thm = struct
     make_ ctx hyps concl
 
   let sym ctx th : t =
-    Error.guard (Error.wrapf "@[<2>in sym@ `@[%a@]`@]:" pp th) @@ fun () ->
+    Error.guard (fun err -> Error.wrapf "@[<2>in sym@ `@[%a@]`@]:" pp th err) @@ fun () ->
     ctx_check_th_uid ctx th;
     match Expr.unfold_eq (concl th) with
     | None -> Error.failf (fun k->k"sym: concl of %a@ should be an equation" pp th)
@@ -1252,7 +1257,7 @@ module Thm = struct
 
   let trans ctx th1 th2 : t =
     Error.guard
-      (Error.wrapf "@[<2>in trans@ %a@ %a@]:" pp_quoted th1 pp_quoted th2)
+      (fun err -> Error.wrapf "@[<2>in trans@ %a@ %a@]:" pp_quoted th1 pp_quoted th2 err)
     @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
@@ -1269,8 +1274,8 @@ module Thm = struct
 
   let bool_eq ctx th1 th2 : t =
     Error.guard
-      (Error.wrapf "@[<hv2>in bool_eq@ th1=%a@ th2=%a@]:"
-         pp_quoted th1 pp_quoted th2)
+      (fun err -> Error.wrapf "@[<hv2>in bool_eq@ th1=%a@ th2=%a@]:"
+         pp_quoted th1 pp_quoted th2 err)
     @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
@@ -1292,8 +1297,8 @@ module Thm = struct
 
   let bool_eq_intro ctx th1 th2 : t =
     Error.guard
-      (Error.wrapf "@[<2>in bool_eq_intro@ th1=`@[%a@]`@ th2=`@[%a@]`@]:"
-         pp th1 pp th2)
+      (fun err -> Error.wrapf "@[<2>in bool_eq_intro@ th1=`@[%a@]`@ th2=`@[%a@]`@]:"
+         pp th1 pp th2 err)
     @@ fun () ->
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
@@ -1307,7 +1312,7 @@ module Thm = struct
     make_ ctx hyps (Expr.app_eq ctx e1 e2)
 
   let beta_conv ctx e : t =
-    Error.guard (Error.wrapf "@[<2>in beta-conv `@[%a@]`:" Expr.pp e) @@ fun () ->
+    Error.guard (fun err -> Error.wrapf "@[<2>in beta-conv `@[%a@]`:" Expr.pp e err) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.view e with
     | E_app (f, a) ->
@@ -1323,7 +1328,7 @@ module Thm = struct
       Error.failf (fun k->k"not a redex: %a not an application" Expr.pp e)
 
   let abs ctx v th : t =
-    Error.guard (Error.wrapf "@[<2>in abs :var %a `@[%a@]`:" Var.pp v pp th) @@ fun () ->
+    Error.guard (fun err -> Error.wrapf "@[<2>in abs :var %a `@[%a@]`:" Var.pp v pp th err) @@ fun () ->
     ctx_check_th_uid ctx th;
     ctx_check_e_uid ctx v.v_ty;
     match Expr.unfold_eq th.th_seq.concl with
@@ -1337,7 +1342,7 @@ module Thm = struct
     | None -> Error.failf (fun k->k"conclusion of `%a`@ is not an equation" pp th)
 
   let new_basic_definition ctx (e:expr) : t * const =
-    Error.guard (Error.wrapf "@[<2>in new-basic-def@ `@[%a@]`@]:" Expr.pp e) @@ fun () ->
+    Error.guard (fun err -> Error.wrapf "@[<2>in new-basic-def@ `@[%a@]`@]:" Expr.pp e err) @@ fun () ->
     ctx_check_e_uid ctx e;
     match Expr.unfold_eq e with
     | None ->
@@ -1374,8 +1379,8 @@ module Thm = struct
       ?ty_vars:provided_ty_vars
       ~name ~abs ~repr ~thm_inhabited () : New_ty_def.t =
     Error.guard
-      (Error.wrapf "@[<2>in new-basic-ty-def :name %s@ :thm `@[%a@]`@]:"
-         name pp thm_inhabited)
+      (fun err -> Error.wrapf "@[<2>in new-basic-ty-def :name %s@ :thm `@[%a@]`@]:"
+         name pp thm_inhabited err)
     @@ fun () ->
     ctx_check_th_uid ctx thm_inhabited;
     if has_hyps thm_inhabited then (
@@ -1502,7 +1507,7 @@ module Theory = struct
   let assume self hyps concl : thm =
     let ctx = self.theory_ctx in
     Error.guard
-      (Error.wrapf "in theory_assume@ `@[%a@ |- %a@]`:" (pp_list Expr.pp) hyps Expr.pp concl)
+      (fun err -> Error.wrapf "in theory_assume@ `@[%a@ |- %a@]`:" (pp_list Expr.pp) hyps Expr.pp concl err)
     @@ fun () ->
     if not (Thm.is_bool_ ctx concl && List.for_all (Thm.is_bool_ ctx) hyps) then (
       Error.fail "Theory.assume: all terms must be booleans"
