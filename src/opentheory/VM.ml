@@ -95,7 +95,7 @@ let pp out self : unit =
     pp_vm self Article.pp (article self)
 
 let pp_stats out self : unit =
-  Fmt.fprintf out "(@[:n-cuts %d :n-absThm %d@ :n-appThm %d@ :n-subst %d@])"
+  Fmt.fprintf out "(@[vm.stats@ :n-cuts %d :n-absThm %d@ :n-appThm %d@ :n-subst %d@])"
     self.n_cut self.n_absThm self.n_appThm self.n_subst
 
 let to_string = Fmt.to_string pp

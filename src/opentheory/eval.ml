@@ -127,10 +127,8 @@ and eval_rec_real_ (self:state) uv_name (th:Thy_file.t) : K.Theory.t * eval_info
   self.cb#start_theory uv_name;
 
   (* process theories implementing requirements of this one requires *)
-  let requires, subs =
-    let l = List.map (fun r -> r, process_requires_ self th r) th.requires in
-    List.map (fun (_,(th,_)) -> th) l,
-    List.map (fun (s,(_,ei)) -> s, ei) l
+  let requires =
+    List.map (fun r -> fst @@ process_requires_ self th r) th.requires
   in
 
   let t0 = now() in
@@ -138,9 +136,8 @@ and eval_rec_real_ (self:state) uv_name (th:Thy_file.t) : K.Theory.t * eval_info
   let main = th.Thy_file.main in (* start with `main` sub-package *)
   let res =
     try
-      let res, ei = check_sub_ ~requires self th main in
-      let ei = {ei with sub=subs} in
-      Ok (res, ei)
+      let r = check_sub_ ~requires self th main in
+      Ok r
     with Exit e -> Error e
   in
 
