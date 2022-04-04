@@ -1,7 +1,7 @@
 
 (** {1 Evaluate theories} *)
 
-module K = Trustee_core.Kernel
+open Common_
 type 'a or_error = 'a Trustee_core.Error.or_error
 
 (** {2 Callbacks for the checking process} *)
@@ -28,10 +28,18 @@ val create :
   unit ->
   state
 
+type eval_info = {
+  info: string;
+  time: float;
+  sub: (string * eval_info) list;
+}
+
+val eval_info_to_html : eval_info -> Html.elt
+
 val eval_theory :
   state ->
   string ->
-  K.Theory.t or_error
+  (K.Theory.t * eval_info) or_error
 (** [eval_theory st name] builds and
     returns the theory with given name from the index.
     The theory will be cached, as will any theory it depends on. *)

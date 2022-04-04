@@ -131,7 +131,7 @@ let to_html (self:t) : Html.elt =
            sub_e @@ tr[] [
              td[][txt "subs"];
              td[][
-               details [A.open_ ""] (
+               details [] (
                  summary [] [txtf "%d subs" (List.length self.subs)] ::
                  List.map (fun s -> div[cls "row"][ sub_to_html s]) self.subs
                )

@@ -1,7 +1,7 @@
 
 (** {1 Evaluate theories} *)
 
-module K = Trustee_core.Kernel
+open Common_
 module Log = Trustee_core.Log
 type 'a or_error = 'a Trustee_core.Error.or_error
 
@@ -43,11 +43,45 @@ end
 
 (* ## main checking state ## *)
 
+type eval_info = {
+  info: string;
+  time: float;
+  sub: (string * eval_info) list;
+}
+
+let rec eval_info_to_html (self:eval_info) =
+  Html.(
+    table' [cls "table table-sm"] [
+      sub_e @@ tr[] [
+        td[][txt "time:"];
+        td[][txtf "%3.fs" self.time]
+      ];
+      sub_e @@ tr[] [
+        td[][txt "info:"];
+        td[][p[][txt self.info]];
+      ];
+      (if self.sub =[] then sub_empty
+       else (
+         sub_l (
+           List.map (fun (s,ei) ->
+               tr[][
+                 td[][txtf "sub.%s:" s];
+                 td[][ eval_info_to_html ei]
+               ])
+             self.sub
+         )
+       ));
+    ]
+  )
+
+let mk_ei ~time ~info ?(sub=[]) () : eval_info =
+  { sub; time; info }
+
 type state = {
   ctx: K.ctx;
   idx: Idx.t;
   progress_bar: bool;
-  theories: K.Theory.t or_error Str_tbl.t;
+  theories: (K.Theory.t * eval_info) or_error Str_tbl.t;
   cb: callbacks;
 }
 
@@ -68,7 +102,7 @@ let interpr_of_sub (sub:Thy_file.sub) : K.Theory.interpretation =
   |> Str_map.of_iter
 
 (* check a theory *)
-let rec eval_rec_ (self:state) (n:string) : K.Theory.t =
+let rec eval_rec_ (self:state) (n:string) : K.Theory.t * eval_info =
   let th = Idx.find_thy self.idx n in
   let uv_name = Thy_file.name th in  (* un-versioned name *)
 
@@ -89,36 +123,48 @@ let rec eval_rec_ (self:state) (n:string) : K.Theory.t =
       | Error e -> raise (Exit e)
   end
 
-and eval_rec_real_ (self:state) uv_name (th:Thy_file.t) : K.Theory.t =
+and eval_rec_real_ (self:state) uv_name (th:Thy_file.t) : K.Theory.t * eval_info =
   self.cb#start_theory uv_name;
 
   (* process theories implementing requirements of this one requires *)
-  let requires = List.map (process_requires_ self th) th.requires in
+  let requires, subs =
+    let l = List.map (fun r -> r, process_requires_ self th r) th.requires in
+    List.map (fun (_,(th,_)) -> th) l,
+    List.map (fun (s,(_,ei)) -> s, ei) l
+  in
 
-  let t1 = now() in
+  let t0 = now() in
 
   let main = th.Thy_file.main in (* start with `main` sub-package *)
   let res =
-    try Ok (check_sub_ ~requires self th main)
+    try
+      let res, ei = check_sub_ ~requires self th main in
+      let ei = {ei with sub=subs} in
+      Ok (res, ei)
     with Exit e -> Error e
   in
 
   let ok = CCResult.is_ok res in
-  self.cb#done_theory uv_name ~ok ~time_s:(since_s t1);
+  self.cb#done_theory uv_name ~ok ~time_s:(since_s t0);
 
   begin match res with
-    | Ok theory ->
+    | Ok (theory, ei) ->
       Log.debugf 4 (fun k->k"(@[@{<green>eval.success@}@ %a@])" K.Theory.pp theory);
-      theory
+      theory, ei
     | Error e ->
       Log.debugf 1 (fun k->k"(@[@{<red>eval.failure@}@ %a@])" Trustee_core.Error.pp e);
       raise (Exit e)
   end
 
 (* check a sub-entry of a theory file *)
-and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
+and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t * eval_info =
   (* process imports *)
-  let imports = List.map (process_import_ ~requires self th) sub.Thy_file.imports in
+  let imports, subs =
+    let l = List.map (fun i -> i, process_import_ ~requires self th i)
+        sub.Thy_file.imports in
+    List.map (fun (_,(th,_)) -> th) l,
+    List.map (fun (s,(_,ei)) -> s, ei) l
+  in
   assert (Option.is_none sub.Thy_file.package || Option.is_none sub.Thy_file.article);
 
   (* name to give the resulting theory *)
@@ -135,16 +181,36 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
             sub.Thy_file.sub_name th.Thy_file.name)
     | None, None ->
       (* union of imports *)
-      K.Theory.union self.ctx ~name:th_name imports
+      let t0 = now() in
+      let r = K.Theory.union self.ctx ~name:th_name imports in
+
+      let ei =
+        mk_ei ~time:(since_s t0)
+          ~info:(spf "union [%s]" (String.concat ", " @@ List.map fst subs)) ()
+      in
+      r, ei
 
     | Some p, None ->
       (* package block *)
-      let th_p = eval_rec_ self p in
+
+      let t0 = now () in
+      let th_p, ei0 = eval_rec_ self p in
       let interp = interpr_of_sub sub in
+
       begin
-        if imports=[] && Str_map.is_empty interp then th_p
-        else if imports=[] then K.Theory.instantiate ~interp:interp th_p
-        else K.Theory.compose ~interp:interp imports th_p
+        if imports=[] && Str_map.is_empty interp then (
+          th_p, ei0
+        ) else if imports=[] then (
+          K.Theory.instantiate ~interp:interp th_p,
+          mk_ei ~time:(now() -. t0) ~info:"instantiate"
+            ~sub:(("th", ei0) :: subs) ()
+        ) else (
+          K.Theory.compose ~interp:interp imports th_p,
+          mk_ei ~time:(now() -. t0)
+            ~info:(spf "compose %s with [%s]" p
+                     (String.concat ", " @@ List.map fst subs))
+            ~sub:(("th", ei0) :: subs) ()
+        )
       end
 
     | None, Some art_name ->
@@ -155,7 +221,7 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
           Trustee_core.Error.failf (fun k->k"cannot find article `%s`" art_name)
       in
 
-      let t1 = now () in
+      let t0 = now () in
 
       (* VM for the article has both imports and requires in scope *)
       let vm =
@@ -168,14 +234,16 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
         (fun ic ->
            let input = VM.Input.of_chan ic in
            let th, art = VM.parse_and_check_art_exn ~name:art_name vm input in
-           self.cb#done_article art_name art ~time_s:(since_s t1);
+           self.cb#done_article art_name art ~time_s:(since_s t0);
            Log.debugf 1 (fun k->k"vm stats: %a" VM.pp_stats vm);
-           th
+           let vm_stat = Fmt.to_string VM.pp_stats vm in
+           let ei = mk_ei ~time:(since_s t0) ~info:vm_stat () in
+           th, ei
         )
   end
 
 (* process an import of a sub, by checking it recursively now *)
-and process_import_ (self:state) ~requires th (name:string) : K.Theory.t =
+and process_import_ (self:state) ~requires th (name:string) : K.Theory.t * _ =
   let sub =
     try List.find (fun sub -> sub.Thy_file.sub_name=name) th.Thy_file.subs
     with Not_found -> Trustee_core.Error.failf (fun k->k"cannot find sub-theory `%s`" name)
@@ -183,9 +251,9 @@ and process_import_ (self:state) ~requires th (name:string) : K.Theory.t =
   check_sub_ self ~requires th sub
 
 (* process a require, looking for a theory with that name *)
-and process_requires_ self _th (name:string) : K.Theory.t =
+and process_requires_ self _th (name:string) : K.Theory.t * _ =
   eval_rec_ self name
 
-let eval_theory (self:state) name0 : K.Theory.t or_error =
+let eval_theory (self:state) name0 : (K.Theory.t * eval_info) or_error =
   try Ok (eval_rec_ self name0)
   with Exit e -> Error e

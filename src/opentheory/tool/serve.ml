@@ -142,9 +142,10 @@ let h_eval (self:state) : unit =
 
   let open Html in
   begin match res with
-    | Ok th ->
+    | Ok (th,ei) ->
       let res = [
-        (* pre [] [txtf "vm stats: %a" VM.*)
+        h3[] [txt "Evaluation information"];
+        Eval.eval_info_to_html ei;
         Render.theory_to_html ~config th;
       ] in
       reply_page ~title:(spf "eval %s" thy_name) req res
