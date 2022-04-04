@@ -15,3 +15,4 @@ module Idx = Idx
 module Interp_file = Interp_file
 module Util = Util
 module Eval = Eval
+module Logger = Logger

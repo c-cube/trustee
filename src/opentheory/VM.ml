@@ -127,7 +127,7 @@ let absThm : rule = fun _ self ->
 (* create a type constant, with local type inference since OT
    gives us only the expected type of the constant *)
 let mk_defined_ty_ c =
-  Log.debugf 1 (fun k->k"mk type const %a" K.Const.pp c);
+  Log.debugf 3 (fun k->k"mk type const %a" K.Const.pp c);
   match K.Const.args c with
   | K.Const.C_arity 0 ->
     (* non-polymorphic constant *)
@@ -227,7 +227,7 @@ let var : rule = fun _ self ->
 (* create a defined constant, with local type inference since OT
    gives us only the expected type of the constant *)
 let mk_defined_const_ c =
-  Log.debugf 1 (fun k->k"mk defined const %a@ :args %a" K.Const.pp c
+  Log.debugf 3 (fun k->k"mk defined const %a@ :args %a" K.Const.pp c
                K.Const.pp_args (K.Const.args c));
   match K.Const.args c with
   | K.Const.C_arity _ -> Error.failf (fun k->k"not a term const: %a" K.Const.pp c)
@@ -363,7 +363,7 @@ let defineConstList : rule = fun theory self ->
       |> K.Var.Set.of_iter
     in
     if not (K.Var.Set.subset fvars_concl vars) then (
-      Log.debugf 2 (fun k->k"thm: %a" K.Thm.pp th);
+      Log.debugf 3 (fun k->k"thm: %a" K.Thm.pp th);
       Error.failf
         (fun k->k"defineConstList: some free vars are not in hypothesis@ \
                   :fvars-concl %a@ :vars %a"

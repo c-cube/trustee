@@ -56,11 +56,6 @@ let create ?(cb=new default_callbacks) ?(progress_bar=false) ~ctx ~idx () : stat
 
 exception Exit of Trustee_core.Error.t
 
-let find_th_by_name_ self n =
-  try Str_tbl.find self.idx.Idx.thy_by_name n
-  with Not_found ->
-    Trustee_core.Error.failf (fun k->k"cannot find theory `%s`" n)
-
 (* TODO: build interpretations *)
 
 let interpr_of_sub (sub:Thy_file.sub) : K.Theory.interpretation =
@@ -74,7 +69,7 @@ let interpr_of_sub (sub:Thy_file.sub) : K.Theory.interpretation =
 
 (* check a theory *)
 let rec eval_rec_ (self:state) (n:string) : K.Theory.t =
-  let th = find_th_by_name_ self n in
+  let th = Idx.find_thy self.idx n in
   let uv_name = Thy_file.name th in  (* un-versioned name *)
 
   (* FIXME: just skip from there? or handle errors in the theory graph? *)
@@ -181,7 +176,6 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t =
 
 (* process an import of a sub, by checking it recursively now *)
 and process_import_ (self:state) ~requires th (name:string) : K.Theory.t =
-  let name = unquote_str name in
   let sub =
     try List.find (fun sub -> sub.Thy_file.sub_name=name) th.Thy_file.subs
     with Not_found -> Trustee_core.Error.failf (fun k->k"cannot find sub-theory `%s`" name)

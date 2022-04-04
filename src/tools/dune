@@ -5,6 +5,6 @@
   (public_name trustee)
   (package trustee-itp)
   (libraries containers logs cmdliner
-             trustee.core trustee.syntax
+             trustee.core trustee.utils trustee.syntax
              trustee-itp trustee-opentheory)
   (flags :standard -open Trustee_core.Sigs))

@@ -1484,6 +1484,12 @@ end
 module Theory = struct
   type t = theory
 
+  let name self = self.theory_name
+  let param_consts self = Name_k_map.values self.theory_in_constants |> Iter.to_list
+  let param_theorems self = self.theory_in_theorems
+  let consts self = Name_k_map.values self.theory_defined_constants |> Iter.to_list
+  let theorems self = self.theory_defined_theorems
+
   let pp_name out self = Fmt.string out self.theory_name
   let pp out (self:t) : unit =
     let {theory_name=name; theory_ctx=_; theory_in_constants=inc;

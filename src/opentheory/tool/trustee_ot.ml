@@ -80,7 +80,8 @@ let () =
   let port = ref 8089 in
   let set_debug n =
     if n>1 then H._enable_debug true;
-    Log.set_level n
+    Log.set_level n;
+    Logger.setup_logs ~debug:(n>1) ~level:n ();
   in
   let opts = [
     "--dir", Arg.Set_string dir, " set opentheory directory";

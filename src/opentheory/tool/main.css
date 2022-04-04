@@ -6,9 +6,17 @@ body {
 }
 
 pre {
-  background-color: lightgrey;
+  background-color: aliceblue;
 }
 
 table {
   border: 2px;
+}
+
+td.theory-out {
+  background-color: #cef7ce;
+}
+
+td.theory-param {
+  background-color: lightcyan;
 }

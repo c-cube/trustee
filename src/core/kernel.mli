@@ -434,6 +434,8 @@ module Theory : sig
     ctx -> name:string ->
     (t -> unit) -> t
 
+  val name : t -> string
+
   val assume : t -> expr list -> expr -> thm
   (** [assume theory hyps concl] creates the theorem
       [hyps |- concl] as a parameter of the theory [theory]. *)
@@ -453,6 +455,12 @@ module Theory : sig
 
   val find_ty_const : t -> string -> ty_const option
   (** Find a type constant used or defined in this theory by its name *)
+
+  val param_consts : t -> const list
+  val param_theorems : t -> thm list
+
+  val consts : t -> const list
+  val theorems : t -> thm list
 
   (** {3 Composition} *)
 

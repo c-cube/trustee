@@ -93,7 +93,7 @@ let sub_to_html (self:sub) : Html.elt =
 
 let to_html (self:t) : Html.elt =
   Html.(
-    div[cls "container"][
+    div[][
       h3[][ txt "theory file"];
       table'[cls "table table-sm table-striped"][
         sub_e @@ tr[] [
@@ -108,7 +108,12 @@ let to_html (self:t) : Html.elt =
           td[][txt "requires"];
           td[] [
             ul[] (
-              List.map (fun x -> li[][ txt x]) self.requires
+              List.map (fun x ->
+                  li[][
+                    a[A.href (spf "/thy/%s" (H.Util.percent_encode x))][
+                      txt x
+                    ]])
+                self.requires
             )
           ];
         ];
@@ -126,7 +131,8 @@ let to_html (self:t) : Html.elt =
            sub_e @@ tr[] [
              td[][txt "subs"];
              td[][
-               div [cls "container"] (
+               details [A.open_ ""] (
+                 summary [] [txtf "%d subs" (List.length self.subs)] ::
                  List.map (fun s -> div[cls "row"][ sub_to_html s]) self.subs
                )
              ]
@@ -221,7 +227,7 @@ let parse ~dir : t P.t =
             let imports =
               CCList.filter_map
                 (function
-                  | (I_kv ("import",s)) -> Some s | _ -> None)
+                  | (I_kv ("import",s)) -> Some (Util.unquote_str s) | _ -> None)
                 l
             in
             let package =
