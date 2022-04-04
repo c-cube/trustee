@@ -35,6 +35,7 @@
     (containers (and (>= 3.6) (< 4.0)))
     (trustee (= :version))
     (tiny_httpd (>= 0.12))
+    logs
     (odoc :with-doc)))
 
 (package
