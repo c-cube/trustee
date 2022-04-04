@@ -54,7 +54,7 @@ let rec eval_info_to_html (self:eval_info) =
     table' [cls "table table-sm"] [
       sub_e @@ tr[] [
         td[][txt "time:"];
-        td[][txtf "%3.fs" self.time]
+        td[][txtf "%.3fs" self.time]
       ];
       sub_e @@ tr[] [
         td[][txt "info:"];
