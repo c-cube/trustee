@@ -136,6 +136,7 @@ let h_art (self:state) : unit =
   let art_file = Idx.find_article self.idx art in
   let content = CCIO.with_in art_file CCIO.read_all in
   let res = Html.[
+      a[A.href "http://www.gilith.com/opentheory/article.html"][txt "reference documentation"];
       h3[] [ txtf "Article %s" art ];
       p[][txtf "path: %S" art_file];
       details [][
