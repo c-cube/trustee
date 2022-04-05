@@ -57,6 +57,27 @@ let[@inline] with_lock l f =
   Mutex.lock l;
   Fun.protect ~finally:(fun () -> Mutex.unlock l) f
 
+let home_txt =
+  Html.[
+    p[][txt "Welcome to Trustee!"];
+    p[][
+      txt
+        {|Trustee is a HOL kernel implemented in OCaml, with a few unusual design choices,
+          such as the pervasive use of hashconsing, explicit type application,
+          and de Bruijn indices.|}
+    ];
+    p[][
+      a[A.href "https://github.com/c-cube/trustee"][txt "see on github."];
+    ];
+    p[][
+      txt
+        {| This website shows a proof-checker for |};
+      a[A.href "http://www.gilith.com/opentheory/"][txt "opentheory"];
+      txt {| using Trustee. This doubles as a test suite and gives an idea of
+      how performant the tool is.|};
+    ];
+  ]
+
 let h_root (self:state) : unit =
   H.add_route_handler self.server H.Route.(return) @@ fun req ->
   let@ () = top_wrap_ req in
@@ -64,6 +85,8 @@ let h_root (self:state) : unit =
   let res =
     let {OT.Idx.thy_by_name; articles; errors; _ } = self.idx in
     [
+      h2[][txt "Trustee"];
+      div[] home_txt;
       h2[][ txt "theories"];
       ul'[A.class_ "list-group"] [
         sub_l (

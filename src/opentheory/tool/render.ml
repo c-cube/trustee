@@ -27,7 +27,9 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
     | K.E_kind -> txt "kind"
     | K.E_type -> txt "type"
     | K.E_var v ->
-      span [A.title (E.to_string (K.Var.ty v))] [txt (K.Var.name v)]
+      let name = K.Var.name v in
+      let title_ = Fmt.asprintf "%s : %a" name E.pp (K.Var.ty v) in
+      span [A.title title_] [txt name]
     | K.E_bound_var v ->
 
       let idx = v.bv_idx in
@@ -38,9 +40,31 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
           if idx<k then spf "x_%d" (k-idx-1)
           else spf "%%db_%d" (idx-k)
       in
-      span [A.title (E.to_string v.bv_ty)] [txt descr]
+      let title_ = Fmt.asprintf "%s : %a" descr E.pp v.bv_ty in
+      span [A.title title_] [txt descr]
+
+    | K.E_const (c, []) ->
+      let descr = strip_name_ ~config @@ K.Const.name c in
+      let title_ =
+        Fmt.asprintf "`%a`@ ty: %a" E.pp e E.pp (E.ty_exn e) in
+      span [A.title title_] [txt descr]
+
+    | K.E_const (c, args) when E.is_a_type e ->
+      (* always write type arguments explicitly for types *)
+      let descr = strip_name_ ~config @@ K.Const.name c in
+      let title =
+        Fmt.asprintf "`%a`@ ty: %a" E.pp e E.pp (E.ty_exn e) in
+      span' [] [
+        sub_e @@ span [A.title title] [txt descr];
+        sub_l (
+          CCList.flat_map
+            (fun sub -> [txt " "; recurse' sub])
+            args
+        )
+      ]
 
     | K.E_const (c, _) ->
+      (* omit arguments *)
       let descr = strip_name_ ~config @@ K.Const.name c in
       let title =
         Fmt.asprintf "`%a`@ ty: %a" E.pp e E.pp (E.ty_exn e) in
@@ -68,9 +92,10 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
 
     | E_lam (n, ty, bod) ->
       let varname = if n="" then spf "x_%d" k else n in
+      let vartitle = Fmt.asprintf "%s : %a" varname E.pp ty in
       span[] [
         txt "λ";
-        span [A.title (E.to_string ty)] [txt varname];
+        span [A.title vartitle] [txt varname];
         txt ". ";
         loop (k+1) ~depth:(depth+1) ~names:(n::names) bod
       ]
@@ -96,12 +121,11 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
 let const_to_html ?(config=Config.make ()) (c:K.Const.t) =
   let name = strip_name_ ~config @@ K.Const.name c in
   let args = Fmt.to_string K.Const.pp_args (K.Const.args c) in
-  let ty = E.to_string (K.Const.ty c) in
   let title_ = Fmt.to_string K.Const.pp_with_ty c in
   Html.(
-    span [cls "const"; A.title title_] [
-      txt name; txt " "; txt args;
-      txt " : "; txt ty
+    span [cls "const"] [
+      span [A.title title_] [txt name]; txt " "; txt args;
+      txt " : "; expr_to_html ~config (K.Const.ty c)
     ]
   )
 
