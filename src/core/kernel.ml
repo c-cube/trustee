@@ -498,7 +498,9 @@ module Expr = struct
   let[@inline] is_a_type e = is_eq_to_type (ty_exn e)
   let is_eq_to_bool e =
     match view e with E_const (c,[]) -> String.equal c.c_name id_bool | _ -> false
-  let is_a_bool e = is_eq_to_bool (ty_exn e)
+  let[@inline] is_a_bool e = is_eq_to_bool (ty_exn e)
+  let[@inline] is_arrow e = match view e with E_arrow _ -> true | _ -> false
+  let[@inline] is_lam e = match view e with E_lam _ -> true | _ -> false
 
   let bool ctx = Lazy.force ctx.ctx_bool
 

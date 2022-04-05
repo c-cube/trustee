@@ -154,6 +154,9 @@ module Expr : sig
   val is_a_type : t -> bool
   (** Is the type of [e] equal to [Type]? *)
 
+  val is_lam : t -> bool
+  val is_arrow : t -> bool
+
   val iter : f:(bool -> t -> unit) -> t -> unit
   (** [iter ~f e] calls [f] on immediate subterms of [e].
       It calls [f true u] if [u] is an immediate subterm under a binder,

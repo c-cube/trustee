@@ -79,6 +79,25 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
             txt " = ";
             recurse' b
           ]
+
+        | E_const (c, _), [lam] when E.is_lam lam && E.is_a_bool e ->
+          (* shortcut display for binders *)
+          let n, ty, bod = match E.view lam with
+            | E_lam (n,ty,bod) -> n, ty, bod
+            | _ -> assert false
+          in
+          let varname = if n="" then spf "x_%d" k else n in
+          let vartitle = Fmt.asprintf "%s : %a" varname E.pp ty in
+          let c_name = strip_name_ ~config @@ K.Const.name c in
+          let c_title =
+            Fmt.asprintf "`%a`@ ty: %a" E.pp f E.pp (E.ty_exn f) in
+          span[] [
+            span [A.title c_title] [txt c_name];
+            span [A.title vartitle] [txt varname];
+            txt ". ";
+            loop (k+1) ~depth:(depth+1) ~names:(n::names) bod
+          ]
+
         | _ ->
           span' [][
             sub_e @@ recurse' f;
