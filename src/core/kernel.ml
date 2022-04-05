@@ -1521,7 +1521,9 @@ module Theory = struct
       Error.fail "Theory.assume: all terms must be booleans"
     );
     let hyps = Expr_set.of_list hyps in
-    {(Thm.make_ ctx hyps concl) with th_theory=Some self}
+    let th = {(Thm.make_ ctx hyps concl) with th_theory=Some self} in
+    self.theory_in_theorems <- th :: self.theory_in_theorems;
+    th
 
   let assume_const_ self (c:const) : unit =
     let kind = if Expr.is_eq_to_type c.c_ty then C_ty else C_term in
