@@ -326,7 +326,9 @@ module Const = struct
   let[@inline] ty c = c.c_ty
 
   let pp_args out = function
+    | C_arity 0 -> ()
     | C_arity n -> Fmt.fprintf out "/%d" n
+    | C_ty_vars [] -> ()
     | C_ty_vars vs -> Fmt.fprintf out " %a" (Fmt.Dump.list var_pp) vs
 
   let pp_with_ty out c =
