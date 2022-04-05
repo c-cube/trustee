@@ -93,12 +93,13 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
   in
   span [cls "expr"] [loop 0 ~depth:0 ~names:[] e]
 
-let const_to_html (c:K.Const.t) =
-  let name = K.Const.name c in
-  let args = Fmt.asprintf "%a" K.Const.pp_args (K.Const.args c) in
+let const_to_html ?(config=Config.make ()) (c:K.Const.t) =
+  let name = strip_name_ ~config @@ K.Const.name c in
+  let args = Fmt.to_string K.Const.pp_args (K.Const.args c) in
   let ty = E.to_string (K.Const.ty c) in
+  let title_ = Fmt.to_string K.Const.pp_with_ty c in
   Html.(
-    span [cls "const"; A.title ty] [
+    span [cls "const"; A.title title_] [
       txt name; txt " "; txt args;
       txt " : "; txt ty
     ]
@@ -135,7 +136,7 @@ let theory_to_html ?(config=Config.make()) (self:K.Theory.t) =
           (fun c ->
              tr[][
                td[cls "theory-param"][txt "in-const"];
-               td[][const_to_html c]
+               td[][const_to_html ~config c]
              ])
           in_consts
       );
@@ -153,7 +154,7 @@ let theory_to_html ?(config=Config.make()) (self:K.Theory.t) =
           (fun c ->
              tr[][
                td[cls "theory-out"][txt "defined-const"];
-               td[][const_to_html c]
+               td[][const_to_html ~config c]
              ])
           out_consts
       );
