@@ -92,6 +92,7 @@ let () =
     "-d", Arg.Int set_debug, " set debug level";
     "--progress", Arg.Set progress_, " progress bar";
     "--serve", Arg.Set serve, " launch web server";
+    "--port", Arg.Set_int port, " set port for web server";
     "-p", Arg.Set_int port, " set port for web server";
     "--progress", Arg.Set progress_, " progress bar";
     "--bt", Arg.Unit (fun()->Printexc.record_backtrace true), " record backtraces";
