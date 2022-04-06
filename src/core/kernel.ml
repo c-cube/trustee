@@ -1149,6 +1149,12 @@ module Thm = struct
 
   let hash (self:t) = Sequent.hash self.th_seq
 
+  module Tbl = CCHashtbl.Make(struct
+      type t = thm
+      let equal = equal
+      let hash = hash
+    end)
+
   type 'a with_ctx = ctx -> 'a
 
   let pp_depth ~max_depth out (th:t) =
@@ -1607,6 +1613,13 @@ module Theory = struct
   let union ctx ~name l : t =
     check_same_ctx_ ctx l;
     let self = mk_str_ ctx ~name in
+    let in_th =
+      Iter.of_list self.theory_in_theorems |> Iter.map (fun th -> th,())
+      |> Thm.Tbl.of_iter in
+    let out_th =
+      Iter.of_list self.theory_defined_theorems |> Iter.map (fun th -> th,())
+      |> Thm.Tbl.of_iter
+    in
     List.iter
       (fun th ->
         self.theory_in_constants <-
@@ -1615,12 +1628,14 @@ module Theory = struct
         self.theory_defined_constants <-
           union_const_map_ ~what:"defined"
             self.theory_defined_constants th.theory_defined_constants;
-        self.theory_in_theorems <-
-          List.rev_append th.theory_in_theorems self.theory_in_theorems;
-        self.theory_defined_theorems <-
-          List.rev_append th.theory_defined_theorems self.theory_defined_theorems;
+        List.iter (fun th -> Thm.Tbl.replace in_th th ()) th.theory_in_theorems;
+        List.iter (fun th -> Thm.Tbl.replace out_th th ()) th.theory_defined_theorems;
       )
       l;
+    self.theory_in_theorems <-
+      in_th |> Thm.Tbl.to_iter |> Iter.map fst |> Iter.to_rev_list;
+    self.theory_defined_theorems <-
+      out_th |> Thm.Tbl.to_iter |> Iter.map fst |> Iter.to_rev_list;
     self
 
   (* interpretation: map some constants to other constants *)
