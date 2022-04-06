@@ -1750,9 +1750,6 @@ module Theory = struct
       let hash (n,ty) = H.(combine3 25 (H.string n) (Expr.hash ty))
     end)
 
-  (* index theorems by [hyps |- concl] *)
-  module Thm_tbl = CCHashtbl.Make(Thm)
-
   let compose ?(interp=Str_map.empty) l th : t =
     Log.debugf 2
       (fun k->k"(@[theory.compose@ %a@ %a@ @[:interp %a@]@])"
@@ -1767,7 +1764,7 @@ module Theory = struct
          to index them by [name,ty].
          Also gather the set of proved theorems from *)
       let const_tbl_ = Str_ty_tbl.create 32 in
-      let provided_thms = Thm_tbl.create 32 in
+      let provided_thms = Thm.Tbl.create 32 in
 
       List.iter
         (fun th0 ->
@@ -1775,7 +1772,7 @@ module Theory = struct
              th0.theory_in_constants;
            Name_k_map.iter (fun _ c -> Str_ty_tbl.replace const_tbl_ (c.c_name,c.c_ty) c)
              th0.theory_defined_constants;
-           List.iter (fun th -> Thm_tbl.replace provided_thms th ())
+           List.iter (fun th -> Thm.Tbl.replace provided_thms th ())
              th0.theory_defined_theorems;
         )
         l;
@@ -1792,15 +1789,22 @@ module Theory = struct
             not (Str_ty_tbl.mem const_tbl_ (c.c_name,c.c_ty)))
           th.theory_in_constants;
       (* remove satisfied assumptions *)
-      th.theory_in_theorems <-
-        CCList.filter
-          (fun th -> not (Thm_tbl.mem provided_thms th))
-          th.theory_in_theorems;
+      let in_thm =
+        th.theory_in_theorems
+        |> Iter.of_list
+        |> Iter.filter (fun thm -> not (Thm.Tbl.mem provided_thms thm))
+        |> Iter.map (fun thm -> thm, ())
+        |> Thm.Tbl.of_iter
+      in
       (* add assumptions from [l] *)
+      List.iter (fun th' ->
+          List.iter
+            (fun thm -> Thm.Tbl.replace in_thm thm ())
+            th'.theory_in_theorems)
+        l;
       th.theory_in_theorems <-
-        List.fold_left
-          (fun l th' -> List.rev_append th'.theory_in_theorems l)
-          th.theory_in_theorems l;
+        Thm.Tbl.to_iter in_thm |> Iter.map fst
+        |> Iter.to_rev_list;
 
       th
     )
