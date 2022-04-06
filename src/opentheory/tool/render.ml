@@ -18,8 +18,14 @@ let strip_name_ ~config (s:string) : string =
     CCString.chop_prefix ~pre s |> Option.get_exn_or "strip name"
   | exception Not_found -> s
 
+let is_a_binder c =
+  match E.unfold_arrow @@ K.Const.ty c with
+  | [a], _ret -> E.is_arrow a
+  | _ -> false
+
 let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
   let open Html in
+
   let rec loop k ~depth ~names e : Html.elt =
     let recurse = loop k ~depth ~names in
     let recurse' e = loop' k ~depth ~names e in
@@ -80,7 +86,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
             recurse' b
           ]
 
-        | E_const (c, _), [lam] when E.is_lam lam && E.is_a_bool e ->
+        | E_const (c, _), [lam] when E.is_lam lam && is_a_binder c ->
           (* shortcut display for binders *)
           let n, ty, bod = match E.view lam with
             | E_lam (n,ty,bod) -> n, ty, bod
