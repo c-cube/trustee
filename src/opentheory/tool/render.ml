@@ -35,7 +35,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
     | K.E_var v ->
       let name = K.Var.name v in
       let title_ = Fmt.asprintf "%s : %a" name E.pp (K.Var.ty v) in
-      span [A.title title_] [txt name]
+      span [cls "term"; A.title title_] [txt name]
     | K.E_bound_var v ->
 
       let idx = v.bv_idx in
@@ -47,20 +47,20 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
           else spf "%%db_%d" (idx-k)
       in
       let title_ = Fmt.asprintf "%s : %a" descr E.pp v.bv_ty in
-      span [A.title title_] [txt descr]
+      span [cls "term"; A.title title_] [txt descr]
 
     | K.E_const (c, []) ->
       let descr = strip_name_ ~config @@ K.Const.name c in
       let title_ =
         Fmt.asprintf "`%a`@ ty: %a" E.pp e E.pp (E.ty_exn e) in
-      span [A.title title_] [txt descr]
+      span [cls "term"; A.title title_] [txt descr]
 
     | K.E_const (c, args) when E.is_a_type e ->
       (* always write type arguments explicitly for types *)
       let descr = strip_name_ ~config @@ K.Const.name c in
       let title =
         Fmt.asprintf "`%a`@ ty: %a" E.pp e E.pp (E.ty_exn e) in
-      span' [] [
+      span' [cls "term"] [
         sub_e @@ span [A.title title] [txt descr];
         sub_l (
           CCList.flat_map
@@ -74,16 +74,16 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       let descr = strip_name_ ~config @@ K.Const.name c in
       let title =
         Fmt.asprintf "`%a`@ ty: %a" E.pp e E.pp (E.ty_exn e) in
-      span [A.title title] [txt descr]
+      span [cls "term"; A.title title] [txt descr]
 
     | K.E_app (_, _) ->
       let f, args = E.unfold_app e in
       begin match E.view f, args with
         | E_const (c, [_]), [a;b] when String.equal (K.Const.name c) "=" ->
-          span[] [
-            recurse' a;
+          span [cls "term tbox"] [
+            span [cls "tbox"] [recurse' a];
             txt " = ";
-            recurse' b
+            span [cls "tbox"] [recurse' b]
           ]
 
         | E_const (c, _), [lam] when E.is_lam lam && is_a_binder c ->
@@ -97,7 +97,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
           let c_name = strip_name_ ~config @@ K.Const.name c in
           let c_title =
             Fmt.asprintf "`%a`@ ty: %a" E.pp f E.pp (E.ty_exn f) in
-          span[] [
+          span [cls "term tbox"] [
             span [A.title c_title] [txt c_name];
             span [A.title vartitle] [txt varname];
             txt ". ";
@@ -105,9 +105,9 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
           ]
 
         | _ ->
-          span' [][
-            sub_e @@ recurse' f;
-            sub_l (
+          span [cls "term tbox"] [
+            recurse' f;
+            span [cls "tbox"] (
               CCList.flat_map
                 (fun sub -> [txt " "; recurse' sub])
                 args
@@ -118,7 +118,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
     | E_lam (n, ty, bod) ->
       let varname = if n="" then spf "x_%d" k else n in
       let vartitle = Fmt.asprintf "%s : %a" varname E.pp ty in
-      span[] [
+      span[cls "term"] [
         txt "λ";
         span [A.title vartitle] [txt varname];
         txt ". ";
@@ -126,20 +126,20 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       ]
 
     | K.E_arrow (a, b) ->
-      span[] [
+      span[cls "term"] [
         recurse' a;
         txt " -> ";
         recurse b
       ]
     | K.E_box _seq ->
-      span[cls "box"][txtf "%a" E.pp e]
+      span[cls "term box"][txtf "%a" E.pp e]
 
   and loop' k ~depth ~names e : Html.elt =
     match E.view e with
     | E_kind | E_type | E_var _ | E_bound_var _ | E_const _ | E_box _ ->
       loop k ~depth ~names e (* atomic expr *)
     | E_app _  | E_lam _ | E_arrow _ ->
-      span[][txt "("; loop k ~depth ~names e; txt ")"]
+      span[cls "tbox"][txt "("; loop k ~depth ~names e; txt ")"]
   in
   span [cls "expr"] [loop 0 ~depth:0 ~names:[] e]
 

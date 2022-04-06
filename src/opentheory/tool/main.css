@@ -20,3 +20,15 @@ td.theory-out {
 td.theory-param {
   background-color: lightcyan;
 }
+
+span.tbox {
+  display: inline-flex;
+  flex-wrap: wrap;
+}
+
+.tbox > .term {
+  margin-left: 2px;
+  margin-right: 2px;
+}
+
+
