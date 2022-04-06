@@ -18,17 +18,30 @@ let strip_name_ ~config (s:string) : string =
     CCString.chop_prefix ~pre s |> Option.get_exn_or "strip name"
   | exception Not_found -> s
 
-let is_a_binder c =
+let is_symbol_ s =
+  let anum = function 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' -> true | _ -> false in
+  not (String.length s > 0 && anum s.[0])
+
+let is_a_binder c c_name =
+  is_symbol_ c_name &&
   match E.unfold_arrow @@ K.Const.ty c with
   | [a], _ret -> E.is_arrow a
   | _ -> false
 
-let is_infix c name =
-  let anum = function 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' -> true | _ -> false in
-  not (String.length name > 0 && anum name.[0]) &&
+let is_infix c c_name =
+  is_symbol_ c_name &&
   match E.unfold_arrow @@ K.Const.ty c with
   | [_; _], _ -> true
   | _ -> false
+
+let expr_wrap_ f e =
+  let open Html in
+  match E.view e with
+  | E_kind | E_type | E_var _ | E_bound_var _ | E_box _ | E_const (_, []) ->
+    f e (* atomic expr *)
+  | E_const _ when not (E.is_a_type e) -> f e
+  | E_app _  | E_lam _ | E_arrow _ | E_const _ ->
+    span[][txt "("; f e; txt ")"]
 
 let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
   let open Html in
@@ -61,7 +74,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       let title_ =
         Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
       let res = span [A.title title_] [txt c_name] in
-      if is_a_binder c || is_infix c c_name
+      if is_a_binder c c_name || is_infix c c_name
       then span[][txt "("; res; txt")"]
       else res
 
@@ -85,7 +98,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       let title =
         Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
       let res = span [A.title title] [txt c_name] in
-      if is_a_binder c || is_infix c c_name
+      if is_a_binder c c_name || is_infix c c_name
       then span[][txt "("; res; txt")"]
       else res
 
@@ -103,6 +116,12 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
         ]
       in
 
+      let c_name = match E.view f with
+        | E_const (c, _) ->
+          strip_name_ ~config @@ K.Const.name c
+        | _ -> ""
+      in
+
       begin match E.view f, args with
         | E_const (c, [_]), [a;b] when String.equal (K.Const.name c) "=" ->
           span[] [
@@ -111,7 +130,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
             recurse' b
           ]
 
-        | E_const (c, _), [lam] when E.is_lam lam && is_a_binder c ->
+        | E_const (c, _), [lam] when E.is_lam lam && is_a_binder c c_name ->
           (* shortcut display for binders *)
           let n, ty, bod = match E.view lam with
             | E_lam (n,ty,bod) -> n, ty, bod
@@ -119,7 +138,6 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
           in
           let varname = if n="" then spf "x_%d" k else n in
           let vartitle = Fmt.asprintf "%s : %a" varname E.pp ty in
-          let c_name = strip_name_ ~config @@ K.Const.name c in
           let c_title =
             Fmt.asprintf "%a : %a" E.pp f E.pp (E.ty_exn f) in
           span[] [
@@ -129,18 +147,15 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
             loop (k+1) ~depth:(depth+1) ~names:(n::names) bod
           ]
 
-        | E_const (c, _), [a; b] ->
-          let c_name = strip_name_ ~config @@ K.Const.name c in
-          if is_infix c c_name then (
-            (* display infix *)
-            let c_title =
-              Fmt.asprintf "%a : %a" E.pp f E.pp (E.ty_exn f) in
-            span[] [
-              recurse' a;
-              span [A.title c_title] [txt (spf " %s " c_name)];
-              recurse' b
-            ]
-          ) else default()
+        | E_const (c, _), [a; b] when is_infix c c_name ->
+          (* display infix *)
+          let c_title =
+            Fmt.asprintf "%a : %a" E.pp f E.pp (E.ty_exn f) in
+          span[] [
+            recurse' a;
+            span [A.title c_title] [txt (spf " %s " c_name)];
+            recurse' b
+          ]
 
         | _ -> default()
       end
@@ -166,11 +181,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       span[cls "box"][txtf "%a" E.pp e]
 
   and loop' k ~depth ~names e : Html.elt =
-    match E.view e with
-    | E_kind | E_type | E_var _ | E_bound_var _ | E_const _ | E_box _ ->
-      loop k ~depth ~names e (* atomic expr *)
-    | E_app _  | E_lam _ | E_arrow _ ->
-      span[][txt "("; loop k ~depth ~names e; txt ")"]
+    expr_wrap_ (loop k ~depth ~names) e
   in
   span [cls "expr"] [loop 0 ~depth:0 ~names:[] e]
 
