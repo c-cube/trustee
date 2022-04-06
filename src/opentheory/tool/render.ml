@@ -23,6 +23,13 @@ let is_a_binder c =
   | [a], _ret -> E.is_arrow a
   | _ -> false
 
+let is_infix c name =
+  let anum = function 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' -> true | _ -> false in
+  not (String.length name > 0 && anum name.[0]) &&
+  match E.unfold_arrow @@ K.Const.ty c with
+  | [_; _], _ -> true
+  | _ -> false
+
 let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
   let open Html in
 
@@ -78,6 +85,18 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
 
     | K.E_app (_, _) ->
       let f, args = E.unfold_app e in
+
+      let default() =
+        span' [][
+          sub_e @@ recurse' f;
+          sub_l (
+            CCList.flat_map
+              (fun sub -> [txt " "; recurse' sub])
+              args
+          )
+        ]
+      in
+
       begin match E.view f, args with
         | E_const (c, [_]), [a;b] when String.equal (K.Const.name c) "=" ->
           span[] [
@@ -104,15 +123,20 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
             loop (k+1) ~depth:(depth+1) ~names:(n::names) bod
           ]
 
-        | _ ->
-          span' [][
-            sub_e @@ recurse' f;
-            sub_l (
-              CCList.flat_map
-                (fun sub -> [txt " "; recurse' sub])
-                args
-            )
-          ]
+        | E_const (c, _), [a; b] ->
+          let c_name = strip_name_ ~config @@ K.Const.name c in
+          if is_infix c c_name then (
+            (* display infix *)
+            let c_title =
+              Fmt.asprintf "`%a`@ ty: %a" E.pp f E.pp (E.ty_exn f) in
+            span[] [
+              recurse' a;
+              span [A.title c_title] [txt (spf " %s " c_name)];
+              recurse' b
+            ]
+          ) else default()
+
+        | _ -> default()
       end
 
     | E_lam (n, ty, bod) ->
@@ -131,6 +155,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
         txt " -> ";
         recurse b
       ]
+
     | K.E_box _seq ->
       span[cls "box"][txtf "%a" E.pp e]
 
