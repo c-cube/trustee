@@ -57,16 +57,19 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       span [A.title title_] [txt descr]
 
     | K.E_const (c, []) ->
-      let descr = strip_name_ ~config @@ K.Const.name c in
+      let c_name = strip_name_ ~config @@ K.Const.name c in
       let title_ =
-        Fmt.asprintf "`%a`@ ty: %a" E.pp e E.pp (E.ty_exn e) in
-      span [A.title title_] [txt descr]
+        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
+      let res = span [A.title title_] [txt c_name] in
+      if is_a_binder c || is_infix c c_name
+      then span[][txt "("; res; txt")"]
+      else res
 
     | K.E_const (c, args) when E.is_a_type e ->
       (* always write type arguments explicitly for types *)
       let descr = strip_name_ ~config @@ K.Const.name c in
       let title =
-        Fmt.asprintf "`%a`@ ty: %a" E.pp e E.pp (E.ty_exn e) in
+        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
       span' [] [
         sub_e @@ span [A.title title] [txt descr];
         sub_l (
@@ -78,10 +81,13 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
 
     | K.E_const (c, _) ->
       (* omit arguments *)
-      let descr = strip_name_ ~config @@ K.Const.name c in
+      let c_name = strip_name_ ~config @@ K.Const.name c in
       let title =
-        Fmt.asprintf "`%a`@ ty: %a" E.pp e E.pp (E.ty_exn e) in
-      span [A.title title] [txt descr]
+        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
+      let res = span [A.title title] [txt c_name] in
+      if is_a_binder c || is_infix c c_name
+      then span[][txt "("; res; txt")"]
+      else res
 
     | K.E_app (_, _) ->
       let f, args = E.unfold_app e in
@@ -115,7 +121,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
           let vartitle = Fmt.asprintf "%s : %a" varname E.pp ty in
           let c_name = strip_name_ ~config @@ K.Const.name c in
           let c_title =
-            Fmt.asprintf "`%a`@ ty: %a" E.pp f E.pp (E.ty_exn f) in
+            Fmt.asprintf "%a : %a" E.pp f E.pp (E.ty_exn f) in
           span[] [
             span [A.title c_title] [txt c_name];
             span [A.title vartitle] [txt varname];
@@ -128,7 +134,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
           if is_infix c c_name then (
             (* display infix *)
             let c_title =
-              Fmt.asprintf "`%a`@ ty: %a" E.pp f E.pp (E.ty_exn f) in
+              Fmt.asprintf "%a : %a" E.pp f E.pp (E.ty_exn f) in
             span[] [
               recurse' a;
               span [A.title c_title] [txt (spf " %s " c_name)];
