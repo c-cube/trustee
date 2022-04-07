@@ -449,7 +449,7 @@ let hash_seq_ ~hash_e ctx (s:sequent) =
   CH.sub ctx (hash_e s.concl)
 
 (* make a constant *)
-let new_const_ ctx ~c_hash name args ty : const =
+let new_const_ ~c_hash name args ty : const =
   { c_name=name; c_hash; c_ty=ty; c_args=args;
   }
 
@@ -522,6 +522,7 @@ module Expr = struct
           CH.string ctx "v"; CH.string ctx v.v_name
         | E_const (c,args) ->
           CH.string ctx "c";
+          CH.string ctx c.c_name; (* need to use name+hash *)
           CH.sub ctx (Const.cr_hash c);
           List.iter (hash_expr_ ctx) args
         | E_bound_var v ->
@@ -711,10 +712,10 @@ module Expr = struct
                but not in the type variables %a"
               Var.pp v name (Fmt.Dump.list Var.pp) ty_vars);
     end;
-    new_const_ ctx name ~c_hash (C_ty_vars ty_vars) ty
+    new_const_ name ~c_hash (C_ty_vars ty_vars) ty
 
   let new_ty_const ctx name n ~c_hash : ty_const =
-    new_const_ ctx name ~c_hash (C_arity n) (type_ ctx)
+    new_const_ name ~c_hash (C_arity n) (type_ ctx)
 
   let mk_const_ ctx c args ty : t =
     make_ ctx (E_const (c,args)) ty
@@ -1182,7 +1183,7 @@ module Ctx = struct
       );
       ctx_bool_c=lazy (
         let typ = Expr.type_ ctx in
-        new_const_ ctx id_bool ~c_hash:(Cr_hash.magic "bool") (C_arity 0) typ
+        new_const_ id_bool ~c_hash:(Cr_hash.magic "bool") (C_arity 0) typ
       );
       ctx_bool=lazy (
         Expr.const ctx (Lazy.force ctx.ctx_bool_c) []
@@ -1192,7 +1193,7 @@ module Ctx = struct
         let a_ = Var.make "a" type_ in
         let ea = Expr.var ctx a_ in
         let typ = Expr.(arrow ctx ea @@ arrow ctx ea @@ bool ctx) in
-        new_const_ ctx id_eq ~c_hash:(Cr_hash.magic "eq") (C_ty_vars [a_]) typ
+        new_const_ id_eq ~c_hash:(Cr_hash.magic "eq") (C_ty_vars [a_]) typ
       );
       ctx_select_c=lazy (
         let type_ = Expr.type_ ctx in
@@ -1200,7 +1201,7 @@ module Ctx = struct
         let a_ = Var.make "a" type_ in
         let ea = Expr.var ctx a_ in
         let typ = Expr.(arrow ctx (arrow ctx ea bool_) ea) in
-        new_const_ ctx id_select ~c_hash:(Cr_hash.magic "select") (C_ty_vars [a_]) typ
+        new_const_ id_select ~c_hash:(Cr_hash.magic "select") (C_ty_vars [a_]) typ
       );
     } in
     ctx
@@ -1552,30 +1553,28 @@ module Thm = struct
                 :ty-vars %a@ :repr `%s`@ :abs `%s`@])"
            name pp_quoted thm_inhabited (Fmt.Dump.list Var.pp) ty_vars_l repr abs);
 
+    let arity = List.length ty_vars_l in
+
     (* compute hash from names and [phi] *)
     let c_hash =
       Cr_hash.(
         let ctx = create() in
-        string ctx "ty";
-        string ctx name;
-        string ctx "a";
-        string ctx abs;
-        string ctx "r";
-        string ctx repr;
+        string ctx "c.ty";
+        int ctx arity;
         sub ctx (Expr.cr_hash phi);
         finalize ctx
       )
     in
 
     (* construct new type and mapping functions *)
-    let tau = Expr.new_ty_const ~c_hash ctx name (List.length ty_vars_l) in
+    let tau = Expr.new_ty_const ~c_hash ctx name arity in
     let tau_vars = Expr.const ctx tau ty_vars_expr_l in
 
     let c_abs =
       let c_hash =
         Cr_hash.(
           let ctx = create() in
-          string ctx "a"; string ctx abs; sub ctx c_hash;
+          string ctx "c.abs"; sub ctx (Expr.cr_hash phi);
           finalize ctx
         )
       in
@@ -1586,7 +1585,7 @@ module Thm = struct
       let c_hash =
         Cr_hash.(
           let ctx = create() in
-          string ctx "r"; string ctx repr; sub ctx c_hash;
+          string ctx "c.repr"; sub ctx (Expr.cr_hash phi);
           finalize ctx
         )
       in
@@ -1683,8 +1682,30 @@ module Theory = struct
     self.theory_in_constants <- Name_k_map.add (kind,c.c_name) c self.theory_in_constants;
     ()
 
-  let assume_const = assume_const_
-  let assume_ty_const = assume_const_
+  let assume_const self name vars ty : const =
+    let c_hash =
+      Cr_hash.(
+        let ctx = create() in
+        string ctx "th.ass";
+        List.iter (fun v -> string ctx v.v_name) vars;
+        sub ctx (Expr.cr_hash ty);
+        finalize ctx
+      ) in
+    let c = Expr.new_const self.theory_ctx ~c_hash name vars ty in
+    assume_const_ self c;
+    c
+
+  let assume_ty_const self name ~arity : const =
+    let c_hash =
+      Cr_hash.(
+        let ctx = create() in
+        string ctx "th.assty";
+        int ctx arity;
+        finalize ctx
+      ) in
+    let c = Expr.new_ty_const self.theory_ctx ~c_hash name arity in
+    assume_const_ self c;
+    c
 
   let add_const_ self c : unit =
     let key = c.c_name in
