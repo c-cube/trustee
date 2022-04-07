@@ -1615,10 +1615,10 @@ module Theory = struct
     let self = mk_str_ ctx ~name in
     let in_th =
       Iter.of_list self.theory_in_theorems |> Iter.map (fun th -> th,())
-      |> Thm.Tbl.of_iter in
-    let out_th =
+      |> Thm.Tbl.of_iter_with ~f:(fun _ () () -> ())
+    and out_th =
       Iter.of_list self.theory_defined_theorems |> Iter.map (fun th -> th,())
-      |> Thm.Tbl.of_iter
+      |> Thm.Tbl.of_iter_with ~f:(fun _ () () -> ())
     in
     List.iter
       (fun th ->
