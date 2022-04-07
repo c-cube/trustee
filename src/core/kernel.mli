@@ -45,6 +45,15 @@ type expr_view =
   | E_arrow of expr * expr
   | E_box of sequent (* reified sequent *)
 
+(** Cryptographic hash *)
+module Cr_hash : sig
+  type t
+
+  include PP with type t := t
+  include EQ with type t := t
+  include HASH with type t := t
+end
+
 (** Logic constants *)
 module Const : sig
   type t = const
@@ -61,6 +70,8 @@ module Const : sig
 
   val pp_args : args Fmt.printer
   val pp_with_ty : t Fmt.printer
+
+  val cr_hash : t -> Cr_hash.t
 
   val eq : ctx -> t
   val bool : ctx -> t
@@ -135,6 +146,8 @@ module Expr : sig
     | E_arrow of expr * expr
     | E_box of sequent (* reified sequent *)
 
+  val cr_hash : t -> Cr_hash.t
+
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
   include Sigs.COMPARE with type t := t
@@ -194,8 +207,6 @@ module Expr : sig
   val select : (ty -> t) with_ctx
   val var : (var -> t) with_ctx
   val const : (const -> ty list -> t) with_ctx
-  val new_const : (string -> ty_var list -> ty -> const) with_ctx
-  val new_ty_const : (string -> int -> const) with_ctx
   val var_name : (string -> ty -> t) with_ctx
   val bvar : (int -> ty -> t) with_ctx
   val app : (t -> t -> t) with_ctx
@@ -443,15 +454,23 @@ module Theory : sig
   (** [assume theory hyps concl] creates the theorem
       [hyps |- concl] as a parameter of the theory [theory]. *)
 
-  val assume_const : t -> const -> unit
+  val assume_const : t -> string -> ty_var list -> ty -> const
+  (** [assume_ty_const theory name vars ty] creates a new constant
+      with type paramters [vars] and type [ty].
+      It adds it to the theory's parameters. *)
 
-  val assume_ty_const : t -> ty_const -> unit
+  val assume_ty_const : t -> string -> arity:int -> const
+  (** [assume_ty_const theory name ~arity] creates a new type constant
+      with given arity and adds it to the theory's parameters. *)
 
   val add_const : t -> const -> unit
+  (** Add defined constant to the theory's output *)
 
   val add_ty_const : t -> ty_const -> unit
+  (** Add defined type constant to the theory's output *)
 
   val add_theorem : t -> thm -> unit
+  (** Add derived theorem to the theory's output *)
 
   val find_const : t -> string -> const option
   (** Find a constant used or defined in this theory by its name *)

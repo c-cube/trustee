@@ -1,7 +1,7 @@
 (library
   (name trustee_core)
   (public_name trustee.core)
-  (libraries containers iter unix))
+  (libraries containers iter unix sha))
 
 (rule
   (targets VM_instr_.ml)

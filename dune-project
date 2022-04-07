@@ -21,6 +21,7 @@
     (pp_loc (and (>= 1.0) (< 2.0)))
     (iter (>= 1.0))
     (ocaml (>= 4.08.0))
+    sha
     (qtest :with-test)
     (ounit2 :with-test)
     (qcheck :with-test)
