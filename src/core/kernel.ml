@@ -1674,7 +1674,7 @@ module Theory = struct
     self.theory_in_theorems <- th :: self.theory_in_theorems;
     th
 
-  let assume_const_ self (c:const) : unit =
+  let add_assumption_const self (c:const) : unit =
     let kind = if Expr.is_eq_to_type c.c_ty then C_ty else C_term in
     if Name_k_map.mem (kind,c.c_name) self.theory_in_constants then (
       Error.failf (fun k->k"Theory.assume_const: constant `%a` already exists" Fmt.string c.c_name);
@@ -1692,7 +1692,7 @@ module Theory = struct
         finalize ctx
       ) in
     let c = Expr.new_const self.theory_ctx ~c_hash name vars ty in
-    assume_const_ self c;
+    add_assumption_const self c;
     c
 
   let assume_ty_const self name ~arity : const =
@@ -1704,7 +1704,7 @@ module Theory = struct
         finalize ctx
       ) in
     let c = Expr.new_ty_const self.theory_ctx ~c_hash name arity in
-    assume_const_ self c;
+    add_assumption_const self c;
     c
 
   let add_const_ self c : unit =
@@ -1864,7 +1864,10 @@ module Theory = struct
           *)
           c'
         | None ->
+          (* FIXME
           Error.failf (fun k->k"cannot find constant `%s` in interpretation" name')
+             *)
+          c
       end
 
     let inst_constants_ (self:state) (m:const Name_k_map.t) : _ Name_k_map.t =

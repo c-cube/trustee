@@ -61,7 +61,7 @@ type t = {
   mutable named_consts: (Name.t, const) Hashtbl.t;
   mutable named_tys: (Name.t, ty_op) Hashtbl.t;
   mutable art: Article.t;
-  ind: K.const;
+  mutable ind: K.const option;
 
   in_scope: K.Theory.t list;
 
@@ -165,7 +165,16 @@ let typeOp : rule = fun theory self ->
         (fun ctx -> function [] -> K.Expr.bool ctx | _ -> Error.fail "bool is a const")
       | {Name.path=[];name="ind"} ->
         (fun ctx -> function
-           | [] -> K.Expr.const ctx self.ind [] | _ -> Error.fail "ind is a const")
+           | [] ->
+             let ind = match self.ind with
+               | Some i -> i
+               | None ->
+                 let ind = K.Theory.assume_ty_const theory "ind" ~arity:0 in (* special type *)
+                 self.ind <- Some ind;
+                 ind
+             in
+             K.Expr.const ctx ind []
+           | _ -> Error.fail "ind is a const")
       | _ ->
         try snd @@ Hashtbl.find self.named_tys n
         with Not_found ->
@@ -175,7 +184,7 @@ let typeOp : rule = fun theory self ->
             | Some c -> c
             | None -> Error.failf (fun k->k"typeOp: unknown typeOp `%a`" Name.pp n)
           in
-          K.Theory.assume_const theory c;
+          K.Theory.add_assumption_const theory c;
           let c' = mk_defined_ty_ c in
           Hashtbl.add self.named_tys n (n,c');
           c'
@@ -274,7 +283,7 @@ let const : rule = fun theory self ->
               | Some c -> c
               | None -> Error.failf (fun k->k"const: unknown constant `%a`" Name.pp n)
             in
-            K.Theory.assume_const theory c;
+            K.Theory.add_assumption_const theory c;
             let c' = mk_defined_const_ c in
             Hashtbl.add self.named_consts n (n,c');
             c'
@@ -649,11 +658,10 @@ let mk_progress() =
 
 let create ?(progress_bar=false) ctx ~in_scope : t =
   let progress_fun = if progress_bar then Some (mk_progress()) else None in
-  let ind = K.Expr.new_ty_const ctx "ind" 0 in (* special type *)
   let self = {
     ctx; stack=[]; dict=Hashtbl.create 32; named_consts=Hashtbl.create 32;
     named_tys=Hashtbl.create 16;
-    art=Article.empty; ind;
+    art=Article.empty; ind=None;
     n_cut=0; n_appThm=0; n_absThm=0; n_subst=0;
     in_scope;
     progress_fun;

@@ -454,6 +454,8 @@ module Theory : sig
   (** [assume theory hyps concl] creates the theorem
       [hyps |- concl] as a parameter of the theory [theory]. *)
 
+  val add_assumption_const : t -> const -> unit
+
   val assume_const : t -> string -> ty_var list -> ty -> const
   (** [assume_ty_const theory name vars ty] creates a new constant
       with type paramters [vars] and type [ty].
