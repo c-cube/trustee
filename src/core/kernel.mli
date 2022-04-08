@@ -176,7 +176,10 @@ module Expr : sig
       and [f false u] otherwise. *)
 
   val exists : f:(bool -> t -> bool) -> t -> bool
+  (** Is there an immediate subterm of [t] satisfying [f]? *)
+
   val for_all : f:(bool -> t -> bool) -> t -> bool
+  (** Do all immediate subterms of [t] satisfy [f]? *)
 
   val contains : t -> sub:t -> bool
   val free_vars : ?init:Var.Set.t -> t -> Var.Set.t

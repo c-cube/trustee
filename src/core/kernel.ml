@@ -22,7 +22,6 @@ module Cr_hash : sig
   val create : unit -> ctx
   val finalize : ctx -> t
   val dummy : t
-  val magic : string -> t (* magic constant, not truly a hash *)
 
   val string : ctx -> string -> unit
   val int : ctx -> int -> unit
@@ -41,7 +40,6 @@ end = struct
   let equal = Bytes.equal
   let hash = CCHash.bytes
   let compare = Bytes.compare
-  let magic s : t = Bytes.unsafe_of_string s
 
   let[@inline] string ctx s = H.update_string ctx.ctx s
 
@@ -95,7 +93,7 @@ and expr = {
   e_view: expr_view;
   e_ty: expr option lazy_t;
   mutable e_id: int;
-  mutable e_flags: int; (* ̵contains: [higher DB var | 1:has free vars | 5:ctx uid] *)
+  mutable e_flags: int; (* contains: [higher DB var | 1:has free vars | 5:ctx uid] *)
   mutable e_hash: Cr_hash.t;
 }
 
@@ -123,9 +121,20 @@ and const = {
   c_name: string;
   c_args: const_args;
   c_ty: ty; (* free vars are [vs] if [c_args = C_ty_vars vs] *)
-  mutable c_hash: Cr_hash.t;
+  c_hash: Cr_hash.t; (* hash of definition before potential erasure *)
+  c_def: const_def; (* definition, possibly erased *)
 }
 and ty_const = const
+
+and const_def =
+  | C_def_expr of {rhs: expr}
+  | C_def_ty of {phi: expr}
+  | C_def_ty_abs of {phi: expr}
+  | C_def_ty_repr of {phi: expr}
+  | C_def_theory_param of {ty_vars: var list; ty: expr}
+  | C_def_theory_ty_param of {arity: int}
+  | C_def_magic of string
+  | C_def_concrete
 
 and const_args =
   | C_ty_vars of ty_var list
@@ -358,6 +367,144 @@ let id_bool = "bool"
 let id_eq = "="
 let id_select = "select"
 
+module Expr0 = struct
+  type t = expr
+
+  let[@inline] ty e = Lazy.force e.e_ty
+  let[@inline] view e = e.e_view
+  let[@inline] ty_exn e = match e.e_ty with
+    | lazy None -> assert false
+    | lazy (Some ty) -> ty
+
+  let equal = expr_eq
+  let hash = expr_hash
+
+  module AsKey = struct
+    type nonrec t = t
+    let equal = equal
+    let compare = compare
+    let hash = hash
+  end
+
+  module Map = CCMap.Make(AsKey)
+  module Set = CCSet.Make(AsKey)
+  module Tbl = CCHashtbl.Make(AsKey)
+
+  let iter ~f (e:expr) : unit =
+    match e.e_view with
+    | E_kind | E_type -> ()
+    | _ ->
+      begin match e.e_ty with
+        | lazy None -> assert false
+        | lazy (Some ty) -> f false ty
+      end;
+      match e.e_view with
+      | E_box _ | E_const _ -> ()
+      | E_kind | E_type -> assert false
+      | E_var v -> f false v.v_ty
+      | E_bound_var v -> f false v.bv_ty
+      | E_app (hd,a) -> f false hd; f false a
+      | E_lam (_, tyv, bod) -> f false tyv; f true bod
+      | E_arrow (a,b) -> f false a; f false b
+
+  let iter_dag ~f e : unit =
+    let tbl = Tbl.create 8 in
+    let rec loop e =
+      if not (Tbl.mem tbl e) then (
+        Tbl.add tbl e ();
+        f e;
+        iter e ~f:(fun _ u -> loop u)
+      )
+    in
+    loop e
+end
+
+module Util_cr_hash_ = struct
+  module H = Cr_hash
+
+  let rec hash_expr_ (e:expr) : H.t =
+
+    (* add hash of [e] to [ctx] *)
+    let[@inline] hash_expr_ ctx e =
+      let h = hash_expr_ e in
+      H.sub ctx h
+    in
+
+    let compute_ e =
+      (* compute hash pf [e] *)
+      let ctx = H.create() in
+      begin match Lazy.force e.e_ty with
+        | Some ty -> hash_expr_ ctx ty
+        | None -> ()
+      end;
+      begin match e.e_view with
+        | E_var v ->
+          H.string ctx "v"; H.string ctx v.v_name
+        | E_const (c,args) ->
+          H.string ctx "c";
+          H.string ctx c.c_name; (* need to use name+hash *)
+          H.sub ctx c.c_hash;
+          List.iter (hash_expr_ ctx) args
+        | E_bound_var v ->
+          H.string ctx "b"; H.int ctx v.bv_idx
+        | E_app (hd,a) ->
+          H.string ctx "@"; hash_expr_ ctx hd; hash_expr_ ctx a
+        | E_lam (n, tyv, bod) ->
+          H.string ctx "l"; hash_expr_ ctx bod
+        | E_arrow (a,b) ->
+          H.string ctx ">"
+        | E_kind -> H.string ctx "K"
+        | E_type -> H.string ctx "T"
+        | E_box seq ->
+          H.string ctx "["; hash_seq_ ctx seq
+      end;
+      H.finalize ctx
+    in
+
+    (* is hash computed already? *)
+    if Cr_hash.equal Cr_hash.dummy e.e_hash then (
+      let h = compute_ e in
+      e.e_hash <- h;
+      h
+    ) else (
+      e.e_hash (* in cache *)
+    )
+
+  (* add hash of [s] to [ctx] *)
+  and hash_seq_ ctx (s:sequent) : unit =
+    let l =
+      List.rev_map hash_expr_ (Expr_set.to_list s.hyps)
+      |> List.sort Cr_hash.compare
+    in
+    List.iter (H.sub ctx) l;
+    H.string ctx "|-";
+    H.sub ctx (hash_expr_ s.concl)
+
+  let hash_const_def_ ~name ~args ~ty (d:const_def) : H.t =
+    let ctx = H.create() in
+    H.string ctx name;
+    begin match d with
+      | C_def_expr {rhs} ->
+        H.string ctx "def"; H.sub ctx (hash_expr_ rhs)
+      | C_def_ty {phi} ->
+        H.string ctx "ty"; H.sub ctx (hash_expr_ phi)
+      | C_def_ty_abs {phi} ->
+        H.string ctx "ty.abs"; H.sub ctx (hash_expr_ phi)
+      | C_def_ty_repr {phi} ->
+        H.string ctx "ty.repr"; H.sub ctx (hash_expr_ phi)
+      | C_def_theory_param {ty_vars; ty} ->
+        H.string ctx "param";
+        List.iter (fun v -> H.string ctx v.v_name) ty_vars;
+        H.sub ctx (hash_expr_ ty)
+      | C_def_theory_ty_param {arity} ->
+        H.string ctx "ty.param"; H.int ctx arity
+      | C_def_magic magic ->
+        H.string ctx "magic"; H.string ctx magic
+      | C_def_concrete -> assert false
+    end;
+    H.finalize ctx
+end
+
 module Const = struct
   type t = const
   let[@inline] pp out c = Fmt.string out c.c_name
@@ -377,6 +524,12 @@ module Const = struct
     assert (not (Cr_hash.equal h Cr_hash.dummy));
     h
 
+  let is_concrete_def (def:const_def) : bool =
+    match def with
+    | C_def_concrete
+    | C_def_magic _ -> true
+    | _ -> false
+
   let pp_args out = function
     | C_arity 0 -> ()
     | C_arity n -> Fmt.fprintf out "/%d" n
@@ -392,6 +545,49 @@ module Const = struct
   let[@inline] select ctx = Lazy.force ctx.ctx_select_c
   let is_eq_to_bool c = String.equal c.c_name id_bool
   let is_eq_to_eq c = String.equal c.c_name id_bool
+
+  let expr_is_concrete_ (e:expr) : bool =
+    try
+      Expr0.iter_dag e
+        ~f:(fun e ->
+            match e.e_view with
+            | E_const (c,_) ->
+              if not (is_concrete_def c.c_def) then raise Exit
+            | _ -> ());
+      true
+    with Exit -> false
+
+  let map_const_def ~f (def:const_def) : const_def =
+    match def with
+    | C_def_expr {rhs} -> C_def_expr {rhs=f rhs}
+    | C_def_ty {phi} -> C_def_ty {phi=f phi}
+    | C_def_ty_abs {phi}-> C_def_ty_abs {phi=f phi}
+    | C_def_ty_repr {phi}-> C_def_ty_repr {phi=f phi}
+    | C_def_theory_param {ty_vars;ty} -> C_def_theory_param {ty_vars;ty=f ty}
+    | C_def_theory_ty_param _
+    | C_def_magic _
+    | C_def_concrete -> def
+
+  (* make a constant *)
+  let make ~def ?c_hash name args ty : t =
+    (* hash name+definition, since equality on (name,def)
+       is the definition of equality for constants. *)
+    let c_hash = match c_hash with
+      | Some h -> h
+      | None -> Util_cr_hash_.hash_const_def_ ~name ~args ~ty def in
+    (* erase def if it's safe to do so (no risk of change in
+       a theory interpretation) *)
+    let def = match def with
+      | C_def_expr {rhs=e}
+      | C_def_ty {phi=e}
+      | C_def_ty_abs {phi=e}
+      | C_def_ty_repr {phi=e} ->
+        if expr_is_concrete_ e then C_def_concrete else def
+      | C_def_theory_param _ | C_def_theory_ty_param _
+      | C_def_concrete | C_def_magic _ -> def
+    in
+    { c_name=name; c_hash; c_ty=ty; c_args=args; c_def=def;
+    }
 end
 
 module Var = struct
@@ -437,24 +633,8 @@ module BVar = struct
   let to_string = Fmt.to_string pp
 end
 
-(* add hash of [s] to [ctx] *)
-let hash_seq_ ~hash_e ctx (s:sequent) =
-  let module CH = Cr_hash in
-  let l =
-    List.rev_map hash_e (Expr_set.to_list s.hyps)
-    |> List.sort Cr_hash.compare
-  in
-  List.iter (CH.sub ctx) l;
-  CH.string ctx "|-";
-  CH.sub ctx (hash_e s.concl)
-
-(* make a constant *)
-let new_const_ ~c_hash name args ty : const =
-  { c_name=name; c_hash; c_ty=ty; c_args=args;
-  }
-
 module Expr = struct
-  type t = expr
+  include Expr0
 
   type view = expr_view =
     | E_kind
@@ -467,15 +647,6 @@ module Expr = struct
     | E_arrow of t * t
     | E_box of sequent
 
-  let[@inline] ty e = Lazy.force e.e_ty
-  let[@inline] view e = e.e_view
-  let[@inline] ty_exn e = match e.e_ty with
-    | lazy None -> assert false
-    | lazy (Some ty) -> ty
-
-  let equal = expr_eq
-  let hash = expr_hash
-
   let pp = expr_pp_
   let to_string = Fmt.to_string pp
   let pp_depth = expr_pp_with_
@@ -486,69 +657,7 @@ module Expr = struct
 
   type 'a with_ctx = ctx -> 'a
 
-  let[@inline] iter ~f (e:t) : unit =
-    match view e with
-    | E_kind | E_type | E_const _ -> ()
-    | _ ->
-      Option.iter (f false) (ty e);
-      match view e with
-      | E_kind | E_type | E_const _ | E_box _ -> assert false
-      | E_var v -> f false v.v_ty
-      | E_bound_var v -> f false v.bv_ty
-      | E_app (hd,a) -> f false hd; f false a
-      | E_lam (_, tyv, bod) -> f false tyv; f true bod
-      | E_arrow (a,b) -> f false a; f false b
-
-  let rec cr_hash (e:t) : Cr_hash.t =
-    let module CH = Cr_hash in
-
-    (* add hash of [e] to [ctx] *)
-    let[@inline] hash_expr_ ctx e =
-      let h = cr_hash e in
-      CH.sub ctx h
-    in
-
-    (* add hash of [s] to [ctx] *)
-    let[@inline] hash_seq_ ctx s =
-      hash_seq_ ctx s ~hash_e:cr_hash
-    in
-
-    let compute_ e =
-      (* compute hash pf [e] *)
-      let ctx = CH.create() in
-      Option.iter (hash_expr_ ctx) (ty e);
-      begin match e.e_view with
-        | E_var v ->
-          CH.string ctx "v"; CH.string ctx v.v_name
-        | E_const (c,args) ->
-          CH.string ctx "c";
-          CH.string ctx c.c_name; (* need to use name+hash *)
-          CH.sub ctx (Const.cr_hash c);
-          List.iter (hash_expr_ ctx) args
-        | E_bound_var v ->
-          CH.string ctx "b"; CH.int ctx v.bv_idx
-        | E_app (hd,a) ->
-          CH.string ctx "@"; hash_expr_ ctx hd; hash_expr_ ctx a
-        | E_lam (n, tyv, bod) ->
-          CH.string ctx "l"; hash_expr_ ctx bod
-        | E_arrow (a,b) ->
-          CH.string ctx ">"
-        | E_kind -> CH.string ctx "K"
-        | E_type -> CH.string ctx "T"
-        | E_box seq ->
-          CH.string ctx "["; hash_seq_ ctx seq
-      end;
-      CH.finalize ctx
-    in
-
-    (* is hash computed already? *)
-    if Cr_hash.equal Cr_hash.dummy e.e_hash then (
-      let h = compute_ e in
-      e.e_hash <- h;
-      h
-    ) else (
-      e.e_hash (* in cache *)
-    )
+  let cr_hash = Util_cr_hash_.hash_expr_
 
   exception E_exit
 
@@ -699,7 +808,7 @@ module Expr = struct
 
   let id_gen_ = ref 0 (* note: updated atomically *)
 
-  let new_const ctx name ty_vars ty ~c_hash : const =
+  let new_const ctx name ty_vars ty ~def : const =
     let fvars = free_vars ty in
     let diff = Var.Set.diff fvars (Var.Set.of_list ty_vars) in
     begin match Var.Set.choose_opt diff with
@@ -712,10 +821,10 @@ module Expr = struct
                but not in the type variables %a"
               Var.pp v name (Fmt.Dump.list Var.pp) ty_vars);
     end;
-    new_const_ name ~c_hash (C_ty_vars ty_vars) ty
+    Const.make ~def name (C_ty_vars ty_vars) ty
 
-  let new_ty_const ctx name n ~c_hash : ty_const =
-    new_const_ name ~c_hash (C_arity n) (type_ ctx)
+  let new_ty_const ctx name n ~def : ty_const =
+    Const.make ~def name (C_arity n) (type_ ctx)
 
   let mk_const_ ctx c args ty : t =
     make_ ctx (E_const (c,args)) ty
@@ -1025,28 +1134,6 @@ module Expr = struct
   let[@inline] as_const_exn e = match e.e_view with
     | E_const (c,args) -> c, args
     | _ -> Error.failf (fun k->k"%a is not a constant" pp e)
-
-  module AsKey = struct
-    type nonrec t = t
-    let equal = equal
-    let compare = compare
-    let hash = hash
-  end
-
-  module Map = CCMap.Make(AsKey)
-  module Set = CCSet.Make(AsKey)
-  module Tbl = CCHashtbl.Make(AsKey)
-
-  let iter_dag ~f e : unit =
-    let tbl = Tbl.create 8 in
-    let rec loop e =
-      if not (Tbl.mem tbl e) then (
-        Tbl.add tbl e ();
-        f e;
-        iter e ~f:(fun _ u -> loop u)
-      )
-    in
-    loop e
 end
 
 module Subst = struct
@@ -1183,7 +1270,7 @@ module Ctx = struct
       );
       ctx_bool_c=lazy (
         let typ = Expr.type_ ctx in
-        new_const_ id_bool ~c_hash:(Cr_hash.magic "bool") (C_arity 0) typ
+        Const.make id_bool ~def:(C_def_magic "bool") (C_arity 0) typ
       );
       ctx_bool=lazy (
         Expr.const ctx (Lazy.force ctx.ctx_bool_c) []
@@ -1193,7 +1280,7 @@ module Ctx = struct
         let a_ = Var.make "a" type_ in
         let ea = Expr.var ctx a_ in
         let typ = Expr.(arrow ctx ea @@ arrow ctx ea @@ bool ctx) in
-        new_const_ id_eq ~c_hash:(Cr_hash.magic "eq") (C_ty_vars [a_]) typ
+        Const.make id_eq ~def:(C_def_magic "eq") (C_ty_vars [a_]) typ
       );
       ctx_select_c=lazy (
         let type_ = Expr.type_ ctx in
@@ -1201,7 +1288,7 @@ module Ctx = struct
         let a_ = Var.make "a" type_ in
         let ea = Expr.var ctx a_ in
         let typ = Expr.(arrow ctx (arrow ctx ea bool_) ea) in
-        new_const_ id_select ~c_hash:(Cr_hash.magic "select") (C_ty_vars [a_]) typ
+        Const.make id_select ~def:(C_def_magic "select") (C_ty_vars [a_]) typ
       );
     } in
     ctx
@@ -1484,17 +1571,8 @@ module Thm = struct
         | exception Not_found -> ()
       end;
 
-      (* compute hash using [rhs] *)
-      let c_hash =
-        Cr_hash.(
-          let ctx = create() in
-          string ctx "def";
-          string ctx (Var.name x_var);
-          sub ctx (Expr.cr_hash rhs);
-          finalize ctx
-        )
-      in
-      let c = Expr.new_const ctx ~c_hash (Var.name x_var) ty_vars_l (Var.ty x_var) in
+      let c = Expr.new_const ctx
+          ~def:(C_def_expr {rhs}) (Var.name x_var) ty_vars_l (Var.ty x_var) in
       let c_e = Expr.const ctx c (List.map (Expr.var ctx) ty_vars_l) in
       let th = make_ ctx Expr_set.empty (Expr.app_eq ctx c_e rhs) in
       th, c
@@ -1555,42 +1633,17 @@ module Thm = struct
 
     let arity = List.length ty_vars_l in
 
-    (* compute hash from names and [phi] *)
-    let c_hash =
-      Cr_hash.(
-        let ctx = create() in
-        string ctx "c.ty";
-        int ctx arity;
-        sub ctx (Expr.cr_hash phi);
-        finalize ctx
-      )
-    in
-
     (* construct new type and mapping functions *)
-    let tau = Expr.new_ty_const ~c_hash ctx name arity in
+    let tau = Expr.new_ty_const ~def:(C_def_ty {phi}) ctx name arity in
     let tau_vars = Expr.const ctx tau ty_vars_expr_l in
 
     let c_abs =
-      let c_hash =
-        Cr_hash.(
-          let ctx = create() in
-          string ctx "c.abs"; sub ctx (Expr.cr_hash phi);
-          finalize ctx
-        )
-      in
       let ty = Expr.arrow ctx ty tau_vars in
-      Expr.new_const ~c_hash ctx abs ty_vars_l ty
+      Expr.new_const ~def:(C_def_ty_abs {phi}) ctx abs ty_vars_l ty
     in
     let c_repr =
-      let c_hash =
-        Cr_hash.(
-          let ctx = create() in
-          string ctx "c.repr"; sub ctx (Expr.cr_hash phi);
-          finalize ctx
-        )
-      in
       let ty = Expr.arrow ctx tau_vars ty in
-      Expr.new_const ~c_hash ctx repr ty_vars_l ty
+      Expr.new_const ~def:(C_def_ty_repr {phi}) ctx repr ty_vars_l ty
     in
 
     let abs_x = Var.make "x" tau_vars in
@@ -1682,28 +1735,16 @@ module Theory = struct
     self.theory_in_constants <- Name_k_map.add (kind,c.c_name) c self.theory_in_constants;
     ()
 
-  let assume_const self name vars ty : const =
-    let c_hash =
-      Cr_hash.(
-        let ctx = create() in
-        string ctx "th.ass";
-        List.iter (fun v -> string ctx v.v_name) vars;
-        sub ctx (Expr.cr_hash ty);
-        finalize ctx
-      ) in
-    let c = Expr.new_const self.theory_ctx ~c_hash name vars ty in
+  let assume_const self name ty_vars ty : const =
+    let c = Expr.new_const
+        ~def:(C_def_theory_param {ty_vars;ty})
+        self.theory_ctx name ty_vars ty in
     add_assumption_const self c;
     c
 
   let assume_ty_const self name ~arity : const =
-    let c_hash =
-      Cr_hash.(
-        let ctx = create() in
-        string ctx "th.assty";
-        int ctx arity;
-        finalize ctx
-      ) in
-    let c = Expr.new_ty_const self.theory_ctx ~c_hash name arity in
+    let c = Expr.new_ty_const self.theory_ctx name arity
+        ~def:(C_def_theory_ty_param {arity}) in
     add_assumption_const self c;
     c
 
@@ -1857,17 +1898,16 @@ module Theory = struct
         | Some c' when Expr.is_eq_to_type c'.c_ty -> c'
         | Some c' ->
           (* reinterpret into [c']… whose type might also change *)
-          (* FIXME: this should never happen, constants do not change type?
-             if they do they're just a new constant
           let ty'' = inst_t_ self c'.c_ty in
-          new_const Const.make_ self.ctx {c' with c_ty=ty''}
-          *)
-          c'
+          let def = Const.map_const_def c'.c_def ~f:(inst_t_ self) in
+          let c_hash =
+            if Const.is_concrete_def def then Some c'.c_hash else None in
+          Const.make ~def ?c_hash c'.c_name c'.c_args ty''
         | None ->
-          (* FIXME
-          Error.failf (fun k->k"cannot find constant `%s` in interpretation" name')
-             *)
-          c
+          let def = Const.map_const_def c.c_def ~f:(inst_t_ self) in
+          let c_hash =
+            if Const.is_concrete_def def then Some c.c_hash else None in
+          Const.make ~def ?c_hash name' c.c_args ty'
       end
 
     let inst_constants_ (self:state) (m:const Name_k_map.t) : _ Name_k_map.t =
