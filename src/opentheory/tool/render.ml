@@ -54,7 +54,8 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
     | K.E_type -> txt "type"
     | K.E_var v ->
       let name = K.Var.name v in
-      let title_ = Fmt.asprintf "%s : %a" name E.pp (K.Var.ty v) in
+      let title_ = Fmt.asprintf "%s : %a@ hash %a"
+          name E.pp (K.Var.ty v) K.Cr_hash.pp (K.Expr.cr_hash e) in
       span [A.title title_] [txt name]
     | K.E_bound_var v ->
 
@@ -72,7 +73,9 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
     | K.E_const (c, []) ->
       let c_name = strip_name_ ~config @@ K.Const.name c in
       let title_ =
-        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
+        Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e)
+          K.Cr_hash.pp (K.Expr.cr_hash e)
+      in
       let res = span [A.title title_] [txt c_name] in
       if is_a_binder c c_name || is_infix c c_name
       then span[][txt "("; res; txt")"]
@@ -82,7 +85,9 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       (* always write type arguments explicitly for types *)
       let descr = strip_name_ ~config @@ K.Const.name c in
       let title =
-        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
+        Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e)
+          K.Cr_hash.pp (K.Expr.cr_hash e)
+      in
       span' [] [
         sub_e @@ span [A.title title] [txt descr];
         sub_l (
@@ -96,7 +101,9 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       (* omit arguments *)
       let c_name = strip_name_ ~config @@ K.Const.name c in
       let title =
-        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
+        Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e)
+          K.Cr_hash.pp (K.Expr.cr_hash e)
+      in
       let res = span [A.title title] [txt c_name] in
       if is_a_binder c c_name || is_infix c c_name
       then span[][txt "("; res; txt")"]
@@ -178,7 +185,10 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       ]
 
     | K.E_box _seq ->
-      span[cls "box"][txtf "%a" E.pp e]
+      let title_ = Fmt.asprintf "box@ hash %a" K.Cr_hash.pp (K.Expr.cr_hash e) in
+      span[cls "box"; A.title title_][
+        txtf "%a" E.pp e
+      ]
 
   and loop' k ~depth ~names e : Html.elt =
     expr_wrap_ (loop k ~depth ~names) e
@@ -188,7 +198,8 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
 let const_to_html ?(config=Config.make ()) (c:K.Const.t) =
   let name = strip_name_ ~config @@ K.Const.name c in
   let args = Fmt.to_string K.Const.pp_args (K.Const.args c) in
-  let title_ = Fmt.to_string K.Const.pp_with_ty c in
+  let title_ = Fmt.asprintf "%a@ hash: %a" K.Const.pp_with_ty c
+      K.Cr_hash.pp (K.Const.cr_hash c) in
   Html.(
     span [cls "const"] [
       span [A.title title_] [txt name]; txt " "; txt args;
