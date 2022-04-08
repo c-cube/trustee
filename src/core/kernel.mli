@@ -313,6 +313,11 @@ module Thm : sig
   (** View theorem as a sequent. *)
   val sequent : t -> Sequent.t
 
+  val is_in_theory : t -> bool
+  (** [is_in_theory th] is true iff [th] belongs in a theory *)
+
+  val cr_hash : t -> Cr_hash.t
+
   val hyps_iter : t -> expr iter
 
   val hyps_l : t -> expr list

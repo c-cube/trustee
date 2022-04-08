@@ -212,11 +212,14 @@ let thm_to_html ?(config=Config.make()) thm : Html.elt =
   let hyps = K.Thm.hyps_l thm in
   let concl = K.Thm.concl thm in
   let bod =
+    let title_ = Fmt.asprintf "hash %a;@ in theory: %B"
+        K.Cr_hash.pp (K.Thm.cr_hash thm) (K.Thm.is_in_theory thm) in
+    let vdash = span [A.title title_] [txt "⊢"] in
     match hyps with
-    | [] -> [txt "⊢"; expr_to_html ~config concl]
+    | [] -> [vdash; expr_to_html ~config concl]
     | l ->
       (* TODO: some basic layout *)
-      List.map (expr_to_html ~config) l @ [txt "⊢"; expr_to_html ~config concl]
+      List.map (expr_to_html ~config) l @ [vdash; expr_to_html ~config concl]
   in
   span[cls "theorem"] bod
 

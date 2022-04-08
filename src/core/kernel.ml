@@ -23,6 +23,9 @@ module Cr_hash : sig
   val finalize : ctx -> t
   val dummy : t
 
+  type 'a hasher = ctx -> 'a -> unit
+  val run : 'a hasher -> 'a -> t
+
   val string : ctx -> string -> unit
   val int : ctx -> int -> unit
   val sub : ctx -> t -> unit
@@ -52,6 +55,12 @@ end = struct
 
   let[@inline] finalize ctx : t =
     Bytes.unsafe_of_string (H.to_bin (H.finalize ctx.ctx))
+
+  type 'a hasher = ctx -> 'a -> unit
+  let run hasher x =
+    let ctx = create() in
+    hasher ctx x;
+    finalize ctx
 
   let str_to_hex (s:string) =
     let i_to_hex (i:int) =
@@ -1333,6 +1342,10 @@ module Thm = struct
   let hyps_sorted_l = hyps_l
   let[@inline] has_hyps self = not (Expr_set.is_empty self.th_seq.hyps)
   let n_hyps self = Expr_set.size self.th_seq.hyps
+
+  let is_in_theory self = Option.is_some self.th_theory
+  let[@inline] cr_hash self =
+    Cr_hash.run Util_cr_hash_.hash_seq_ self.th_seq
 
   let[@inline] equal a b =
     Sequent.equal a.th_seq b.th_seq &&
