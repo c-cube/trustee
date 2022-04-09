@@ -373,11 +373,7 @@ module Name_k_map = CCMap.Make(struct
 type thm = {
   th_seq: sequent;
   mutable th_flags: int; (* [bool flags|ctx uid] *)
-  mutable th_theory: theory option;
 }
-(* TODO:
-   - store set of axioms used
-   *)
 
 and theory = {
   theory_name: string;
@@ -397,6 +393,7 @@ and ctx = {
   ctx_bool_c: const lazy_t;
   ctx_eq_c: const lazy_t;
   ctx_select_c : const lazy_t;
+  ctx_erase_defs: bool;
   mutable ctx_axioms: thm list;
   mutable ctx_axioms_allowed: bool;
 }
@@ -460,6 +457,8 @@ module Expr0 = struct
       )
     in
     loop e
+
+  let iter_dag' e f = iter_dag ~f e
 end
 
 module Util_cr_hash_ = struct
@@ -615,8 +614,16 @@ module Const = struct
     | C_def_magic _ | C_def_skolem _
     | C_def_concrete -> def
 
+  let approx_def self =
+    match self.c_def with
+    | C_def_expr {rhs} -> `Def rhs
+    | C_def_ty {phi} -> `Ty_def phi
+    | C_def_concrete -> `Erased
+    | C_def_theory_ty_param _ | C_def_theory_param _ -> `Param
+    | _ -> `Other
+
   (* make a constant *)
-  let make ~def ?c_hash name args ty : t =
+  let make (ctx:ctx) ~def ?c_hash name args ty : t =
     (* hash name+definition, since equality on (name,def)
        is the definition of equality for constants. *)
     let c_hash = match c_hash with
@@ -625,6 +632,7 @@ module Const = struct
     (* erase def if it's safe to do so (no risk of change in
        a theory interpretation) *)
     let def = match def with
+      | _ when not ctx.ctx_erase_defs -> def (* no erasure *)
       | C_def_expr {rhs=e}
       | C_def_ty {phi=e}
       | C_def_ty_abs {phi=e}
@@ -869,10 +877,10 @@ module Expr = struct
                but not in the type variables %a"
               Var.pp v name (Fmt.Dump.list Var.pp) ty_vars);
     end;
-    Const.make ~def name (C_ty_vars ty_vars) ty
+    Const.make ctx ~def name (C_ty_vars ty_vars) ty
 
   let new_ty_const ctx name n ~def : ty_const =
-    Const.make ~def name (C_arity n) (type_ ctx)
+    Const.make ctx ~def name (C_arity n) (type_ ctx)
 
   let mk_const_ ctx c args ty : t =
     make_ ctx (E_const (c,args)) ty
@@ -1282,6 +1290,9 @@ module Sequent = struct
   let[@inline] hyps_iter g = Expr_set.to_iter g.hyps
   let[@inline] hyps_l g = Expr_set.to_list g.hyps
 
+  let iter_exprs self =
+    Iter.cons (concl self) (hyps_iter self)
+
   let pp out (self:t) : unit =
     if Expr_set.is_empty self.hyps then (
       Fmt.fprintf out "@[?-@ %a@]" Expr.pp self.concl
@@ -1303,11 +1314,12 @@ module Ctx = struct
 
   let uid_ = ref 0
 
-  let create () : t =
+  let create ?(erase_defs=true) () : t =
     let ctx_uid = !uid_ land ctx_id_mask in
     incr uid_;
     let rec ctx = {
       ctx_uid;
+      ctx_erase_defs=erase_defs;
       ctx_exprs=Expr_hashcons.create ~size:2_048 ();
       ctx_axioms=[];
       ctx_axioms_allowed=true;
@@ -1318,7 +1330,7 @@ module Ctx = struct
       );
       ctx_bool_c=lazy (
         let typ = Expr.type_ ctx in
-        Const.make id_bool ~def:(C_def_magic "bool") (C_arity 0) typ
+        Const.make ctx id_bool ~def:(C_def_magic "bool") (C_arity 0) typ
       );
       ctx_bool=lazy (
         Expr.const ctx (Lazy.force ctx.ctx_bool_c) []
@@ -1328,7 +1340,7 @@ module Ctx = struct
         let a_ = Var.make "a" type_ in
         let ea = Expr.var ctx a_ in
         let typ = Expr.(arrow ctx ea @@ arrow ctx ea @@ bool ctx) in
-        Const.make id_eq ~def:(C_def_magic "eq") (C_ty_vars [a_]) typ
+        Const.make ctx id_eq ~def:(C_def_magic "eq") (C_ty_vars [a_]) typ
       );
       ctx_select_c=lazy (
         let type_ = Expr.type_ ctx in
@@ -1336,7 +1348,7 @@ module Ctx = struct
         let a_ = Var.make "a" type_ in
         let ea = Expr.var ctx a_ in
         let typ = Expr.(arrow ctx (arrow ctx ea bool_) ea) in
-        Const.make id_select ~def:(C_def_magic "select") (C_ty_vars [a_]) typ
+        Const.make ctx id_select ~def:(C_def_magic "select") (C_ty_vars [a_]) typ
       );
     } in
     ctx
@@ -1349,12 +1361,12 @@ module Ctx = struct
 
   let axioms self k = List.iter k self.ctx_axioms
 
-  let new_skolem_const _self name tyvars ty : const =
-    Const.make ~def:(C_def_skolem {name}) name (C_ty_vars tyvars) ty
+  let new_skolem_const self name tyvars ty : const =
+    Const.make self ~def:(C_def_skolem {name}) name (C_ty_vars tyvars) ty
 
   let new_skolem_ty_const self name ~arity : const =
     let ty = Expr.type_ self in
-    Const.make ~def:(C_def_skolem_ty {name; arity}) name (C_arity arity) ty
+    Const.make self ~def:(C_def_skolem_ty {name; arity}) name (C_arity arity) ty
 end
 
 module New_ty_def = struct
@@ -1386,16 +1398,18 @@ module Thm = struct
   let[@inline] hyps_iter self k = Expr_set.iter k self.th_seq.hyps
   let[@inline] hyps_l self = Expr_set.to_list self.th_seq.hyps
   let hyps_sorted_l = hyps_l
+  let iter_exprs self = Sequent.iter_exprs self.th_seq
   let[@inline] has_hyps self = not (Expr_set.is_empty self.th_seq.hyps)
   let n_hyps self = Expr_set.size self.th_seq.hyps
 
-  let is_in_theory self = Option.is_some self.th_theory
+  let is_fully_concrete self =
+    Const.expr_is_concrete_ (concl self) &&
+    Iter.for_all Const.expr_is_concrete_ (hyps_iter self)
+
   let[@inline] cr_hash self =
     Cr_hash.run Util_cr_hash_.hash_seq_ self.th_seq
 
-  let[@inline] equal a b =
-    Sequent.equal a.th_seq b.th_seq &&
-    Option.equal Stdlib.(==) a.th_theory b.th_theory
+  let[@inline] equal a b = Sequent.equal a.th_seq b.th_seq
 
   let hash (self:t) = Sequent.hash self.th_seq
 
@@ -1429,7 +1443,7 @@ module Thm = struct
 
   let make_seq_ ctx seq : t =
     let th_flags = ctx.ctx_uid in
-    { th_flags; th_seq=seq; th_theory=None }
+    { th_flags; th_seq=seq; }
 
   let make_ ctx hyps concl : t =
     let th_seq = Sequent.make hyps concl in
@@ -1782,7 +1796,7 @@ module Theory = struct
       Error.fail "Theory.assume: all terms must be booleans"
     );
     let hyps = Expr_set.of_list hyps in
-    let th = {(Thm.make_ ctx hyps concl) with th_theory=Some self} in
+    let th = Thm.make_ ctx hyps concl in
     self.theory_in_theorems <- th :: self.theory_in_theorems;
     th
 
@@ -1831,13 +1845,6 @@ module Theory = struct
     with Not_found -> Name_k_map.get (C_ty,s) self.theory_in_constants
 
   let add_theorem self th : unit =
-    begin match th.th_theory with
-      | None -> th.th_theory <- Some self
-      | Some theory' when theory' == self -> ()
-      | Some theory' ->
-        Error.failf (fun k->k"Theory.add_theorem:@ %a@ already belongs in theory `%a`"
-                   Thm.pp_quoted th Fmt.string theory'.theory_name);
-    end;
     self.theory_defined_theorems <- th :: self.theory_defined_theorems
 
   let mk_ ctx ~name : t =
@@ -1961,12 +1968,12 @@ module Theory = struct
           let def = Const.map_const_def c'.c_def ~f:(inst_t_ self) in
           let c_hash =
             if Const.is_concrete_def def then Some c'.c_hash else None in
-          Const.make ~def ?c_hash c'.c_name c'.c_args ty''
+          Const.make self.ctx ~def ?c_hash c'.c_name c'.c_args ty''
         | None ->
           let def = Const.map_const_def c.c_def ~f:(inst_t_ self) in
           let c_hash =
             if Const.is_concrete_def def then Some c.c_hash else None in
-          Const.make ~def ?c_hash name' c.c_args ty'
+          Const.make self.ctx ~def ?c_hash name' c.c_args ty'
       end
 
     let inst_constants_ (self:state) (m:const Name_k_map.t) : _ Name_k_map.t =

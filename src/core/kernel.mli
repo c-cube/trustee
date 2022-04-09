@@ -52,6 +52,10 @@ module Cr_hash : sig
   include PP with type t := t
   include EQ with type t := t
   include HASH with type t := t
+
+  val of_string_exn : string -> t
+
+  module Tbl : CCHashtbl.S with type key = t
 end
 
 (** Logic constants *)
@@ -80,6 +84,9 @@ module Const : sig
 
   val is_eq_to_bool : t -> bool
   val is_eq_to_eq : t -> bool
+
+  val approx_def : t -> [`Other | `Erased | `Param | `Ty_def of expr | `Def of expr]
+  (** An approximation of the definition *)
 end
 
 (** Free Variables *)
@@ -200,6 +207,8 @@ module Expr : sig
   val iter_dag : f:(t -> unit) -> t -> unit
   (** [iter_dag ~f e] calls [f] once on each unique subterm of [e]. *)
 
+  val iter_dag' : t -> t Iter.t
+
   type 'a with_ctx = ctx -> 'a
 
   val subst : (recursive:bool -> t -> Subst.t -> t) with_ctx
@@ -261,6 +270,8 @@ module Sequent : sig
   val hyps_l : t -> Expr.t list
   val hyps_iter : t -> Expr.t iter
 
+  val iter_exprs : t -> Expr.t Iter.t
+
   include Sigs.PP with type t := t
 end
 
@@ -313,8 +324,10 @@ module Thm : sig
   (** View theorem as a sequent. *)
   val sequent : t -> Sequent.t
 
-  val is_in_theory : t -> bool
-  (** [is_in_theory th] is true iff [th] belongs in a theory *)
+  val is_fully_concrete : t -> bool
+  (** [is_fully_concrete th] is true iff [th]'s expressions
+      are entirely made of fully concrete constants (as opposed
+      to theory parameters) *)
 
   val cr_hash : t -> Cr_hash.t
 
@@ -324,6 +337,8 @@ module Thm : sig
 
   val hyps_sorted_l : t -> expr list
   (** List of hypothesis of this theorem, sorted, and deduplicated. *)
+
+  val iter_exprs : t -> Expr.t Iter.t
 
   val n_hyps : t -> int
   (** Number of hypothesis of this theorem *)
@@ -530,7 +545,9 @@ end
 module Ctx : sig
   type t = ctx
 
-  val create : unit -> t
+  val create :
+    ?erase_defs:bool ->
+    unit -> t
 
   val pledge_no_more_axioms : t -> unit
   (** Forbid the creation of new axioms. From now on, this logical context
