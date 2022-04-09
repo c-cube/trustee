@@ -23,7 +23,8 @@ td.theory-param {
 
 a.const {
   color: inherit;
-  text-decoration-line: none;
+  text-decoration-thickness: 1px;
+  text-decoration-style: dotted;
 }
 
 a.const:hover {

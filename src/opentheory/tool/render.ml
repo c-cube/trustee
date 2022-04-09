@@ -174,8 +174,11 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
           let vartitle = Fmt.asprintf "%s : %a" varname E.pp ty in
           let c_title =
             Fmt.asprintf "%a : %a" E.pp f E.pp (E.ty_exn f) in
+          let c_href = href_const c in
           span[] [
-            span [A.title c_title] [txt c_name];
+            span [A.title c_title] [
+              a [A.href c_href; cls"const"] [txt c_name]
+            ];
             span [A.title vartitle] [txt varname];
             txt ". ";
             loop (k+1) ~depth:(depth+1) ~names:(n::names) bod
