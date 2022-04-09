@@ -23,12 +23,16 @@ module Cr_hash : sig
   val finalize : ctx -> t
   val dummy : t
 
+  val of_string_exn : string -> t
+
   type 'a hasher = ctx -> 'a -> unit
   val run : 'a hasher -> 'a -> t
 
   val string : ctx -> string -> unit
   val int : ctx -> int -> unit
   val sub : ctx -> t -> unit
+
+  module Tbl : CCHashtbl.S with type key = t
 end = struct
   module H = Sha256
   type t = bytes (* binary content *)
@@ -82,6 +86,34 @@ end = struct
     str_to_hex s
 
   let pp out self = Fmt.string out (to_string  self)
+
+  let of_hex_exn (s:string) : string =
+    let n_of_c = function
+      | '0' .. '9' as c -> Char.code c - Char.code '0'
+      | 'a' .. 'f' as c -> 10 + Char.code c - Char.code 'a'
+      | _ -> invalid_arg "string: invalid hex"
+    in
+    if (String.length s mod 2 <> 0) then (
+      invalid_arg "string: hex sequence must be of even length";
+    );
+    let res = Bytes.make (String.length s / 2) '\x00' in
+    for i=0 to String.length s/2-1 do
+      let n1 = n_of_c (String.get s (2*i)) in
+      let n2 = n_of_c (String.get s (2*i+1)) in
+      let n = (n1 lsl 4) lor n2 in
+      Bytes.set res i (Char.chr n)
+    done;
+    Bytes.unsafe_to_string res
+
+  let of_string_exn s : t =
+    of_hex_exn s |> Bytes.unsafe_of_string
+
+  module As_key = struct
+    type nonrec t = t
+    let equal = equal
+    let hash = hash
+  end
+  module Tbl = CCHashtbl.Make(As_key)
 end
 
 let ctx_id_bits = 5
