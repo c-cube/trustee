@@ -537,6 +537,10 @@ module Ctx : sig
       is frozen. *)
 
   val axioms : t -> thm iter
+
+  val new_skolem_const : t -> string -> var list -> ty -> const
+
+  val new_skolem_ty_const : t -> string -> arity:int -> const
 end
 
 

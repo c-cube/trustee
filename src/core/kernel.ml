@@ -142,6 +142,8 @@ and const_def =
   | C_def_ty_repr of {phi: expr}
   | C_def_theory_param of {ty_vars: var list; ty: expr}
   | C_def_theory_ty_param of {arity: int}
+  | C_def_skolem of {name: string}
+  | C_def_skolem_ty of {name: string; arity: int}
   | C_def_magic of string
   | C_def_concrete
 
@@ -509,6 +511,10 @@ module Util_cr_hash_ = struct
         H.string ctx "ty.param"; H.int ctx arity
       | C_def_magic magic ->
         H.string ctx "magic"; H.string ctx magic
+      | C_def_skolem {name} ->
+        H.string ctx "sk.e"; H.string ctx name
+      | C_def_skolem_ty {name;arity} ->
+        H.string ctx "sk.ty"; H.string ctx name
       | C_def_concrete -> assert false
     end;
     H.finalize ctx
@@ -573,8 +579,8 @@ module Const = struct
     | C_def_ty_abs {phi}-> C_def_ty_abs {phi=f phi}
     | C_def_ty_repr {phi}-> C_def_ty_repr {phi=f phi}
     | C_def_theory_param {ty_vars;ty} -> C_def_theory_param {ty_vars;ty=f ty}
-    | C_def_theory_ty_param _
-    | C_def_magic _
+    | C_def_theory_ty_param _ | C_def_skolem_ty _
+    | C_def_magic _ | C_def_skolem _
     | C_def_concrete -> def
 
   (* make a constant *)
@@ -593,6 +599,7 @@ module Const = struct
       | C_def_ty_repr {phi=e} ->
         if expr_is_concrete_ e then C_def_concrete else def
       | C_def_theory_param _ | C_def_theory_ty_param _
+      | C_def_skolem _ | C_def_skolem_ty _
       | C_def_concrete | C_def_magic _ -> def
     in
     { c_name=name; c_hash; c_ty=ty; c_args=args; c_def=def;
@@ -1203,16 +1210,16 @@ end
   let ctx = Ctx.create ()
   let bool = Expr.bool ctx
   let type_ = Expr.type_ ctx
-  let tau = Expr.const ctx (Expr.new_ty_const ctx "tau" 0) []
+  let tau = Expr.const ctx (Ctx.new_skolem_ty_const ctx "tau" ~arity:0) []
   let lambda v t = Expr.lambda ctx v t
   let v' s ty = Var.make s ty
   let v x = Expr.var ctx x
   let (@->) a b = Expr.arrow ctx a b
   let (@@) a b = Expr.app ctx a b
-  let a = Expr.const ctx (Expr.new_const ctx "a0" [] tau) []
-  let b = Expr.const ctx (Expr.new_const ctx "b0" [] tau) []
-  let c = Expr.const ctx (Expr.new_const ctx "c0" [] tau) []
-  let f1: const = Expr.new_const ctx "f1" [] (tau @-> tau)
+  let a = Expr.const ctx (Ctx.new_skolem_const ctx "a0" [] tau) []
+  let b = Expr.const ctx (Ctx.new_skolem_const ctx "b0" [] tau) []
+  let c = Expr.const ctx (Ctx.new_skolem_const ctx "c0" [] tau) []
+  let f1: const = Ctx.new_skolem_const ctx "f1" [] (tau @-> tau)
   let eq = Expr.app_eq ctx
 
   let must_fail f = try ignore (f()); false with _ -> true
@@ -1309,6 +1316,13 @@ module Ctx = struct
     )
 
   let axioms self k = List.iter k self.ctx_axioms
+
+  let new_skolem_const _self name tyvars ty : const =
+    Const.make ~def:(C_def_skolem {name}) name (C_ty_vars tyvars) ty
+
+  let new_skolem_ty_const self name ~arity : const =
+    let ty = Expr.type_ self in
+    Const.make ~def:(C_def_skolem_ty {name; arity}) name (C_arity arity) ty
 end
 
 module New_ty_def = struct

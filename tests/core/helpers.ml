@@ -11,7 +11,7 @@ module Make() = struct
 
   include E
   let c_bool = K.Const.bool ctx
-  let tau = E.const ctx (E.new_ty_const ctx "tau" 0) []
+  let tau = E.const ctx (K.Ctx.new_skolem_ty_const ctx "tau" ~arity:0) []
   let v' s ty = K.Var.make s ty
   let bool = E.bool ctx
   let type_ = E.type_ ctx
@@ -19,7 +19,7 @@ module Make() = struct
   let app_eq = E.app_eq ctx
   let (@->) = E.arrow ctx
   let (@@@) = E.app ctx
-  let new_const s ty = E.new_const ctx s [] ty
+  let new_const s ty = K.Ctx.new_skolem_const ctx s [] ty
   let const' c = E.const ctx c []
   let const c l = E.const ctx c l
   let var_name = E.var_name ctx
