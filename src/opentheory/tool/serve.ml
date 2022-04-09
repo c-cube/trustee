@@ -47,15 +47,9 @@ let reply_page ~title req h =
   H.Response.make_string ~headers @@ Ok res
 
 type state = {
-  lock: Mutex.t;
   server: H.t;
-  idx: Idx.t;
-  eval: Eval.state;
+  st: St.t;
 }
-
-let[@inline] with_lock l f =
-  Mutex.lock l;
-  Fun.protect ~finally:(fun () -> Mutex.unlock l) f
 
 let home_txt =
   Html.[
@@ -83,7 +77,7 @@ let h_root (self:state) : unit =
   let@ () = top_wrap_ req in
   let open Html in
   let res =
-    let {OT.Idx.thy_by_name; articles; errors; _ } = self.idx in
+    let {OT.Idx.thy_by_name; articles; errors; _ } = self.st.idx in
     [
       h2[][txt "Trustee"];
       div[] home_txt;
@@ -109,7 +103,7 @@ let h_thy (self:state) : unit =
   H.add_route_handler self.server
     H.Route.(exact "thy" @/ string_urlencoded @/ return) @@ fun thy_name req ->
   let@ () = top_wrap_ req in
-  let thy = Idx.find_thy self.idx thy_name in
+  let thy = Idx.find_thy self.st.idx thy_name in
   let res =
     let open Html in
     [
@@ -133,7 +127,9 @@ let h_art (self:state) : unit =
   H.add_route_handler self.server
     H.Route.(exact "art" @/ string_urlencoded @/ return) @@ fun art req ->
   let@ () = top_wrap_ req in
-  let art_file = Idx.find_article self.idx art in
+  let art_file =
+    let@ () = St.with_lock self.st.lock in
+    Idx.find_article self.st.idx art in
   let content = CCIO.with_in art_file CCIO.read_all in
   let res = Html.[
       a[A.href "http://www.gilith.com/opentheory/article.html"][txt "reference documentation"];
@@ -153,12 +149,14 @@ let h_eval (self:state) : unit =
   let@ () = top_wrap_ req in
   let res =
     (* need lock around ctx/eval *)
-    let@ () = with_lock self.lock in
-    Eval.eval_theory self.eval thy_name
+    let@ () = St.with_lock self.st.lock in
+    Eval.eval_theory self.st.eval thy_name
   in
 
   let config =
-    let thy = Idx.find_thy self.idx thy_name in
+    let thy =
+      let@ () = St.with_lock self.st.lock in
+      Idx.find_thy self.st.idx thy_name in
     let open_namespaces =
       thy.Thy_file.meta
       |> List.filter_map (fun (mk,v) ->
@@ -189,37 +187,35 @@ let h_hash_item (self:state) : unit =
   let h = K.Cr_hash.of_string_exn h in
   let res =
     (* need lock around ctx/eval *)
-    let@ () = with_lock self.lock in
-    K.Cr_hash.Tbl.find_opt self.idx.Idx.by_hash h
+    let@ () = St.with_lock self.st.lock in
+    K.Cr_hash.Tbl.find_opt self.st.idx.Idx.by_hash h
   in
 
   let r = match res with
     | Some r -> r
     | None -> Error.failf (fun k->k"hash not found: %a" K.Cr_hash.pp h)
   in
-  let config = Render.Config.make () in
+  let config = Render.Config.make ~open_all_namespaces:true () in
 
   let open Html in
-  let res = match r with
+  let kind, res = match r with
     | Idx.H_const c ->
-      [
+      "constant", [
         h3[] [txtf "constant %a" K.Const.pp c];
         pre[][Render.const_to_html ~config c];
         h4[] [txt "Definition"];
         Render.const_def_to_html ~config c;
       ]
     | Idx.H_expr e ->
-      [
+      "expression", [
         pre[][Render.expr_to_html ~config e]
       ]
   in
-  reply_page ~title:(spf "eval %s" @@ K.Cr_hash.to_string h) req res
+  reply_page ~title:(spf "%s %s" kind @@ K.Cr_hash.to_string h) req res
 
-let serve (idx:OT.Idx.t) ~port : unit =
+let serve st ~port : unit =
   let server = H.create ~port () in
-  let ctx = K.Ctx.create ~erase_defs:false () in
-  let eval = Eval.create ~ctx ~idx () in
-  let state = {idx; server; eval; lock=Mutex.create(); } in
+  let state = {server; st } in
   h_root state;
   h_thy state;
   h_art state;

@@ -1,7 +1,6 @@
 
 open Trustee_opentheory
 open Common_
-module K = Trustee_core.Kernel
 module Log = Trustee_core.Log
 
 let print_all idx =
@@ -31,20 +30,6 @@ type theories = {
 
 let unquote_str = Util.unquote_str
 
-let check_ (idx:Idx.t) ~progress_bar ~names : unit =
-  let ctx = K.Ctx.create () in
-  let eval_st =
-    Eval.create ~cb:(new Eval.print_callbacks) ~progress_bar ~ctx ~idx () in
-
-  Iter.iter
-    (fun name ->
-       match Eval.eval_theory eval_st name with
-       | Ok _ -> ()
-       | Error e ->
-         Format.eprintf "error: %a" Trustee_core.Error.pp e)
-    names;
-  ()
-
 let print = ref false
 let check = ref []
 let check_all = ref false
@@ -58,17 +43,26 @@ let main ~dir ~serve ~port () =
     r
   in
   if !print then print_all idx;
-  if serve then Serve.serve idx ~port
-  else (
-    let theories = Iter.of_list idx.Idx.theories |> Iter.map snd in
-    if !check_all then (
-      check_ idx
-        ~progress_bar:!progress_ ~names:(Iter.map Thy_file.name theories);
-    ) else if !check <> [] then (
-      check_ idx
-        ~progress_bar:!progress_ ~names:(Iter.of_list !check)
-    );
+  let theories = Iter.of_list idx.Idx.theories |> Iter.map snd in
+
+  let ctx = K.Ctx.create ~erase_defs:false () in
+  let st =
+    let progress_bar = !progress_ in
+    St.create
+      ~cb:(new Eval.print_callbacks) ~progress_bar ~ctx ~idx ()
+  in
+
+  let th_serve =
+    if serve then Some (Thread.create (fun () -> Serve.serve st ~port) ()) else None
+  in
+
+  if !check_all then (
+    Check_all.check ~st ~names:(Iter.map Thy_file.name theories) ();
+  ) else if !check <> [] then (
+    Check_all.check ~st ~names:(Iter.of_list !check) ()
   );
+
+  Option.iter Thread.join th_serve;
   ()
 
 (* TODO: use Logs *)

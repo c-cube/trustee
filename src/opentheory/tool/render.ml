@@ -6,17 +6,23 @@ module E = K.Expr
 module Config = struct
   type t = {
     open_namespaces: string list;
+    open_all_namespaces: bool;
   }
 
-  let make ?(open_namespaces=[]) () : t =
-    { open_namespaces }
+  let make ?(open_namespaces=[]) ?(open_all_namespaces=false) () : t =
+    { open_namespaces; open_all_namespaces }
 end
 
 let strip_name_ ~config (s:string) : string =
-  match List.find (fun pre -> CCString.prefix ~pre s) config.Config.open_namespaces with
-  | pre ->
-    CCString.chop_prefix ~pre s |> Option.get_exn_or "strip name"
-  | exception Not_found -> s
+  if config.Config.open_all_namespaces then
+    match List.rev (String.split_on_char '.' s) with
+    | c :: _ -> c
+    | [] -> s
+  else
+    match List.find (fun pre -> CCString.prefix ~pre s) config.Config.open_namespaces with
+    | pre ->
+      CCString.chop_prefix ~pre s |> Option.get_exn_or "strip name"
+    | exception Not_found -> s
 
 let is_symbol_ s =
   let anum = function 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' -> true | _ -> false in
