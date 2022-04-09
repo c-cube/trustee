@@ -49,12 +49,11 @@ let expr_wrap_ f e =
   | E_app _  | E_lam _ | E_arrow _ | E_const _ ->
     span[][txt "("; f e; txt ")"]
 
+let href_const c =
+  spf "/h/%s" (K.Cr_hash.to_string @@ K.Const.cr_hash c)
+
 let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
   let open Html in
-
-  let href_const c =
-    spf "/h/%s" (K.Cr_hash.to_string @@ K.Const.cr_hash c)
-  in
 
   let rec loop k ~depth ~names e : Html.elt =
     let recurse = loop k ~depth ~names in
@@ -248,7 +247,11 @@ let const_to_html ?(config=Config.make ()) (c:K.Const.t) =
       K.Cr_hash.pp (K.Const.cr_hash c) in
   Html.(
     span [cls "const"] [
-      span [A.title title_] [txt name]; txt " "; txt args;
+      span [A.title title_] [
+        a[cls "const"; A.href (href_const c)][
+          txt name
+        ]
+      ]; txt " "; txt args;
       txt " : "; expr_to_html ~config (K.Const.ty c)
     ]
   )
