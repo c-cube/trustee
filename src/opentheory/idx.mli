@@ -4,7 +4,13 @@
     The index is used to list all thy/int/art files and build the dependency
     graph among them. *)
 
+open Common_
+
 type path = string
+
+type hashed_item =
+  | H_const of K.Const.t
+  | H_expr of K.Expr.t
 
 (** Results of listing a directory *)
 type t = {
@@ -14,6 +20,7 @@ type t = {
   interp_by_name: Interp_file.t Str_tbl.t;
   articles: path Str_tbl.t; (* basename -> path *)
   errors: (path * Trustee_core.Error.t) list;
+  by_hash: hashed_item K.Cr_hash.Tbl.t;
 }
 
 val list_dir : path -> t

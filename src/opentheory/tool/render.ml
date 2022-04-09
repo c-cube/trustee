@@ -46,6 +46,10 @@ let expr_wrap_ f e =
 let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
   let open Html in
 
+  let href_const c =
+    spf "/h/%s" (K.Cr_hash.to_string @@ K.Const.cr_hash c)
+  in
+
   let rec loop k ~depth ~names e : Html.elt =
     let recurse = loop k ~depth ~names in
     let recurse' e = loop' k ~depth ~names e in
@@ -76,7 +80,10 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
         Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e)
           K.Cr_hash.pp (K.Expr.cr_hash e)
       in
-      let res = span [A.title title_] [txt c_name] in
+      let href = href_const c in
+      let res = span [A.title title_] [
+          a [A.href href; cls"const"] [txt c_name]
+        ] in
       if is_a_binder c c_name || is_infix c c_name
       then span[][txt "("; res; txt")"]
       else res
@@ -89,7 +96,14 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
           K.Cr_hash.pp (K.Expr.cr_hash e)
       in
       span' [] [
-        sub_e @@ span [A.title title] [txt descr];
+        sub_e @@ span [
+          A.title title;
+        ] [
+          a[
+            A.href (href_const c);
+            cls "const";
+          ][ txt descr]
+        ];
         sub_l (
           CCList.flat_map
             (fun sub -> [txt " "; recurse' sub])
@@ -104,7 +118,14 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
         Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e)
           K.Cr_hash.pp (K.Expr.cr_hash e)
       in
-      let res = span [A.title title] [txt c_name] in
+      let res = span [
+          A.title title;
+        ] [
+          a[
+            A.href (href_const c);
+            cls "const";
+          ][txt c_name]
+        ] in
       if is_a_binder c c_name || is_infix c c_name
       then span[][txt "("; res; txt")"]
       else res
@@ -160,7 +181,14 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
             Fmt.asprintf "%a : %a" E.pp f E.pp (E.ty_exn f) in
           span[] [
             recurse' a;
-            span [A.title c_title] [txt (spf " %s " c_name)];
+            span [
+              A.title c_title;
+            ] [
+              Html.a[
+                A.href (href_const c);
+                cls "const";
+              ][txt (spf " %s " c_name)]
+            ];
             recurse' b
           ]
 
@@ -195,6 +223,15 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
   in
   span [cls "expr"] [loop 0 ~depth:0 ~names:[] e]
 
+let const_def_to_html ?(config=Config.make ()) (c:K.Const.t) =
+  let open Html in
+  match K.Const.approx_def c with
+  | `Def rhs -> p[][txt "defined as: "; expr_to_html ~config rhs]
+  | `Ty_def phi -> p[][txt "defined type with predicate: "; expr_to_html ~config phi]
+  | `Erased -> p[][txt "erased definition"]
+  | `Param -> p[][txt "theory parameter"]
+  | `Other -> p[][txt "opaque"]
+
 let const_to_html ?(config=Config.make ()) (c:K.Const.t) =
   let name = strip_name_ ~config @@ K.Const.name c in
   let args = Fmt.to_string K.Const.pp_args (K.Const.args c) in
@@ -212,8 +249,8 @@ let thm_to_html ?(config=Config.make()) thm : Html.elt =
   let hyps = K.Thm.hyps_l thm in
   let concl = K.Thm.concl thm in
   let bod =
-    let title_ = Fmt.asprintf "hash %a;@ in theory: %B"
-        K.Cr_hash.pp (K.Thm.cr_hash thm) (K.Thm.is_in_theory thm) in
+    let title_ = Fmt.asprintf "hash %a;@ fully concrete: %B"
+        K.Cr_hash.pp (K.Thm.cr_hash thm) (K.Thm.is_fully_concrete thm) in
     let vdash = span [A.title title_] [txt "⊢"] in
     match hyps with
     | [] -> [vdash; expr_to_html ~config concl]

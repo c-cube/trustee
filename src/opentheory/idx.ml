@@ -4,6 +4,10 @@ type path = string
 
 (* TODO: interpretations *)
 
+type hashed_item =
+  | H_const of K.Const.t
+  | H_expr of K.Expr.t
+
 (** Results of listing a directory *)
 type t = {
   theories: (path * Thy_file.t) list;
@@ -12,6 +16,7 @@ type t = {
   interp_by_name: Interp_file.t Str_tbl.t;
   articles: path Str_tbl.t; (* basename -> path *)
   errors: (path * Trustee_core.Error.t) list;
+  by_hash: hashed_item K.Cr_hash.Tbl.t;
 }
 
 let find_thy (self:t) name : Thy_file.t =
@@ -80,4 +85,4 @@ let list_dir dir : t =
   in
   G.iter g ~f:handle_file;
   { theories= !theories; thy_by_name; interp_by_name; interps= !interp;
-    articles; errors= !errors; }
+    articles; errors= !errors; by_hash=K.Cr_hash.Tbl.create 32; }

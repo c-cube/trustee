@@ -20,3 +20,12 @@ td.theory-out {
 td.theory-param {
   background-color: lightcyan;
 }
+
+a.const {
+  color: inherit;
+  text-decoration-line: none;
+}
+
+a.const:hover {
+  background-color: gold;
+}

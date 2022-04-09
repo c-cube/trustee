@@ -182,15 +182,49 @@ let h_eval (self:state) : unit =
       H.Response.make_string (Error(500, msg))
   end
 
+let h_hash_item (self:state) : unit =
+  H.add_route_handler self.server
+    H.Route.(exact "h" @/ string @/ return) @@ fun h req ->
+  let@ () = top_wrap_ req in
+  let h = K.Cr_hash.of_string_exn h in
+  let res =
+    (* need lock around ctx/eval *)
+    let@ () = with_lock self.lock in
+    K.Cr_hash.Tbl.find_opt self.idx.Idx.by_hash h
+  in
+
+  let r = match res with
+    | Some r -> r
+    | None -> Error.failf (fun k->k"hash not found: %a" K.Cr_hash.pp h)
+  in
+  let config = Render.Config.make () in
+
+  let open Html in
+  let res = match r with
+    | Idx.H_const c ->
+      [
+        h3[] [txtf "constant %a" K.Const.pp c];
+        pre[][Render.const_to_html ~config c];
+        h4[] [txt "Definition"];
+        Render.const_def_to_html ~config c;
+      ]
+    | Idx.H_expr e ->
+      [
+        pre[][Render.expr_to_html ~config e]
+      ]
+  in
+  reply_page ~title:(spf "eval %s" @@ K.Cr_hash.to_string h) req res
+
 let serve (idx:OT.Idx.t) ~port : unit =
   let server = H.create ~port () in
-  let ctx = K.Ctx.create () in
+  let ctx = K.Ctx.create ~erase_defs:false () in
   let eval = Eval.create ~ctx ~idx () in
   let state = {idx; server; eval; lock=Mutex.create(); } in
   h_root state;
   h_thy state;
   h_art state;
   h_eval state;
+  h_hash_item state;
   H.Dir.add_vfs server
     ~config:(H.Dir.config ~dir_behavior:H.Dir.Index_or_lists ())
     ~vfs:Static.vfs ~prefix:"static";

@@ -101,13 +101,39 @@ let interpr_of_sub (sub:Thy_file.sub) : K.Theory.interpretation =
       | Interp_file.I_ty (a,b) -> a, b)
   |> Str_map.of_iter
 
+(* index individual content of theory *)
+let add_theory_items (idx:Idx.t) (th:K.Theory.t) =
+
+  let thms =
+    Iter.append
+      (K.Theory.param_theorems th |> Iter.of_list)
+      (K.Theory.theorems th |> Iter.of_list)
+  in
+
+  let exprs = thms |> Iter.flat_map K.Thm.iter_exprs in
+  let consts =
+    Iter.concat @@ Iter.of_list [
+      (* constants in any sub-term *)
+      (exprs |> Iter.flat_map K.Expr.iter_dag'
+       |> Iter.filter_map K.Expr.as_const |> Iter.map fst);
+      (K.Theory.param_consts th |> Iter.of_list);
+      (K.Theory.consts th |> Iter.of_list);
+    ]
+  in
+
+  consts (fun c ->
+      let h = K.Const.cr_hash c in
+      K.Cr_hash.Tbl.replace idx.Idx.by_hash h (Idx.H_const c));
+
+  ()
+
 (* check a theory *)
 let rec eval_rec_ (self:state) (n:string) : K.Theory.t * eval_info =
   let th = Idx.find_thy self.idx n in
   let uv_name = Thy_file.name th in  (* un-versioned name *)
 
   (* FIXME: just skip from there? or handle errors in the theory graph? *)
-(*   if uv_name = "group-witness" then Log.set_level 50; *)
+  (*   if uv_name = "group-witness" then Log.set_level 50; *)
 
   begin match Str_tbl.get self.theories uv_name with
     | Some (Error e) -> raise (Exit e)
@@ -117,6 +143,7 @@ let rec eval_rec_ (self:state) (n:string) : K.Theory.t * eval_info =
         try Ok (eval_rec_real_ self uv_name th)
         with Exit e -> Error e
       in
+      CCResult.iter (fun (th,_) -> add_theory_items self.idx th) eval_res;
       Str_tbl.add self.theories uv_name eval_res;
       match eval_res with
       | Ok x -> x
