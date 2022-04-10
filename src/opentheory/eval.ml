@@ -125,6 +125,11 @@ let add_theory_items (idx:Idx.t) (th:K.Theory.t) =
       let h = K.Const.cr_hash c in
       K.Cr_hash.Tbl.replace idx.Idx.by_hash h (Idx.H_const c));
 
+  thms (fun th ->
+      K.Thm.make_main_proof th;
+      let h = K.Thm.cr_hash th in
+      K.Cr_hash.Tbl.replace idx.Idx.by_hash h (Idx.H_thm th));
+
   ()
 
 (* check a theory *)

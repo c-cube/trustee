@@ -81,6 +81,7 @@ let h_root (self:state) : unit =
     [
       h2[][txt "Trustee"];
       div[] home_txt;
+      a[A.href "/stats"][txt "context statistics"];
       h2[][ txt "theories"];
       ul'[A.class_ "list-group"] [
         sub_l (
@@ -210,8 +211,47 @@ let h_hash_item (self:state) : unit =
       "expression", [
         pre[][Render.expr_to_html ~config e]
       ]
+    | Idx.H_thm thm ->
+      "theorem", [
+        h3[] [txt "theorem"];
+        Render.thm_to_html ~config thm;
+        h3[] [txt "proof"];
+        Render.proof_to_html ~config thm;
+      ]
   in
   reply_page ~title:(spf "%s %s" kind @@ K.Cr_hash.to_string h) req res
+
+let h_stats self : unit =
+  H.add_route_handler self.server
+    H.Route.(exact "stats" @/ return) @@ fun req ->
+  let@ () = top_wrap_ req in
+  let res =
+    (* need lock around ctx/eval *)
+    let@ () = St.with_lock self.st.lock in
+    let n_exprs = K.Ctx.n_exprs self.st.ctx in
+    let n_theories = List.length self.st.idx.Idx.theories in
+    let n_hashes = K.Cr_hash.Tbl.length self.st.idx.Idx.by_hash in
+    Html.(
+      table[cls "table table-striped table-sm"][
+        tbody[][
+          tr[][
+            td[][txt "number of exprs"];
+            td[][txtf "%d" n_exprs];
+          ];
+          tr[][
+            td[][txt "number of theories"];
+            td[][txtf "%d" n_theories];
+          ];
+          tr[][
+            td[][txt "number of objects indexed by their hash"];
+            td[][txtf "%d" n_hashes];
+          ];
+
+        ]
+      ]
+    )
+  in
+  reply_page ~title:"/stats" req [res]
 
 let serve st ~port : unit =
   let server = H.create ~port () in
@@ -221,6 +261,7 @@ let serve st ~port : unit =
   h_art state;
   h_eval state;
   h_hash_item state;
+  h_stats state;
   H.Dir.add_vfs server
     ~config:(H.Dir.config ~dir_behavior:H.Dir.Index_or_lists ())
     ~vfs:Static.vfs ~prefix:"static";

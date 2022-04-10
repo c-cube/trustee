@@ -34,6 +34,7 @@ let print = ref false
 let check = ref []
 let check_all = ref false
 let progress_ = ref false
+let store_proofs_ = ref false
 
 let main ~dir ~serve ~port () =
   let idx =
@@ -45,7 +46,8 @@ let main ~dir ~serve ~port () =
   if !print then print_all idx;
   let theories = Iter.of_list idx.Idx.theories |> Iter.map snd in
 
-  let ctx = K.Ctx.create ~erase_defs:false () in
+  (* TODO: use param for store_proofs *)
+  let ctx = K.Ctx.create ~store_proofs:!store_proofs_ ~erase_defs:false () in
   let st =
     let progress_bar = !progress_ in
     St.create
@@ -84,6 +86,7 @@ let () =
     "--check-all", Arg.Set check_all, " check all";
     "-nc", Arg.Clear color, " disable colors";
     "-d", Arg.Int set_debug, " set debug level";
+    "--store-proofs", Arg.Set store_proofs_, " enable storage of proofs (takes a lot of ram)";
     "--progress", Arg.Set progress_, " progress bar";
     "--serve", Arg.Set serve, " launch web server";
     "--port", Arg.Set_int port, " set port for web server";

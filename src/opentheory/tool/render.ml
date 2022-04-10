@@ -1,6 +1,7 @@
 
 open Trustee_opentheory.Common_
 
+module Vec = Trustee_core.Vec
 module E = K.Expr
 
 module Config = struct
@@ -52,6 +53,13 @@ let expr_wrap_ f e =
 let href_const c =
   spf "/h/%s" (K.Cr_hash.to_string @@ K.Const.cr_hash c)
 
+let var_to_html (v:K.Var.t) : Html.elt =
+  let open Html in
+  let name = K.Var.name v in
+  let title_ = Fmt.asprintf "%s : %a@ hash-of-ty %a"
+      name E.pp (K.Var.ty v) K.Cr_hash.pp (K.Expr.cr_hash v.v_ty) in
+  span [A.title title_] [txt name]
+
 let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
   let open Html in
 
@@ -61,13 +69,9 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
     match E.view e with
     | K.E_kind -> txt "kind"
     | K.E_type -> txt "type"
-    | K.E_var v ->
-      let name = K.Var.name v in
-      let title_ = Fmt.asprintf "%s : %a@ hash %a"
-          name E.pp (K.Var.ty v) K.Cr_hash.pp (K.Expr.cr_hash e) in
-      span [A.title title_] [txt name]
-    | K.E_bound_var v ->
+    | K.E_var v -> var_to_html v
 
+    | K.E_bound_var v ->
       let idx = v.bv_idx in
       let descr =
         match CCList.nth_opt names idx with
@@ -256,14 +260,35 @@ let const_to_html ?(config=Config.make ()) (c:K.Const.t) =
     ]
   )
 
+let subst_as_l_to_html ?(config=Config.make()) (su:(K.var*K.expr)list) =
+  let open Html in
+  ul[] (
+    List.map(fun (v,e) ->
+        li[][
+          var_to_html v; txt " := "; expr_to_html ~config e
+        ]) su
+  )
+
+let subst_to_html ?(config=Config.make()) su =
+  K.Subst.to_iter su
+  |> Iter.to_rev_list |> subst_as_l_to_html ~config
+
 let thm_to_html ?(config=Config.make()) thm : Html.elt =
   let open Html in
   let hyps = K.Thm.hyps_l thm in
   let concl = K.Thm.concl thm in
   let bod =
+    let h = K.Thm.cr_hash thm in
     let title_ = Fmt.asprintf "hash %a;@ fully concrete: %B"
-        K.Cr_hash.pp (K.Thm.cr_hash thm) (K.Thm.is_fully_concrete thm) in
-    let vdash = span [A.title title_] [txt "⊢"] in
+        K.Cr_hash.pp h (K.Thm.is_fully_concrete thm) in
+    let vdash =
+      if K.Thm.proof thm |> K.Proof.is_main then (
+        a [
+          cls "theorem";
+          A.title title_;
+          A.href (spf "/h/%s" (K.Cr_hash.to_string h));
+        ] [txt "⊢"]
+      ) else txt "⊢" in
     match hyps with
     | [] -> [vdash; expr_to_html ~config concl]
     | l ->
@@ -272,8 +297,89 @@ let thm_to_html ?(config=Config.make()) thm : Html.elt =
   in
   span[cls "theorem"] bod
 
-let subst_to_html su =
-  Html.(pre[][txtf "%a" K.Subst.pp su])
+module Th_tbl = CCHashtbl.Make(K.Thm)
+
+let proof_to_html ?(config=Config.make()) (th0:K.Thm.t) : Html.elt =
+  let open Html in
+  let steps = Vec.create() in
+  let idx = ref 0 in
+  let seen = Th_tbl.create 8 in
+
+  (* add step to the proof *)
+  let add_step (thm:K.Thm.t) (step:Html.elt) : int =
+    let i = !idx in
+    incr idx;
+    let row = tr[][
+        td[A.id (spf "step%d" i); cls "proof-step"] [txtf "%d:" i];
+        td[] [thm_to_html ~config thm];
+        td[] [step];
+      ] in
+    Vec.push steps (thm,row);
+    i
+  in
+
+  let arg_to_html = function
+    | K.Proof.Pr_expr e -> expr_to_html ~config e
+    | K.Proof.Pr_subst s -> subst_as_l_to_html ~config s
+  in
+
+  let rec traverse thm pr : int =
+    match Th_tbl.find_opt seen thm with
+    | Some i -> i
+    | None ->
+      let i =
+        match pr with
+        | K.Proof.Pr_main pr' when thm == th0 -> step_to_html thm pr'
+        | _ -> step_to_html thm pr
+      in
+      Th_tbl.add seen thm i;
+      i
+
+  and step_to_html (thm:K.Thm.t) step : int =
+    match step with
+    | K.Proof.Pr_main _ ->
+      (* link to theorem *)
+      let step =
+        a[A.href (spf "/h/%s" (K.Cr_hash.to_string @@ K.Thm.cr_hash thm))]
+          [txt "lemma"]
+      in
+      add_step thm step
+    | K.Proof.Pr_dummy ->
+      add_step thm (txt "<dummy>")
+    | K.Proof.Pr_step { rule; args; parents} ->
+      let parents = List.map (fun th' -> traverse th' (K.Thm.proof th')) parents in
+      let render_parent i n =
+        let title_ = K.Thm.to_string (fst @@ Vec.get steps n) in
+        a [
+          A.href (spf "#step%d" n);
+          A.title title_;
+          cls "proof-step";
+        ] [txtf "%s%d" (if i>0 then ", " else "") n]
+      in
+      let step = div[][
+          span[] (txt rule :: List.map arg_to_html args);
+          (if parents=[] then span[][]
+           else
+             span'[] [
+               sub_e @@ txt "[";
+               sub_l @@ List.mapi render_parent parents;
+               sub_e @@ txt "]";
+             ]);
+        ] in
+      add_step thm step
+  in
+
+  ignore (traverse th0 (K.Thm.proof th0) : int);
+  table[cls "table table-sm table-striped"][
+    thead[] [
+      tr[][
+        th[][txt "idx"];
+        th[][txt "result"];
+        th[][txt "proof"];
+      ]
+    ];
+    tbody[] (Vec.to_iter steps |> Iter.map snd |> Iter.to_list);
+  ]
 
 let theory_to_html ?(config=Config.make()) (self:K.Theory.t) =
   let _name = K.Theory.name self in

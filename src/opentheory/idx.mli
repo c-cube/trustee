@@ -11,6 +11,7 @@ type path = string
 type hashed_item =
   | H_const of K.Const.t
   | H_expr of K.Expr.t
+  | H_thm of K.Thm.t
 
 (** Results of listing a directory *)
 type t = {
