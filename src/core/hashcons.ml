@@ -14,6 +14,7 @@ module Make(A : ARG): sig
   val create : ?size:int -> unit -> t
   val hashcons : t -> A.t -> A.t
   val to_iter : t -> A.t iter
+  val size : t -> int
 end = struct
   module W = Weak.Make(A)
 
@@ -36,6 +37,7 @@ end = struct
     );
     t'
 
+  let size st = W.count st.tbl
   let to_iter st yield =
     W.iter yield st.tbl
 end
