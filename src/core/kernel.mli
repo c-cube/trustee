@@ -102,6 +102,9 @@ module Proof : sig
         args: arg list;
         parents: thm list;
       }
+
+  val is_main : t -> bool
+  val is_main_or_dummy : t -> bool
 end
 
 (** Free Variables *)
@@ -350,6 +353,10 @@ module Thm : sig
   (** Recover stored proof. Actual proof are stored only
       if the context was created using [Ctx.create ~store_proofs:true]. *)
 
+  val make_main_proof : t -> unit
+  (** [make_main_proof thm] wraps the proof of [thm] with {!Pr_main},
+      so as to indicate that other proofs should stop there. *)
+
   val hyps_iter : t -> expr iter
 
   val hyps_l : t -> expr list
@@ -572,6 +579,8 @@ module Ctx : sig
   val pledge_no_more_axioms : t -> unit
   (** Forbid the creation of new axioms. From now on, this logical context
       is frozen. *)
+
+  val n_exprs : t -> int
 
   val axioms : t -> thm iter
 

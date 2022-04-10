@@ -1374,6 +1374,8 @@ module Ctx = struct
     } in
     ctx
 
+  let n_exprs self = Expr_hashcons.size self.ctx_exprs
+
   let pledge_no_more_axioms self =
     if self.ctx_axioms_allowed then (
       Log.debugf 5 (fun k->k "pledge no more axioms");
@@ -1431,6 +1433,11 @@ module Proof = struct
   let main self : t = Pr_main self
   let step ?(args=[]) ?(parents=[]) (rule:string) : t =
     Pr_step {rule; args; parents}
+
+  let is_main = function Pr_main _ -> true | _ -> false
+  let is_main_or_dummy = function
+    | Pr_dummy | Pr_main _ -> true
+    | Pr_step _ -> false
 end
 
 module Thm = struct
@@ -1450,9 +1457,30 @@ module Thm = struct
     Const.expr_is_concrete_ (concl self) &&
     Iter.for_all Const.expr_is_concrete_ (hyps_iter self)
 
-  let[@inline] cr_hash self =
-    Cr_hash.run Util_cr_hash_.hash_seq_ self.th_seq
+  let rec cr_hash_proof_ ctx =
+    let open Cr_hash in
+    function
+    | Pr_main p -> string ctx "m"; cr_hash_proof_ ctx p
+    | Pr_dummy -> string ctx "d";
+    | Pr_step {rule; args=_; parents} ->
+      (* TODO: hash args, too, although hashing the conclusion might be enough *)
+      string ctx "s";
+      string ctx rule;
+      List.iter (fun th -> Util_cr_hash_.hash_seq_ ctx th.th_seq) parents
+
+  let cr_hash self =
+    let open Cr_hash in
+    let ctx = create() in
+    Util_cr_hash_.hash_seq_ ctx self.th_seq;
+    cr_hash_proof_ ctx self.th_proof;
+    finalize ctx
+
   let proof self = self.th_proof
+
+  let make_main_proof self =
+    if not (Proof.is_main_or_dummy self.th_proof) then (
+      self.th_proof <- Pr_main self.th_proof;
+    )
 
   let[@inline] equal a b = Sequent.equal a.th_seq b.th_seq
 
