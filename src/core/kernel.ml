@@ -518,6 +518,7 @@ module Util_cr_hash_ = struct
       List.rev_map hash_expr_ (Expr_set.to_list s.hyps)
       |> List.sort Cr_hash.compare
     in
+    H.string ctx "seq";
     List.iter (H.sub ctx) l;
     H.string ctx "|-";
     H.sub ctx (hash_expr_ s.concl)
@@ -1283,6 +1284,9 @@ module Sequent = struct
   let make hyps concl : t = {hyps; concl}
   let make_l h c = make (Expr_set.of_list h) c
   let make_nohyps c : t = make Expr_set.empty c
+
+  let[@inline] cr_hash self : Cr_hash.t =
+    Cr_hash.run Util_cr_hash_.hash_seq_ self
 
   let[@inline] concl g = g.concl
   let[@inline] n_hyps self = Int_map.cardinal self.hyps
