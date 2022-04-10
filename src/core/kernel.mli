@@ -89,6 +89,21 @@ module Const : sig
   (** An approximation of the definition *)
 end
 
+module Proof : sig
+  type arg =
+    | Pr_expr of expr
+    | Pr_subst of (var * expr) list
+
+  type t = private
+    | Pr_dummy
+    | Pr_main of t
+    | Pr_step of {
+        rule: string;
+        args: arg list;
+        parents: thm list;
+      }
+end
+
 (** Free Variables *)
 module Var : sig
   type t = var
@@ -331,6 +346,10 @@ module Thm : sig
 
   val cr_hash : t -> Cr_hash.t
 
+  val proof : t -> Proof.t
+  (** Recover stored proof. Actual proof are stored only
+      if the context was created using [Ctx.create ~store_proofs:true]. *)
+
   val hyps_iter : t -> expr iter
 
   val hyps_l : t -> expr list
@@ -547,6 +566,7 @@ module Ctx : sig
 
   val create :
     ?erase_defs:bool ->
+    ?store_proofs:bool ->
     unit -> t
 
   val pledge_no_more_axioms : t -> unit

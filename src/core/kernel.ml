@@ -373,6 +373,7 @@ module Name_k_map = CCMap.Make(struct
 type thm = {
   th_seq: sequent;
   mutable th_flags: int; (* [bool flags|ctx uid] *)
+  mutable th_proof: proof;
 }
 
 and theory = {
@@ -384,6 +385,19 @@ and theory = {
   mutable theory_defined_theorems: thm list;
 }
 
+and proof =
+  | Pr_dummy
+  | Pr_main of proof
+  | Pr_step of {
+      rule: string;
+      args: proof_arg list;
+      parents: thm list;
+    }
+
+and proof_arg =
+  | Pr_expr of expr
+  | Pr_subst of (var * expr) list
+
 and ctx = {
   ctx_uid: int;
   ctx_exprs: Expr_hashcons.t;
@@ -394,6 +408,7 @@ and ctx = {
   ctx_eq_c: const lazy_t;
   ctx_select_c : const lazy_t;
   ctx_erase_defs: bool;
+  ctx_store_proofs: bool;
   mutable ctx_axioms: thm list;
   mutable ctx_axioms_allowed: bool;
 }
@@ -1222,6 +1237,7 @@ module Subst = struct
   let empty = Expr.subst_empty_
   let bind = Expr.subst_bind_
   let pp = Expr.subst_pp_
+  let to_list s = List.rev_append (Var.Map.to_list s.ty) (Var.Map.to_list s.m)
   let[@inline] bind' x t s : t = bind s x t
   let[@inline] size self = Var.Map.cardinal self.m + Var.Map.cardinal self.ty
   let[@inline] to_iter self =
@@ -1318,12 +1334,13 @@ module Ctx = struct
 
   let uid_ = ref 0
 
-  let create ?(erase_defs=true) () : t =
+  let create ?(erase_defs=true) ?(store_proofs=false) () : t =
     let ctx_uid = !uid_ land ctx_id_mask in
     incr uid_;
     let rec ctx = {
       ctx_uid;
       ctx_erase_defs=erase_defs;
+      ctx_store_proofs=store_proofs;
       ctx_exprs=Expr_hashcons.create ~size:2_048 ();
       ctx_axioms=[];
       ctx_axioms_allowed=true;
@@ -1393,6 +1410,29 @@ end
 
 (** {2 Theorems and Deduction Rules} *)
 
+module Proof = struct
+  type t = proof =
+    | Pr_dummy
+    | Pr_main of proof
+    | Pr_step of {
+        rule: string;
+        args: proof_arg list;
+        parents: thm list;
+      }
+
+  type arg = proof_arg =
+    | Pr_expr of expr
+    | Pr_subst of (var * expr) list
+
+  let a_expr e : arg = Pr_expr e
+  let a_subst (s:subst) : arg = Pr_subst (Subst.to_list s)
+
+  let dummy : t = Pr_dummy
+  let main self : t = Pr_main self
+  let step ?(args=[]) ?(parents=[]) (rule:string) : t =
+    Pr_step {rule; args; parents}
+end
+
 module Thm = struct
   type t = thm
 
@@ -1412,6 +1452,7 @@ module Thm = struct
 
   let[@inline] cr_hash self =
     Cr_hash.run Util_cr_hash_.hash_seq_ self.th_seq
+  let proof self = self.th_proof
 
   let[@inline] equal a b = Sequent.equal a.th_seq b.th_seq
 
@@ -1445,13 +1486,14 @@ module Thm = struct
 
   (** {3 Deduction rules} *)
 
-  let make_seq_ ctx seq : t =
+  let make_seq_ ctx seq proof : t =
     let th_flags = ctx.ctx_uid in
-    { th_flags; th_seq=seq; }
+    let proof = if ctx.ctx_store_proofs then proof () else Proof.dummy in
+    { th_flags; th_seq=seq; th_proof=proof; }
 
-  let make_ ctx hyps concl : t =
+  let make_ ctx hyps concl proof : t =
     let th_seq = Sequent.make hyps concl in
-    make_seq_ ctx th_seq
+    make_seq_ ctx th_seq proof
 
   let is_bool_ ctx e : bool =
     let ty = Expr.ty_exn e in
@@ -1463,7 +1505,10 @@ module Thm = struct
     if not (is_bool_ ctx e) then (
       Error.fail "assume takes a boolean"
     );
-    make_ ctx (Expr_set.singleton e) e
+    let proof () =
+      Proof.(step "assume" ~args:[a_expr e])
+    in
+    make_ ctx (Expr_set.singleton e) e proof
 
   let axiom ctx hyps e : t =
     Error.guard (fun err ->
@@ -1476,7 +1521,9 @@ module Thm = struct
     if not (is_bool_ ctx e && List.for_all (is_bool_ ctx) hyps) then (
       Error.fail "axiom takes a boolean"
     );
-    make_ ctx (Expr_set.of_list hyps) e
+    let proof () =
+      Proof.(step "axiom" ~args:[a_expr e]) in
+    make_ ctx (Expr_set.of_list hyps) e proof
 
   let merge_hyps_ = Expr_set.union
 
@@ -1488,11 +1535,13 @@ module Thm = struct
     ctx_check_th_uid ctx th2;
     let b = concl th1 in
     let hyps = merge_hyps_ (hyps_ th1) (Expr_set.remove b (hyps_ th2)) in
-    make_ ctx hyps (concl th2)
+    let proof () = Proof.(step "cut" ~parents:[th1; th2]) in
+    make_ ctx hyps (concl th2) proof
 
   let refl ctx e : t =
     ctx_check_e_uid ctx e;
-    make_ ctx Expr_set.empty (Expr.app_eq ctx e e)
+    let proof () = Proof.(step "refl" ~args:[a_expr e]) in
+    make_ ctx Expr_set.empty (Expr.app_eq ctx e e) proof
 
   let congr ctx th1 th2 : t =
     Error.guard
@@ -1507,7 +1556,8 @@ module Thm = struct
       let t1 = Expr.app ctx f t in
       let t2 = Expr.app ctx g u in
       let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
-      make_ ctx hyps (Expr.app_eq ctx t1 t2)
+      let proof () = Proof.(step "congr" ~parents:[th1;th2]) in
+      make_ ctx hyps (Expr.app_eq ctx t1 t2) proof
 
   exception E_subst_non_closed of var * expr
 
@@ -1523,7 +1573,8 @@ module Thm = struct
     end;
     let hyps = hyps_ th |> Expr_set.map (fun e -> Expr.subst ~recursive ctx e s) in
     let concl = Expr.subst ~recursive ctx (concl th) s in
-    make_ ctx hyps concl
+    let proof() = Proof.(step "subst" ~args:[a_subst s] ~parents:[th]) in
+    make_ ctx hyps concl proof
 
   let sym ctx th : t =
     Error.guard (fun err -> Error.wrapf "@[<2>in sym@ `@[%a@]`@]:" pp th err) @@ fun () ->
@@ -1531,7 +1582,8 @@ module Thm = struct
     match Expr.unfold_eq (concl th) with
     | None -> Error.failf (fun k->k"sym: concl of %a@ should be an equation" pp th)
     | Some (t,u) ->
-      make_ ctx (hyps_ th) (Expr.app_eq ctx u t)
+      let proof () = Proof.(step "sym" ~parents:[th]) in
+      make_ ctx (hyps_ th) (Expr.app_eq ctx u t) proof
 
   let trans ctx th1 th2 : t =
     Error.guard
@@ -1548,7 +1600,8 @@ module Thm = struct
                          of %a@ and %a@ do not match@]" pp th1 pp th2)
       );
       let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
-      make_ ctx hyps (Expr.app_eq ctx t v)
+      let proof() = Proof.(step "trans" ~parents:[th1;th2]) in
+      make_ ctx hyps (Expr.app_eq ctx t v) proof
 
   let bool_eq ctx th1 th2 : t =
     Error.guard
@@ -1564,7 +1617,8 @@ module Thm = struct
     | Some (t, u) ->
       if Expr.equal t (concl th1) then (
         let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
-        make_ ctx hyps u
+        let proof() = Proof.(step "bool_eq" ~parents:[th1;th2]) in
+        make_ ctx hyps u proof
       ) else (
         Error.failf
           (fun k->k
@@ -1587,7 +1641,8 @@ module Thm = struct
         (Expr_set.remove e1 (hyps_ th2))
         (Expr_set.remove e2 (hyps_ th1))
     in
-    make_ ctx hyps (Expr.app_eq ctx e1 e2)
+    let proof() = Proof.(step "bool_eq_intro" ~parents:[th1;th2]) in
+    make_ ctx hyps (Expr.app_eq ctx e1 e2) proof
 
   let beta_conv ctx e : t =
     Error.guard (fun err -> Error.wrapf "@[<2>in beta-conv `@[%a@]`:" Expr.pp e err) @@ fun () ->
@@ -1598,7 +1653,8 @@ module Thm = struct
        | E_lam (_, ty_v, body) ->
          assert (Expr.equal ty_v (Expr.ty_exn a)); (* else `app` would have failed *)
          let rhs = Expr.subst_db_0 ctx body ~by:a in
-         make_ ctx Expr_set.empty (Expr.app_eq ctx e rhs)
+         let proof() = Proof.(step "beta_conv" ~args:[a_expr e]) in
+         make_ ctx Expr_set.empty (Expr.app_eq ctx e rhs) proof
        | _ ->
          Error.failf (fun k->k"not a redex: function %a is not a lambda" Expr.pp f)
       )
@@ -1615,8 +1671,9 @@ module Thm = struct
       if Expr_set.exists is_in_hyp th.th_seq.hyps then (
         Error.failf (fun k->k"variable `%a` occurs in an hypothesis@ of %a" Var.pp v pp th);
       );
+      let proof() = Proof.(step "abs" ~parents:[th]) in
       make_ ctx th.th_seq.hyps
-        (Expr.app_eq ctx (Expr.lambda ctx v a) (Expr.lambda ctx v b))
+        (Expr.app_eq ctx (Expr.lambda ctx v a) (Expr.lambda ctx v b)) proof
     | None -> Error.failf (fun k->k"conclusion of `%a`@ is not an equation" pp th)
 
   let new_basic_definition ctx (e:expr) : t * const =
@@ -1651,7 +1708,8 @@ module Thm = struct
       let c = Expr.new_const ctx
           ~def:(C_def_expr {rhs}) (Var.name x_var) ty_vars_l (Var.ty x_var) in
       let c_e = Expr.const ctx c (List.map (Expr.var ctx) ty_vars_l) in
-      let th = make_ ctx Expr_set.empty (Expr.app_eq ctx c_e rhs) in
+      let proof() = Proof.(step "new_def" ~args:[a_expr e]) in
+      let th = make_ ctx Expr_set.empty (Expr.app_eq ctx c_e rhs) proof in
       th, c
 
   let new_basic_type_definition ctx
@@ -1723,6 +1781,8 @@ module Thm = struct
       Expr.new_const ~def:(C_def_ty_repr {phi}) ctx repr ty_vars_l ty
     in
 
+    let proof() = Proof.(step "new_ty" ~args:[a_expr phi]) in
+
     let abs_x = Var.make "x" tau_vars in
     (* `|- abs (repr x) = x` *)
     let abs_thm =
@@ -1732,7 +1792,7 @@ module Thm = struct
       let abs = Expr.const ctx c_abs ty_vars_expr_l in
       let abs_t = Expr.app ctx abs t in
       let eqn = Expr.app_eq ctx abs_t abs_x in
-      make_ ctx Expr_set.empty eqn
+      make_ ctx Expr_set.empty eqn proof
     in
 
     let repr_x = Var.make "x" ty in
@@ -1745,7 +1805,7 @@ module Thm = struct
       let t2 = Expr.app ctx repr t1 in
       let eq_t2_x = Expr.app_eq ctx t2 repr_x in
       let phi_x = Expr.app ctx phi repr_x in
-      make_ ctx Expr_set.empty (Expr.app_eq ctx phi_x eq_t2_x)
+      make_ ctx Expr_set.empty (Expr.app_eq ctx phi_x eq_t2_x) proof
     in
 
     {New_ty_def.
@@ -1754,12 +1814,14 @@ module Thm = struct
 
   let box ctx (th: t) : t =
     let box = Expr.box ctx th.th_seq in
-    make_ ctx Expr_set.empty box
+    let proof() = Proof.(step "box" ~parents:[th]) in
+    make_ ctx Expr_set.empty box proof
 
   let assume_box ctx (seq:sequent) : t =
     let box = Expr.box ctx seq in
     let seq' = {seq with hyps=Expr_set.add box seq.hyps} in
-    make_seq_ ctx seq'
+    let proof() = Proof.(step "assume-box") in
+    make_seq_ ctx seq' proof
 end
 
 module Theory = struct
@@ -1800,7 +1862,8 @@ module Theory = struct
       Error.fail "Theory.assume: all terms must be booleans"
     );
     let hyps = Expr_set.of_list hyps in
-    let th = Thm.make_ ctx hyps concl in
+    let proof() = Proof.(step "th.assume") in
+    let th = Thm.make_ ctx hyps concl proof in
     self.theory_in_theorems <- th :: self.theory_in_theorems;
     th
 
@@ -1996,7 +2059,8 @@ module Theory = struct
         |> Expr_set.of_iter
       in
       let concl = inst_t_ self th.th_seq.concl in
-      Thm.make_ self.ctx hyps concl
+      let proof() = th.th_proof in
+      Thm.make_ self.ctx hyps concl proof
 
     let inst_theory_ (self:state) (th:theory) : theory =
       assert (self.ctx == th.theory_ctx);
