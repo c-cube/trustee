@@ -16,7 +16,6 @@
   (license MIT)
   (tags (logic proof HOL assistant))
   (depends
-    (dune (>= "2.0"))
     (containers (and (>= 3.3) (< 4.0)))
     (pp_loc (and (>= 1.0) (< 2.0)))
     (iter (>= 1.0))
@@ -28,11 +27,20 @@
     (odoc :with-doc)))
 
 (package
+  (name trustee-script)
+  (synopsis "Script language around Trustee")
+  (license MIT)
+  (depends
+    (containers (and (>= 3.6) (< 4.0)))
+    (trustee (= :version))
+    menhir
+    (odoc :with-doc)))
+
+(package
   (name trustee-opentheory)
   (synopsis "Opentheory parser and checker using Trustee")
   (license MIT)
   (depends
-    (dune (>= "2.0"))
     (containers (and (>= 3.6) (< 4.0)))
     (trustee (= :version))
     (tiny_httpd (>= 0.12))
@@ -43,7 +51,6 @@
   (name trustee-itp)
   (synopsis "Trustee-powered interactive theorem prover")
   (depends
-    (dune (>= "2.0"))
     (containers (and (>= 3.0) (< 4.0)))
     containers-thread
     logs

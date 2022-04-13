@@ -1,0 +1,9 @@
+
+(library
+  (name trustee_script)
+  (public_name trustee-script)
+  (libraries trustee.core trustee.loc containers)
+  (flags :standard -open Trustee_core.Sigs -open Trustee_loc))
+
+(menhir (modules p_parse))
+(ocamllex (modules p_lex))
