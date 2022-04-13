@@ -63,6 +63,16 @@ let main ~dir ~serve ~port () =
   ) else if !check <> [] then (
     Check_all.check ~st ~names:(Iter.of_list !check) ()
   );
+  (*
+  Gc.full_major();
+  Gc.compact();
+     *)
+
+  ignore (
+    Thread.create
+      (fun () ->
+         while true do Thread.delay 5.; Jemalloc.release_free_memory () done)
+      () : Thread.t);
 
   Option.iter Thread.join th_serve;
   ()
@@ -79,6 +89,7 @@ let () =
     Log.set_level n;
     Logger.setup_logs ~debug:(n>1) ~level:n ();
   in
+  Jemalloc.release_free_memory();
   let opts = [
     "--dir", Arg.Set_string dir, " set opentheory directory";
     "--print", Arg.Set print, " print the list of theories";

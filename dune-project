@@ -63,6 +63,7 @@
     (trustee-itp (= :version))
     lsp
     logs
+    jemalloc
     (linol (and (>= 0.4) (< 0.5)))
     (ocaml (>= 4.06.0))
     (odoc :with-doc)))
