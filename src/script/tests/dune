@@ -1,0 +1,5 @@
+
+(tests
+  (names t1)
+  (flags :standard -open Trustee_core -open Trustee_script)
+  (libraries trustee.core trustee-script))
