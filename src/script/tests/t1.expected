@@ -1,20 +1,18 @@
 parsed:
-ok(
-[(S_fn ("f", ["x"; "y"],
-    { bl_items = [(S_eval (E_app ("f", [(E_var "x"); (E_var "y")])))] }))
-  ])
+(Ok [(S_fn ("f", ["x"; "y"],
+        { bl_items = [(S_eval (E_app ("f", [(E_var "x"); (E_var "y")])))] }))
+      ])
 parsed:
-ok(
-[(S_fn ("f", ["x"; "y"],
-    { bl_items =
-      [(S_let ("z1",
-          (E_app ("f",
-             [(E_app ("g", [(E_app ("h", [(E_var "x")])); (E_var "y")]));
-               (E_var "z1"); (E_var "z2")]
-             ))
-          ));
-        (S_eval (E_app ("g", [(E_var "z1"); (E_var "z1")])));
-        (S_eval (E_var "z1"))]
-      }
-    ));
-  (S_fn ("g", ["x"], { bl_items = [(S_eval (E_var "x"))] }))])
+(Ok [(S_fn ("f", ["x"; "y"],
+        { bl_items =
+          [(S_let ("z1",
+              (E_app ("f",
+                 [(E_app ("g", [(E_app ("h", [(E_var "x")])); (E_var "y")]));
+                   (E_var "z1"); (E_var "z2")]
+                 ))
+              ));
+            (S_eval (E_app ("g", [(E_var "z1"); (E_var "z1")])));
+            (S_eval (E_var "z1"))]
+          }
+        ));
+      (S_fn ("g", ["x"], { bl_items = [(S_eval (E_var "x"))] }))])

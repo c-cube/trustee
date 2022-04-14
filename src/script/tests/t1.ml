@@ -4,7 +4,7 @@ let top = parse_top_str ~filename:"t1"
    f(x,y) }
 |};;
 
-Format.printf "parsed:@ %a@." (CCResult.pp' Ast.pp_top Error.pp) top;;
+Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top;;
 
 let top = parse_top_str ~filename:"t1"
 {|fn f(x,y) {
@@ -16,6 +16,6 @@ let top = parse_top_str ~filename:"t1"
 fn g(x) { x }
 |};;
 
-Format.printf "parsed:@ %a@." (CCResult.pp' Ast.pp_top Error.pp) top;;
+Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top;;
 
 
