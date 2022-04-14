@@ -22,6 +22,8 @@ let of_string (s:string) : t =
   let lines = Vec.to_array lines in
   { lines; size; }
 
+let of_file file : t = of_string @@ CCIO.File.read_exn file
+
 let line_col_of_offset self ~off : int * int =
   (* binary search *)
   let low = ref 0 in

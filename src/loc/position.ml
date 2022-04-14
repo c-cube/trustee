@@ -18,6 +18,9 @@ let make ~line ~col : t =
   assert (col < mask_low);
   (line lsl n_bits) lor col
 
+let of_lex (p:Lexing.position) : t =
+  make ~line:p.pos_lnum ~col:p.pos_cnum
+
 let none = make ~line:1 ~col:1
 let (<=) a b = line a < line b || (line a=line b && col a <= col b)
 let (<) a b = line a < line b || (line a=line b && col a < col b)

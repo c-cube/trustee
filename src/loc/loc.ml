@@ -18,6 +18,11 @@ let none : t =
   let ctx = LL.create ~filename:"<none>" "" in
   make ~ctx LL.none
 
+let of_lex_pos ~ctx p1 p2 : t =
+  make ~ctx (LL.of_lex_pos ~ctx p1 p2)
+let of_lexbuf ~ctx (b:Lexing.lexbuf) : t =
+  make ~ctx (LL.of_lexbuf ~ctx b)
+
 let contains {loc;ctx} p =
   let offset = LL.offset_of_pos ~ctx p in
   LL.contains loc ~off:offset
@@ -41,6 +46,7 @@ end = struct
   let conv_loc_input (self:Loc_input.t) =
     match Loc_input.view self with
     | Loc_input.String s -> Pp_loc.Input.string s
+    | Loc_input.File s -> Pp_loc.Input.file s
 
   let to_pp_loc (self:t) : Pp_loc.loc =
     let off1, off2 = LL.offsets self.loc in

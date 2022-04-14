@@ -1,14 +1,18 @@
 
 type ctx = {
-  str: string;
   filename: string;
   input: Loc_input.t;
   index: Line_index.t lazy_t;
 }
 
 let create ~filename str : ctx =
-  { str; filename; input=Loc_input.string str;
+  { filename; input=Loc_input.string str;
     index=lazy (Line_index.of_string str);
+  }
+
+let create_file ~filename : ctx =
+  { filename; input=Loc_input.file filename;
+    index=lazy (Line_index.of_file filename);
   }
 
 type t = int [@@deriving show]

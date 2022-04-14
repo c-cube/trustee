@@ -16,6 +16,9 @@ val filename : t -> string
 val positions : t -> Position.t * Position.t
 val contains : t -> Position.t -> bool
 
+val of_lex_pos : ctx:LL.ctx -> Lexing.position -> Lexing.position -> t
+val of_lexbuf : ctx:LL.ctx -> Lexing.lexbuf -> t
+
 val local_loc : t -> Local_loc.t
 val same_local_loc : t -> t -> bool
 

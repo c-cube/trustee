@@ -8,13 +8,13 @@
     The context provides information that is common to all locations within
     the same file, allowing each location to fit in one integer. *)
 type ctx = private {
-  str: string;
   filename: string;
   input: Loc_input.t;
   index: Line_index.t lazy_t;
 }
 
 val create : filename:string -> string -> ctx
+val create_file : filename:string -> ctx
 
 type t = private int
 
