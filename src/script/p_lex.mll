@@ -1,6 +1,6 @@
 
 {
-  open P_token
+  include P_token
   type unescape_state =
     | Not_escaped
     | Escaped
