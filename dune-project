@@ -33,6 +33,7 @@
   (depends
     (containers (and (>= 3.6) (< 4.0)))
     (trustee (= :version))
+    ppx_deriving
     menhir
     (odoc :with-doc)))
 
