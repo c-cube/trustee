@@ -11,12 +11,12 @@ end
 open A
 %}
 
-%type <Ast.statement list> file
-%start file
+%type <Ast.top> top
+%start top
 
 %%
 
-file: l=statement* EOI { l }
+top: l=statement* EOI { l }
 
 statement:
 | FN f=var
@@ -55,10 +55,12 @@ expr:
 
 app_args:
 | { [] }
+| e=expr { [e] }
 | e=expr COMMA args=app_args { e :: args }
 
 vars:
 |  { [] }
+| v=var { [v] }
 | v=var COMMA l=vars { v :: l }
 
 var:

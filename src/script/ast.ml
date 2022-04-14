@@ -1,6 +1,8 @@
 
 type loc = Loc.t
+
 type 'a with_loc = 'a With_loc.t
+let pp_with_loc ppx out x = ppx out x.With_loc.view
 
 let mk ~loc x : _ with_loc = {With_loc.view=x; loc}
 
@@ -13,6 +15,7 @@ type const =
   | C_string of string
   | C_bool of bool
   | C_unit
+[@@deriving show {with_path=false}]
 
 type binop =
   | Plus
@@ -23,8 +26,10 @@ type binop =
   | Lt
   | Geq
   | Gt
+[@@deriving show {with_path=false}]
 
 type var = string with_loc
+[@@deriving show {with_path=false}]
 
 type expr = expr_view with_loc
 and expr_view =
@@ -32,6 +37,7 @@ and expr_view =
   | E_app of var * expr list
   | E_op of binop * expr * expr
   | E_const of const
+[@@deriving show {with_path=false}]
 
 type statement = statement_view with_loc
 and statement_view =
@@ -54,3 +60,6 @@ and block_item =
   | S_continue
     (* TODO: [for x = 1,n { }] à la lua *)
   | S_block of block
+[@@deriving show {with_path=false}]
+
+type top = statement list [@@deriving show]

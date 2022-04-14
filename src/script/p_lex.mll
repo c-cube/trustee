@@ -80,13 +80,14 @@
 let newline = '\n' | "\r\n"
 let white = [' ' '\r' '\t'] | newline
 
-let comment_line = ';' [^ '\n']*
+let comment_line = "//" [^ '\n']*
 let printable_char = [^ '\n']
 
 let alpha = ['a'-'z' 'A'-'Z']
+let alphas = alpha | ['_']
 let num = ['0'-'9']
 let alphanum = alpha | num
-let id = alpha alphanum*
+let id = alphas (alphas | num)*
 let string_item =
   ([^ '"' '\\'] | "\\\"" | "\\\\" | "\\b" | "\\n" | "\\t" | "\\r")
 let string = '"' string_item* '"'
@@ -98,7 +99,8 @@ rule token = parse
   | eof { EOI }
   | "var" { VAR }
   | "let" { LET }
-  | "" { LET }
+  | "fn" { FN }
+  | ',' { COMMA }
   | '=' { EQUAL }
   | ';' { SEMI }
   | '+' { PLUS }
@@ -108,7 +110,7 @@ rule token = parse
   | '<' { LT }
   | "<=" { LEQ }
   | '>' { GT }
-  | ">+" { GEQ }
+  | ">=" { GEQ }
   | '(' { LPAREN }
   | ')' { RPAREN }
   | '[' { LBRACKET }
@@ -116,7 +118,7 @@ rule token = parse
   | '{' { LBRACE }
   | '}' { RBRACE }
   | '-'? num+ { INT (Lexing.lexeme lexbuf) }
-  | ':' alphanum+ { COLON_STR (Lexing.lexeme lexbuf) }
+  | ':' (alphas | num)+ { COLON_STR (Lexing.lexeme lexbuf) }
   | id { IDENT (Lexing.lexeme lexbuf) }
   | string { QUOTED_STR (remove_quotes lexbuf (Lexing.lexeme lexbuf)) }
   | _ as c
