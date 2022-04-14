@@ -15,7 +15,7 @@ let create_file ~filename : ctx =
     index=lazy (Line_index.of_file filename);
   }
 
-type t = int [@@deriving show]
+type t = int
 
 let none : t = 0
 

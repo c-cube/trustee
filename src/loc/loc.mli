@@ -11,6 +11,8 @@ val pp_l : t list Fmt.printer
 
 val none : t
 val make : ctx:LL.ctx -> LL.t -> t
+val create_ctx_string : filename:string -> string -> LL.ctx
+val create_ctx_file : filename:string -> LL.ctx
 
 val filename : t -> string
 val positions : t -> Position.t * Position.t

@@ -18,6 +18,9 @@ let none : t =
   let ctx = LL.create ~filename:"<none>" "" in
   make ~ctx LL.none
 
+let create_ctx_string = LL.create
+let create_ctx_file = LL.create_file
+
 let of_lex_pos ~ctx p1 p2 : t =
   make ~ctx (LL.of_lex_pos ~ctx p1 p2)
 let of_lexbuf ~ctx (b:Lexing.lexbuf) : t =
