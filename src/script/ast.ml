@@ -1,13 +1,12 @@
 
-module LL = Local_loc
-
-type loc = Local_loc.t
+type loc = Loc.t
 type 'a with_loc = 'a With_loc.t
 
-type sym = sym_view with_loc
-and sym_view = {
-  name: string;
-}
+let mk ~loc x : _ with_loc = {With_loc.view=x; loc}
+
+module type PARSER_PARAM = sig
+  val ctx : Local_loc.ctx
+end
 
 type const =
   | C_int of int
@@ -25,15 +24,18 @@ type binop =
   | Geq
   | Gt
 
+type var = string with_loc
+
 type expr = expr_view with_loc
 and expr_view =
-  | E_app of sym * expr list
+  | E_var of var
+  | E_app of var * expr list
   | E_op of binop * expr * expr
   | E_const of const
 
 type statement = statement_view with_loc
 and statement_view =
-  | S_fn of sym * expr list * block
+  | S_fn of var * var list * block
   | S_eval of expr
   (* TODO: theorem, structured proofs, etc. *)
 
@@ -43,8 +45,8 @@ and block_view = {
 }
 
 and block_item =
-  | S_let of sym * expr
-  | S_var of sym * expr
+  | S_let of var * expr
+  | S_var of var * expr
   | S_eval of expr
   | S_while of expr * block
   | S_return of expr

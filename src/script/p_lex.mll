@@ -1,36 +1,6 @@
 
 {
-  type token =
-    | IDENT of string
-
-    | COLON_STR of string
-    | QUOTED_STR of string
-    | INT of string
-
-    | VAR
-    | LET
-    | SEMI
-    | FN
-    | EQUAL
-
-    | LPAREN
-    | RPAREN
-    | LBRACKET
-    | RBRACKET
-    | LBRACE
-    | RBRACE
-
-    | PLUS
-    | MINUS
-    | STAR
-    | SLASH
-    | LT
-    | LEQ
-    | GT
-    | GEQ
-
-    | EOI
-
+  open P_token
   type unescape_state =
     | Not_escaped
     | Escaped
@@ -41,7 +11,7 @@
 
   let error _buf str = failwith str
 
-  let pp_tok out = function
+  let pp out = function
     | IDENT s -> Format.fprintf out "(ident %S)" s
     | QUOTED_STR s -> Format.fprintf out "(quoted_str %S)" s
     | COLON_STR s -> Format.fprintf out "(colon_str %S)" s
@@ -66,6 +36,7 @@
     | EQUAL -> Fmt.string out "="
     | LET -> Fmt.string out "let"
     | SEMI -> Fmt.string out ";"
+    | COMMA -> Fmt.string out ","
 
   (* remove quotes + unescape *)
   let remove_quotes lexbuf s =
@@ -146,7 +117,7 @@ rule token = parse
   | '}' { RBRACE }
   | '-'? num+ { INT (Lexing.lexeme lexbuf) }
   | ':' alphanum+ { COLON_STR (Lexing.lexeme lexbuf) }
-  | id { ATOM (Lexing.lexeme lexbuf) }
+  | id { IDENT (Lexing.lexeme lexbuf) }
   | string { QUOTED_STR (remove_quotes lexbuf (Lexing.lexeme lexbuf)) }
   | _ as c
     { error lexbuf (Printf.sprintf "lexing failed on char `%c`" c) }

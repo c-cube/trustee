@@ -5,5 +5,8 @@
   (libraries trustee.core trustee.loc containers)
   (flags :standard -open Trustee_core.Sigs -open Trustee_loc))
 
-(menhir (modules p_parse))
+(menhir (modules p_token) (flags --only-tokens))
+(menhir (modules p_parse p_token)
+         (merge_into p_parse)
+         (flags --external-tokens P_token))
 (ocamllex (modules p_lex))
