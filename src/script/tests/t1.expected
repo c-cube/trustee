@@ -16,3 +16,17 @@ parsed:
           }
         ));
       (S_fn ("g", ["x"], { bl_items = [(S_eval (E_var "x"))] }))])
+parsed:
+(Ok [(S_fn ("f", ["x"; "y"; "z"],
+        { bl_items =
+          [(S_while ((E_app ("p", [(E_var "x"); (E_var "z")])),
+              { bl_items =
+                [(S_var ("y", (E_app ("f", [(E_var "x"); (E_var "x")]))));
+                  (S_assign ("y", (E_var "z"))); S_break; S_continue;
+                  (S_return (E_var "x"))]
+                }
+              ));
+            (S_eval (E_var "z"))]
+          }
+        ))
+      ])

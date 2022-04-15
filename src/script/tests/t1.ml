@@ -18,4 +18,20 @@ fn g(x) { x }
 
 Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top;;
 
+let top = parse_top_str ~filename:"t1"
+{|fn f(x,y, z, ) {
+  while p(x,z) {
+    var y = f(x,x);
+    y = z;
+    break;
+    continue;
+    return x;
+  }
+  z
+}
+|};;
+
+Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top;;
+
+
 
