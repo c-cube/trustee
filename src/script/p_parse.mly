@@ -2,13 +2,13 @@
 %parameter <Ctx : Ast.PARSER_PARAM>
 
 %{
-open P_token
 open struct
   module A = Ast
   module Loc = Loc
   let mk_loc a b = Loc.of_lex_pos ~ctx:Ctx.ctx a b
 end
 open A
+open P_token
 %}
 
 %type <Ast.top> top
