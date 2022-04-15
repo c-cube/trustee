@@ -53,6 +53,7 @@ and block_view = {
 and block_item =
   | S_let of var * expr
   | S_var of var * expr
+  | S_assign of var * expr
   | S_eval of expr
   | S_while of expr * block
   | S_return of expr

@@ -31,12 +31,17 @@
     | GT -> Fmt.string out "'>'"
     | GEQ -> Fmt.string out "'>='"
     | EOI -> Fmt.string out "eoi"
-    | VAR -> Fmt.string out "var"
     | FN -> Fmt.string out "fn"
+    | EVAL -> Fmt.string out "eval"
     | EQUAL -> Fmt.string out "="
-    | LET -> Fmt.string out "let"
     | SEMI -> Fmt.string out ";"
     | COMMA -> Fmt.string out ","
+    | LET -> Fmt.string out "let"
+    | VAR -> Fmt.string out "var"
+    | WHILE -> Fmt.string out "while"
+    | BREAK -> Fmt.string out "break"
+    | CONTINUE -> Fmt.string out "continue"
+    | RETURN -> Fmt.string out "return"
 
   (* remove quotes + unescape *)
   let remove_quotes lexbuf s =
@@ -100,6 +105,11 @@ rule token = parse
   | "var" { VAR }
   | "let" { LET }
   | "fn" { FN }
+  | "eval" { EVAL }
+  | "while" { WHILE }
+  | "break" { BREAK }
+  | "continue" { CONTINUE }
+  | "return" { RETURN }
   | ',' { COMMA }
   | '=' { EQUAL }
   | ';' { SEMI }

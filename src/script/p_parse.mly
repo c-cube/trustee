@@ -36,12 +36,27 @@ block:
 
 block_items:
 | { [] }
-| LET v=var EQUAL e=expr SEMI bls=block_items
-  { S_let (v, e) :: bls }
+| i=block_item_semi bls=block_items { i :: bls }
+| i=block_item_atomic SEMI bls=block_items { i :: bls }
+| i=block_item_atomic { [ i ] }
+
+%inline block_item_semi:
+| LET v=var EQUAL e=expr SEMI
+  { S_let (v, e) }
+| VAR v=var EQUAL e=expr SEMI
+  { S_var (v, e) }
+| v=var EQUAL e=expr SEMI
+  { S_assign (v, e) }
+| WHILE e=expr bl=block
+  { S_while (e,bl) }
+| BREAK SEMI { S_break }
+| CONTINUE SEMI { S_continue }
+| RETURN e=expr SEMI
+  { S_return e }
+
+%inline block_item_atomic:
 | e=expr
-  { [S_eval e] }
-| e=expr SEMI bls=block_items
-  { S_eval e :: bls }
+  { S_eval e }
 
 expr:
 | v=var {
