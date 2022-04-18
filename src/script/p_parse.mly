@@ -41,11 +41,15 @@ block:
 
 block_items:
 | { [] }
-| i=block_item_semi bls=block_items { i :: bls }
+| i=block_item_self_delimited bls=block_items { i :: bls }
 | i=block_item_atomic SEMI bls=block_items { i :: bls }
 | i=block_item_atomic { [ i ] }
 
-%inline block_item_semi:
+(* no need for trailing ; *)
+%inline block_item_self_delimited:
+| e=brace_expr {
+  Bl_eval e
+}
 | LET v=var EQUAL e=expr SEMI
   { Bl_let (v, e) }
 | VAR v=var EQUAL e=expr SEMI
@@ -60,15 +64,11 @@ block_items:
   { Bl_return e }
 
 %inline block_item_atomic:
-| e=expr
+| e=atomic_expr
   { Bl_eval e }
 
 expr:
 | e=or_expr { e }
-| f=var LPAREN l=app_args RPAREN {
-  let loc = mk_loc $startpos $endpos in
-  mk ~loc @@ E_app (f, l)
-  }
 
 or_expr:
 | e=and_expr { e }
@@ -129,14 +129,23 @@ mult_expr:
 | SLASH { Div }
 
 uminus_expr:
-| e=atomic_expr { e }
+| e=core_expr { e }
 | MINUS e=atomic_expr  {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_unop (Uminus, e)
   }
 
+core_expr:
+| e=atomic_expr { e }
+| e=brace_expr { e }
+
+(* atomic (sub)-expression *)
 atomic_expr:
 | LPAREN e=expr RPAREN { e }
+| f=var LPAREN l=app_args RPAREN {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ E_app (f, l)
+  }
 | LBRACKET l=app_args RBRACKET {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_array_lit l
@@ -157,6 +166,26 @@ atomic_expr:
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_var v
   }
+
+(* expression ending in {} *)
+brace_expr:
+| IF e=expr bl1=block rest=if_rest {
+  let elseif, else_ = rest in
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ E_if {
+    test=e;
+    then_=bl1;
+    elseif;
+    else_;
+  }
+}
+
+if_rest:
+| { [], None }
+| ELSE bl=block { [], Some bl }
+| ELSE IF e=expr bl=block rest=if_rest {
+  let l, else_ = rest in
+  (e,bl) :: l, else_ }
 
 app_args:
 | { [] }

@@ -43,6 +43,8 @@
     | LET -> Fmt.string out "let"
     | VAR -> Fmt.string out "var"
     | WHILE -> Fmt.string out "while"
+    | IF -> Fmt.string out "if"
+    | ELSE -> Fmt.string out "else"
     | BREAK -> Fmt.string out "break"
     | CONTINUE -> Fmt.string out "continue"
     | RETURN -> Fmt.string out "return"
@@ -109,6 +111,8 @@ rule token = parse
   | "var" { VAR }
   | "let" { LET }
   | "fn" { FN }
+  | "if" { IF }
+  | "else" { ELSE }
   | "while" { WHILE }
   | "break" { BREAK }
   | "continue" { CONTINUE }

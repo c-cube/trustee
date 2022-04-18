@@ -41,7 +41,13 @@ type unop =
 type var = string with_loc
 [@@deriving show {with_path=false}]
 
-type expr = expr_view with_loc
+type statement = statement_view with_loc
+and statement_view =
+  | S_fn of var * var list * block
+  | S_eval of expr
+  (* TODO: theorem, structured proofs, etc. *)
+
+and expr = expr_view with_loc
 and expr_view =
   | E_var of var
   | E_app of var * expr list
@@ -49,13 +55,13 @@ and expr_view =
   | E_binop of binop * expr * expr
   | E_unop of unop * expr
   | E_const of const
+  | E_if of {
+      test: expr;
+      then_: block;
+      elseif : (expr * block) list;
+      else_: block option;
+    }
 [@@deriving show {with_path=false}]
-
-type statement = statement_view with_loc
-and statement_view =
-  | S_fn of var * var list * block
-  | S_eval of expr
-  (* TODO: theorem, structured proofs, etc. *)
 
 and block = block_view with_loc
 and block_view = {
