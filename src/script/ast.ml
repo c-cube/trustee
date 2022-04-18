@@ -14,6 +14,7 @@ type const =
   | C_int of int
   | C_string of string
   | C_bool of bool
+  | C_atom of string
   | C_unit
 [@@deriving show {with_path=false}]
 
@@ -22,10 +23,19 @@ type binop =
   | Minus
   | Times
   | Div
+  | Eq
+  | Neq
+  | And
+  | Or
   | Leq
   | Lt
   | Geq
   | Gt
+[@@deriving show {with_path=false}]
+
+type unop =
+  | Not
+  | Uminus
 [@@deriving show {with_path=false}]
 
 type var = string with_loc
@@ -35,7 +45,9 @@ type expr = expr_view with_loc
 and expr_view =
   | E_var of var
   | E_app of var * expr list
-  | E_op of binop * expr * expr
+  | E_array_lit of expr list
+  | E_binop of binop * expr * expr
+  | E_unop of unop * expr
   | E_const of const
 [@@deriving show {with_path=false}]
 
@@ -51,16 +63,16 @@ and block_view = {
 }
 
 and block_item =
-  | S_let of var * expr
-  | S_var of var * expr
-  | S_assign of var * expr
-  | S_eval of expr
-  | S_while of expr * block
-  | S_return of expr
-  | S_break
-  | S_continue
+  | Bl_let of var * expr
+  | Bl_var of var * expr
+  | Bl_assign of var * expr
+  | Bl_eval of expr
+  | Bl_while of expr * block
+  | Bl_return of expr
+  | Bl_break
+  | Bl_continue
     (* TODO: [for x = 1,n { }] à la lua *)
-  | S_block of block
+  | Bl_block of block
 [@@deriving show {with_path=false}]
 
 type top = statement list [@@deriving show]

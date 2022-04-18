@@ -26,13 +26,17 @@
     | MINUS -> Fmt.string out "-"
     | STAR -> Fmt.string out "*"
     | SLASH -> Fmt.string out "/"
+    | AND -> Fmt.string out "'&&'"
+    | OR -> Fmt.string out "'||'"
+    | NOT -> Fmt.string out "'!'"
+    | EQ -> Fmt.string out "'=='"
+    | NEQ -> Fmt.string out "'!='"
     | LT -> Fmt.string out "'<'"
     | LEQ -> Fmt.string out "'<='"
     | GT -> Fmt.string out "'>'"
     | GEQ -> Fmt.string out "'>='"
     | EOI -> Fmt.string out "eoi"
     | FN -> Fmt.string out "fn"
-    | EVAL -> Fmt.string out "eval"
     | EQUAL -> Fmt.string out "="
     | SEMI -> Fmt.string out ";"
     | COMMA -> Fmt.string out ","
@@ -105,7 +109,6 @@ rule token = parse
   | "var" { VAR }
   | "let" { LET }
   | "fn" { FN }
-  | "eval" { EVAL }
   | "while" { WHILE }
   | "break" { BREAK }
   | "continue" { CONTINUE }
@@ -117,6 +120,11 @@ rule token = parse
   | '-' { MINUS }
   | '*' { STAR }
   | '/' { SLASH }
+  | "&&" { AND }
+  | "||" { OR }
+  | '!' { NOT }
+  | "==" { EQ }
+  | "!=" { NEQ }
   | '<' { LT }
   | "<=" { LEQ }
   | '>' { GT }
