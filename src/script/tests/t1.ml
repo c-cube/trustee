@@ -23,12 +23,14 @@ Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top;;
 let top = parse_top_str ~filename:"t1"
 {|fn f(x,y, z, ) {
   while p(x,z) {
-    var y = f(x,"foo");
-    y = z + 1;
+    var y = f(x+1,"foo");
+    y = z + 1 + $ \x (y z: foo). x (x y) z $;
     break;
+
+    let myexpr = $ \x. f ${x} ${ g(y) } $;
     if false { continue; }
     else if true { echo("elseif"); break; }
-    else if !true && !false { return 42; }
+    else if !true && !false || foo { return 42; }
     else {
       let res = if true { 1 } else { 2 };
       return res;

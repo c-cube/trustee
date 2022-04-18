@@ -25,11 +25,36 @@ parsed:
           [(Bl_while ((E_app ("p", [(E_var "x"); (E_var "z")])),
               { bl_items =
                 [(Bl_var ("y",
-                    (E_app ("f", [(E_var "x"); (E_const (C_string "foo"))]))
+                    (E_app ("f",
+                       [(E_binop (Plus, (E_var "x"), (E_const (C_int 1))));
+                         (E_const (C_string "foo"))]
+                       ))
                     ));
                   (Bl_assign ("y",
-                     (E_binop (Plus, (E_var "z"), (E_const (C_int 1))))));
+                     (E_binop (Plus,
+                        (E_binop (Plus, (E_var "z"), (E_const (C_int 1)))),
+                        (E_logic
+                           L_bind {binder = L_lambda;
+                             bs =
+                             [(["x"], None);
+                               (["y"; "z"], (Some (L_var "foo")))];
+                             body =
+                             (L_app ((L_var "x"),
+                                [(L_app ((L_var "x"), [(L_var "y")]));
+                                  (L_var "z")]
+                                ))})
+                        ))
+                     ));
                   Bl_break;
+                  (Bl_let ("myexpr",
+                     (E_logic
+                        L_bind {binder = L_lambda; bs = [(["x"], None)];
+                          body =
+                          (L_app ((L_var "f"),
+                             [(L_escape (E_var "x"));
+                               (L_escape (E_app ("g", [(E_var "y")])))]
+                             ))})
+                     ));
                   (Bl_eval
                      E_if {test = (E_var "false");
                        then_ = { bl_items = [Bl_continue] };
@@ -41,8 +66,10 @@ parsed:
                                   [(E_const (C_string "elseif"))])));
                              Bl_break]
                            });
-                         ((E_binop (And, (E_unop (Not, (E_var "true"))),
-                             (E_unop (Not, (E_var "false"))))),
+                         ((E_binop (Or,
+                             (E_binop (And, (E_unop (Not, (E_var "true"))),
+                                (E_unop (Not, (E_var "false"))))),
+                             (E_var "foo"))),
                           { bl_items = [(Bl_return (E_const (C_int 42)))] })
                          ];
                        else_ =
