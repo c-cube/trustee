@@ -9,5 +9,5 @@
 (menhir (modules p_token) (flags --only-tokens))
 (menhir (modules p_parse p_token)
          (merge_into p_parse)
-         (flags --external-tokens P_token))
+         (flags --external-tokens P_token --explain))
 (ocamllex (modules p_lex))

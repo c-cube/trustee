@@ -1,32 +1,75 @@
 parsed:
 (Ok [(S_fn ("f", ["x"; "y"],
-        { bl_items = [(S_eval (E_app ("f", [(E_var "x"); (E_var "y")])))] }))
+        { bl_items = [(Bl_eval (E_app ("f", [(E_var "x"); (E_var "y")])))] }
+        ))
       ])
 parsed:
 (Ok [(S_fn ("f", ["x"; "y"],
         { bl_items =
-          [(S_let ("z1",
+          [(Bl_let ("z1",
               (E_app ("f",
                  [(E_app ("g", [(E_app ("h", [(E_var "x")])); (E_var "y")]));
                    (E_var "z1"); (E_var "z2")]
                  ))
               ));
-            (S_eval (E_app ("g", [(E_var "z1"); (E_var "z1")])));
-            (S_eval (E_var "z1"))]
+            (Bl_eval (E_app ("g", [(E_var "z1"); (E_var "z1")])));
+            (Bl_eval (E_var "z1"))]
           }
         ));
-      (S_fn ("g", ["x"], { bl_items = [(S_eval (E_var "x"))] }))])
+      (S_eval
+         (E_app ("f", [(E_const (C_int 1)); (E_const (C_string "yolo"))])));
+      (S_fn ("g", ["x"], { bl_items = [(Bl_eval (E_var "x"))] }))])
 parsed:
 (Ok [(S_fn ("f", ["x"; "y"; "z"],
         { bl_items =
-          [(S_while ((E_app ("p", [(E_var "x"); (E_var "z")])),
+          [(Bl_while ((E_app ("p", [(E_var "x"); (E_var "z")])),
               { bl_items =
-                [(S_var ("y", (E_app ("f", [(E_var "x"); (E_var "x")]))));
-                  (S_assign ("y", (E_var "z"))); S_break; S_continue;
-                  (S_return (E_var "x"))]
+                [(Bl_var ("y",
+                    (E_app ("f", [(E_var "x"); (E_const (C_string "foo"))]))
+                    ));
+                  (Bl_assign ("y",
+                     (E_binop (Plus, (E_var "z"), (E_const (C_int 1))))));
+                  Bl_break;
+                  (Bl_eval
+                     E_if {test = (E_var "false");
+                       then_ = { bl_items = [Bl_continue] };
+                       elseif =
+                       [((E_var "true"),
+                         { bl_items =
+                           [(Bl_eval
+                               (E_app ("echo",
+                                  [(E_const (C_string "elseif"))])));
+                             Bl_break]
+                           });
+                         ((E_binop (And, (E_unop (Not, (E_var "true"))),
+                             (E_unop (Not, (E_var "false"))))),
+                          { bl_items = [(Bl_return (E_const (C_int 42)))] })
+                         ];
+                       else_ =
+                       (Some { bl_items =
+                               [(Bl_let ("res",
+                                   E_if {test = (E_var "true");
+                                     then_ =
+                                     { bl_items =
+                                       [(Bl_eval (E_const (C_int 1)))] };
+                                     elseif = [];
+                                     else_ =
+                                     (Some { bl_items =
+                                             [(Bl_eval (E_const (C_int 2)))]
+                                             })}
+                                   ));
+                                 (Bl_return (E_var "res"))]
+                               })});
+                  (Bl_return (E_var "x"))]
                 }
               ));
-            (S_eval (E_var "z"))]
+            (Bl_eval (E_var "z"))]
           }
-        ))
+        ));
+      (S_eval
+         (E_app ("call_some_fun",
+            [(E_app ("g",
+                [(E_const (C_atom ":atom")); (E_const (C_atom ":atom2"))]));
+              (E_const (C_string "bang!"))]
+            )))
       ])

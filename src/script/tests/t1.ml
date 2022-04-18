@@ -13,6 +13,8 @@ let top = parse_top_str ~filename:"t1"
   z1
 }
 
+f(1, "yolo");
+
 fn g(x) { x }
 |};;
 
@@ -21,14 +23,22 @@ Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top;;
 let top = parse_top_str ~filename:"t1"
 {|fn f(x,y, z, ) {
   while p(x,z) {
-    var y = f(x,x);
-    y = z;
+    var y = f(x,"foo");
+    y = z + 1;
     break;
-    continue;
+    if false { continue; }
+    else if true { echo("elseif"); break; }
+    else if !true && !false { return 42; }
+    else {
+      let res = if true { 1 } else { 2 };
+      return res;
+    }
     return x;
   }
   z
 }
+
+call_some_fun(g(:atom, :atom2), "bang!");
 |};;
 
 Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top;;
