@@ -41,12 +41,21 @@ type unop =
 type var = string with_loc
 [@@deriving show {with_path=false}]
 
+(** Logical binder *)
+type lbinder =
+  | L_lambda
+  | L_with
+  | L_other of var
+[@@deriving show {with_path=false}]
+
+(** Toplevel statement *)
 type statement = statement_view with_loc
 and statement_view =
   | S_fn of var * var list * block
   | S_eval of expr
   (* TODO: theorem, structured proofs, etc. *)
 
+(** Meta level expression *)
 and expr = expr_view with_loc
 and expr_view =
   | E_var of var
@@ -55,6 +64,7 @@ and expr_view =
   | E_binop of binop * expr * expr
   | E_unop of unop * expr
   | E_const of const
+  | E_logic of lexpr
   | E_if of {
       test: expr;
       then_: block;
@@ -63,6 +73,20 @@ and expr_view =
     }
 [@@deriving show {with_path=false}]
 
+(** Logical expr *)
+and lexpr = lexpr_view with_loc
+and lexpr_view =
+  | L_var of var
+  | L_app of lexpr * lexpr list
+  | L_bind of {
+      binder: lbinder;
+      bs: (var list * lexpr option) list;
+      body: lexpr
+    }
+  | L_escape of expr (* inject result of computation *)
+[@@deriving show {with_path=false}]
+
+(** Meta-level block (composite expression) *)
 and block = block_view with_loc
 and block_view = {
   bl_items: block_item list;

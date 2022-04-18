@@ -13,6 +13,7 @@ open A
 
 %type <Ast.top> top
 %type <Ast.statement> statement
+%type <Ast.lexpr> lexpr
 %start top
 
 %%
@@ -150,6 +151,10 @@ atomic_expr:
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_array_lit l
 }
+| DOLLAR le=lexpr DOLLAR {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ E_logic le
+}
 | n=INT {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_const (C_int (int_of_string n))
@@ -202,5 +207,65 @@ var:
   let loc = mk_loc $startpos $endpos in
   (mk ~loc v: A.var)
 }
+
+symbol:
+| s=SYMBOL {
+  let loc = mk_loc $startpos $endpos in
+  (mk ~loc s: A.var)
+}
+
+(* logic exprs *)
+
+lexpr:
+| e=lexpr_app { e }
+| binder=lbinder bs=lexpr_binding+ DOT body=lexpr {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ L_bind { binder; bs; body }
+}
+
+%inline lbinder:
+| LAMBDA { L_lambda }
+| WITH { L_with }
+(* TODO
+| s=symbol { L_other s }
+*)
+
+lexpr_app:
+| e=lexpr_atomic { e }
+| e=lexpr_symbol { e }
+| e=lexpr_atomic l=lexpr_atomic+ {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ L_app (e,l)
+}
+| a=lexpr_atomic s=lexpr_symbol b=lexpr_atomic {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ L_app (s, [a;b])
+}
+| s=lexpr_symbol e=lexpr_atomic {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ L_app (s,[e])
+}
+
+lexpr_symbol:
+| s=symbol {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ L_var s
+}
+
+lexpr_atomic:
+| LPAREN e=lexpr RPAREN { e }
+| DOLLAR_LBRACE e=expr RBRACE {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ L_escape e
+}
+| v=var {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ L_var v
+}
+
+(* variable binding *)
+lexpr_binding:
+| v=var { [v], None }
+| LPAREN vs=var+ COLON e=lexpr RPAREN { vs, Some e }
 
 %%

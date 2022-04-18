@@ -13,6 +13,7 @@
 
   let pp out = function
     | IDENT s -> Format.fprintf out "(ident %S)" s
+    | SYMBOL s -> Format.fprintf out "(symbol %S)" s
     | QUOTED_STR s -> Format.fprintf out "(quoted_str %S)" s
     | COLON_STR s -> Format.fprintf out "(colon_str %S)" s
     | INT s -> Format.fprintf out "(int %s)" s
@@ -39,7 +40,13 @@
     | FN -> Fmt.string out "fn"
     | EQUAL -> Fmt.string out "="
     | SEMI -> Fmt.string out ";"
+    | COLON -> Fmt.string out ":"
     | COMMA -> Fmt.string out ","
+    | DOT -> Fmt.string out "."
+    | DOLLAR -> Fmt.string out "$"
+    | DOLLAR_LBRACE -> Fmt.string out "${"
+    | WITH -> Fmt.string out "with"
+    | LAMBDA -> Fmt.string out "\\"
     | LET -> Fmt.string out "let"
     | VAR -> Fmt.string out "var"
     | WHILE -> Fmt.string out "while"
@@ -99,6 +106,8 @@ let alphas = alpha | ['_']
 let num = ['0'-'9']
 let alphanum = alpha | num
 let id = alphas (alphas | num)*
+let sym1 = ['!' '@' '#' '$' '%' '^' '&' '*' '-' '_' '+' '=' '?']
+let symbol = sym1 sym1*
 let string_item =
   ([^ '"' '\\'] | "\\\"" | "\\\\" | "\\b" | "\\n" | "\\t" | "\\r")
 let string = '"' string_item* '"'
@@ -117,8 +126,13 @@ rule token = parse
   | "break" { BREAK }
   | "continue" { CONTINUE }
   | "return" { RETURN }
+  | "with" { WITH }
+  | '\\' { LAMBDA }
+  | '$' { DOLLAR }
+  | '.' { DOT }
   | ',' { COMMA }
   | '=' { EQUAL }
+  | ':' { COLON }
   | ';' { SEMI }
   | '+' { PLUS }
   | '-' { MINUS }
@@ -137,10 +151,12 @@ rule token = parse
   | ')' { RPAREN }
   | '[' { LBRACKET }
   | ']' { RBRACKET }
+  | "${" { DOLLAR_LBRACE }
   | '{' { LBRACE }
   | '}' { RBRACE }
   | '-'? num+ { INT (Lexing.lexeme lexbuf) }
   | ':' (alphas | num)+ { COLON_STR (Lexing.lexeme lexbuf) }
+  | symbol { SYMBOL (Lexing.lexeme lexbuf) }
   | id { IDENT (Lexing.lexeme lexbuf) }
   | string { QUOTED_STR (remove_quotes lexbuf (Lexing.lexeme lexbuf)) }
   | _ as c
