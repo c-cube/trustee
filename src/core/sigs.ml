@@ -31,6 +31,8 @@ let pp_list ?(sep=" ") ppx out l =
 let pp_iter ?(sep=" ") ppx out iter =
   Fmt.iter ~sep:(fun out () -> Fmt.fprintf out "%s@," sep) ppx out iter
 
+let[@inline] (let@) f x = f x
+
 module Str_tbl = CCHashtbl.Make(CCString)
 module Str_map = CCMap.Make(CCString)
 module Str_set = CCSet.Make(CCString)

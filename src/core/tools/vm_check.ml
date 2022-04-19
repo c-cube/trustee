@@ -41,7 +41,7 @@ let pp_err err =
 
 let main (files:string Vec.t) =
   let ctx = K.Ctx.create() in
-  let env = ref VM.Scoping_env.empty in
+  let env = ref VM_parser.Scoping_env.empty in
 
   let eval_stanza stanza =
     if !debug then Format.eprintf "parsed stanza %a@." VM.Stanza.pp stanza;
@@ -51,8 +51,8 @@ let main (files:string Vec.t) =
 
   let read_file file =
     let str = CCIO.with_in file CCIO.read_all in
-    let p = VM.Parser.create ~prims str in
-    let env', stanzas = VM.Parser.parse_stanzas p ~env:!env in
+    let p = VM_parser.create ~prims str in
+    let env', stanzas = VM_parser.parse_stanzas p ~env:!env in
     env := env';
     let stanzas = match stanzas with
       | Ok v -> v

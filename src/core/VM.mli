@@ -17,6 +17,8 @@ type 'a vec
 
 type vm
 type thunk
+type chunk
+type primitive
 
 (** Values manipulated by the VM. *)
 module Value : sig
@@ -32,6 +34,8 @@ module Value : sig
   val var : K.Var.t -> t
   val subst : K.Subst.t -> t
   val theory : K.Theory.t -> t
+  val prim : primitive -> t
+  val chunk : chunk -> t
 
   (* TODO: custom values? *)
 
@@ -59,13 +63,22 @@ end
 
 (** Chunk of executable bytecode. *)
 module Chunk : sig
-  type t
+  type t = chunk
   include PP with type t := t
 end
 
-(** Primitive function, implemented in OCaml. *)
+(** Primitive operation.
+
+    A primitive is a function implemented in OCaml (or the host language,
+    in general), that operates over the VM, and can perform computations
+    more efficiently. It should be referentially transparent.
+
+    A good use of primitives is to implement logical algorithms such as
+    unification, rewriting, congruence closure, etc. and expose them
+    as fast primitive operations to help user programs reason.
+*)
 module Primitive : sig
-  type t
+  type t = primitive
   include PP with type t := t
   val name : t -> string
 
@@ -80,8 +93,11 @@ end
 
     A thunk is a delayed/lazy computation of some {!Chunk.t}. *)
 module Thunk : sig
-  type t
+  type t = thunk
   include PP with type t := t
+
+  val make : chunk -> t
+  (** Build a thunk that will evaluate this chunk. *)
 end
 
 (** Low level proof/meta stanzas.
@@ -103,7 +119,7 @@ module Stanza : sig
   type t
   (** A single stanza *)
 
-  type view = private
+  type view =
     | Declare of {
         name: string;
         ty: Thunk.t;
@@ -142,6 +158,8 @@ module Stanza : sig
         value: Thunk.t;
       }
 
+  val make : id:Sym_ptr.t -> view -> t
+
   val view : t -> view
   (** Examine the stanza *)
 
@@ -149,39 +167,31 @@ module Stanza : sig
   (** Pretty print *)
 end
 
-(** Scoping environment for the virtual machine.
-
-    This environment contains local names, and is required for parsing.
-*)
-module Scoping_env : sig
-  type t
-  (** A persistent env *)
-
-  val empty : t
-
-  val pp : t Fmt.printer
-end
-
-(** Basic syntax.
-
-    This syntax is, for now, only intended for testing and possibly as
-    an internal compilation target. *)
-module Parser : sig
+(** Object used to build chunks incrementally. *)
+module Chunk_builder : sig
   type t
 
-  val create :
-    ?prims:Primitive.t Str_map.t ->
-    string -> t
-  (** [create ?prims str] creates a parser that will parse [str],
-      using [prims] as the additional primitives *)
+  val create : unit -> t
 
-  val needs_more : string -> bool
+  val reset : t -> unit
 
-  val parse_chunk : t -> env:Scoping_env.t -> (Chunk.t, Error.t) result
+  val to_chunk : t -> Chunk.t
+  (** Obtain the chunk that we just built *)
 
-  val parse_stanzas :
-    t -> env:Scoping_env.t ->
-    Scoping_env.t * (Stanza.t Vec.t, Error.t) result
+  val add_local : t -> Value.t -> int
+  (** Add a local value to this chunk, returning its index. *)
+
+  val add_instr : t -> Instr.t -> unit
+  (** Push an instruction *)
+
+  val cur_pos : t -> int
+  (** current position in the list of instructions. This can be
+      useful for emitting a jump to this instruction later on. *)
+
+  val set_instr : t -> int -> Instr.t -> unit
+  (** [set_instr builder off instr] sets the existing instruction
+      at offset [off] to [instr]. This is useful to emit a forward
+      jump once the offset it jumps to, is known. *)
 end
 
 type t = vm
@@ -229,6 +239,9 @@ val eval_thunk1 :
   Thunk.t ->
   (Value.t, Error.t) result
 
+(* FIXME: result type for evaluating stanza, reflecting their shape;
+   callback to abstract on the effect of evaluating a thunk, rather than
+   hardcoding a "printf" *)
 val eval_stanza :
   ?debug_hook:debug_hook ->
   K.Ctx.t -> Stanza.t ->
@@ -238,18 +251,3 @@ val dump : t Fmt.printer
 (** Debug printer for the VM.
     Output is not specified, and not guaranteed to be stable. *)
 
-val parse_chunk_string :
-  ?prims:Primitive.t Str_map.t ->
-  Scoping_env.t -> string -> (Chunk.t, Error.t) result
-
-val parse_chunk_string_exn :
-  ?prims:Primitive.t Str_map.t ->
-  Scoping_env.t -> string -> Chunk.t
-
-val parse_stanza_string :
-  ?prims:Primitive.t Str_map.t ->
-  Scoping_env.t -> string -> Scoping_env.t * (Stanza.t, Error.t) result
-
-val parse_stanza_string_exn :
-  ?prims:Primitive.t Str_map.t ->
-  Scoping_env.t -> string -> Scoping_env.t * Stanza.t

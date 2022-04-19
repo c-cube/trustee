@@ -130,10 +130,36 @@ let emit_pp (name,args,doc) =
   );
   pf "\n"
 
+let emit_mk (name,args,doc) =
+  pf "\n  (** %s *)\n" doc;
+  pf "  let mk_%s" name;
+  let n = List.length args in
+  List.iteri (fun i ty ->
+      pf " (x_%d : " i;
+      match ty with
+      | Int -> pf "int)";
+      | Bool -> pf "bool)";
+      | Thunk -> pf "thunk)";)
+    args;
+  pf " : thunk t = %s" (String.capitalize_ascii name);
+  if n=0 then ()
+  else if n=1 then pf " x_0"
+  else (
+    pf "("; List.iteri (fun i _ -> if i>0 then pf ","; pf "x_%d" i) args; pf ")"
+  );
+  pf "\n"
+
 let () =
   pf "type 'thunk t =\n";
   List.iter emit_ty instrs;
   pf "\n";
   pf "let pp pp_thunk out (i:_ t) : unit = match i with\n";
   List.iter emit_pp instrs;
+  pf "\n";
+  pf "(** Instruction builder *)\n";
+  pf "module Make(Th : sig type thunk end) = struct\n";
+  pf "  open Th\n";
+  List.iter emit_mk instrs;
+  pf "end\n";
+  ()
 
