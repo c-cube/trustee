@@ -1,0 +1,83 @@
+ast: [(S_fn ("fact", ["n"],
+         { bl_items =
+           [(Bl_var ("i", (E_var "n")));
+             (Bl_var ("res", (E_const (C_int 1))));
+             (Bl_while ((E_binop (Gt, (E_var "i"), (E_const (C_int 0)))),
+                { bl_items =
+                  [(Bl_assign ("res",
+                      (E_binop (Times, (E_var "res"), (E_var "i")))));
+                    (Bl_assign ("i",
+                       (E_binop (Minus, (E_var "i"), (E_const (C_int 1))))))
+                    ]
+                  }
+                ));
+             (Bl_eval (E_var "res"))]
+           }
+         ));
+       (S_eval (E_app ("fact", [(E_const (C_int 5))])))]
+compiled stanzas:
+  [(def `fact`
+    :chunk (thunk
+            :st (lazy
+                 chunk[0 regs] {
+                   :instrs
+                    0        (lload 0) ; <chunk>
+                   :locals  0        chunk[3 regs] {
+                                       :instrs
+                                        0        (rstore 0)
+                                        1        (rload 0)
+                                        2        (rstore 1)
+                                        3        (int 1)
+                                        4        (rstore 2)
+                                        5        (int 0)
+                                        6        (rload 1)
+                                        7        lt
+                                        8        (jifn 18)
+                                        9        (rload 2)
+                                        10       (rload 1)
+                                        11       mult
+                                        12       (rstore 2)
+                                        13       (rload 1)
+                                        14       (int 1)
+                                        15       sub
+                                        16       (rstore 1)
+                                        17       (jmp 5)
+                                        18       (rload 2)
+                                        19       ret
+                                     }
+                 })));
+   (eval
+    (thunk
+     :st (lazy
+          chunk[0 regs] {
+            :instrs
+             0        (int 5)
+             1        (tforce (thunk :st (lazy)))
+             2        call
+          })))]
+(def fact =
+ result: chunk[3 regs] {
+           :instrs
+            0        (rstore 0)
+            1        (rload 0)
+            2        (rstore 1)
+            3        (int 1)
+            4        (rstore 2)
+            5        (int 0)
+            6        (rload 1)
+            7        lt
+            8        (jifn 18)
+            9        (rload 2)
+            10       (rload 1)
+            11       mult
+            12       (rstore 2)
+            13       (rload 1)
+            14       (int 1)
+            15       sub
+            16       (rstore 1)
+            17       (jmp 5)
+            18       (rload 2)
+            19       ret
+         })
+(eval: 
+   120)
