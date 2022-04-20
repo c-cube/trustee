@@ -50,24 +50,24 @@ compiled stanzas:
                     0        chunk[3 regs] {
                                :instrs
                                 0        (rstore 0)
-                                1        (rload 0)
-                                2        (rstore 1)
+                                1        (rload 0) ; deref n
+                                2        (rstore 1) ; var i
                                 3        (int 1)
-                                4        (rstore 2)
+                                4        (rstore 2) ; var res
                                 5        (int 0)
-                                6        (rload 1)
+                                6        (rload 1) ; deref i
                                 7        lt
-                                8        (jifn 18)
-                                9        (rload 2)
-                                10       (rload 1)
+                                8        (jifn 18) ; exit while
+                                9        (rload 2) ; deref res
+                                10       (rload 1) ; deref i
                                 11       mult
                                 12       (rstore 2)
-                                13       (rload 1)
+                                13       (rload 1) ; deref i
                                 14       (int 1)
                                 15       sub
                                 16       (rstore 1)
                                 17       (jmp 5)
-                                18       (rload 2)
+                                18       (rload 2) ; deref res
                                 19       ret
                              }
                  })));
@@ -110,8 +110,8 @@ compiled stanzas:
              8        (lload 1) ; "b"
              9        (jmp 11)
              10       (lload 2) ; "c"
-             11       (rstore 0)
-             12       (rload 0)
+             11       (rstore 0) ; x
+             12       (rload 0) ; deref x
             :locals
              0        "a"
              1        "b"
@@ -121,24 +121,24 @@ compiled stanzas:
  result: chunk[3 regs] {
            :instrs
             0        (rstore 0)
-            1        (rload 0)
-            2        (rstore 1)
+            1        (rload 0) ; deref n
+            2        (rstore 1) ; var i
             3        (int 1)
-            4        (rstore 2)
+            4        (rstore 2) ; var res
             5        (int 0)
-            6        (rload 1)
+            6        (rload 1) ; deref i
             7        lt
-            8        (jifn 18)
-            9        (rload 2)
-            10       (rload 1)
+            8        (jifn 18) ; exit while
+            9        (rload 2) ; deref res
+            10       (rload 1) ; deref i
             11       mult
             12       (rstore 2)
-            13       (rload 1)
+            13       (rload 1) ; deref i
             14       (int 1)
             15       sub
             16       (rstore 1)
             17       (jmp 5)
-            18       (rload 2)
+            18       (rload 2) ; deref res
             19       ret
          })
 (eval:

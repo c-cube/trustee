@@ -65,6 +65,7 @@ end
 (** Chunk of executable bytecode. *)
 module Chunk : sig
   type t = chunk
+  val strip_comments : t -> unit
   include PP with type t := t
 end
 
@@ -175,7 +176,7 @@ end
 module Chunk_builder : sig
   type t
 
-  val create : unit -> t
+  val create : ?allow_comments:bool -> unit -> t
 
   val reset : t -> unit
 
@@ -187,6 +188,9 @@ module Chunk_builder : sig
 
   val push_i : t -> Instr.t -> unit
   (** Push an instruction *)
+
+  val push_comment : t -> string -> unit
+  (** Add short comment on the current instruction *)
 
   val cur_pos : t -> int
   (** current position in the list of instructions. This can be

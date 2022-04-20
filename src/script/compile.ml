@@ -163,6 +163,7 @@ module Compile_ = struct
         compile_expr self test;
         let last_pos = CB.cur_pos self.cb in
         CB.push_i self.cb I.nop;
+        CB.push_comment self.cb "if";
 
         (* test is true: execute block *)
         compile_block_return self then_;
@@ -216,7 +217,8 @@ module Compile_ = struct
   and compile_var (self:st) (s:A.var) : unit =
     match Str_map.find_opt s.view self.locals with
     | Some {lreg;_} ->
-      CB.push_i self.cb (I.rload lreg)
+      CB.push_comment self.cb (spf "deref %s" s.view);
+      CB.push_i self.cb (I.rload lreg);
     | None ->
       match Env.find s.view self.env with
       | Some th ->
@@ -269,6 +271,7 @@ module Compile_ = struct
         let reg = alloc_reg self in
         local_regs := reg :: !local_regs;
         compile_expr self e;
+        CB.push_comment self.cb v.view;
         CB.push_i self.cb (I.rstore reg);
         self.locals <- Str_map.add v.view {lreg=reg; lvar=false} self.locals;
 
@@ -281,6 +284,7 @@ module Compile_ = struct
         let reg = alloc_reg self in
         local_regs := reg :: !local_regs;
         compile_expr self e;
+        CB.push_comment self.cb (spf "var %s" v.view);
         CB.push_i self.cb (I.rstore reg);
         self.locals <- Str_map.add v.view {lreg=reg; lvar=true} self.locals;
 
@@ -316,6 +320,7 @@ module Compile_ = struct
         let pos_start = CB.cur_pos self.cb in
         compile_expr self cond;
         let pos_test = CB.cur_pos self.cb in
+        CB.push_comment self.cb "exit while";
         CB.push_i self.cb I.nop; (* placeholder *)
         compile_block_noreturn self bl;
         CB.push_i self.cb (I.jmp pos_start); (* back to start *)

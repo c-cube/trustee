@@ -86,6 +86,9 @@ module Types_ = struct
 
     c_locals: value array;
     (** Local values, used by some instructions *)
+
+    mutable c_comments : (int * string) array;
+    (** comments *)
   }
 
   and instr = thunk VM_instr_.t
@@ -133,20 +136,29 @@ module Types_ = struct
     Fmt.fprintf out "(@[thunk@ :st %a@])" (pp_thunk_state ~short:false) self.th_st
 
   and pp_chunk ?(pp_thunk=pp_thunk) ?ip out (self:chunk) : unit =
-    let pp_instr out i =
-      VM_instr_.pp pp_thunk out i;
-      begin match i with
+    let pp_instr i out instr =
+      VM_instr_.pp pp_thunk out instr;
+      begin match instr with
         | Lload n ->
           let local = self.c_locals.(n) in
           Fmt.fprintf out " ; %a" (pp_value ~short:true) local
-        | _ -> ()
+        | _ ->
+          match
+            CCArray.bsearch (i,"") ~cmp:(fun (i,_) (j,_) -> compare i j)
+              self.c_comments
+          with
+          | `At j ->
+            let _, comment = self.c_comments.(j) in
+            Fmt.fprintf out " ; %s" comment;
+          | _ -> ()
+
       end
     in
     let ppi pre ppx out (i,x) =
       Fmt.fprintf out "%s%-8d %a" pre i ppx x in
     let ppi_ip ppx out (i,x) =
       let ptr = match ip with Some i' when i=i' -> ">" | _ -> " " in
-      ppi ptr ppx out (i,x) in
+      ppi ptr (ppx i) out (i,x) in
     let pp_locals out () =
       if Array.length self.c_locals = 0 then ()
       else (
@@ -254,11 +266,15 @@ module Chunk = struct
   let to_string = Fmt.to_string pp
   let pp_at ~ip out c = pp_chunk ~ip out c
 
+  let strip_comments self =
+    self.c_comments <- [||]
+
   (* empty chunk, does nothing *)
   let dummy : t = {
     c_n_regs=0;
     c_locals=[||];
     c_instrs=[||];
+    c_comments=[||];
   }
 end
 
@@ -890,10 +906,15 @@ module Chunk_builder = struct
     cb_instrs: instr Vec.t; (** Instructions *)
     mutable cb_n_regs: int; (** Number of regs to allocate for this chunk *)
     cb_locals: value Vec.t; (** Local values, used by some instructions *)
+    cb_comments: (int * string) Vec.t;
+    cb_allow_comments: bool;
   }
 
-  let create() : t =
-    { cb_instrs=Vec.create(); cb_n_regs=0; cb_locals=Vec.create(); }
+  let create ?(allow_comments=true) () : t =
+    { cb_instrs=Vec.create(); cb_n_regs=0;
+      cb_locals=Vec.create(); cb_comments=Vec.create();
+      cb_allow_comments=allow_comments;
+    }
 
   let reset (self:t) : unit =
     let {cb_instrs; cb_locals; cb_n_regs=_} = self in
@@ -905,12 +926,20 @@ module Chunk_builder = struct
   let to_chunk (self:t) : chunk =
     { c_instrs=Vec.to_array self.cb_instrs;
       c_n_regs=self.cb_n_regs;
-      c_locals=Vec.to_array self.cb_locals; }
+      c_locals=Vec.to_array self.cb_locals;
+      c_comments=Vec.to_array self.cb_comments;
+    }
 
   let[@inline] add_local (self:t) (v:value) : int =
     let i = Vec.size self.cb_locals in
     Vec.push self.cb_locals v;
     i
+
+  let push_comment self str =
+    if self.cb_allow_comments then (
+      let i = Vec.size self.cb_instrs in
+      Vec.push self.cb_comments (i,str)
+    )
 
   let push_i self (i:instr) : unit =
     Vec.push self.cb_instrs i;
