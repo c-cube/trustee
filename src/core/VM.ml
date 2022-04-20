@@ -150,7 +150,7 @@ module Types_ = struct
     let pp_locals out () =
       if Array.length self.c_locals = 0 then ()
       else (
-        Fmt.fprintf out "@ :locals %a"
+        Fmt.fprintf out "@ :locals@ %a"
           (pp_arri ~sep:"" @@ ppi " " @@ pp_value ~short:false) self.c_locals
       )
     in
@@ -1036,7 +1036,11 @@ let eval_stanza ?debug_hook (ctx:K.Ctx.t) (stanza:Stanza.t) : unit =
     | Error err -> Error.raise err
   and pp_res out = function
     | Ok vs ->
-      List.iter (Fmt.fprintf out "@;%a" Value.pp) vs;
+      List.iteri
+        (fun i v ->
+           if i>0 then Fmt.fprintf out "@ ";
+           Value.pp out v)
+        vs;
     | Error err -> Fmt.fprintf out "error: %a" Error.pp err
   and pp_res1 out = function
     | Ok v -> Fmt.fprintf out "result: %a" Value.pp v
@@ -1063,6 +1067,6 @@ let eval_stanza ?debug_hook (ctx:K.Ctx.t) (stanza:Stanza.t) : unit =
       Fmt.printf "(@[def %s =@ %a@])@." name pp_res1 r;
     | Stanza.Eval_meta {value} ->
       let r = eval_thunk ?debug_hook ctx value in
-      Fmt.printf "(@[<v2>eval: %a@])@." pp_res r;
+      Fmt.printf "(@[<v2>eval:@ %a@])@." pp_res r;
   end
 

@@ -1,8 +1,13 @@
 
 module K = Kernel
 
+let () = Printexc.register_printer (function
+    | Error.E e -> Some (Error.show e)
+    | _ -> None);;
+
 let s = {|
 
+// factorial
 fn fact(n) {
   var i = n;
   var res = 1;
@@ -15,6 +20,16 @@ fn fact(n) {
 }
 
 fact(5);
+
+(if true { "a" } else { "false" });
+
+{
+  let x =
+    if false { "a" }
+    else if  1 == 2 { "b" }
+    else { "c" };
+  x
+};
 
 |}
 
@@ -37,6 +52,10 @@ Format.printf "@[<2>compiled stanzas:@ %a@]@." (Fmt.Dump.list VM.Stanza.debug) s
 (* evaluate *)
 
 let debug_hook vm i =
-  Fmt.eprintf "@[<2>exec `%a`@ in %a@]@." VM.Instr.pp i VM.dump vm;;
+  ()
+  (*
+  Fmt.eprintf "@[<2>exec `%a`@ in %a@]@." VM.Instr.pp i VM.dump vm
+        *)
+;;
 
 List.iter (VM.eval_stanza ~debug_hook ctx) stanzas;;

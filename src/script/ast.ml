@@ -65,6 +65,7 @@ and expr_view =
   | E_unop of unop * expr
   | E_const of const
   | E_logic of lexpr
+  | E_block of block
   | E_if of {
       test: expr;
       then_: block;

@@ -56,10 +56,10 @@ parsed:
                              ))})
                      ));
                   (Bl_eval
-                     E_if {test = (E_var "false");
+                     E_if {test = (E_const (C_bool false));
                        then_ = { bl_items = [Bl_continue] };
                        elseif =
-                       [((E_var "true"),
+                       [((E_const (C_bool true)),
                          { bl_items =
                            [(Bl_eval
                                (E_app ("echo",
@@ -67,15 +67,16 @@ parsed:
                              Bl_break]
                            });
                          ((E_binop (Or,
-                             (E_binop (And, (E_unop (Not, (E_var "true"))),
-                                (E_unop (Not, (E_var "false"))))),
+                             (E_binop (And,
+                                (E_unop (Not, (E_const (C_bool true)))),
+                                (E_unop (Not, (E_const (C_bool false)))))),
                              (E_var "foo"))),
                           { bl_items = [(Bl_return (E_const (C_int 42)))] })
                          ];
                        else_ =
                        (Some { bl_items =
                                [(Bl_let ("res",
-                                   E_if {test = (E_var "true");
+                                   E_if {test = (E_const (C_bool true));
                                      then_ =
                                      { bl_items =
                                        [(Bl_eval (E_const (C_int 1)))] };

@@ -155,7 +155,46 @@ module Compile_ = struct
       end;
 
     | A.E_if {test; then_; elseif; else_} ->
-      assert false
+
+      let branch_ends = ref [] in
+
+      let compile_branch (test, then_) =
+        (* test expr, then test *)
+        compile_expr self test;
+        let last_pos = CB.cur_pos self.cb in
+        CB.push_i self.cb I.nop;
+
+        (* test is true: execute block *)
+        compile_block_return self then_;
+
+        (* jump over the other branches *)
+        let success_pos = CB.cur_pos self.cb in
+        branch_ends := success_pos :: !branch_ends;
+        CB.push_i self.cb I.nop;
+
+        (* now that block is done, insert a jump over it
+           if test is false *)
+        CB.set_i self.cb last_pos (I.jifn @@ CB.cur_pos self.cb);
+      in
+
+      compile_branch (test,then_);
+      List.iter compile_branch elseif;
+
+      begin match else_ with
+        | None -> CB.push_i self.cb I.nil
+        | Some bl ->
+          compile_block_return self bl;
+      end;
+
+      (* jump here from successful branches *)
+      let here = CB.cur_pos self.cb in
+      List.iter (fun pos ->
+          CB.set_i self.cb pos (I.jmp here))
+        !branch_ends;
+
+    | A.E_block bl ->
+      let ret = compile_block self bl in
+      if not ret then CB.push_i self.cb I.nil
 
     | A.E_const c ->
       begin match c with
@@ -188,6 +227,11 @@ module Compile_ = struct
 
   and compile_block (self:st) (bl:A.block) : bool =
     compile_block_items self bl.view.bl_items
+
+  and compile_block_return self bl : unit =
+    let ret = compile_block self bl in
+    if not ret then CB.push_i self.cb I.nil;
+    ()
 
   and compile_block_noreturn self bl : unit =
     let ret = compile_block self bl in

@@ -14,7 +14,31 @@ ast: [(S_fn ("fact", ["n"],
              (Bl_eval (E_var "res"))]
            }
          ));
-       (S_eval (E_app ("fact", [(E_const (C_int 5))])))]
+       (S_eval (E_app ("fact", [(E_const (C_int 5))])));
+       (S_eval
+          E_if {test = (E_const (C_bool true));
+            then_ = { bl_items = [(Bl_eval (E_const (C_string "a")))] };
+            elseif = [];
+            else_ =
+            (Some { bl_items = [(Bl_eval (E_const (C_string "false")))] })});
+       (S_eval
+          (E_block
+             { bl_items =
+               [(Bl_let ("x",
+                   E_if {test = (E_const (C_bool false));
+                     then_ =
+                     { bl_items = [(Bl_eval (E_const (C_string "a")))] };
+                     elseif =
+                     [((E_binop (Eq, (E_const (C_int 1)), (E_const (C_int 2))
+                          )),
+                       { bl_items = [(Bl_eval (E_const (C_string "b")))] })];
+                     else_ =
+                     (Some { bl_items = [(Bl_eval (E_const (C_string "c")))]
+                             })}
+                   ));
+                 (Bl_eval (E_var "x"))]
+               }))
+       ]
 compiled stanzas:
   [(def `fact`
     :chunk (thunk
@@ -22,29 +46,30 @@ compiled stanzas:
                  chunk[0 regs] {
                    :instrs
                     0        (lload 0) ; <chunk>
-                   :locals  0        chunk[3 regs] {
-                                       :instrs
-                                        0        (rstore 0)
-                                        1        (rload 0)
-                                        2        (rstore 1)
-                                        3        (int 1)
-                                        4        (rstore 2)
-                                        5        (int 0)
-                                        6        (rload 1)
-                                        7        lt
-                                        8        (jifn 18)
-                                        9        (rload 2)
-                                        10       (rload 1)
-                                        11       mult
-                                        12       (rstore 2)
-                                        13       (rload 1)
-                                        14       (int 1)
-                                        15       sub
-                                        16       (rstore 1)
-                                        17       (jmp 5)
-                                        18       (rload 2)
-                                        19       ret
-                                     }
+                   :locals
+                    0        chunk[3 regs] {
+                               :instrs
+                                0        (rstore 0)
+                                1        (rload 0)
+                                2        (rstore 1)
+                                3        (int 1)
+                                4        (rstore 2)
+                                5        (int 0)
+                                6        (rload 1)
+                                7        lt
+                                8        (jifn 18)
+                                9        (rload 2)
+                                10       (rload 1)
+                                11       mult
+                                12       (rstore 2)
+                                13       (rload 1)
+                                14       (int 1)
+                                15       sub
+                                16       (rstore 1)
+                                17       (jmp 5)
+                                18       (rload 2)
+                                19       ret
+                             }
                  })));
    (eval
     (thunk
@@ -54,6 +79,43 @@ compiled stanzas:
              0        (int 5)
              1        (tforce (thunk :st (lazy)))
              2        call
+          })));
+   (eval
+    (thunk
+     :st (lazy
+          chunk[0 regs] {
+            :instrs
+             0        (bool true)
+             1        (jifn 4)
+             2        (lload 0) ; "a"
+             3        (jmp 5)
+             4        (lload 1) ; "false"
+            :locals
+             0        "a"
+             1        "false"
+          })));
+   (eval
+    (thunk
+     :st (lazy
+          chunk[1 regs] {
+            :instrs
+             0        (bool false)
+             1        (jifn 4)
+             2        (lload 0) ; "a"
+             3        (jmp 11)
+             4        (int 1)
+             5        (int 2)
+             6        eq
+             7        (jifn 10)
+             8        (lload 1) ; "b"
+             9        (jmp 11)
+             10       (lload 2) ; "c"
+             11       (rstore 0)
+             12       (rload 0)
+            :locals
+             0        "a"
+             1        "b"
+             2        "c"
           })))]
 (def fact =
  result: chunk[3 regs] {
@@ -79,5 +141,9 @@ compiled stanzas:
             18       (rload 2)
             19       ret
          })
-(eval: 
+(eval:
    120)
+(eval:
+   "a")
+(eval:
+   "c")

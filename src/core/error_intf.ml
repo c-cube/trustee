@@ -49,6 +49,7 @@ module type S = sig
   *)
 
   val pp : t Fmt.printer
+  val show : t -> string
 end
 
 module type LOC = sig

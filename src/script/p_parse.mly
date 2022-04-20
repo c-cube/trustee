@@ -179,7 +179,9 @@ atomic_expr:
 }
 | v=var {
   let loc = mk_loc $startpos $endpos in
-  mk ~loc @@ E_var v
+  if v.view = "true" then mk ~loc @@ E_const (C_bool true)
+  else if v.view = "false" then mk ~loc @@ E_const (C_bool false)
+  else mk ~loc @@ E_var v
   }
 
 (* expression ending in {} *)
@@ -193,6 +195,10 @@ brace_expr:
     elseif;
     else_;
   }
+}
+| bl=block {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ E_block bl
 }
 
 if_rest:

@@ -93,6 +93,7 @@ module Make(Loc : LOC) : S with type loc = Loc.t = struct
       end
     in
     Fmt.fprintf out "@[<v>%a@]" loop self
+  let show = Fmt.to_string pp
 
 end
 
