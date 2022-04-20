@@ -11,6 +11,7 @@ module Token = P_token
 module Parse = P_parse
 module Ast = Ast
 module Error = Error
+module Compile = Compile
 
 type 'a or_error = ('a, Error.t) result [@@deriving show]
 

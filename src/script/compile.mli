@@ -10,7 +10,7 @@ module Env : sig
 
   val empty : t
 
-  val add_stanza : stanza -> t -> t
+  val add_stanza : t -> stanza -> t
 
   val pp : t Fmt.printer
 end

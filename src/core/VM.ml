@@ -113,17 +113,26 @@ module Types_ = struct
       if short then Fmt.string out "<chunk>" else pp_chunk out c
     | Prim p -> pp_prim out p
 
-  and pp_thunk_state out = function
+  and pp_thunk_state ~short out = function
     | Th_ok v ->
-      Fmt.fprintf out "(@[ok %a@])" (pp_list @@ pp_value ~short:true) v
+      Fmt.fprintf out "(@[ok %a@])" (pp_list @@ pp_value ~short) v
     | Th_err e -> Fmt.fprintf out "(@[err %a@])" Error.pp e
-    | Th_lazy _ -> Fmt.string out "(lazy)"
-    | Th_suspended _c -> Fmt.string out "(suspended)"
+    | Th_lazy _ when short -> Fmt.string out "(lazy)"
+    | Th_lazy c ->
+      (* print chunk, but do not print thunks inside recursively *)
+      Fmt.fprintf out "(@[lazy@ %a@])" (pp_chunk ~pp_thunk ?ip:None) c
+    | Th_suspended _c when short -> Fmt.string out "(suspended)"
+    | Th_suspended {c;vm} ->
+      Fmt.fprintf out "(@[suspended %a@])"
+        (pp_chunk ~pp_thunk:debug_thunk ~ip:vm.ip) c
 
   and pp_thunk out (self:thunk) =
-    Fmt.fprintf out "(@[thunk@ :st %a@])" pp_thunk_state self.th_st
+    Fmt.fprintf out "(@[thunk@ :st %a@])" (pp_thunk_state ~short:true) self.th_st
 
-  and pp_chunk ?ip out (self:chunk) : unit =
+  and debug_thunk out (self:thunk) =
+    Fmt.fprintf out "(@[thunk@ :st %a@])" (pp_thunk_state ~short:false) self.th_st
+
+  and pp_chunk ?(pp_thunk=pp_thunk) ?ip out (self:chunk) : unit =
     let pp_instr out i =
       VM_instr_.pp pp_thunk out i;
       begin match i with
@@ -138,10 +147,17 @@ module Types_ = struct
     let ppi_ip ppx out (i,x) =
       let ptr = match ip with Some i' when i=i' -> ">" | _ -> " " in
       ppi ptr ppx out (i,x) in
-    Fmt.fprintf out "@[<v2>chunk[%d regs] {@ :instrs@ %a@ :locals@ %a@;<1 -2>}@]"
+    let pp_locals out () =
+      if Array.length self.c_locals = 0 then ()
+      else (
+        Fmt.fprintf out "@ :locals %a"
+          (pp_arri ~sep:"" @@ ppi " " @@ pp_value ~short:false) self.c_locals
+      )
+    in
+    Fmt.fprintf out "@[<v2>chunk[%d regs] {@ :instrs@ %a%a@;<1 -2>}@]"
       self.c_n_regs
       (pp_arri ~sep:"" @@ ppi_ip pp_instr) self.c_instrs
-      (pp_arri ~sep:"" @@ ppi " " @@ pp_value ~short:false) self.c_locals
+      pp_locals()
 
   and pp_prim out (p:primitive) : unit =
     Fmt.fprintf out "<prim %s>" p.pr_name
@@ -156,6 +172,9 @@ type primitive = Types_.primitive
 module Instr = struct
   open Types_
   type t = instr
+
+  (* builder *)
+  include VM_instr_.Make(struct type nonrec thunk=thunk end)
 
   let pp = VM_instr_.pp pp_thunk
   let to_string = Fmt.to_string pp
@@ -270,6 +289,7 @@ module Thunk = struct
 
   let pp_state = pp_thunk_state
   let pp = pp_thunk
+  let debug = debug_thunk
   let to_string = Fmt.to_string pp
 
   let make c : t = {th_st=Th_lazy c}
@@ -312,25 +332,28 @@ module Stanza = struct
   let[@inline] make ~id view : t = {view; id}
   let[@inline] id self = self.id
 
-  let pp out (self:t) : unit =
+  let pp_with ~pp_thunk out (self:t) : unit =
     match view self with
     | Declare {name; ty} ->
-      Fmt.fprintf out "(@[declare %s@ :ty %a@])" name Thunk.pp ty
+      Fmt.fprintf out "(@[declare %s@ :ty %a@])" name pp_thunk ty
     | Define {name; body} ->
-      Fmt.fprintf out "(@[define %s@ :body %a@])" name Thunk.pp body
+      Fmt.fprintf out "(@[define %s@ :body %a@])" name pp_thunk body
     | Define_meta {name; value} ->
       Fmt.fprintf out "(@[def `%s`@ :chunk %a@])"
-        name Thunk.pp value
+        name pp_thunk value
     | Prove {name; deps; goal; proof} ->
       let pp_dep out (s,kind,ref) =
         let skind = match kind with `Eager -> ":eager" | `Lazy -> ":lazy" in
         Fmt.fprintf out "(@[%s %s %s@ :goal %a@ :proof %a@])"
-          s skind ref Thunk.pp goal Thunk.pp proof
+          s skind ref pp_thunk goal pp_thunk proof
       in
       Fmt.fprintf out "(@[prove %s@ :deps (@[%a@])@])"
         name (pp_list pp_dep) deps
     | Eval_meta {value} ->
-      Fmt.fprintf out "(@[eval@ %a@])" Thunk.pp value
+      Fmt.fprintf out "(@[eval@ %a@])" pp_thunk value
+
+  let pp = pp_with ~pp_thunk:Thunk.pp
+  let debug = pp_with ~pp_thunk:Thunk.debug
 end
 
 (** Exceptions raised to suspend a computation so as to compute
@@ -889,7 +912,7 @@ module Chunk_builder = struct
     Vec.push self.cb_locals v;
     i
 
-  let add_instr self (i:instr) : unit =
+  let push_i self (i:instr) : unit =
     Vec.push self.cb_instrs i;
     begin match i with
       | Rstore i | Rload i -> self.cb_n_regs <- max (i+1) self.cb_n_regs
@@ -901,7 +924,7 @@ module Chunk_builder = struct
     Vec.size self.cb_instrs
 
   (* set an instruction after the fact *)
-  let set_instr (self:t) i (instr:instr) : unit =
+  let set_i (self:t) i (instr:instr) : unit =
     assert (i < Vec.size self.cb_instrs);
     Vec.set self.cb_instrs i instr
 end

@@ -130,9 +130,24 @@ let emit_pp (name,args,doc) =
   );
   pf "\n"
 
-let emit_mk (name,args,doc) =
+let emit_name = function
+  | "type" -> "type_"
+  | s -> s
+
+let emit_mk_sig (name,args,doc) =
   pf "\n  (** %s *)\n" doc;
-  pf "  let mk_%s" name;
+  pf "  val %s : " @@ emit_name name;
+  List.iter (fun ty ->
+      match ty with
+      | Int -> pf "int -> ";
+      | Bool -> pf "bool -> ";
+      | Thunk -> pf "thunk -> ";)
+    args;
+  pf "thunk t\n";
+  ()
+
+let emit_mk (name,args,_doc) =
+  pf "  let %s" (emit_name name);
   let n = List.length args in
   List.iteri (fun i ty ->
       pf " (x_%d : " i;
@@ -157,8 +172,12 @@ let () =
   List.iter emit_pp instrs;
   pf "\n";
   pf "(** Instruction builder *)\n";
-  pf "module Make(Th : sig type thunk end) = struct\n";
-  pf "  open Th\n";
+  pf "module type S = sig\n";
+  pf "  type thunk\n";
+  List.iter emit_mk_sig instrs;
+  pf "end\n\n";
+  pf "module Make(Th : sig type thunk end) : S with type thunk = Th.thunk = struct\n";
+  pf "  include Th\n";
   List.iter emit_mk instrs;
   pf "end\n";
   ()

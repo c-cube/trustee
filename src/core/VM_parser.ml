@@ -184,7 +184,7 @@ module Parser = struct
     | VM_lex.QUOTED_STR s ->
       consume self;
       let n = CB.add_local self.cb (Value.string s) in
-      CB.add_instr self.cb (I.Lload n);
+      CB.push_i self.cb (I.Lload n);
       recurse()
 
     | VM_lex.COLON_STR lbl ->
@@ -200,22 +200,22 @@ module Parser = struct
         | "extract" ->
           let i = int self in
           rparen self;
-          CB.add_instr self.cb (I.Extract i)
+          CB.push_i self.cb (I.Extract i)
 
         | "rstore" ->
           let i = int self in
           rparen self;
-          CB.add_instr self.cb (I.Rstore i)
+          CB.push_i self.cb (I.Rstore i)
 
         | "rload" ->
           let i = int self in
           rparen self;
-          CB.add_instr self.cb (I.Rload i)
+          CB.push_i self.cb (I.Rload i)
 
         | "lload" ->
           let i = int self in
           rparen self;
-          CB.add_instr self.cb (I.Lload i)
+          CB.push_i self.cb (I.Lload i)
 
         | "tforce" ->
           let name = quoted_str self in
@@ -223,7 +223,7 @@ module Parser = struct
           begin match Scoping_env.find name self.env with
             | Some (Scoping_env.E_th th) ->
               (* evaluate thunk lazily *)
-              CB.add_instr self.cb (I.Tforce th)
+              CB.push_i self.cb (I.Tforce th)
             | Some _ ->
               Error.failf (fun k->k"tforce: expected a thunk for %S" name)
             | None ->
@@ -234,25 +234,25 @@ module Parser = struct
           let lbl = colon_str self in
           rparen self;
           let cur_pos = CB.cur_pos self.cb in
-          CB.add_instr self.cb I.Nop;
+          CB.push_i self.cb I.Nop;
           with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (I.Jif lbl_pos))
+              CB.set_i self.cb cur_pos (I.Jif lbl_pos))
 
         | "jifn" ->
           let lbl = colon_str self in
           rparen self;
           let cur_pos = CB.cur_pos self.cb in
-          CB.add_instr self.cb I.Nop;
+          CB.push_i self.cb I.Nop;
           with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (I.Jifn lbl_pos))
+              CB.set_i self.cb cur_pos (I.Jifn lbl_pos))
 
         | "jmp" ->
           let lbl = colon_str self in
           rparen self;
           let cur_pos = CB.cur_pos self.cb in
-          CB.add_instr self.cb I.Nop;
+          CB.push_i self.cb I.Nop;
           with_label lbl (fun lbl_pos ->
-              CB.set_instr self.cb cur_pos (I.Jmp lbl_pos))
+              CB.set_i self.cb cur_pos (I.Jmp lbl_pos))
 
         | _ ->
           Error.failf (fun k->k"invalid instruction %S" str)
@@ -267,75 +267,75 @@ module Parser = struct
     | VM_lex.INT i ->
       consume self;
       let i = int_of_string i in
-      CB.add_instr self.cb (I.Int i);
+      CB.push_i self.cb (I.Int i);
       recurse()
 
     | VM_lex.ATOM str ->
       consume self;
       begin match str with
-        | "nop" -> CB.add_instr self.cb I.Nop
-        | "call" -> CB.add_instr self.cb I.Call
-        | "ret" -> CB.add_instr self.cb I.Ret
-        | "dup" -> CB.add_instr self.cb I.Dup
-        | "drop" -> CB.add_instr self.cb I.Drop
-        | "exch" -> CB.add_instr self.cb I.Exch
-        | "true" -> CB.add_instr self.cb (I.Bool true)
-        | "false" -> CB.add_instr self.cb (I.Bool false)
-        | "nil" -> CB.add_instr self.cb I.Nil
-        | "not" ->  CB.add_instr self.cb I.Not
-        | "add" -> CB.add_instr self.cb I.Add
-        | "add1" -> CB.add_instr self.cb I.Add1
-        | "sub" -> CB.add_instr self.cb I.Sub
-        | "sub1" -> CB.add_instr self.cb I.Sub1
-        | "mult" -> CB.add_instr self.cb I.Mult
-        | "leq" -> CB.add_instr self.cb I.Leq
-        | "lt" -> CB.add_instr self.cb I.Lt
-        | "eq" -> CB.add_instr self.cb I.Eq
-        | "acreate" -> CB.add_instr self.cb I.Acreate
-        | "apush" -> CB.add_instr self.cb I.Apush
-        | "aget" -> CB.add_instr self.cb I.Aget
-        | "aset" -> CB.add_instr self.cb I.Aset
-        | "alen" -> CB.add_instr self.cb I.Alen
-        | "aclear" -> CB.add_instr self.cb I.Aclear
-        | "suem" -> CB.add_instr self.cb I.Suem;
-        | "subinde" -> CB.add_instr self.cb I.Subinde;
-        | "subindty" -> CB.add_instr self.cb I.Subindty;
-        | "type" -> CB.add_instr self.cb I.Type
-        | "var" -> CB.add_instr self.cb I.Var
-        | "vty" -> CB.add_instr self.cb I.Vty
-        | "tyarr" -> CB.add_instr self.cb I.Tyarr
-        | "evar" -> CB.add_instr self.cb I.Evar
-        | "eapp" -> CB.add_instr self.cb I.Eapp
-        | "elam" -> CB.add_instr self.cb I.Elam
-        | "econst" -> CB.add_instr self.cb I.Econst
-        | "econst0" -> CB.add_instr self.cb I.Econst0
-        | "econst1" -> CB.add_instr self.cb I.Econst1
-        | "deapp" -> CB.add_instr self.cb I.Deapp
-        | "delam" -> CB.add_instr self.cb I.Delam
-        | "devar" -> CB.add_instr self.cb I.Devar
-        | "deconst" -> CB.add_instr self.cb I.Deconst
-        | "thabs" -> CB.add_instr self.cb I.Thabs
-        | "thcongr" -> CB.add_instr self.cb I.Thcongr
-        | "thass" -> CB.add_instr self.cb I.Thass
-        | "thcut" -> CB.add_instr self.cb I.Thcut
-        | "threfl" -> CB.add_instr self.cb I.Threfl
-        | "thsym" -> CB.add_instr self.cb I.Thsym
-        | "thtrans" -> CB.add_instr self.cb I.Thtrans
-        | "thbeq" -> CB.add_instr self.cb I.Thbeq
-        | "thbeqi" -> CB.add_instr self.cb I.Thbeqi
-        | "thbeta" -> CB.add_instr self.cb I.Thbeta
-        | "thsubst" -> CB.add_instr self.cb I.Thsubst
-        | "dth" -> CB.add_instr self.cb I.Dth
-        | "stopexec" -> CB.add_instr self.cb I.Stopexec
-        | "curch" ->  CB.add_instr self.cb I.Curch
+        | "nop" -> CB.push_i self.cb I.Nop
+        | "call" -> CB.push_i self.cb I.Call
+        | "ret" -> CB.push_i self.cb I.Ret
+        | "dup" -> CB.push_i self.cb I.Dup
+        | "drop" -> CB.push_i self.cb I.Drop
+        | "exch" -> CB.push_i self.cb I.Exch
+        | "true" -> CB.push_i self.cb (I.Bool true)
+        | "false" -> CB.push_i self.cb (I.Bool false)
+        | "nil" -> CB.push_i self.cb I.Nil
+        | "not" ->  CB.push_i self.cb I.Not
+        | "add" -> CB.push_i self.cb I.Add
+        | "add1" -> CB.push_i self.cb I.Add1
+        | "sub" -> CB.push_i self.cb I.Sub
+        | "sub1" -> CB.push_i self.cb I.Sub1
+        | "mult" -> CB.push_i self.cb I.Mult
+        | "leq" -> CB.push_i self.cb I.Leq
+        | "lt" -> CB.push_i self.cb I.Lt
+        | "eq" -> CB.push_i self.cb I.Eq
+        | "acreate" -> CB.push_i self.cb I.Acreate
+        | "apush" -> CB.push_i self.cb I.Apush
+        | "aget" -> CB.push_i self.cb I.Aget
+        | "aset" -> CB.push_i self.cb I.Aset
+        | "alen" -> CB.push_i self.cb I.Alen
+        | "aclear" -> CB.push_i self.cb I.Aclear
+        | "suem" -> CB.push_i self.cb I.Suem;
+        | "subinde" -> CB.push_i self.cb I.Subinde;
+        | "subindty" -> CB.push_i self.cb I.Subindty;
+        | "type" -> CB.push_i self.cb I.Type
+        | "var" -> CB.push_i self.cb I.Var
+        | "vty" -> CB.push_i self.cb I.Vty
+        | "tyarr" -> CB.push_i self.cb I.Tyarr
+        | "evar" -> CB.push_i self.cb I.Evar
+        | "eapp" -> CB.push_i self.cb I.Eapp
+        | "elam" -> CB.push_i self.cb I.Elam
+        | "econst" -> CB.push_i self.cb I.Econst
+        | "econst0" -> CB.push_i self.cb I.Econst0
+        | "econst1" -> CB.push_i self.cb I.Econst1
+        | "deapp" -> CB.push_i self.cb I.Deapp
+        | "delam" -> CB.push_i self.cb I.Delam
+        | "devar" -> CB.push_i self.cb I.Devar
+        | "deconst" -> CB.push_i self.cb I.Deconst
+        | "thabs" -> CB.push_i self.cb I.Thabs
+        | "thcongr" -> CB.push_i self.cb I.Thcongr
+        | "thass" -> CB.push_i self.cb I.Thass
+        | "thcut" -> CB.push_i self.cb I.Thcut
+        | "threfl" -> CB.push_i self.cb I.Threfl
+        | "thsym" -> CB.push_i self.cb I.Thsym
+        | "thtrans" -> CB.push_i self.cb I.Thtrans
+        | "thbeq" -> CB.push_i self.cb I.Thbeq
+        | "thbeqi" -> CB.push_i self.cb I.Thbeqi
+        | "thbeta" -> CB.push_i self.cb I.Thbeta
+        | "thsubst" -> CB.push_i self.cb I.Thsubst
+        | "dth" -> CB.push_i self.cb I.Dth
+        | "stopexec" -> CB.push_i self.cb I.Stopexec
+        | "curch" ->  CB.push_i self.cb I.Curch
         | _ ->
           (* look for a primitive of that name *)
           begin match Str_map.find_opt str self.prims with
             | Some p ->
               (* load primitive *)
               let n = CB.add_local self.cb (Value.prim p) in
-              CB.add_instr self.cb (I.Lload n);
-              CB.add_instr self.cb I.Call;
+              CB.push_i self.cb (I.Lload n);
+              CB.push_i self.cb I.Call;
             | None ->
               Error.failf (fun k->k"unknown instruction/prim %S" str)
           end
@@ -354,7 +354,7 @@ module Parser = struct
       (* finish sub-chunk, put it into locals *)
       let c = CB.to_chunk st'.cb in
       let n = CB.add_local self.cb (Value.chunk c) in
-      CB.add_instr self.cb (I.Lload n);
+      CB.push_i self.cb (I.Lload n);
       recurse()
 
     | VM_lex.RPAREN -> finalize();

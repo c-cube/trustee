@@ -92,7 +92,8 @@ and block_view = {
   bl_items: block_item list;
 }
 
-and block_item =
+and block_item = block_item_view with_loc
+and block_item_view =
   | Bl_let of var * expr
   | Bl_var of var * expr
   | Bl_assign of var * expr

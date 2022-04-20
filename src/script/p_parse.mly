@@ -49,24 +49,34 @@ block_items:
 (* no need for trailing ; *)
 %inline block_item_self_delimited:
 | e=brace_expr {
-  Bl_eval e
-}
-| LET v=var EQUAL e=expr SEMI
-  { Bl_let (v, e) }
-| VAR v=var EQUAL e=expr SEMI
-  { Bl_var (v, e) }
-| v=var EQUAL e=expr SEMI
-  { Bl_assign (v, e) }
-| WHILE e=expr bl=block
-  { Bl_while (e,bl) }
-| BREAK SEMI { Bl_break }
-| CONTINUE SEMI { Bl_continue }
-| RETURN e=expr SEMI
-  { Bl_return e }
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ Bl_eval e }
+| LET v=var EQUAL e=expr SEMI {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ Bl_let (v, e) }
+| VAR v=var EQUAL e=expr SEMI {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ Bl_var (v, e) }
+| v=var EQUAL e=expr SEMI {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ Bl_assign (v, e) }
+| WHILE e=expr bl=block {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ Bl_while (e,bl) }
+| BREAK SEMI {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ Bl_break }
+| CONTINUE SEMI {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ Bl_continue }
+| RETURN e=expr SEMI {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ Bl_return e }
 
 %inline block_item_atomic:
-| e=atomic_expr
-  { Bl_eval e }
+| e=atomic_expr {
+  let loc = mk_loc $startpos $endpos in
+  mk ~loc @@ Bl_eval e }
 
 expr:
 | e=or_expr { e }

@@ -58,6 +58,7 @@ end
 (** Instructions for the VM *)
 module Instr : sig
   type t = thunk VM_instr_.t
+  include VM_instr_.S with type thunk := thunk
   include Sigs.PP with type t := t
 end
 
@@ -165,6 +166,9 @@ module Stanza : sig
 
   val pp : t Fmt.printer
   (** Pretty print *)
+
+  val debug : t Fmt.printer
+  (** Pretty printer for debug *)
 end
 
 (** Object used to build chunks incrementally. *)
@@ -181,15 +185,15 @@ module Chunk_builder : sig
   val add_local : t -> Value.t -> int
   (** Add a local value to this chunk, returning its index. *)
 
-  val add_instr : t -> Instr.t -> unit
+  val push_i : t -> Instr.t -> unit
   (** Push an instruction *)
 
   val cur_pos : t -> int
   (** current position in the list of instructions. This can be
       useful for emitting a jump to this instruction later on. *)
 
-  val set_instr : t -> int -> Instr.t -> unit
-  (** [set_instr builder off instr] sets the existing instruction
+  val set_i : t -> int -> Instr.t -> unit
+  (** [set_i builder off instr] sets the existing instruction
       at offset [off] to [instr]. This is useful to emit a forward
       jump once the offset it jumps to, is known. *)
 end
