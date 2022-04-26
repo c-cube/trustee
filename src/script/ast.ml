@@ -1,7 +1,10 @@
 
 type loc = Loc.t
 
-type 'a with_loc = 'a With_loc.t
+type 'a with_loc = 'a With_loc.t = {
+  loc: Loc.t;
+  view: 'a;
+}
 let pp_with_loc ppx out x = ppx out x.With_loc.view
 
 let mk ~loc x : _ with_loc = {With_loc.view=x; loc}

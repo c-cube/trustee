@@ -191,7 +191,7 @@ atomic_expr:
 }
 | v=var {
   let loc = mk_loc $startpos $endpos in
-  if v.view = "true" then mk ~loc @@ E_const (C_bool true)
+  if v.A.view = "true" then mk ~loc @@ E_const (C_bool true)
   else if v.view = "false" then mk ~loc @@ E_const (C_bool false)
   else mk ~loc @@ E_var v
   }
