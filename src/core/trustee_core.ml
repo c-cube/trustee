@@ -21,6 +21,5 @@ module Var = Kernel.Var
 
 module Sym_ptr = Sym_ptr
 module VM = VM
-module VM_parser = VM_parser
 
 module Str_map = Sigs.Str_map

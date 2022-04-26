@@ -64,7 +64,7 @@ let ensure_size_with self f n =
     self.sz <- n
   )
 
-let ensure_size self x n = ensure_size_with self (fun() -> x) n
+let[@inline] ensure_size self x n = ensure_size_with self (fun() -> x) n
 
 (* grow the array *)
 let[@inline never] grow_to_double_size t x : unit =
@@ -176,3 +176,5 @@ let pp ?(sep=", ") pp out v =
        if !first then first := false else Format.fprintf out "%s@," sep;
        pp out x)
     v
+
+let[@inline] unsafe_array_ self = self.data

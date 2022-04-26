@@ -111,3 +111,5 @@ val pp :
   ?sep:string ->
   (Format.formatter -> 'a -> unit) ->
   Format.formatter -> 'a t -> unit
+
+val unsafe_array_ : 'a t -> 'a array

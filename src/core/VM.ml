@@ -10,6 +10,9 @@ module Types_ = struct
     stack: value Vec.t;
     (** Operand stack. *)
 
+    stack_offsets: int Vec.t;
+    (** End offset for each frame in `stack` *)
+
     call_stack : chunk Vec.t;
     (** Chunks currently being evaluated. The active chunk is the one
         on top. *)
@@ -68,6 +71,7 @@ module Types_ = struct
     | Subst of K.Subst.t
     | Theory of K.Theory.t
     | Chunk of chunk
+    | Thunk of thunk
     | Prim of primitive
 
   (** Primitive implemented in OCaml *)
@@ -81,6 +85,12 @@ module Types_ = struct
     c_instrs: instr array;
     (** Instructions *)
 
+    c_n_args: int;
+    (** Number of parameters *)
+
+    c_n_ret: int;
+    (** Number of values returned *)
+
     c_n_regs: int;
     (** Number of regs to allocate for this chunk *)
 
@@ -91,7 +101,7 @@ module Types_ = struct
     (** comments *)
   }
 
-  and instr = thunk VM_instr_.t
+  and instr = VM_instr_.t
 
   let pp_vec ?(sep=", ") ppx out v =
     Fmt.fprintf out "%a" (pp_iter ~sep ppx) (Vec.to_iter v)
@@ -114,6 +124,7 @@ module Types_ = struct
     | Theory x -> K.Theory.pp out x
     | Chunk c ->
       if short then Fmt.string out "<chunk>" else pp_chunk out c
+    | Thunk th -> pp_thunk out th
     | Prim p -> pp_prim out p
 
   and pp_thunk_state ~short out = function
@@ -123,11 +134,11 @@ module Types_ = struct
     | Th_lazy _ when short -> Fmt.string out "(lazy)"
     | Th_lazy c ->
       (* print chunk, but do not print thunks inside recursively *)
-      Fmt.fprintf out "(@[lazy@ %a@])" (pp_chunk ~pp_thunk ?ip:None) c
+      Fmt.fprintf out "(@[lazy@ %a@])" (pp_chunk ?ip:None) c
     | Th_suspended _c when short -> Fmt.string out "(suspended)"
     | Th_suspended {c;vm} ->
       Fmt.fprintf out "(@[suspended %a@])"
-        (pp_chunk ~pp_thunk:debug_thunk ~ip:vm.ip) c
+        (pp_chunk ~ip:vm.ip) c
 
   and pp_thunk out (self:thunk) =
     Fmt.fprintf out "(@[thunk@ :st %a@])" (pp_thunk_state ~short:true) self.th_st
@@ -135,9 +146,9 @@ module Types_ = struct
   and debug_thunk out (self:thunk) =
     Fmt.fprintf out "(@[thunk@ :st %a@])" (pp_thunk_state ~short:false) self.th_st
 
-  and pp_chunk ?(pp_thunk=pp_thunk) ?ip out (self:chunk) : unit =
+  and pp_chunk ?ip out (self:chunk) : unit =
     let pp_instr i out instr =
-      VM_instr_.pp pp_thunk out instr;
+      VM_instr_.pp out instr;
       begin match instr with
         | Lload n ->
           let local = self.c_locals.(n) in
@@ -166,10 +177,13 @@ module Types_ = struct
           (pp_arri ~sep:"" @@ ppi " " @@ pp_value ~short:false) self.c_locals
       )
     in
-    Fmt.fprintf out "@[<v2>chunk[%d regs] {@ :instrs@ %a%a@;<1 -2>}@]"
-      self.c_n_regs
+    Fmt.fprintf out "@[<v2>chunk[%d->%d|%d local] {@ :instrs@ %a%a@;<1 -2>}@]"
+      self.c_n_args self.c_n_ret self.c_n_regs
       (pp_arri ~sep:"" @@ ppi_ip pp_instr) self.c_instrs
       pp_locals()
+
+  and debug_chunk ?ip out c =
+    pp_chunk ?ip out c
 
   and pp_prim out (p:primitive) : unit =
     Fmt.fprintf out "<prim %s>" p.pr_name
@@ -186,9 +200,9 @@ module Instr = struct
   type t = instr
 
   (* builder *)
-  include VM_instr_.Make(struct type nonrec thunk=thunk end)
+  include VM_instr_.Build
 
-  let pp = VM_instr_.pp pp_thunk
+  let pp = VM_instr_.pp
   let to_string = Fmt.to_string pp
 end
 
@@ -210,6 +224,7 @@ module Value = struct
   let subst (x:K.Subst.t) : t = Subst x
   let theory (x:K.Theory.t) : t = Theory x
   let chunk c : t = Chunk c
+  let thunk th : t = Thunk th
   let prim p : t = Prim p
 
   let pp = pp_value ~short:false
@@ -229,9 +244,10 @@ module Value = struct
     | Subst s1, Subst s2 -> K.Subst.equal s1 s2
     | Theory th1, Theory th2 -> th1 == th2
     | Chunk c1, Chunk c2 -> c1 == c2
+    | Thunk th1, Thunk th2 -> th1 == th2
     | Prim p1, Prim p2 -> p1.pr_name = p2.pr_name
     | (Bool _ | Int _ | String _ | Array _ | Const _
-      | Expr _ | Thm _ | Var _ | Subst _ |
+      | Expr _ | Thm _ | Var _ | Subst _ | Thunk _ |
        Theory _ | Nil | Chunk _ | Prim _), _ -> false
 
 
@@ -247,6 +263,7 @@ module Value = struct
   let[@inline] to_const = function Const x -> Some x | _ -> None
   let[@inline] to_array = function Array x -> Some x | _ -> None
   let[@inline] to_subst = function Subst x -> Some x | _ -> None
+  let[@inline] to_thunk = function Thunk x -> Some x | _ -> None
 
   let[@inline] to_str_exn = function String x -> x | _ -> Error.fail "expected string"
   let[@inline] to_bool_exn = function Bool x -> x | _ -> Error.fail "expected bool"
@@ -257,6 +274,7 @@ module Value = struct
   let[@inline] to_const_exn = function Const x -> x | _ -> Error.fail "expected const"
   let[@inline] to_array_exn = function Array x -> x | _ -> Error.fail "expected array"
   let[@inline] to_subst_exn = function Subst x -> x | _ -> Error.fail "expected subst"
+  let[@inline] to_thunk_exn = function Thunk x -> x | _ -> Error.fail "expected thunk"
 end
 
 module Chunk = struct
@@ -265,6 +283,7 @@ module Chunk = struct
   let pp out c = pp_chunk out c
   let to_string = Fmt.to_string pp
   let pp_at ~ip out c = pp_chunk ~ip out c
+  let debug = debug_chunk ?ip:None
 
   let strip_comments self =
     self.c_comments <- [||]
@@ -273,6 +292,8 @@ module Chunk = struct
   let dummy : t = {
     c_n_regs=0;
     c_locals=[||];
+    c_n_args=0;
+    c_n_ret=0;
     c_instrs=[||];
     c_comments=[||];
   }
@@ -392,6 +413,7 @@ module VM_ = struct
 
   let create ~ctx : t = {
     stack=Vec.make 128 Value.nil;
+    stack_offsets=Vec.make 128 0;
     call_stack=Vec.make 12 Chunk.dummy;
     call_restore_ip=Vec.make 12 0;
     call_prim=Vec.create ();
@@ -436,33 +458,72 @@ module VM_ = struct
 
   (* reset state entirely *)
   let reset (self:t) : unit =
-    let { stack; call_stack; ip=_; call_prim;
-          call_restore_ip; regs; debug_hook=_; } = self in
+    let { stack; call_stack; ip=_; call_prim; stack_offsets;
+          call_restore_ip; regs; ctx=_; debug_hook=_; } = self in
     self.ip <- 0;
     Vec.clear call_stack;
     Vec.clear call_restore_ip;
     Vec.clear stack;
     Vec.clear call_prim;
     Vec.clear regs;
+    Vec.clear stack_offsets;
     self.debug_hook <- None;
     ()
 
-  let enter_chunk (self:t) (c:chunk) : unit =
+  (* enter chunk, passing it [n] arguments off the stack *)
+  let enter_chunk (self:t) (c:chunk) ~n : unit =
+    if n <> c.c_n_args then (
+      Error.failf (fun k->k"vm.enter_chunk: expected %d arguments, got %d" c.c_n_args n);
+    );
+    if n > c.c_n_regs then (
+      Error.failf (fun k->k"vm.enter_chunk: too many arguments");
+    );
     if not (Vec.is_empty self.call_stack) then (
       Vec.push self.call_restore_ip self.ip;
     );
-    Vec.push self.call_stack c;
     self.ip <- 0;
-    (* allocate regs for [c] *)
-    for _j = 1 to c.c_n_regs do
-      Vec.push self.regs Value.nil
-    done
+    Vec.push self.call_stack c;
+    (* allocate registers *)
+    let start_regs = Vec.size self.regs in
+    Vec.ensure_size self.regs Value.nil (start_regs + c.c_n_regs);
+    (* move [n] values from stack to regs for [c], before allocating
+       a new operand stack frame *)
+    for j = n downto 1 do
+      let v = pop_val_exn self in
+      Vec.set self.regs (start_regs + j-1) v
+    done;
+    (* alloc operand stack frame *)
+    Vec.push self.stack_offsets (Vec.size self.stack)
 
-  let pop_chunk (self:t) : unit =
+  (* return [n] values from chunk *)
+  let exit_chunk (self:t) : unit =
     let c = Vec.pop_exn self.call_stack in
     if c.c_n_regs > 0 then (
       Vec.shrink self.regs (Vec.size self.regs - c.c_n_regs);
     );
+    assert (not (Vec.is_empty self.stack_offsets));
+
+    let n_ret = c.c_n_ret in
+
+    (* return [n] values to caller *)
+    let last_stack_off = Vec.pop_exn self.stack_offsets in
+    let frame_size = Vec.size self.stack - last_stack_off in
+    if frame_size < n_ret then (
+      Error.failf
+        (fun k->k"vm.exit_chunk: must return %d values,@ frame only contains %d"
+            frame_size n_ret);
+    );
+    if frame_size <> n_ret then (
+      (* shift items on the stack, the [frame_size-n] bottom ones in the top
+         frame must be discarded *)
+      let arr = Vec.unsafe_array_ self.stack in
+      if n_ret > 0 then (
+        Array.blit arr (last_stack_off + frame_size - n_ret) arr last_stack_off n_ret;
+      );
+      Vec.shrink self.stack (last_stack_off + n_ret);
+    );
+
+    (* restore instruction pointer *)
     if not (Vec.is_empty self.call_restore_ip) then (
       assert (not (Vec.is_empty self.call_stack));
       self.ip <- Vec.pop_exn self.call_restore_ip;
@@ -496,17 +557,19 @@ module VM_ = struct
 
   let dump out (self:t) : unit =
     let {
-      stack; call_stack; ip; call_restore_ip;
-      call_prim;
+      stack; call_stack; ip; call_restore_ip=_;
+      call_prim=_; stack_offsets=_; ctx=_; debug_hook=_;
       regs; } = self in
     Fmt.fprintf out "@[<v2>VM {@ ";
     Fmt.fprintf out "@[call stack: %d frames@]" (Vec.size call_stack);
+
     if not (Vec.is_empty call_stack) then (
       let c = Vec.last_exn call_stack in
       Fmt.fprintf out "@,@[<v2>top chunk: {@ ";
       Chunk.pp_at ~ip out c;
 
       (* print registers *)
+      assert (Vec.size self.regs >= c.c_n_regs);
       if c.c_n_regs > 0 then (
         for i=0 to c.c_n_regs-1 do
           let v = Vec.get regs (Vec.size regs - c.c_n_regs + i) in
@@ -540,7 +603,7 @@ module VM_ = struct
 
         if ip >= Array.length c.c_instrs then (
           (* done with chunk *)
-          pop_chunk self;
+          exit_chunk self;
           if Vec.is_empty self.call_stack then (
             continue := false; (* all done *)
           )
@@ -557,7 +620,9 @@ module VM_ = struct
 
           match instr with
           | Nop -> ()
-          | Ret -> pop_chunk self
+          | Ret ->
+            exit_chunk self;
+            if Vec.is_empty self.call_stack then continue := false;
           | Drop -> ignore (pop_val_exn self : Value.t)
           | Exch -> swap_val self
           | Extract i -> extract_ self i
@@ -573,11 +638,13 @@ module VM_ = struct
           | Bool b -> push_val self (Value.bool b)
           | Nil -> push_val self Value.nil
 
-          | Call ->
+          | Call n ->
             let c = pop_val_exn self in
             begin match c with
-              | Chunk c -> enter_chunk self c
-              | Prim p -> eval_prim self p
+              | Chunk c -> enter_chunk self c ~n
+              | Prim p ->
+                (* FIXME: pass arguments to prim via a list of [n] values *)
+                eval_prim self p
               | _ -> Error.failf (fun k->k"call: expected a chunk,@ got %a" Value.pp c)
             end;
 
@@ -587,7 +654,7 @@ module VM_ = struct
 
           | Rload i ->
             let v = rload self i in
-            push_val self v
+            push_val self v;
 
           | Lload i ->
             if i < Array.length c.c_locals then (
@@ -678,7 +745,8 @@ module VM_ = struct
             let arr = pop_val_exn self |> Value.to_array_exn in
             Vec.clear arr
 
-          | Tforce th ->
+          | Tforce ->
+            let th = pop_val_exn self |> Value.to_thunk_exn in
             begin match Thunk.state th with
               | Th_err err -> raise (Error.E err)
               | Th_ok vs ->
@@ -906,13 +974,17 @@ module Chunk_builder = struct
     cb_instrs: instr Vec.t; (** Instructions *)
     mutable cb_n_regs: int; (** Number of regs to allocate for this chunk *)
     cb_locals: value Vec.t; (** Local values, used by some instructions *)
+    cb_n_args: int;
+    cb_n_ret: int;
     cb_comments: (int * string) Vec.t;
     cb_allow_comments: bool;
   }
 
-  let create ?(allow_comments=true) () : t =
+  let create ?(allow_comments=true) ~n_args ~n_ret () : t =
     { cb_instrs=Vec.create(); cb_n_regs=0;
       cb_locals=Vec.create(); cb_comments=Vec.create();
+      cb_n_args=n_args;
+      cb_n_ret=n_ret;
       cb_allow_comments=allow_comments;
     }
 
@@ -926,14 +998,26 @@ module Chunk_builder = struct
   let to_chunk (self:t) : chunk =
     { c_instrs=Vec.to_array self.cb_instrs;
       c_n_regs=self.cb_n_regs;
+      c_n_args=self.cb_n_args;
+      c_n_ret=self.cb_n_ret;
       c_locals=Vec.to_array self.cb_locals;
       c_comments=Vec.to_array self.cb_comments;
     }
 
+  exception L_found of int
+
   let[@inline] add_local (self:t) (v:value) : int =
-    let i = Vec.size self.cb_locals in
-    Vec.push self.cb_locals v;
-    i
+    match
+      (* look for [v] in the existing locals *)
+      Vec.iteri (fun i v' -> if Value.equal v v' then raise (L_found i))
+        self.cb_locals;
+      ()
+    with
+    | exception L_found i -> i
+    | () ->
+      let i = Vec.size self.cb_locals in
+      Vec.push self.cb_locals v;
+      i
 
   let push_comment self str =
     if self.cb_allow_comments then (
@@ -976,7 +1060,7 @@ let pop = VM_.pop_val
 let pop_exn = VM_.pop_val_exn
 
 let run self c =
-  VM_.enter_chunk self c;
+  VM_.enter_chunk self c ~n:0;
   VM_.run self
 
 let eval_thunk ?debug_hook (ctx:K.Ctx.t) (th:Thunk.t) : (Value.t list, Error.t) result =
@@ -1010,7 +1094,7 @@ let eval_thunk ?debug_hook (ctx:K.Ctx.t) (th:Thunk.t) : (Value.t list, Error.t) 
 
   let eval_chunk ~th ~vm ~c : unit =
     match
-      VM_.enter_chunk vm c;
+      VM_.enter_chunk vm c ~n:0;
       VM_.run vm;
       VM_.pop_vals vm
     with

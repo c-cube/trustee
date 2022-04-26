@@ -7,14 +7,15 @@ let pf = Printf.printf
 type op_arg =
   | Int
   | Bool
-  | Thunk
 
 type doc=string
 
 let instrs: (string*op_arg list*doc) list = [
   "nop", [], "( -- ) Do nothing";
-  "call", [], "(chunk -- ) Pop and call the chunk or primitive that is on top of the stack";
-  "ret", [], "( -- ) Return from current chunk";
+  "call", [Int], "(<n values> chunk -- ) \
+                  Pop and call the chunk or primitive that is on top of the stack \
+                  with the top <n> values below it";
+  "ret", [], "( -- ) Return values from current chunk (number determined by chunk arity)";
   "dup", [], "(a -- a a) drop value on top of stack, discarding it";
   "drop", [], "(a -- ) drop value on top of stack, discarding it";
   "exch", [], "(a b -- b a) exchange the two top values of the stack";
@@ -47,7 +48,7 @@ let instrs: (string*op_arg list*doc) list = [
   "jif", [Int], "(bool -- ) Pop a boolean; if true, then set IP=<offset>";
   "jifn", [Int], "(bool -- ) Pop a boolean; if false, then set IP=<offset>";
   "jmp", [Int], "( -- ) Set IP=<offset> unconditionally";
-  "tforce", [Thunk], "( -- x) Evalutes thunk and pushes the value onto the stack";
+  "tforce", [], "(th -- x) Evalutes thunk and pushes the value onto the stack";
   "curch", [], "( -- c) Pushes current thunk onto the stack";
 
   "type", [], "( -- type) Pushes the kind `type`.";
@@ -95,7 +96,7 @@ let emit_ty (name,args,doc) =
   if nargs>1 then pf " of (";
   List.iteri (fun i ty ->
       if i>0 then pf " * ";
-      match ty with Int -> pf "int" | Bool -> pf "bool" | Thunk -> pf "'thunk")
+      match ty with Int -> pf "int" | Bool -> pf "bool")
     args;
   if nargs>1 then pf ")";
   pf " (** %s *)" doc;
@@ -119,13 +120,11 @@ let emit_pp (name,args,doc) =
         match ty with
         | Int -> pf "%%d"
         | Bool -> pf "%%b"
-        | Thunk -> pf "%%a"
       ) args;
     pf {|)"|};
     List.iteri (fun i ty ->
         match ty with
         | Int | Bool -> pf "x%d" i
-        | Thunk -> pf "pp_thunk x%d" i
       ) args;
   );
   pf "\n"
@@ -141,9 +140,9 @@ let emit_mk_sig (name,args,doc) =
       match ty with
       | Int -> pf "int -> ";
       | Bool -> pf "bool -> ";
-      | Thunk -> pf "thunk -> ";)
+    )
     args;
-  pf "thunk t\n";
+  pf "t\n";
   ()
 
 let emit_mk (name,args,_doc) =
@@ -154,9 +153,9 @@ let emit_mk (name,args,_doc) =
       match ty with
       | Int -> pf "int)";
       | Bool -> pf "bool)";
-      | Thunk -> pf "thunk)";)
+    )
     args;
-  pf " : thunk t = %s" (String.capitalize_ascii name);
+  pf " : t = %s" (String.capitalize_ascii name);
   if n=0 then ()
   else if n=1 then pf " x_0"
   else (
@@ -165,19 +164,16 @@ let emit_mk (name,args,_doc) =
   pf "\n"
 
 let () =
-  pf "type 'thunk t =\n";
+  pf "type t =\n";
   List.iter emit_ty instrs;
   pf "\n";
-  pf "let pp pp_thunk out (i:_ t) : unit = match i with\n";
+  pf "let pp out (i:t) : unit = match i with\n";
   List.iter emit_pp instrs;
   pf "\n";
   pf "(** Instruction builder *)\n";
-  pf "module type S = sig\n";
-  pf "  type thunk\n";
+  pf "module Build : sig\n";
   List.iter emit_mk_sig instrs;
-  pf "end\n\n";
-  pf "module Make(Th : sig type thunk end) : S with type thunk = Th.thunk = struct\n";
-  pf "  include Th\n";
+  pf "end = struct\n";
   List.iter emit_mk instrs;
   pf "end\n";
   ()

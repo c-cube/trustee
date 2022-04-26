@@ -36,6 +36,7 @@ module Value : sig
   val theory : K.Theory.t -> t
   val prim : primitive -> t
   val chunk : chunk -> t
+  val thunk : thunk -> t
 
   (* TODO: custom values? *)
 
@@ -57,8 +58,8 @@ end
 
 (** Instructions for the VM *)
 module Instr : sig
-  type t = thunk VM_instr_.t
-  include VM_instr_.S with type thunk := thunk
+  type t = VM_instr_.t
+  include module type of VM_instr_.Build
   include Sigs.PP with type t := t
 end
 
@@ -67,6 +68,7 @@ module Chunk : sig
   type t = chunk
   val strip_comments : t -> unit
   include PP with type t := t
+  val debug : t Fmt.printer
 end
 
 (** Primitive operation.
@@ -97,6 +99,8 @@ end
 module Thunk : sig
   type t = thunk
   include PP with type t := t
+
+  val debug : t Fmt.printer
 
   val make : chunk -> t
   (** Build a thunk that will evaluate this chunk. *)
@@ -176,7 +180,14 @@ end
 module Chunk_builder : sig
   type t
 
-  val create : ?allow_comments:bool -> unit -> t
+  val create :
+    ?allow_comments:bool ->
+    n_args:int ->
+    n_ret:int ->
+    unit -> t
+  (** Create a new chunk builder.
+      @param n_args number of arguments the chunk takes
+      @param n_ret number of values returned by the chunk *)
 
   val reset : t -> unit
 

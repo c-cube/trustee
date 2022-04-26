@@ -3,9 +3,3 @@
 (executable
   (modules mkinstr)
   (name mkinstr))
-
-; batch checker
-(executable
-  (name vm_check)
-  (modules vm_check)
-  (libraries containers trustee.core))
