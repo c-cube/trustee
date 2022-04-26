@@ -76,15 +76,22 @@ parsed:
                        else_ =
                        (Some { bl_items =
                                [(Bl_let ("res",
-                                   E_if {test = (E_const (C_bool true));
-                                     then_ =
-                                     { bl_items =
-                                       [(Bl_eval (E_const (C_int 1)))] };
-                                     elseif = [];
-                                     else_ =
-                                     (Some { bl_items =
-                                             [(Bl_eval (E_const (C_int 2)))]
-                                             })}
+                                   (E_binop (Plus,
+                                      (E_binop (Plus,
+                                         (E_app ("f", [(E_const (C_int 1))])),
+                                         (E_app ("f", [(E_const (C_int 2))]))
+                                         )),
+                                      E_if {test = (E_const (C_bool true));
+                                        then_ =
+                                        { bl_items =
+                                          [(Bl_eval (E_const (C_int 1)))] };
+                                        elseif = [];
+                                        else_ =
+                                        (Some { bl_items =
+                                                [(Bl_eval (E_const (C_int 2)))
+                                                  ]
+                                                })}
+                                      ))
                                    ));
                                  (Bl_return (E_var "res"))]
                                })});

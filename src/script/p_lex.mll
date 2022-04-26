@@ -107,7 +107,7 @@ let num = ['0'-'9']
 let alphanum = alpha | num
 let id = alphas (alphas | num)*
 let sym1 = ['!' '@' '#' '$' '%' '^' '&' '*' '-' '_' '+' '=' '?']
-let symbol = sym1 sym1*
+let symbol = sym1 sym1+
 let string_item =
   ([^ '"' '\\'] | "\\\"" | "\\\\" | "\\b" | "\\n" | "\\t" | "\\r")
 let string = '"' string_item* '"'

@@ -7,42 +7,30 @@ let () = Printexc.register_printer (function
 
 let s = {|
 
-// factorial
-fn fact(n) {
-  var i = n;
-  var res = 1;
-
-  while i > 0 {
-    res = res * i;
-    i = i - 1;
+// naive fib
+fn fib(n) {
+  if n <= 2 {
+    1
+  } else {
+    fib(n - 1) + fib(n - 2)
   }
-  res
 }
 
-fact(5);
+// TODO: arrays + map with a closure
 
-(if true { "a" } else { "false" });
+"fib 5";
+fib(5);
+fib(6);
 
-{
-  let x =
-    if false { "a" }
-    else if  1 == 2 { "b" }
-    else { "c" };
-  x
-};
+"fib 12";
+fib(12);
 
-"big sum:";
-
-{
-  let x = fact(5);
-  let y = fact(6);
-  let z = fact(fact(4));
-  (x + y + z)
-};
+"fib 24";
+fib(24);
 
 |}
 
-let ast = match parse_top_str ~filename:"t2" s with
+let ast = match parse_top_str ~filename:"t3" s with
   | Ok l -> l
   | Error e ->
     Format.printf "error: %a@." Error.pp e;
@@ -73,12 +61,12 @@ try List.iter (VM.eval_stanza ~debug_hook ctx) stanzas
 with _ -> ();;
 
 
-let rec fact n =
-  if n<=1 then 1 else n * fact (n-1)
+let rec fib n =
+  if n<=2 then 1 else
+    fib (n-1) + fib (n-2)
 
 let () =
-  let x = fact(5) in
-  let y = fact(6) in
-  let z = fact(fact(4)) in
-  let n = (x + y + z) in
-  Fmt.printf "@[<v3>expected result for big sum:@ %d@]@." n
+  Fmt.printf "expected fib(5) = %d@." (fib 5);
+  Fmt.printf "expected fib(12) = %d@." (fib 12);
+  Fmt.printf "expected fib(24) = %d@." (fib 24);
+  ()

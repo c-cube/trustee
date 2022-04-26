@@ -37,59 +37,80 @@ ast: [(S_fn ("fact", ["n"],
                              })}
                    ));
                  (Bl_eval (E_var "x"))]
+               }));
+       (S_eval (E_const (C_string "big sum:")));
+       (S_eval
+          (E_block
+             { bl_items =
+               [(Bl_let ("x", (E_app ("fact", [(E_const (C_int 5))]))));
+                 (Bl_let ("y", (E_app ("fact", [(E_const (C_int 6))]))));
+                 (Bl_let ("z",
+                    (E_app ("fact", [(E_app ("fact", [(E_const (C_int 4))]))]
+                       ))
+                    ));
+                 (Bl_eval
+                    (E_binop (Plus,
+                       (E_binop (Plus, (E_var "x"), (E_var "y"))),
+                       (E_var "z"))))
+                 ]
                }))
        ]
 compiled stanzas:
   [(def `fact`
     :chunk (thunk
             :st (lazy
-                 chunk[0 regs] {
+                 chunk[0->1|0 local] {
                    :instrs
                     0        (lload 0) ; <chunk>
+                    1        ret
                    :locals
-                    0        chunk[3 regs] {
+                    0        chunk[1->1|3 local] {
                                :instrs
-                                0        (rstore 0)
-                                1        (rload 0) ; deref n
-                                2        (rstore 1) ; var i
-                                3        (int 1)
-                                4        (rstore 2) ; var res
-                                5        (int 0)
-                                6        (rload 1) ; deref i
-                                7        lt
-                                8        (jifn 18) ; exit while
-                                9        (rload 2) ; deref res
-                                10       (rload 1) ; deref i
-                                11       mult
-                                12       (rstore 2)
-                                13       (rload 1) ; deref i
-                                14       (int 1)
-                                15       sub
-                                16       (rstore 1)
-                                17       (jmp 5)
-                                18       (rload 2) ; deref res
-                                19       ret
+                                0        (rload 0) ; deref n
+                                1        (rstore 1) ; var i
+                                2        (int 1)
+                                3        (rstore 2) ; var res
+                                4        (int 0)
+                                5        (rload 1) ; deref i
+                                6        lt
+                                7        (jifn 17) ; exit while
+                                8        (rload 2) ; deref res
+                                9        (rload 1) ; deref i
+                                10       mult
+                                11       (rstore 2)
+                                12       (rload 1) ; deref i
+                                13       (int 1)
+                                14       sub
+                                15       (rstore 1)
+                                16       (jmp 4)
+                                17       (rload 2) ; deref res
+                                18       ret
                              }
                  })));
    (eval
     (thunk
      :st (lazy
-          chunk[0 regs] {
+          chunk[0->1|0 local] {
             :instrs
              0        (int 5)
-             1        (tforce (thunk :st (lazy)))
-             2        call
+             1        (lload 0) ; (thunk :st (lazy))
+             2        tforce
+             3        (call 1)
+             4        ret
+            :locals
+             0        (thunk :st (lazy))
           })));
    (eval
     (thunk
      :st (lazy
-          chunk[0 regs] {
+          chunk[0->1|0 local] {
             :instrs
              0        (bool true)
              1        (jifn 4)
              2        (lload 0) ; "a"
              3        (jmp 5)
              4        (lload 1) ; "false"
+             5        ret
             :locals
              0        "a"
              1        "false"
@@ -97,7 +118,7 @@ compiled stanzas:
    (eval
     (thunk
      :st (lazy
-          chunk[1 regs] {
+          chunk[0->1|1 local] {
             :instrs
              0        (bool false)
              1        (jifn 4)
@@ -112,34 +133,76 @@ compiled stanzas:
              10       (lload 2) ; "c"
              11       (rstore 0) ; x
              12       (rload 0) ; deref x
+             13       ret
             :locals
              0        "a"
              1        "b"
              2        "c"
+          })));
+   (eval
+    (thunk
+     :st (lazy
+          chunk[0->1|0 local] {
+            :instrs
+             0        (lload 0) ; "big sum:"
+             1        ret
+            :locals
+             0        "big sum:"
+          })));
+   (eval
+    (thunk
+     :st (lazy
+          chunk[0->1|3 local] {
+            :instrs
+             0        (int 5)
+             1        (lload 0) ; (thunk :st (lazy))
+             2        tforce
+             3        (call 1)
+             4        (rstore 0) ; x
+             5        (int 6)
+             6        (lload 0) ; (thunk :st (lazy))
+             7        tforce
+             8        (call 1)
+             9        (rstore 1) ; y
+             10       (int 4)
+             11       (lload 0) ; (thunk :st (lazy))
+             12       tforce
+             13       (call 1)
+             14       (lload 0) ; (thunk :st (lazy))
+             15       tforce
+             16       (call 1)
+             17       (rstore 2) ; z
+             18       (rload 0) ; deref x
+             19       (rload 1) ; deref y
+             20       add
+             21       (rload 2) ; deref z
+             22       add
+             23       ret
+            :locals
+             0        (thunk :st (lazy))
           })))]
 (def fact =
- result: chunk[3 regs] {
+ result: chunk[1->1|3 local] {
            :instrs
-            0        (rstore 0)
-            1        (rload 0) ; deref n
-            2        (rstore 1) ; var i
-            3        (int 1)
-            4        (rstore 2) ; var res
-            5        (int 0)
-            6        (rload 1) ; deref i
-            7        lt
-            8        (jifn 18) ; exit while
-            9        (rload 2) ; deref res
-            10       (rload 1) ; deref i
-            11       mult
-            12       (rstore 2)
-            13       (rload 1) ; deref i
-            14       (int 1)
-            15       sub
-            16       (rstore 1)
-            17       (jmp 5)
-            18       (rload 2) ; deref res
-            19       ret
+            0        (rload 0) ; deref n
+            1        (rstore 1) ; var i
+            2        (int 1)
+            3        (rstore 2) ; var res
+            4        (int 0)
+            5        (rload 1) ; deref i
+            6        lt
+            7        (jifn 17) ; exit while
+            8        (rload 2) ; deref res
+            9        (rload 1) ; deref i
+            10       mult
+            11       (rstore 2)
+            12       (rload 1) ; deref i
+            13       (int 1)
+            14       sub
+            15       (rstore 1)
+            16       (jmp 4)
+            17       (rload 2) ; deref res
+            18       ret
          })
 (eval:
    120)
@@ -147,3 +210,9 @@ compiled stanzas:
    "a")
 (eval:
    "c")
+(eval:
+   "big sum:")
+(eval:
+   1388186055525532488)
+expected result for big sum:
+   1388186055525532488

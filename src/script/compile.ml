@@ -55,13 +55,15 @@ module Compile_ = struct
     mutable locals: local Str_map.t;
     cb: CB.t;
     env: Env.t;
-    mutable n_regs: int;
+    fun_name: string option;
+    mutable n_regs: int; (* current number of registers, evolves over time *)
     mutable free_regs: int list;
   }
 
-  let create env : st =
-    { locals=Str_map.empty; env;
-      cb=CB.create(); n_regs=0; free_regs=[] }
+  let create ?fun_name env ~n : st =
+    { locals=Str_map.empty; env; fun_name;
+      cb=CB.create ~n_args:n ~n_ret:1 (); n_regs=n;
+      free_regs=[] }
 
   let alloc_reg self =
     match self.free_regs with
@@ -86,10 +88,11 @@ module Compile_ = struct
     let loc = e.loc in
     match With_loc.view e with
     | A.E_app (f, args) ->
+      let n = List.length args in
       let args = List.rev args in
       List.iter recurse args;
       compile_var self f;
-      CB.push_i self.cb I.call;
+      CB.push_i self.cb (I.call n);
 
     | A.E_var s ->
       compile_var self s
@@ -220,10 +223,15 @@ module Compile_ = struct
       CB.push_comment self.cb (spf "deref %s" s.view);
       CB.push_i self.cb (I.rload lreg);
     | None ->
-      match Env.find s.view self.env with
-      | Some th ->
-        CB.push_i self.cb (I.tforce th)
-      | None ->
+      match Env.find s.view self.env, self.fun_name with
+      | Some th, _ ->
+        let local = CB.add_local self.cb (VM.Value.thunk th) in
+        CB.push_i self.cb (I.lload local);
+        CB.push_i self.cb I.tforce;
+      | None, Some name when s.view = name ->
+        (* recursive call *)
+        CB.push_i self.cb I.curch;
+      | None, _ ->
         Error.failf ~loc:s.loc
           (fun k->k"Variable %S is not in scope" s.view)
 
@@ -263,6 +271,8 @@ module Compile_ = struct
         clear_stack();
         compile_expr self e;
         returns := true;
+
+        loop tl
 
       | {With_loc.view=A.Bl_let (v, e); _} :: tl ->
         clear_stack();
@@ -346,18 +356,18 @@ module Compile_ = struct
     List.iter (recycle_reg self) !local_regs;
     !returns
 
-  let compile_fn ~env vars body : VM.Chunk.t =
-    let st = create env in
-    (* put arguments into registers *)
+  let compile_fn ~env ?fun_name vars body : VM.Chunk.t =
+    let st = create env ?fun_name ~n:(List.length vars) in
     let vars = List.rev vars in
-    List.iter
-      (fun (v:A.var) ->
-         let reg = alloc_reg st in
-         CB.push_i st.cb (I.rstore reg);
-         st.locals <- Str_map.add v.view {lreg=reg; lvar=false} st.locals)
+    (* registers are assigned to [vars] already, just reflect that
+       in the [locals] *)
+    List.iteri
+      (fun i (v:A.var) ->
+         st.locals <- Str_map.add v.view {lreg=i; lvar=false} st.locals)
       vars;
     let ret = compile_block st body in
     if not ret then CB.push_i st.cb I.nil; (* make sure we return sth *)
+    (* TODO: be able to return multiple values? *)
     CB.push_i st.cb I.ret;
     CB.to_chunk st.cb
 
@@ -370,12 +380,13 @@ module Compile_ = struct
       match With_loc.view p with
       | A.S_fn (f,vars,bl) ->
         let id = Sym_ptr.(namespace "fn" @@ str f.view) in
-        let st = create env in
+        let st = create env ~n:0 in
 
         (* chunk that just returns the function *)
-        let c_fn = compile_fn ~env vars bl in
+        let c_fn = compile_fn ~fun_name:f.view ~env vars bl in
         let local = CB.add_local st.cb (VM.Value.chunk c_fn) in
         CB.push_i st.cb (I.lload local);
+        CB.push_i st.cb I.ret;
         let c = CB.to_chunk st.cb in
 
         let value = VM.Thunk.make c in
@@ -383,8 +394,9 @@ module Compile_ = struct
 
       | A.S_eval e ->
         let id = Sym_ptr.(namespace "eval" @@ pos (gen_sym_pos_())) in
-        let st = create env in
+        let st = create env ~n:0 in
         compile_expr st e;
+        CB.push_i st.cb I.ret;
         let c = CB.to_chunk st.cb in
         let value = VM.Thunk.make c in
         [ VM.Stanza.(make ~id @@ Eval_meta {value}) ]

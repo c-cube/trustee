@@ -27,7 +27,7 @@ statement:
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ S_fn (f, vars, bl)
   }
-| e=expr SEMI {
+| e=top_expr SEMI {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ S_eval e
 }
@@ -51,16 +51,16 @@ block_items:
 | e=brace_expr {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ Bl_eval e }
-| LET v=var EQUAL e=expr SEMI {
+| LET v=var EQUAL e=top_expr SEMI {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ Bl_let (v, e) }
-| VAR v=var EQUAL e=expr SEMI {
+| VAR v=var EQUAL e=top_expr SEMI {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ Bl_var (v, e) }
-| v=var EQUAL e=expr SEMI {
+| v=var EQUAL e=top_expr SEMI {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ Bl_assign (v, e) }
-| WHILE e=expr bl=block {
+| WHILE e=top_expr bl=block {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ Bl_while (e,bl) }
 | BREAK SEMI {
@@ -69,35 +69,41 @@ block_items:
 | CONTINUE SEMI {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ Bl_continue }
-| RETURN e=expr SEMI {
+| RETURN e=top_expr SEMI {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ Bl_return e }
 
 %inline block_item_atomic:
-| e=atomic_expr {
+| e=top_expr_non_brace {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ Bl_eval e }
 
-expr:
-| e=or_expr { e }
+top_expr:
+| e=expr(core_expr) { e }
 
-or_expr:
-| e=and_expr { e }
-| a=or_expr OR b=and_expr {
+top_expr_non_brace:
+| e=expr(atomic_or_call_expr) { e} 
+
+expr(X):
+| e=or_expr(X) { e }
+
+or_expr(X):
+| e=and_expr(X) { e }
+| a=or_expr(X) OR b=and_expr(X) {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_binop (Or, a, b)
   }
 
-and_expr:
-| e=bool_expr { e }
-| a=and_expr AND b=bool_expr {
+and_expr(X):
+| e=bool_expr(X) { e }
+| a=and_expr(X) AND b=bool_expr(X) {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_binop (And, a, b)
   }
 
-bool_expr:
-| e=not_expr { e }
-| a=not_expr op=bool_op b=not_expr {
+bool_expr(X):
+| e=not_expr(X) { e }
+| a=not_expr(X) op=bool_op b=not_expr(X) {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_binop (op, a, b)
   }
@@ -110,16 +116,16 @@ bool_expr:
 | EQ { Eq }
 | NEQ { Neq }
 
-not_expr:
-| e=add_expr { e }
-| NOT e=add_expr {
+not_expr(X):
+| e=add_expr(X) { e }
+| NOT e=add_expr(X) {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_unop (Not, e)
   }
 
-add_expr:
-| e=mult_expr { e }
-| a=add_expr op=add_op b=mult_expr {
+add_expr(X):
+| e=mult_expr(X) { e }
+| a=add_expr(X) op=add_op b=mult_expr(X) {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_binop (op, a, b)
   }
@@ -128,9 +134,9 @@ add_expr:
 | PLUS { Plus }
 | MINUS { Minus }
 
-mult_expr:
-| e=uminus_expr { e }
-| a=mult_expr op=mult_op b=uminus_expr {
+mult_expr(X):
+| e=uminus_expr(X) { e }
+| a=mult_expr(X) op=mult_op b=uminus_expr(X) {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_binop (op, a, b)
   }
@@ -139,24 +145,30 @@ mult_expr:
 | STAR { Times }
 | SLASH { Div }
 
-uminus_expr:
-| e=core_expr { e }
-| MINUS e=atomic_expr  {
+uminus_expr(X):
+| e=X { e }
+| MINUS e=X  {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_unop (Uminus, e)
   }
 
 core_expr:
-| e=atomic_expr { e }
+| e=atomic_or_call_expr { e}
 | e=brace_expr { e }
 
-(* atomic (sub)-expression *)
-atomic_expr:
-| LPAREN e=expr RPAREN { e }
+atomic_or_call_expr:
+| e=atomic_expr { e }
+| e=call_expr { e }
+
+call_expr:
 | f=var LPAREN l=app_args RPAREN {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_app (f, l)
   }
+
+(* atomic (sub)-expression *)
+atomic_expr:
+| LPAREN e=top_expr RPAREN { e }
 | LBRACKET l=app_args RBRACKET {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_array_lit l
@@ -186,7 +198,7 @@ atomic_expr:
 
 (* expression ending in {} *)
 brace_expr:
-| IF e=expr bl1=block rest=if_rest {
+| IF e=top_expr bl1=block rest=if_rest {
   let elseif, else_ = rest in
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ E_if {
@@ -204,14 +216,14 @@ brace_expr:
 if_rest:
 | { [], None }
 | ELSE bl=block { [], Some bl }
-| ELSE IF e=expr bl=block rest=if_rest {
+| ELSE IF e=top_expr bl=block rest=if_rest {
   let l, else_ = rest in
   (e,bl) :: l, else_ }
 
 app_args:
 | { [] }
-| e=expr { [e] }
-| e=expr COMMA args=app_args { e :: args }
+| e=top_expr { [e] }
+| e=top_expr COMMA args=app_args { e :: args }
 
 vars:
 |  { [] }
@@ -270,7 +282,7 @@ lexpr_symbol:
 
 lexpr_atomic:
 | LPAREN e=lexpr RPAREN { e }
-| DOLLAR_LBRACE e=expr RBRACE {
+| DOLLAR_LBRACE e=top_expr RBRACE {
   let loc = mk_loc $startpos $endpos in
   mk ~loc @@ L_escape e
 }

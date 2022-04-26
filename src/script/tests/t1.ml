@@ -32,7 +32,7 @@ let top = parse_top_str ~filename:"t1"
     else if true { echo("elseif"); break; }
     else if !true && !false || foo { return 42; }
     else {
-      let res = if true { 1 } else { 2 };
+      let res = f(1) + f(2) +  if true { 1 } else { 2 };
       return res;
     }
     return x;
