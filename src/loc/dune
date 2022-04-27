@@ -2,5 +2,6 @@
 (library
   (name trustee_loc)
   (public_name trustee.loc)
+  (optional)
   (libraries trustee.core containers pp_loc)
   (flags :standard -open Trustee_core.Sigs))

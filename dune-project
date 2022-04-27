@@ -15,6 +15,8 @@
   (synopsis "Kernel of trust and proof assistant for HOL")
   (license MIT)
   (tags (logic proof HOL assistant))
+  (depopts
+    pp_loc)
   (depends
     (containers (and (>= 3.3) (< 4.0)))
     (pp_loc (and (>= 1.0) (< 2.0)))
