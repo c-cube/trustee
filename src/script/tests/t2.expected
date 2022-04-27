@@ -57,48 +57,60 @@ ast: [(S_fn ("fact", ["n"],
        ]
 compiled stanzas:
   [(def `fact`
-    :chunk (thunk
-            :st (lazy
-                 chunk[0->1|0 local] {
-                   :instrs
-                    0        (lload 0) ; <chunk>
-                    1        ret
-                   :locals
-                    0        chunk[1->1|3 local] {
-                               :instrs
-                                0        (rload 0) ; deref n
-                                1        (rstore 1) ; var i
-                                2        (int 1)
-                                3        (rstore 2) ; var res
-                                4        (int 0)
-                                5        (rload 1) ; deref i
-                                6        lt
-                                7        (jifn 17) ; exit while
-                                8        (rload 2) ; deref res
-                                9        (rload 1) ; deref i
-                                10       mult
-                                11       (rstore 2)
-                                12       (rload 1) ; deref i
-                                13       (int 1)
-                                14       sub
-                                15       (rstore 1)
-                                16       (jmp 4)
-                                17       (rload 2) ; deref res
-                                18       ret
-                             }
-                 })));
+    chunk[1->1|3 local] {
+      :instrs
+       0        (rload 0) ; deref n
+       1        (rstore 1) ; var i
+       2        (int 1)
+       3        (rstore 2) ; var res
+       4        (int 0)
+       5        (rload 1) ; deref i
+       6        lt
+       7        (jifn 17) ; exit while
+       8        (rload 2) ; deref res
+       9        (rload 1) ; deref i
+       10       mult
+       11       (rstore 2)
+       12       (rload 1) ; deref i
+       13       (int 1)
+       14       sub
+       15       (rstore 1)
+       16       (jmp 4)
+       17       (rload 2) ; deref res
+       18       ret
+    });
    (eval
     (thunk
      :st (lazy
           chunk[0->1|0 local] {
             :instrs
              0        (int 5)
-             1        (lload 0) ; (thunk :st (lazy))
-             2        tforce
-             3        (call 1)
-             4        ret
+             1        (lload 0) ; <chunk>
+             2        (call 1)
+             3        ret
             :locals
-             0        (thunk :st (lazy))
+             0        chunk[1->1|3 local] {
+                        :instrs
+                         0        (rload 0) ; deref n
+                         1        (rstore 1) ; var i
+                         2        (int 1)
+                         3        (rstore 2) ; var res
+                         4        (int 0)
+                         5        (rload 1) ; deref i
+                         6        lt
+                         7        (jifn 17) ; exit while
+                         8        (rload 2) ; deref res
+                         9        (rload 1) ; deref i
+                         10       mult
+                         11       (rstore 2)
+                         12       (rload 1) ; deref i
+                         13       (int 1)
+                         14       sub
+                         15       (rstore 1)
+                         16       (jmp 4)
+                         17       (rload 2) ; deref res
+                         18       ret
+                      }
           })));
    (eval
     (thunk
@@ -155,55 +167,49 @@ compiled stanzas:
           chunk[0->1|3 local] {
             :instrs
              0        (int 5)
-             1        (lload 0) ; (thunk :st (lazy))
-             2        tforce
-             3        (call 1)
-             4        (rstore 0) ; x
-             5        (int 6)
-             6        (lload 0) ; (thunk :st (lazy))
-             7        tforce
-             8        (call 1)
-             9        (rstore 1) ; y
-             10       (int 4)
-             11       (lload 0) ; (thunk :st (lazy))
-             12       tforce
-             13       (call 1)
-             14       (lload 0) ; (thunk :st (lazy))
-             15       tforce
-             16       (call 1)
-             17       (rstore 2) ; z
-             18       (rload 0) ; deref x
-             19       (rload 1) ; deref y
-             20       add
-             21       (rload 2) ; deref z
-             22       add
-             23       ret
+             1        (lload 0) ; <chunk>
+             2        (call 1)
+             3        (rstore 0) ; x
+             4        (int 6)
+             5        (lload 0) ; <chunk>
+             6        (call 1)
+             7        (rstore 1) ; y
+             8        (int 4)
+             9        (lload 0) ; <chunk>
+             10       (call 1)
+             11       (lload 0) ; <chunk>
+             12       (call 1)
+             13       (rstore 2) ; z
+             14       (rload 0) ; deref x
+             15       (rload 1) ; deref y
+             16       add
+             17       (rload 2) ; deref z
+             18       add
+             19       ret
             :locals
-             0        (thunk :st (lazy))
+             0        chunk[1->1|3 local] {
+                        :instrs
+                         0        (rload 0) ; deref n
+                         1        (rstore 1) ; var i
+                         2        (int 1)
+                         3        (rstore 2) ; var res
+                         4        (int 0)
+                         5        (rload 1) ; deref i
+                         6        lt
+                         7        (jifn 17) ; exit while
+                         8        (rload 2) ; deref res
+                         9        (rload 1) ; deref i
+                         10       mult
+                         11       (rstore 2)
+                         12       (rload 1) ; deref i
+                         13       (int 1)
+                         14       sub
+                         15       (rstore 1)
+                         16       (jmp 4)
+                         17       (rload 2) ; deref res
+                         18       ret
+                      }
           })))]
-(def fact =
- result: chunk[1->1|3 local] {
-           :instrs
-            0        (rload 0) ; deref n
-            1        (rstore 1) ; var i
-            2        (int 1)
-            3        (rstore 2) ; var res
-            4        (int 0)
-            5        (rload 1) ; deref i
-            6        lt
-            7        (jifn 17) ; exit while
-            8        (rload 2) ; deref res
-            9        (rload 1) ; deref i
-            10       mult
-            11       (rstore 2)
-            12       (rload 1) ; deref i
-            13       (int 1)
-            14       sub
-            15       (rstore 1)
-            16       (jmp 4)
-            17       (rload 2) ; deref res
-            18       ret
-         })
 (eval:
    120)
 (eval:
