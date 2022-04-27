@@ -65,6 +65,10 @@ module Make() = struct
       } in
       Lwt.return (Ok res)
 
+    | exception Trustee_core.Error.E e ->
+      Lwt.return_error (Fmt.to_string Trustee_core.Error.pp e)
+    | exception Trustee_script.Error.E e ->
+      Lwt.return_error (Fmt.to_string Trustee_script.Error.pp e)
     | exception e ->
       Lwt.return_error (Printexc.to_string e)
 

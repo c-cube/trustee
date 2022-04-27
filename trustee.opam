@@ -20,6 +20,7 @@ depends: [
   "qcheck" {with-test}
   "odoc" {with-doc}
 ]
+depopts: ["pp_loc"]
 build: [
   ["dune" "subst"] {pinned}
   [
