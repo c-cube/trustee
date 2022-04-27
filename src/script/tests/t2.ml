@@ -69,7 +69,7 @@ let debug_hook vm i =
 [@@ocaml.warning "-27"]
 ;;
 
-try List.iter (VM.eval_stanza ~debug_hook ctx) stanzas
+try List.iter (VM.eval_stanza_pp ~debug_hook ctx) stanzas
 with _ -> ();;
 
 

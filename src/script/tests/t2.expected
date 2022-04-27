@@ -210,6 +210,29 @@ compiled stanzas:
                          18       ret
                       }
           })))]
+(def fact =
+ chunk[1->1|3 local] {
+   :instrs
+    0        (rload 0) ; deref n
+    1        (rstore 1) ; var i
+    2        (int 1)
+    3        (rstore 2) ; var res
+    4        (int 0)
+    5        (rload 1) ; deref i
+    6        lt
+    7        (jifn 17) ; exit while
+    8        (rload 2) ; deref res
+    9        (rload 1) ; deref i
+    10       mult
+    11       (rstore 2)
+    12       (rload 1) ; deref i
+    13       (int 1)
+    14       sub
+    15       (rstore 1)
+    16       (jmp 4)
+    17       (rload 2) ; deref res
+    18       ret
+ })
 (eval:
    120)
 (eval:

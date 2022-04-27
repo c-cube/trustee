@@ -15,3 +15,10 @@ clean:
 
 doc:
 	@dune build @doc
+
+KERNEL_DIR=$${HOME}/.local/share/jupyter/kernels/trustee_script/
+
+install_kernel:
+	mkdir -p $(KERNEL_DIR)
+	cp data/kernel.json $(KERNEL_DIR)/
+

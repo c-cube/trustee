@@ -263,10 +263,25 @@ val eval_thunk1 :
   Thunk.t ->
   (Value.t, Error.t) result
 
-(* FIXME: result type for evaluating stanza, reflecting their shape;
-   callback to abstract on the effect of evaluating a thunk, rather than
-   hardcoding a "printf" *)
+module Eval_effect : sig
+  type t =
+    | Eff_declare of string * K.ty
+    | Eff_define of string * K.Expr.t
+    | Eff_print_val of Value.t
+    | Eff_prove of string * K.Sequent.t * K.Thm.t Error.or_error
+    | Eff_define_thunk of string * thunk
+    | Eff_define_chunk of string * chunk
+    | Eff_print_error of Error.t
+
+  val pp : t Fmt.printer
+end
+
 val eval_stanza :
+  ?debug_hook:debug_hook ->
+  K.Ctx.t -> Stanza.t ->
+  Eval_effect.t list
+
+val eval_stanza_pp :
   ?debug_hook:debug_hook ->
   K.Ctx.t -> Stanza.t ->
   unit

@@ -278,6 +278,7 @@ module Sequent : sig
     hyps: expr_set;
   }
 
+  val equal : t -> t -> bool
   val make : expr_set -> Expr.t -> t
   val make_l : Expr.t list -> Expr.t -> t
   val make_nohyps : Expr.t -> t

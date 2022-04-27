@@ -213,6 +213,28 @@ compiled stanzas:
                          17       ret
                       }
           })))]
+(def fib =
+ chunk[1->1|1 local] {
+   :instrs
+    0        (rload 0) ; deref n
+    1        (int 2)
+    2        leq
+    3        (jifn 6)
+    4        (int 1) ; if
+    5        (jmp 17)
+    6        (rload 0) ; deref n
+    7        (int 1)
+    8        sub
+    9        curch
+    10       (call 1)
+    11       (rload 0) ; deref n
+    12       (int 2)
+    13       sub
+    14       curch
+    15       (call 1)
+    16       add
+    17       ret
+ })
 (eval:
    "fib 5")
 (eval:

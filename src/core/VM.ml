@@ -65,6 +65,7 @@ module Types_ = struct
     | String of string
     | Array of value vec
     | Expr of K.Expr.t
+    | Seq of K.Sequent.t
     | Thm of K.Thm.t
     | Var of K.Var.t
     | Const of K.Const.t
@@ -118,6 +119,7 @@ module Types_ = struct
       Fmt.fprintf out "[@[%a@]]" (pp_vec ~sep:", " @@ pp_value ~short) x
     | Expr x -> K.Expr.pp out x
     | Thm x -> K.Thm.pp out x
+    | Seq x -> K.Sequent.pp out x
     | Var x -> K.Var.pp out x
     | Const x -> K.Const.pp out x
     | Subst x -> K.Subst.pp out x
@@ -219,6 +221,7 @@ module Value = struct
   let array (x:t vec) : t = Array x
   let expr (x:K.Expr.t) : t = Expr x
   let thm (x:K.Thm.t) : t = Thm x
+  let seq seq : t = Seq seq
   let var (x:K.Var.t) : t = Var x
   let const (x:K.Const.t) : t = Const x
   let subst (x:K.Subst.t) : t = Subst x
@@ -245,9 +248,10 @@ module Value = struct
     | Theory th1, Theory th2 -> th1 == th2
     | Chunk c1, Chunk c2 -> c1 == c2
     | Thunk th1, Thunk th2 -> th1 == th2
+    | Seq s1, Seq s2 -> K.Sequent.equal s1 s2
     | Prim p1, Prim p2 -> p1.pr_name = p2.pr_name
     | (Bool _ | Int _ | String _ | Array _ | Const _
-      | Expr _ | Thm _ | Var _ | Subst _ | Thunk _ |
+      | Expr _ | Thm _ | Var _ | Subst _ | Thunk _ | Seq _ |
        Theory _ | Nil | Chunk _ | Prim _), _ -> false
 
 
@@ -259,6 +263,7 @@ module Value = struct
   let[@inline] to_int = function Int x -> Some x | _ -> None
   let[@inline] to_expr = function Expr x -> Some x | _ -> None
   let[@inline] to_thm = function Thm x -> Some x | _ -> None
+  let[@inline] to_seq = function Seq x -> Some x | _ -> None
   let[@inline] to_var = function Var x -> Some x | _ -> None
   let[@inline] to_const = function Const x -> Some x | _ -> None
   let[@inline] to_array = function Array x -> Some x | _ -> None
@@ -270,6 +275,7 @@ module Value = struct
   let[@inline] to_int_exn = function Int x -> x | _ -> Error.fail "expected int"
   let[@inline] to_expr_exn = function Expr x -> x | _ -> Error.fail "expected expr"
   let[@inline] to_thm_exn = function Thm x -> x | _ -> Error.fail "expected thm"
+  let[@inline] to_seq_exn = function Seq x -> x | _ -> Error.fail "expected sequent"
   let[@inline] to_var_exn = function Var x -> x | _ -> Error.fail "expected var"
   let[@inline] to_const_exn = function Const x -> x | _ -> Error.fail "expected const"
   let[@inline] to_array_exn = function Array x -> x | _ -> Error.fail "expected array"
@@ -1151,11 +1157,17 @@ let eval_thunk1 ?debug_hook ctx th : _ result =
     Error (Error.makef "eval_thunk1: expected one result, got %d" (List.length vs))
   | Error _ as e -> e
 
-let eval_stanza ?debug_hook (ctx:K.Ctx.t) (stanza:Stanza.t) : unit =
-  let unwrap_ = function
-    | Ok v -> v
-    | Error err -> Error.raise err
-  and pp_res out = function
+module Eval_effect = struct
+  type t =
+    | Eff_declare of string * K.ty
+    | Eff_define of string * K.Expr.t
+    | Eff_print_val of Value.t
+    | Eff_prove of string * K.Sequent.t * K.Thm.t Error.or_error
+    | Eff_define_thunk of string * thunk
+    | Eff_define_chunk of string * chunk
+    | Eff_print_error of Error.t
+
+  let pp_res out = function
     | Ok vs ->
       List.iteri
         (fun i v ->
@@ -1163,32 +1175,67 @@ let eval_stanza ?debug_hook (ctx:K.Ctx.t) (stanza:Stanza.t) : unit =
            Value.pp out v)
         vs;
     | Error err -> Fmt.fprintf out "error: %a" Error.pp err
-  and pp_res1 out = function
-    | Ok v -> Fmt.fprintf out "result: %a" Value.pp v
+  and pp_res1 ppx out = function
+    | Ok v -> Fmt.fprintf out "result: %a" ppx v
     | Error err -> Fmt.fprintf out "error: %a" Error.pp err
-  in
 
-  (* FIXME: reteurn special type, see .mli *)
-  begin match Stanza.view stanza with
+  let pp out = function
+    | Eff_declare (name, ty) ->
+      Fmt.fprintf out "(@[declare %s :@ %a@])" name K.Expr.pp ty
+    | Eff_define (name, body) ->
+      Fmt.fprintf out "(@[define %s :=@ %a@])" name K.Expr.pp body
+    | Eff_print_val v ->
+      Fmt.fprintf out "(@[<v2>eval:@ %a@])" Value.pp v
+    | Eff_prove (name, goal, proof) ->
+      Fmt.printf "(@[proof %s@ :goal %a@ :proof %a@])"
+        name K.Sequent.pp goal (pp_res1 K.Thm.pp) proof
+    | Eff_define_thunk (name, th) ->
+      Fmt.fprintf out "(@[def %s =@ %a@])" name Thunk.pp th;
+    | Eff_define_chunk (name, c) ->
+      Fmt.fprintf out "(@[def %s =@ %a@])" name Chunk.pp c;
+    | Eff_print_error err ->
+      Fmt.fprintf out "(@[err@ %a@])" Error.pp err
+end
+
+let unwrap_ = function
+  | Ok v -> v
+  | Error err -> Error.raise err
+
+let eval_stanza ?debug_hook (ctx:K.Ctx.t) (stanza:Stanza.t) : _ list =
+  let module Eff = Eval_effect in
+  try
+    match Stanza.view stanza with
     | Stanza.Declare {name;ty} ->
-      (* TODO: turn into term *)
-      let ty = eval_thunk1 ?debug_hook ctx ty |> unwrap_ in
-      Fmt.printf "(@[declare %s :@ %a@])@." name Value.pp ty
+      let ty =
+        eval_thunk1 ?debug_hook ctx ty |> unwrap_
+        |> Value.to_expr_exn in
+      [Eff.Eff_declare (name, ty)]
     | Stanza.Define {name;body} ->
-      (* TODO: turn into term *)
-      let body = eval_thunk1 ?debug_hook ctx body |> unwrap_ in
-      Fmt.printf "(@[define %s :=@ %a@])@." name Value.pp body
+      let body =
+        eval_thunk1 ?debug_hook ctx body |> unwrap_
+        |> Value.to_expr_exn in
+      [Eff.Eff_define (name, body)]
     | Stanza.Prove {name; goal; proof} ->
-      let goal = eval_thunk1 ?debug_hook ctx goal |> unwrap_ in
-      let proof = eval_thunk1 ?debug_hook ctx proof in
-      Fmt.printf "(@[proof %s@ :goal %a@ :proof %a@])@."
-        name Value.pp goal pp_res1 proof
+      let goal = eval_thunk1 ?debug_hook ctx goal |> unwrap_
+                 |> Value.to_seq_exn in
+      let proof = eval_thunk1 ?debug_hook ctx proof
+                  |> Result.map Value.to_thm_exn in
+      [Eff.Eff_prove (name, goal, proof)]
     | Stanza.Define_thunk {name; value} ->
-      let r = eval_thunk1 ?debug_hook ctx value in
-      Fmt.printf "(@[def %s =@ %a@])@." name pp_res1 r;
-    | Stanza.Define_chunk _ -> ()
+      [Eff.Eff_define_thunk (name, value)]
+    | Stanza.Define_chunk {name; value} ->
+      [Eff.Eff_define_chunk (name, value)]
     | Stanza.Eval {value} ->
       let r = eval_thunk ?debug_hook ctx value in
-      Fmt.printf "(@[<v2>eval:@ %a@])@." pp_res r;
-  end
+      begin match r with
+        | Ok l -> List.map (fun v -> Eff.Eff_print_val v) l
+        | Error e -> [Eff.Eff_print_error e]
+      end
+  with
+  | Error.E err ->
+    [Eff.Eff_print_error err]
+
+let eval_stanza_pp ?debug_hook ctx stanza : unit =
+  let l = eval_stanza ?debug_hook ctx stanza in
+  List.iter (Fmt.printf "%a@." Eval_effect.pp) l
 

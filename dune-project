@@ -38,6 +38,19 @@
     (odoc :with-doc)))
 
 (package
+  (name trustee-script-jupyter)
+  (synopsis "Jupyter kernel for trustee-script")
+  (license MIT)
+  (depends
+    (containers (and (>= 3.6) (< 4.0)))
+    (trustee (= :version))
+    (trustee-script (= :version))
+    ppx_deriving
+    jupyter-kernel
+    tiny_httpd
+    (odoc :with-doc)))
+
+(package
   (name trustee-opentheory)
   (synopsis "Opentheory parser and checker using Trustee")
   (license MIT)
