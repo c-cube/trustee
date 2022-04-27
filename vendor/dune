@@ -1,3 +1,3 @@
-(vendored_dirs linol pp_loc)
+(vendored_dirs linol)
 
 (data_only_dirs opentheory)
