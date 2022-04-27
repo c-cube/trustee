@@ -78,10 +78,10 @@ module Make() = struct
       ()
 end
 
-let main () : _ Lwt.t =
-  Lwt.return ()
-
-
+let main () : unit Lwt.t =
+  let module M = Make() in
+  let config = JK.Client_main.mk_config ~usage:"<usage>" () in
+  JK.Client_main.main ~config ~kernel:M.kernel
 
 
 let () =
