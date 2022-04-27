@@ -7,27 +7,37 @@ module A = Ast
 
 type stanza = VM.Stanza.t
 type thunk = VM.Thunk.t
+type chunk = VM.Chunk.t
 
 module Env = struct
   module M = Str_map
 
+  type value =
+    | T of thunk
+    | C of chunk
+
   type t = {
-    ths: thunk M.t;
+    vals: value M.t;
   }
 
-  let empty : t = {ths=M.empty}
+  let empty : t = {vals=M.empty}
 
-  let find name (self:t) : thunk option =
-    M.find_opt name self.ths
+  let find name (self:t) : value option =
+    M.find_opt name self.vals
 
-  let add name th (self:t) : t =
-    {ths=M.add name th self.ths}
+  let add_thunk name th (self:t) : t =
+    {vals=M.add name (T th) self.vals}
+
+  let add_chunk name ch (self:t) : t =
+    {vals=M.add name (C ch) self.vals}
 
   let add_stanza self (st:VM.Stanza.t) : t =
     match VM.Stanza.view st with
-    | VM.Stanza.Define_meta {name; value} ->
-      add name value self
-    | VM.Stanza.Eval_meta _ -> self
+    | VM.Stanza.Define_thunk {name; value} ->
+      add_thunk name value self
+    | VM.Stanza.Define_chunk {name; value} ->
+      add_chunk name value self
+    | VM.Stanza.Eval _ -> self
     | VM.Stanza.Declare _
     | VM.Stanza.Define _
     | VM.Stanza.Prove _
@@ -36,10 +46,14 @@ module Env = struct
     {ths=M.add s th self.ths}
            *)
 
+  let pp_value out = function
+    | C c -> VM.Chunk.pp out c
+    | T t -> VM.Thunk.pp out t
+
   let pp out self =
-    let pp_kv out (k,v) = Fmt.fprintf out "@[%s := %a@]" k VM.Thunk.pp v in
+    let pp_kv out (k,v) = Fmt.fprintf out "@[%s := %a@]" k pp_value v in
     Fmt.fprintf out "@[<2>env{@ %a@;<1 -2>}@]"
-      (pp_iter pp_kv) (M.to_iter self.ths)
+      (pp_iter pp_kv) (M.to_iter self.vals)
 end
 
 module Compile_ = struct
@@ -224,10 +238,13 @@ module Compile_ = struct
       CB.push_i self.cb (I.rload lreg);
     | None ->
       match Env.find s.view self.env, self.fun_name with
-      | Some th, _ ->
+      | Some (Env.T th), _ ->
         let local = CB.add_local self.cb (VM.Value.thunk th) in
         CB.push_i self.cb (I.lload local);
         CB.push_i self.cb I.tforce;
+      | Some (Env.C c), _ ->
+        let local = CB.add_local self.cb (VM.Value.chunk c) in
+        CB.push_i self.cb (I.lload local);
       | None, Some name when s.view = name ->
         (* recursive call *)
         CB.push_i self.cb I.curch;
@@ -380,17 +397,9 @@ module Compile_ = struct
       match With_loc.view p with
       | A.S_fn (f,vars,bl) ->
         let id = Sym_ptr.(namespace "fn" @@ str f.view) in
-        let st = create env ~n:0 in
-
         (* chunk that just returns the function *)
         let c_fn = compile_fn ~fun_name:f.view ~env vars bl in
-        let local = CB.add_local st.cb (VM.Value.chunk c_fn) in
-        CB.push_i st.cb (I.lload local);
-        CB.push_i st.cb I.ret;
-        let c = CB.to_chunk st.cb in
-
-        let value = VM.Thunk.make c in
-        [ VM.Stanza.(make ~id @@ Define_meta {name=f.view; value}) ]
+        [ VM.Stanza.(make ~id @@ Define_chunk {name=f.view; value=c_fn}) ]
 
       | A.S_eval e ->
         let id = Sym_ptr.(namespace "eval" @@ pos (gen_sym_pos_())) in
@@ -399,7 +408,7 @@ module Compile_ = struct
         CB.push_i st.cb I.ret;
         let c = CB.to_chunk st.cb in
         let value = VM.Thunk.make c in
-        [ VM.Stanza.(make ~id @@ Eval_meta {value}) ]
+        [ VM.Stanza.(make ~id @@ Eval {value}) ]
     in
     let env = List.fold_left Env.add_stanza env stanzas in
     env, stanzas

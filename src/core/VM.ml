@@ -351,12 +351,17 @@ module Stanza = struct
         proof: Thunk.t; (* thm *)
       }
 
-    | Define_meta of {
+    | Define_thunk of {
         name: string;
         value: Thunk.t;
-      } (** Define a meta-level value *)
+      } (** Define a meta-level chunk *)
 
-    | Eval_meta of {
+    | Define_chunk of {
+        name: string;
+        value: Chunk.t;
+      } (** Define a meta-level chunk *)
+
+    | Eval of {
         value: Thunk.t;
       }
 
@@ -375,9 +380,12 @@ module Stanza = struct
       Fmt.fprintf out "(@[declare %s@ :ty %a@])" name pp_thunk ty
     | Define {name; body} ->
       Fmt.fprintf out "(@[define %s@ :body %a@])" name pp_thunk body
-    | Define_meta {name; value} ->
-      Fmt.fprintf out "(@[def `%s`@ :chunk %a@])"
+    | Define_thunk {name; value} ->
+      Fmt.fprintf out "(@[def `%s`@ %a@])"
         name pp_thunk value
+    | Define_chunk {name; value} ->
+      Fmt.fprintf out "(@[def `%s`@ %a@])"
+        name Chunk.pp value
     | Prove {name; deps; goal; proof} ->
       let pp_dep out (s,kind,ref) =
         let skind = match kind with `Eager -> ":eager" | `Lazy -> ":lazy" in
@@ -386,7 +394,7 @@ module Stanza = struct
       in
       Fmt.fprintf out "(@[prove %s@ :deps (@[%a@])@])"
         name (pp_list pp_dep) deps
-    | Eval_meta {value} ->
+    | Eval {value} ->
       Fmt.fprintf out "(@[eval@ %a@])" pp_thunk value
 
   let pp = pp_with ~pp_thunk:Thunk.pp
@@ -1175,10 +1183,11 @@ let eval_stanza ?debug_hook (ctx:K.Ctx.t) (stanza:Stanza.t) : unit =
       let proof = eval_thunk1 ?debug_hook ctx proof in
       Fmt.printf "(@[proof %s@ :goal %a@ :proof %a@])@."
         name Value.pp goal pp_res1 proof
-    | Stanza.Define_meta {name; value} ->
+    | Stanza.Define_thunk {name; value} ->
       let r = eval_thunk1 ?debug_hook ctx value in
       Fmt.printf "(@[def %s =@ %a@])@." name pp_res1 r;
-    | Stanza.Eval_meta {value} ->
+    | Stanza.Define_chunk _ -> ()
+    | Stanza.Eval {value} ->
       let r = eval_thunk ?debug_hook ctx value in
       Fmt.printf "(@[<v2>eval:@ %a@])@." pp_res r;
   end

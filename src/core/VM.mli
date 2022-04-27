@@ -155,12 +155,17 @@ module Stanza : sig
             boxed proof of the step at [name].
         *)
 
-    | Define_meta of {
+    | Define_thunk of {
         name: string;
         value: Thunk.t;
       } (** Define a meta-level chunk *)
 
-    | Eval_meta of {
+    | Define_chunk of {
+        name: string;
+        value: Chunk.t;
+      } (** Define a meta-level chunk *)
+
+    | Eval of {
         value: Thunk.t;
       }
 
