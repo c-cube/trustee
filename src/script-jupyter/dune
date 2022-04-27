@@ -1,0 +1,6 @@
+
+(executable
+  (name trustee_script_jupyter)
+  (public_name trustee-script-jupyter)
+  (package trustee-script-jupyter)
+  (libraries jupyter-kernel lwt lwt.unix trustee_core trustee_script tiny_httpd))
