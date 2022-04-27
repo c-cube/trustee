@@ -1,0 +1,10 @@
+{
+  "argv":
+    ["trustee-script-jupyter",
+      "--connection-file",
+      "{connection_file}"
+    ],
+  "interrupt_mode": "message",
+  "display_name": "Trustee_script",
+  "language": "trustee-script"
+}
