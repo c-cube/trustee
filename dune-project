@@ -35,6 +35,7 @@
     (trustee (= :version))
     ppx_deriving
     menhir
+    pp_loc
     (odoc :with-doc)))
 
 (package
