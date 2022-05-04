@@ -374,6 +374,7 @@ type thm = {
   th_seq: sequent;
   mutable th_flags: int; (* [bool flags|ctx uid] *)
   mutable th_proof: proof;
+  mutable th_theory: theory option;
 }
 
 and theory = {
@@ -1514,14 +1515,14 @@ module Thm = struct
 
   (** {3 Deduction rules} *)
 
-  let make_seq_ ctx seq proof : t =
+  let make_seq_ ctx seq proof th_theory : t =
     let th_flags = ctx.ctx_uid in
     let proof = if ctx.ctx_store_proofs then proof () else Proof.dummy in
-    { th_flags; th_seq=seq; th_proof=proof; }
+    { th_flags; th_seq=seq; th_proof=proof; th_theory }
 
-  let make_ ctx hyps concl proof : t =
+  let make_ ctx hyps concl proof th : t =
     let th_seq = Sequent.make hyps concl in
-    make_seq_ ctx th_seq proof
+    make_seq_ ctx th_seq proof th
 
   let is_bool_ ctx e : bool =
     let ty = Expr.ty_exn e in
@@ -1536,7 +1537,7 @@ module Thm = struct
     let proof () =
       Proof.(step "assume" ~args:[a_expr e])
     in
-    make_ ctx (Expr_set.singleton e) e proof
+    make_ ctx (Expr_set.singleton e) e proof None
 
   let axiom ctx hyps e : t =
     Error.guard (fun err ->
@@ -1551,9 +1552,16 @@ module Thm = struct
     );
     let proof () =
       Proof.(step "axiom" ~args:[a_expr e]) in
-    make_ ctx (Expr_set.of_list hyps) e proof
+    make_ ctx (Expr_set.of_list hyps) e proof None
 
   let merge_hyps_ = Expr_set.union
+
+  let merge_theory_ a b = match a, b with
+    | None, a -> a
+    | a, None -> a
+    | Some a as res, Some b ->
+      if a != b then Error.fail "cannot use theorems from distinct theories";
+      res
 
   let cut ctx th1 th2 : t =
     Error.guard
@@ -1564,12 +1572,13 @@ module Thm = struct
     let b = concl th1 in
     let hyps = merge_hyps_ (hyps_ th1) (Expr_set.remove b (hyps_ th2)) in
     let proof () = Proof.(step "cut" ~parents:[th1; th2]) in
-    make_ ctx hyps (concl th2) proof
+    let th = merge_theory_ th1.th_theory th2.th_theory in
+    make_ ctx hyps (concl th2) proof th
 
   let refl ctx e : t =
     ctx_check_e_uid ctx e;
     let proof () = Proof.(step "refl" ~args:[a_expr e]) in
-    make_ ctx Expr_set.empty (Expr.app_eq ctx e e) proof
+    make_ ctx Expr_set.empty (Expr.app_eq ctx e e) proof None
 
   let congr ctx th1 th2 : t =
     Error.guard
@@ -1585,7 +1594,8 @@ module Thm = struct
       let t2 = Expr.app ctx g u in
       let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
       let proof () = Proof.(step "congr" ~parents:[th1;th2]) in
-      make_ ctx hyps (Expr.app_eq ctx t1 t2) proof
+      let th = merge_theory_ th1.th_theory th2.th_theory in
+      make_ ctx hyps (Expr.app_eq ctx t1 t2) proof th
 
   exception E_subst_non_closed of var * expr
 
@@ -1602,7 +1612,7 @@ module Thm = struct
     let hyps = hyps_ th |> Expr_set.map (fun e -> Expr.subst ~recursive ctx e s) in
     let concl = Expr.subst ~recursive ctx (concl th) s in
     let proof() = Proof.(step "subst" ~args:[a_subst s] ~parents:[th]) in
-    make_ ctx hyps concl proof
+    make_ ctx hyps concl proof th.th_theory
 
   let sym ctx th : t =
     Error.guard (fun err -> Error.wrapf "@[<2>in sym@ `@[%a@]`@]:" pp th err) @@ fun () ->
@@ -1611,7 +1621,7 @@ module Thm = struct
     | None -> Error.failf (fun k->k"sym: concl of %a@ should be an equation" pp th)
     | Some (t,u) ->
       let proof () = Proof.(step "sym" ~parents:[th]) in
-      make_ ctx (hyps_ th) (Expr.app_eq ctx u t) proof
+      make_ ctx (hyps_ th) (Expr.app_eq ctx u t) proof th.th_theory
 
   let trans ctx th1 th2 : t =
     Error.guard
@@ -1629,7 +1639,8 @@ module Thm = struct
       );
       let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
       let proof() = Proof.(step "trans" ~parents:[th1;th2]) in
-      make_ ctx hyps (Expr.app_eq ctx t v) proof
+      let th = merge_theory_ th1.th_theory th2.th_theory in
+      make_ ctx hyps (Expr.app_eq ctx t v) proof th
 
   let bool_eq ctx th1 th2 : t =
     Error.guard
@@ -1646,7 +1657,8 @@ module Thm = struct
       if Expr.equal t (concl th1) then (
         let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
         let proof() = Proof.(step "bool_eq" ~parents:[th1;th2]) in
-        make_ ctx hyps u proof
+        let th = merge_theory_ th1.th_theory th2.th_theory in
+        make_ ctx hyps u proof th
       ) else (
         Error.failf
           (fun k->k
@@ -1670,7 +1682,8 @@ module Thm = struct
         (Expr_set.remove e2 (hyps_ th1))
     in
     let proof() = Proof.(step "bool_eq_intro" ~parents:[th1;th2]) in
-    make_ ctx hyps (Expr.app_eq ctx e1 e2) proof
+    let th = merge_theory_ th1.th_theory th2.th_theory in
+    make_ ctx hyps (Expr.app_eq ctx e1 e2) proof th
 
   let beta_conv ctx e : t =
     Error.guard (fun err -> Error.wrapf "@[<2>in beta-conv `@[%a@]`:" Expr.pp e err) @@ fun () ->
@@ -1682,7 +1695,7 @@ module Thm = struct
          assert (Expr.equal ty_v (Expr.ty_exn a)); (* else `app` would have failed *)
          let rhs = Expr.subst_db_0 ctx body ~by:a in
          let proof() = Proof.(step "beta_conv" ~args:[a_expr e]) in
-         make_ ctx Expr_set.empty (Expr.app_eq ctx e rhs) proof
+         make_ ctx Expr_set.empty (Expr.app_eq ctx e rhs) proof None
        | _ ->
          Error.failf (fun k->k"not a redex: function %a is not a lambda" Expr.pp f)
       )
@@ -1701,7 +1714,7 @@ module Thm = struct
       );
       let proof() = Proof.(step "abs" ~parents:[th]) in
       make_ ctx th.th_seq.hyps
-        (Expr.app_eq ctx (Expr.lambda ctx v a) (Expr.lambda ctx v b)) proof
+        (Expr.app_eq ctx (Expr.lambda ctx v a) (Expr.lambda ctx v b)) proof th.th_theory
     | None -> Error.failf (fun k->k"conclusion of `%a`@ is not an equation" pp th)
 
   let new_basic_definition ctx (e:expr) : t * const =
@@ -1737,7 +1750,7 @@ module Thm = struct
           ~def:(C_def_expr {rhs}) (Var.name x_var) ty_vars_l (Var.ty x_var) in
       let c_e = Expr.const ctx c (List.map (Expr.var ctx) ty_vars_l) in
       let proof() = Proof.(step "new_def" ~args:[a_expr e]) in
-      let th = make_ ctx Expr_set.empty (Expr.app_eq ctx c_e rhs) proof in
+      let th = make_ ctx Expr_set.empty (Expr.app_eq ctx c_e rhs) proof None in
       th, c
 
   let new_basic_type_definition ctx
@@ -1820,7 +1833,7 @@ module Thm = struct
       let abs = Expr.const ctx c_abs ty_vars_expr_l in
       let abs_t = Expr.app ctx abs t in
       let eqn = Expr.app_eq ctx abs_t abs_x in
-      make_ ctx Expr_set.empty eqn proof
+      make_ ctx Expr_set.empty eqn proof None
     in
 
     let repr_x = Var.make "x" ty in
@@ -1833,7 +1846,7 @@ module Thm = struct
       let t2 = Expr.app ctx repr t1 in
       let eq_t2_x = Expr.app_eq ctx t2 repr_x in
       let phi_x = Expr.app ctx phi repr_x in
-      make_ ctx Expr_set.empty (Expr.app_eq ctx phi_x eq_t2_x) proof
+      make_ ctx Expr_set.empty (Expr.app_eq ctx phi_x eq_t2_x) proof None
     in
 
     {New_ty_def.
@@ -1843,13 +1856,13 @@ module Thm = struct
   let box ctx (th: t) : t =
     let box = Expr.box ctx th.th_seq in
     let proof() = Proof.(step "box" ~parents:[th]) in
-    make_ ctx Expr_set.empty box proof
+    make_ ctx Expr_set.empty box proof th.th_theory
 
   let assume_box ctx (seq:sequent) : t =
     let box = Expr.box ctx seq in
     let seq' = {seq with hyps=Expr_set.add box seq.hyps} in
     let proof() = Proof.(step "assume-box") in
-    make_seq_ ctx seq' proof
+    make_seq_ ctx seq' proof None
 end
 
 module Theory = struct
@@ -1891,7 +1904,7 @@ module Theory = struct
     );
     let hyps = Expr_set.of_list hyps in
     let proof() = Proof.(step "th.assume") in
-    let th = Thm.make_ ctx hyps concl proof in
+    let th = Thm.make_ ctx hyps concl proof (Some self) in
     self.theory_in_theorems <- th :: self.theory_in_theorems;
     th
 
@@ -1940,6 +1953,11 @@ module Theory = struct
     with Not_found -> Name_k_map.get (C_ty,s) self.theory_in_constants
 
   let add_theorem self th : unit =
+    (match th.th_theory with
+    | None -> th.th_theory <- Some self
+    | Some th' when self != th' ->
+        Error.failf (fun k->k"add theorem %a@ from the wrong theory" Thm.pp th)
+    | Some _ -> ());
     self.theory_defined_theorems <- th :: self.theory_defined_theorems
 
   let mk_ ctx ~name : t =
@@ -2080,7 +2098,7 @@ module Theory = struct
       |> Name_k_map.of_iter
 
     (* instantiate a whole theorem *)
-    let inst_thm_ (self:state) (th:thm) : thm =
+    let inst_thm_ (self:state) theory (th:thm) : thm =
       let hyps =
         Expr_set.to_iter th.th_seq.hyps
         |> Iter.map (inst_t_ self)
@@ -2088,7 +2106,7 @@ module Theory = struct
       in
       let concl = inst_t_ self th.th_seq.concl in
       let proof() = th.th_proof in
-      Thm.make_ self.ctx hyps concl proof
+      Thm.make_ self.ctx hyps concl proof (Some theory)
 
     let inst_theory_ (self:state) (th:theory) : theory =
       assert (self.ctx == th.theory_ctx);
@@ -2102,9 +2120,9 @@ module Theory = struct
       th'.theory_defined_constants <-
         inst_constants_ self theory_defined_constants;
       th'.theory_in_theorems <-
-        List.map (inst_thm_ self) theory_in_theorems;
+        List.map (inst_thm_ self th') theory_in_theorems;
       th'.theory_defined_theorems <-
-        List.map (inst_thm_ self) theory_defined_theorems;
+        List.map (inst_thm_ self th') theory_defined_theorems;
       th'
   end
 
