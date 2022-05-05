@@ -7,6 +7,7 @@ module Hashcons = Hashcons
 module Error = Error
 module Error_intf = Error_intf
 module Vec = Vec
+module Cbor_pack = Cbor_pack
 
 module Conv = Conv
 module Unif = Unif
