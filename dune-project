@@ -23,6 +23,8 @@
     (iter (>= 1.0))
     (ocaml (>= 4.08.0))
     sha
+    (cbor :with-test)
+    (ppx_deriving :with-test)
     (qtest :with-test)
     (ounit2 :with-test)
     (qcheck :with-test)
