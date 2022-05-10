@@ -1,6 +1,0 @@
-(library
- (name trustee_cbor)
- (public_name trustee.cbor)
- (optional)
- (flags :standard -open Trustee_core)
- (libraries cbor trustee.core))

@@ -2,4 +2,4 @@
  (names t1)
  (preprocess
   (pps ppx_deriving.std))
- (libraries trustee.core trustee.cbor cbor ppx_deriving.runtime))
+ (libraries trustee.core cbor ppx_deriving.runtime))

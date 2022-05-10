@@ -84,4 +84,18 @@ module Dec : sig
   val run : 'a t -> cbor_pack -> ('a, string) result
 end
 
+val encode : 'a Enc.t -> 'a -> cbor
 
+val encode_to_string : 'a Enc.t -> 'a -> string
+
+val cbor_to_string : cbor -> string
+
+val decode : 'a Dec.t -> cbor -> ('a, string) result
+
+val decode_string : 'a Dec.t -> string -> ('a, string) result
+
+val decode_string_exn : 'a Dec.t -> string -> 'a
+(** Same as {!decode_string} but can raise
+    @raise Failure if decoding failed. *)
+
+val cbor_of_string : string -> cbor

@@ -15,15 +15,13 @@
   (synopsis "Kernel of trust and proof assistant for HOL")
   (license MIT)
   (tags (logic proof HOL assistant))
-  (depopts
-    cbor)
   (depends
     (containers (and (>= 3.3) (< 4.0)))
     (pp_loc (and (>= 1.0) (< 2.0)))
     (iter (>= 1.0))
     (ocaml (>= 4.08.0))
     sha
-    (cbor :with-test)
+    cbor
     (ppx_deriving :with-test)
     (qtest :with-test)
     (ounit2 :with-test)

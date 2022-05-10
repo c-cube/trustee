@@ -110,11 +110,11 @@ let () = Format.printf "dec(enc(c1)): %a@." pp_clause c1';;
 
 let () = assert (equal_clause c1 c1');;
 
-let c1_str = Trustee_cbor.encode_to_string enc_clause c1';;
+let c1_str = CB.encode_to_string enc_clause c1';;
 
 Format.printf "enc(c1): (len %d) %S@." (String.length c1_str) c1_str;;
 
-let c1'' = match Trustee_cbor.decode_string dec_clause c1_str with
+let c1'' = match CB.decode_string dec_clause c1_str with
   | Ok c -> c
   | Error e -> failwith e;;
 

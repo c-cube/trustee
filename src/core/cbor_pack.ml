@@ -1,4 +1,6 @@
 
+module Cbor = CBOR.Simple
+
 type cbor =
   [ `Array of cbor list
   | `Bool of bool
@@ -11,6 +13,9 @@ type cbor =
   | `Tag of int * cbor
   | `Text of string
   | `Undefined ]
+
+(* make sure the types coincide *)
+let _ = ignore ((fun x->x):cbor -> Cbor.t)
 
 type t = {
   h: cbor Vec.t; (* heap *)
@@ -191,4 +196,42 @@ module Dec = struct
 
 end
 
+let encode (enc:'a Enc.t) (x:'a) : Cbor.t =
+  let encoder = Enc.init() in
+  let key = enc encoder x in
+  let cb = Enc.finalize encoder ~key in
+  `Map [
+    `Text "h", `Array (Vec.to_list cb.h);
+    `Text "k", cb.k;
+  ]
 
+let cbor_to_string = Cbor.encode
+
+let cbor_of_string = Cbor.decode
+
+let encode_to_string enc x : string =
+  Cbor.encode @@ encode enc x
+
+let decode (dec:'a Dec.t) (cbor:Cbor.t) : ('a, _) result =
+  match cbor with
+  | `Map l ->
+    begin match
+        let k = try List.assoc (`Text "k") l with _ -> failwith "missing 'k' field" in
+        let h = try List.assoc (`Text "h") l with _ -> failwith "missing 'h' field" in
+        let h = match h with `Array l-> l | _ -> failwith "'h' field is not a list" in
+        {k; h=Vec.of_list h}
+      with
+      | cb-> Dec.run dec cb
+      | exception Failure e -> Error e
+    end
+  | _ -> Error "expected map"
+
+let decode_string dec (str:string) : _ result =
+  match Cbor.decode str with
+  | c -> decode dec c
+  | exception _ -> Error "invalid CBOR"
+
+let decode_string_exn dec s =
+  match decode_string dec s with
+  | Ok x -> x
+  | Error e -> failwith e
