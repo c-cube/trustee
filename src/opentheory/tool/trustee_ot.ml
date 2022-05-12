@@ -36,6 +36,8 @@ let check_all = ref false
 let progress_ = ref false
 let store_proofs_ = ref false
 
+(* TODO: storage: use sqlite *)
+
 let main ~dir ~serve ~port () =
   let idx =
     let t1 = now() in
@@ -47,7 +49,8 @@ let main ~dir ~serve ~port () =
   let theories = Iter.of_list idx.Idx.theories |> Iter.map snd in
 
   (* TODO: use param for store_proofs *)
-  let ctx = K.Ctx.create ~store_proofs:!store_proofs_ ~erase_defs:false () in
+  let ctx = K.Ctx.create ~store_proofs:!store_proofs_
+    ~store_concrete_definitions:true () in
   let st =
     let progress_bar = !progress_ in
     St.create

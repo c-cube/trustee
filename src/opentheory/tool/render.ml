@@ -51,13 +51,13 @@ let expr_wrap_ f e =
     span[][txt "("; f e; txt ")"]
 
 let href_const c =
-  spf "/h/%s" (K.Cr_hash.to_string @@ K.Const.cr_hash c)
+  spf "/h/%s" (Chash.to_string @@ K.Const.chash c)
 
 let var_to_html (v:K.Var.t) : Html.elt =
   let open Html in
   let name = K.Var.name v in
   let title_ = Fmt.asprintf "%s : %a@ hash-of-ty %a"
-      name E.pp (K.Var.ty v) K.Cr_hash.pp (K.Expr.cr_hash v.v_ty) in
+      name E.pp (K.Var.ty v) Chash.pp (K.Expr.chash v.v_ty) in
   span [A.title title_] [txt name]
 
 let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
@@ -87,7 +87,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       let c_name = strip_name_ ~config @@ K.Const.name c in
       let title_ =
         Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e)
-          K.Cr_hash.pp (K.Expr.cr_hash e)
+          Chash.pp (K.Expr.chash e)
       in
       let href = href_const c in
       let res = span [A.title title_] [
@@ -102,7 +102,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       let descr = strip_name_ ~config @@ K.Const.name c in
       let title =
         Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e)
-          K.Cr_hash.pp (K.Expr.cr_hash e)
+          Chash.pp (K.Expr.chash e)
       in
       span' [] [
         sub_e @@ span [
@@ -125,7 +125,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       let c_name = strip_name_ ~config @@ K.Const.name c in
       let title =
         Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e)
-          K.Cr_hash.pp (K.Expr.cr_hash e)
+          Chash.pp (K.Expr.chash e)
       in
       let res = span [
           A.title title;
@@ -225,7 +225,7 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
       ]
 
     | K.E_box _seq ->
-      let title_ = Fmt.asprintf "box@ hash %a" K.Cr_hash.pp (K.Expr.cr_hash e) in
+      let title_ = Fmt.asprintf "box@ hash %a" Chash.pp (K.Expr.chash e) in
       span[cls "box"; A.title title_][
         txtf "%a" E.pp e
       ]
@@ -235,12 +235,12 @@ let expr_to_html ?(config=Config.make()) (e:K.Expr.t) : Html.elt =
   in
   span [cls "expr"] [loop 0 ~depth:0 ~names:[] e]
 
-let const_def_to_html ?(config=Config.make ()) (c:K.Const.t) =
+let const_def_to_html ?(config=Config.make ()) ctx (c:K.Const.t) =
   let open Html in
-  match K.Const.approx_def c with
+  match K.Const_def.approx_def @@ K.Const.get_def_exn ctx c with
   | `Def rhs -> p[][txt "defined as: "; expr_to_html ~config rhs]
   | `Ty_def phi -> p[][txt "defined type with predicate: "; expr_to_html ~config phi]
-  | `Erased -> p[][txt "erased definition"]
+  (*| `Erased -> p[][txt "erased definition"]*)
   | `Param -> p[][txt "theory parameter"]
   | `Other -> p[][txt "opaque"]
 
@@ -248,7 +248,7 @@ let const_to_html ?(config=Config.make ()) (c:K.Const.t) =
   let name = strip_name_ ~config @@ K.Const.name c in
   let args = Fmt.to_string K.Const.pp_args (K.Const.args c) in
   let title_ = Fmt.asprintf "%a@ hash: %a" K.Const.pp_with_ty c
-      K.Cr_hash.pp (K.Const.cr_hash c) in
+      Chash.pp (K.Const.chash c) in
   Html.(
     span [cls "const"] [
       span [A.title title_] [
@@ -278,15 +278,15 @@ let thm_to_html ?(config=Config.make()) thm : Html.elt =
   let hyps = K.Thm.hyps_l thm in
   let concl = K.Thm.concl thm in
   let bod =
-    let h = K.Thm.cr_hash thm in
+    let h = K.Thm.chash thm in
     let title_ = Fmt.asprintf "hash %a;@ fully concrete: %B"
-        K.Cr_hash.pp h (K.Thm.is_fully_concrete thm) in
+        Chash.pp h (K.Thm.is_fully_concrete thm) in
     let vdash =
       if K.Thm.proof thm |> K.Proof.is_main then (
         a [
           cls "theorem";
           A.title title_;
-          A.href (spf "/h/%s" (K.Cr_hash.to_string h));
+          A.href (spf "/h/%s" (Chash.to_string h));
         ] [txt "⊢"]
       ) else txt "⊢" in
     match hyps with
@@ -340,7 +340,7 @@ let proof_to_html ?(config=Config.make()) (th0:K.Thm.t) : Html.elt =
     | K.Proof.Pr_main _ ->
       (* link to theorem *)
       let step =
-        a[A.href (spf "/h/%s" (K.Cr_hash.to_string @@ K.Thm.cr_hash thm))]
+        a[A.href (spf "/h/%s" (Chash.to_string @@ K.Thm.chash thm))]
           [txt "lemma"]
       in
       add_step thm step

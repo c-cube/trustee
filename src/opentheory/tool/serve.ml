@@ -185,16 +185,16 @@ let h_hash_item (self:state) : unit =
   H.add_route_handler self.server
     H.Route.(exact "h" @/ string @/ return) @@ fun h req ->
   let@ () = top_wrap_ req in
-  let h = K.Cr_hash.of_string_exn h in
+  let h = Chash.of_string_exn h in
   let res =
     (* need lock around ctx/eval *)
     let@ () = St.with_lock self.st.lock in
-    K.Cr_hash.Tbl.find_opt self.st.idx.Idx.by_hash h
+    Chash.Tbl.find_opt self.st.idx.Idx.by_hash h
   in
 
   let r = match res with
     | Some r -> r
-    | None -> Error.failf (fun k->k"hash not found: %a" K.Cr_hash.pp h)
+    | None -> Error.failf (fun k->k"hash not found: %a" Chash.pp h)
   in
   let config = Render.Config.make ~open_all_namespaces:true () in
 
@@ -205,7 +205,7 @@ let h_hash_item (self:state) : unit =
         h3[] [txtf "constant %a" K.Const.pp c];
         pre[][Render.const_to_html ~config c];
         h4[] [txt "Definition"];
-        Render.const_def_to_html ~config c;
+        Render.const_def_to_html ~config self.st.ctx c;
       ]
     | Idx.H_expr e ->
       "expression", [
@@ -219,7 +219,7 @@ let h_hash_item (self:state) : unit =
         Render.proof_to_html ~config thm;
       ]
   in
-  reply_page ~title:(spf "%s %s" kind @@ K.Cr_hash.to_string h) req res
+  reply_page ~title:(spf "%s %s" kind @@ Chash.to_string h) req res
 
 let h_stats self : unit =
   H.add_route_handler self.server
@@ -230,7 +230,7 @@ let h_stats self : unit =
     let@ () = St.with_lock self.st.lock in
     let n_exprs = K.Ctx.n_exprs self.st.ctx in
     let n_theories = List.length self.st.idx.Idx.theories in
-    let n_hashes = K.Cr_hash.Tbl.length self.st.idx.Idx.by_hash in
+    let n_hashes = Chash.Tbl.length self.st.idx.Idx.by_hash in
     Html.(
       table[cls "table table-striped table-sm"][
         tbody[][

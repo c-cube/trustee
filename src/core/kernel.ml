@@ -366,6 +366,9 @@ module Expr0 = struct
     loop e
 
   let iter_dag' ~iter_ty e f = iter_dag ~iter_ty ~f e
+
+  (* forward declaration *)
+  let make_expr_ = ref (fun _ _ _ -> assert false)
 end
 
 module Util_chash_ = struct
@@ -736,6 +739,8 @@ module Expr = struct
       ctx_check_e_uid ctx e_h;
     );
     e_h
+
+  let () = Expr0.make_expr_ := make_
 
   let kind ctx = Lazy.force ctx.ctx_kind
   let type_ ctx = Lazy.force ctx.ctx_type
