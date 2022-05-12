@@ -9,6 +9,9 @@ type t = {
 val make : string -> Chash.t -> t
 val name : t -> string
 val chash : t -> Chash.t
+val chasher : t Chash.hasher
+
+val pp_name : t Fmt.printer
 
 include PP with type t := t
 include EQ with type t := t
