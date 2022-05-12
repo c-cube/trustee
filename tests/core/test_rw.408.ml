@@ -101,7 +101,7 @@ module Make() = struct
     let open QCheck in
     (* shrink to a subterm with the same type *)
     fun yield ->
-      E.iter_dag e
+      E.iter_dag e ~iter_ty:false
         ~f:(fun u -> if e != u && E.is_closed u && E.ty_exn e == E.ty_exn u
              then yield y)
 
