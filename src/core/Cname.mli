@@ -20,3 +20,4 @@ include HASH with type t := t
 
 val enc : t Cbor_pack.Enc.t
 val dec : t Cbor_pack.Dec.t
+

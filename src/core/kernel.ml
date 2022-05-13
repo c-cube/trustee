@@ -250,6 +250,8 @@ module Expr_hashcons = Hashcons.Make(struct
     let on_new e = ignore (Lazy.force e.e_ty : _ option)
     end)
 
+module Cname_LRU = LRU.Make(Cname)
+
 type const_kind = C_ty | C_term
 
 (* special map for indexing constants, differentiating type and term constants *)
@@ -300,6 +302,7 @@ and ctx = {
   ctx_storage: Storage.t;
   ctx_store_concrete_definitions: bool;
   ctx_store_proofs: bool;
+  ctx_def_cache: const_def option Cname_LRU.t;
   mutable ctx_axioms: thm list;
   mutable ctx_axioms_allowed: bool;
 }
@@ -798,8 +801,13 @@ module Const = struct
 
   let get_def (self:ctx) (c:t) : const_def option =
     let cname = c.c_name in
-    let key = key_const_def cname in
-    Storage.get self.ctx_storage (Const_def.dec self) ~key
+    Cname_LRU.get self.ctx_def_cache cname
+      ~compute:(fun _ ->
+        (*Fmt.eprintf "MISS: %a (%d/%d)@." Cname.pp cname
+          (Cname_LRU.size self.ctx_def_cache)
+          (Cname_LRU.max_size self.ctx_def_cache);*)
+        let key = key_const_def cname in
+        Storage.get self.ctx_storage (Const_def.dec self) ~key)
 
   let get_def_exn self c = match get_def self c with
     | Some d -> d
@@ -1531,6 +1539,7 @@ module Ctx = struct
   let uid_ = ref 0
 
   let create
+      ?(def_cache_size=1_024)
       ?(storage=Storage.in_memory ())
       ?(store_proofs=false)
       ?(store_concrete_definitions=false)
@@ -1545,6 +1554,7 @@ module Ctx = struct
       ctx_exprs=Expr_hashcons.create ~size:2_048 ();
       ctx_axioms=[];
       ctx_axioms_allowed=true;
+      ctx_def_cache=Cname_LRU.create ~size:def_cache_size ();
       ctx_kind=lazy (Expr.make_ ctx E_kind (Lazy.from_val None));
       ctx_type=lazy (
         let kind = Expr.kind ctx in

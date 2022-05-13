@@ -11,6 +11,7 @@ module Cbor_pack = Cbor_pack
 module Chash = Chash
 module Cname = Cname
 module Storage = Storage
+module LRU = LRU
 
 module Conv = Conv
 module Unif = Unif

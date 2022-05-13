@@ -596,6 +596,7 @@ module Ctx : sig
   type t = ctx
 
   val create :
+    ?def_cache_size:int ->
     ?storage:Storage.t ->
     ?store_proofs:bool ->
     ?store_concrete_definitions:bool ->
