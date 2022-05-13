@@ -1539,7 +1539,7 @@ module Ctx = struct
   let uid_ = ref 0
 
   let create
-      ?(def_cache_size=1_024)
+      ?(def_cache_size=128)
       ?(storage=Storage.in_memory ())
       ?(store_proofs=false)
       ?(store_concrete_definitions=false)
