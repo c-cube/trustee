@@ -10,6 +10,7 @@ module Vec = Vec
 module Cbor_pack = Cbor_pack
 module Chash = Chash
 module Cname = Cname
+module Storage = Storage
 
 module Conv = Conv
 module Unif = Unif

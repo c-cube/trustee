@@ -73,7 +73,13 @@ module Dec : sig
 
   val list : 'a t -> 'a list t
 
+  val map : 'a t -> 'b t -> ('a * 'b) list t
+
   val apply : 'a t -> cbor -> 'a t
+
+  val apply_l : 'a t -> cbor list -> 'a list t
+
+  val delay : (unit -> 'a t) -> 'a t
 
   val (let+) : 'a t -> ('a -> 'b) -> 'b t
 

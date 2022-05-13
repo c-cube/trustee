@@ -367,8 +367,23 @@ module Expr0 = struct
 
   let iter_dag' ~iter_ty e f = iter_dag ~iter_ty ~f e
 
+  module type MK = sig
+    type 'a with_ctx = ctx -> 'a
+    val type_ : t with_ctx
+    val eq : (t -> t) with_ctx
+    val bool : t with_ctx
+    val select : (t -> t) with_ctx
+    val var : (var -> t) with_ctx
+    val const : (const -> ty list -> t) with_ctx
+    val bvar : (int -> ty -> t) with_ctx
+    val app : (t -> t -> t) with_ctx
+    val lambda_db : (name:string -> ty_v:ty -> t -> t) with_ctx
+    val arrow : (t -> t -> t) with_ctx
+    val box : (sequent -> t) with_ctx
+  end
+
   (* forward declaration *)
-  let make_expr_ = ref (fun _ _ _ -> assert false)
+  let make_ : (module MK) option ref = ref None
 end
 
 module Util_chash_ = struct
@@ -460,6 +475,190 @@ module Util_chash_ = struct
     H.string ctx name;
     hasher_const_def_ ctx d;
     H.finalize ctx
+
+
+  (* used to compute some cnames independently of a ctx *)
+  let cname_of_def_ ~name ~def : Cname.t =
+    let chash = hash_const_def_ ~name def in
+    Cname.make name chash
+
+  let cname_magic_ name = cname_of_def_ ~name ~def:(C_def_magic name)
+  let cname_bool = cname_magic_ id_bool
+  let cname_eq = cname_magic_ id_eq
+  let cname_select = cname_magic_ id_select
+end
+
+module Util_enc_ = struct
+  open CB.Enc
+
+  let rec enc_var enc (v:var) =
+    add_entry enc (list [text v.v_name; enc_expr enc v.v_ty])
+
+  and enc_expr enc (e:expr) : ptr =
+    let open Expr0 in
+    let recurse = enc_expr enc in
+    match view e with
+    | E_kind -> assert false
+    | E_type -> add_entry enc @@ text "type"
+    | E_const (c,[]) when Cname.equal c.c_name Util_chash_.cname_bool ->
+      add_entry enc @@ text "bool"
+    | E_const (c,[a]) when Cname.equal c.c_name Util_chash_.cname_select ->
+      add_entry enc @@ list [text "select"; recurse a]
+    | E_const (c,[a]) when Cname.equal c.c_name Util_chash_.cname_eq ->
+      add_entry enc @@ list [text "="; recurse a]
+    | E_const (c,args) ->
+      add_entry enc @@ list [text "c"; enc_const enc c; list (List.map recurse args)]
+    | E_lam (str, ty, body) ->
+      add_entry enc @@ list [text "l"; text str; recurse ty; recurse body]
+    | E_app (f,a) -> add_entry enc @@ list [text "@"; recurse f; recurse a]
+    | E_arrow (a,b) -> add_entry enc @@ list [text ">"; recurse a; recurse b]
+    | E_var v -> add_entry enc @@ list [text "v"; enc_var enc v]
+    | E_bound_var v -> add_entry enc @@ list [text "bv"; int v.bv_idx; recurse v.bv_ty]
+    | E_box seq -> add_entry enc @@ list [text "box"; enc_seq enc seq]
+
+  and enc_const enc (c:const) : ptr =
+    let {c_name; c_concrete; c_args; c_ty} = c in
+    let args = match c_args with
+      | C_arity n -> list [text "ar"; int n]
+      | C_ty_vars l -> list (text "vs" :: List.map (enc_var enc) l)
+    in
+    add_entry enc @@ map [
+      text "cn", Cname.enc enc c_name;
+      text "ty", enc_expr enc c_ty;
+      text "_", bool c_concrete;
+      text "args", args;
+    ]
+
+  and enc_seq enc (seq:sequent) : ptr =
+    add_entry enc @@ map [
+      text "concl", enc_expr enc seq.concl;
+      text "hyps", list (seq.hyps |> Expr_set.to_list |> List.rev_map (enc_expr enc));
+    ]
+
+  let enc_const_def enc def : ptr =
+    let evar = enc_var enc in
+    let eexpr = enc_expr enc in
+    match def with
+    | C_def_magic str -> add_entry enc @@ list [text "magic"; text str]
+    | C_def_expr {vars; rhs} ->
+      add_entry enc @@ list [text "dt"; list (List.map evar vars); eexpr rhs]
+    | C_def_ty {arity; phi} ->
+      add_entry enc @@ list [text "dty"; int arity; eexpr phi]
+    | C_def_ty_abs {arity; phi} ->
+      add_entry enc @@ list [text "dty.abs"; int arity; eexpr phi]
+    | C_def_ty_repr {arity; phi} ->
+      add_entry enc @@ list [text "dty.repr"; int arity; eexpr phi]
+    | C_def_theory_param {ty_vars; ty} ->
+      add_entry enc @@ list [text "th.param"; list (List.map evar ty_vars); eexpr ty]
+    | C_def_theory_ty_param {arity} ->
+      add_entry enc @@ list [text "th.typaram"; int arity]
+    | C_def_skolem {name} ->
+      add_entry enc @@ list [text "sko"; text name]
+    | C_def_skolem_ty {name;arity} ->
+      add_entry enc @@ list [text "sko.ty"; text name; int arity]
+end
+
+module Util_dec_ = struct
+  open CB.Dec
+
+  let rec dec_var ctx : var t =
+    let* l = list value in
+    match l with
+    | [`Text v_name; ty] ->
+      let+ v_ty = apply (dec_expr ctx) ty in {v_name; v_ty}
+    | _ -> fail "expected var"
+
+  and dec_expr ctx : expr t =
+    delay @@ fun () ->
+    let recurse = dec_expr ctx in
+
+    let (module Mk : Expr0.MK) = match !Expr0.make_ with
+      | None -> assert false
+      | Some m -> m
+    in
+
+    let* v = value in
+    match v with
+    | `Text "type" -> return (Mk.type_ ctx)
+    | `Text "bool" -> return (Mk.bool ctx)
+    | `Array [`Text "="; ty] ->
+      let+ ty = apply recurse ty in Mk.eq ctx ty
+    | `Array [`Text "select"; ty] ->
+      let+ ty = apply recurse ty in Mk.select ctx ty
+    | `Array [`Text "c"; c; args] ->
+      let+ c = apply (dec_const ctx) c and+ args = apply (list recurse) args in
+      Mk.const ctx c args
+    | `Array [`Text "l"; `Text name; ty; body] ->
+      let+ ty_v = apply recurse ty and+ body = apply recurse body in
+      Mk.lambda_db ctx ~name ~ty_v body
+    | `Array [`Text "@"; f; a] ->
+      let+ f = apply recurse f and+ a = apply recurse a in
+      Mk.app ctx f a
+    | `Array [`Text ">"; a; b] ->
+      let+ a = apply recurse a and+ b = apply recurse b in
+      Mk.arrow ctx a b
+    | `Array [`Text "v"; v] ->
+      let+ v = apply (dec_var ctx) v in
+      Mk.var ctx v
+    | `Array [`Text "bv"; `Int i; ty] ->
+      let+ ty = apply recurse ty in
+      Mk.bvar ctx i ty
+    | `Array [`Text "box"; seq] ->
+      let+ seq = apply (dec_seq ctx) seq in
+      Mk.box ctx seq
+    | _ -> fail (Fmt.asprintf "expected expr, got %s" (CBOR.Simple.to_diagnostic v))
+
+  and dec_const ctx : const t =
+    let dec_args =
+      let* l = list value in
+      match l with
+      | [`Text "ar"; `Int n] -> return @@ C_arity n
+      | (`Text "vs" :: vs) ->
+        let+ vs = apply_l (dec_var ctx) vs in C_ty_vars vs
+      | _ -> fail "expected constant args"
+    in
+
+    let+ c_name = field "cn" Cname.dec
+    and+ c_ty = field "ty" (dec_expr ctx)
+    and+ c_concrete = field "_" bool
+    and+ c_args = field "args" dec_args in
+    { c_name; c_ty; c_concrete; c_args }
+
+  and dec_seq ctx : sequent t =
+    let+ concl = field "concl" (dec_expr ctx)
+    and+ hyps = field "hyps" (list (dec_expr ctx)) in
+    let hyps = Expr_set.of_list hyps in
+    { concl; hyps}
+
+  let dec_const_def ctx : const_def t =
+    let dvar = dec_var ctx in
+    let dexpr = dec_expr ctx in
+    let* l = list value in
+    match l with
+    | [`Text "magic"; `Text str] ->
+      return @@ C_def_magic str
+    | [`Text "dt"; vars; rhs] ->
+      let+ vars = apply (list dvar) vars and+ rhs = apply dexpr rhs in
+      C_def_expr {vars;rhs}
+    | [`Text "dty"; `Int arity; phi] ->
+      let+ phi = apply dexpr phi in
+      C_def_ty {arity; phi}
+    | [`Text "dty.abs"; `Int arity; phi] ->
+      let+ phi = apply dexpr phi in
+      C_def_ty_abs {arity; phi}
+    | [`Text "dty.repr"; `Int arity; phi] ->
+      let+ phi = apply dexpr phi in
+      C_def_ty_repr {arity; phi}
+    | [`Text "th.param"; ty_vars; ty] ->
+      let+ ty_vars = apply (list dvar) ty_vars and+ ty = apply dexpr ty in
+      C_def_theory_param {ty_vars; ty}
+    | [`Text "th.typaram"; `Int arity] ->
+      return @@ C_def_theory_ty_param {arity}
+    | [`Text "sko"; `Text name] ->
+      return @@ C_def_skolem {name}
+    | [`Text "sko.ty"; `Text name; `Int arity] ->
+      return @@ C_def_skolem_ty {name; arity}
+    | _ -> fail "expected const_def"
 end
 
 (** Storage key for a constant definition *)
@@ -493,11 +692,8 @@ module Const_def = struct
 
   let to_string = Fmt.to_string pp
 
-  let enc _ _ = assert false (* TODO *)
-
-  let dec _ =
-    let open CB.Dec in
-    return (C_def_magic "") (* FIXME *)
+  let enc = Util_enc_.enc_const_def
+  let dec = Util_dec_.dec_const_def
 
   let map ~f (def:t) : t =
     match def with
@@ -526,6 +722,7 @@ module Const = struct
     | C_arity of int
 
   let[@inline] pp out c = Fmt.string out (Cname.name c.c_name)
+  let[@inline] pp_cname out c = Cname.pp out c.c_name
   let[@inline] to_string c = Fmt.to_string pp c
   let[@inline] cname c = c.c_name
   let[@inline] name c = c.c_name.name
@@ -542,6 +739,9 @@ module Const = struct
   let pp_with_ty out c =
     Fmt.fprintf out "`@[%a@ : %a@]`"
       Cname.pp_name c.c_name expr_pp_ c.c_ty
+
+  let enc = Util_enc_.enc_const
+  let dec = Util_dec_.dec_const
 
   let[@inline] eq ctx = Lazy.force ctx.ctx_eq_c
   let[@inline] bool ctx = Lazy.force ctx.ctx_bool_c
@@ -576,15 +776,9 @@ module Const = struct
     | C_def_skolem _ | C_def_skolem_ty _
     | C_def_magic _ -> false
 
-  (* used to compute some cnames independently of a ctx *)
-  let cname_of_def ~name ~def : Cname.t =
-    let chash = Util_chash_.hash_const_def_ ~name def in
-    Cname.make name chash
-
-  let cname_magic_ name = cname_of_def ~name ~def:(C_def_magic name)
-  let cname_bool = cname_magic_ id_bool
-  let cname_eq = cname_magic_ id_eq
-  let cname_select = cname_magic_ id_select
+  let cname_bool = Util_chash_.cname_bool
+  let cname_eq = Util_chash_.cname_eq
+  let cname_select = Util_chash_.cname_select
 
   (* make a constant *)
   let make (ctx:ctx) ~def ?chash name args ty : t =
@@ -632,6 +826,9 @@ module Var = struct
     if expr_eq a.v_ty b.v_ty
     then String.compare a.v_name b.v_name
     else expr_compare a.v_ty b.v_ty
+
+  let enc = Util_enc_.enc_var
+  let dec = Util_dec_.dec_var
 
   module AsKey = struct
     type nonrec t = t
@@ -740,7 +937,8 @@ module Expr = struct
     );
     e_h
 
-  let () = Expr0.make_expr_ := make_
+  let enc = Util_enc_.enc_expr
+  let dec = Util_dec_.dec_expr
 
   let kind ctx = Lazy.force ctx.ctx_kind
   let type_ ctx = Lazy.force ctx.ctx_type
@@ -1133,6 +1331,23 @@ module Expr = struct
 
   let lambda_l ctx = CCList.fold_right (lambda ctx)
 
+  let () =
+    let module M = struct
+      type 'a with_ctx = ctx -> 'a
+      let type_ = type_
+      let bool = bool
+      let select = select
+      let eq = eq
+      let lambda_db = lambda_db
+      let box = box
+      let arrow = arrow
+      let app = app
+      let var = var
+      let const = const
+      let bvar = bvar
+    end in
+    Expr0.make_ := Some (module M)
+
   let unfold_app = unfold_app
 
   let[@inline] unfold_eq e =
@@ -1213,6 +1428,30 @@ module Subst = struct
     in
     is_renaming_ self.ty && is_renaming_ self.m
 
+  let enc enc (self:t) =
+    let open CB.Enc in
+    let lt =
+      Var.Map.to_iter self.m
+      |> Iter.map (fun (v,t) -> Var.enc enc v, Util_enc_.enc_expr enc t)
+      |> Iter.to_rev_list |> map
+    and lty =
+      Var.Map.to_iter self.ty
+      |> Iter.map (fun (v,t) -> Var.enc enc v, Util_enc_.enc_expr enc t)
+      |> Iter.to_rev_list |> map
+    in
+    add_entry enc @@ map [
+      text "t", lt;
+      text "ty", lty;
+    ]
+
+  let dec ctx : t CB.Dec.t =
+    let open CB.Dec in
+    let d_map = map (Util_dec_.dec_var ctx) (Util_dec_.dec_expr ctx) in
+    let+ m = field "t" d_map
+    and+ ty = field "ty" d_map in
+    let m = Var.Map.of_list m and ty = Var.Map.of_list ty in
+    { m; ty }
+
   let[@inline] bind_uncurry_ s (x,t) = bind s x t
   let of_list = List.fold_left bind_uncurry_ empty
   let of_iter = Iter.fold bind_uncurry_ empty
@@ -1264,6 +1503,8 @@ module Sequent = struct
   let[@inline] hyps g = g.hyps
   let[@inline] hyps_iter g = Expr_set.to_iter g.hyps
   let[@inline] hyps_l g = Expr_set.to_list g.hyps
+
+  let enc = Util_enc_.enc_seq
 
   let iter_exprs self =
     Iter.cons (concl self) (hyps_iter self)
@@ -1951,12 +2192,15 @@ module Theory = struct
         then Error.failf (fun k->k"theory `%a` comes from a different context" pp_name th))
       l
 
-  let union_const_map_ ~what m1 m2 =
+  let union_const_map_ ctx ~what m1 m2 =
     Name_k_map.union
       (fun (_,n) c1 c2 ->
          if not (Const.equal c1 c2) then (
-           Error.failf (fun k->k"incompatible %s constant `%a`: %a vs %a"
-                      what Fmt.string n Const.pp c1 Const.pp c2)
+           let d1 = Const.get_def_exn ctx c1 in
+           let d2 = Const.get_def_exn ctx c2 in
+           Error.failf (fun k->k"incompatible %s constant `%a`: %a vs %a@ :def1 %a@ :def2 %a"
+                      what Fmt.string n Const.pp_cname c1 Const.pp_cname c2
+                      Const_def.pp d1 Const_def.pp d2)
          );
          Some c1)
       m1 m2
@@ -1975,10 +2219,10 @@ module Theory = struct
     List.iter
       (fun th ->
         self.theory_in_constants <-
-          union_const_map_ ~what:"assumed"
+          union_const_map_ ctx ~what:"assumed"
             self.theory_in_constants th.theory_in_constants;
         self.theory_defined_constants <-
-          union_const_map_ ~what:"defined"
+          union_const_map_ ctx ~what:"defined"
             self.theory_defined_constants th.theory_defined_constants;
         List.iter (fun th -> Thm.Tbl.replace in_th th ()) th.theory_in_theorems;
         List.iter (fun th -> Thm.Tbl.replace out_th th ()) th.theory_defined_theorems;

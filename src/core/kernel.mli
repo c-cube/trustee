@@ -74,10 +74,6 @@ module Const : sig
 
   val get_def : ctx -> t -> def option
   val get_def_exn : ctx -> t -> def
-
-  (* TODO
-  include Sigs.SER with type t := t and type state := unit
-  *)
 end
 
 (** Constant definitions.
@@ -88,7 +84,7 @@ module Const_def : sig
   type t = const_def
 
   include PP with type t := t
-  include Sigs.SER with type t := t and type state := ctx
+  include Sigs.SER1 with type t := t and type state := ctx
 
   val approx_def : t -> [`Other | `Param | `Ty_def of expr | `Def of expr]
   (** An approximation of the definition *)
@@ -132,9 +128,7 @@ module Var : sig
   include Sigs.PP with type t := t
   val pp_with_ty : t Fmt.printer
 
-  (* TODO
-  include Sigs.SER with type t := t and type state := ctx
-  *)
+  include Sigs.SER1 with type t := t and type state := ctx
 
   module Set : CCSet.S with type elt = t
   module Map : CCMap.S with type key = t
@@ -154,9 +148,7 @@ module Subst : sig
   include Sigs.PP with type t := t
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
-  (* TODO
-  include Sigs.SER with type t := t and type state := ctx
-  *)
+  include Sigs.SER1 with type t := t and type state := ctx
   val find_exn : var -> t -> expr
   val empty : t
   val is_empty : t -> bool
@@ -193,9 +185,7 @@ module Expr : sig
   include Sigs.HASH with type t := t
   include Sigs.COMPARE with type t := t
   include Sigs.PP with type t := t
-  (* TODO
-  include Sigs.SER with type t := t and type state := ctx
-  *)
+  include Sigs.SER1 with type t := t and type state := ctx
 
   val pp_depth : max_depth:int -> t Fmt.printer
   (** Print the term and insert ellipsis in subterms above given depth.

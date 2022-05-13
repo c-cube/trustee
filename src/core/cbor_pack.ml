@@ -1,4 +1,5 @@
 
+module Fmt = CCFormat
 module Cbor = CBOR.Simple
 
 type cbor =
@@ -23,6 +24,11 @@ type t = {
 }
 
 type cbor_pack = t
+
+let pp out (self:t) : unit =
+  Fmt.fprintf out "{@[<v>h=[@[<v>";
+  Vec.iteri (fun i v -> Fmt.fprintf out "%d: %s@," i (Cbor.to_diagnostic v)) self.h;
+  Fmt.fprintf out "@]];@ k=%s@;<1 -1>@]}" (Cbor.to_diagnostic self.k)
 
 let ptr_tag = 6
 
@@ -92,6 +98,10 @@ module Dec = struct
 
   let return x = {decode=fun _ _ _ -> x}
 
+  let delay f : _ t = {
+    decode=fun dec path c -> (f()).decode dec path c
+  }
+
   let fail s = {
     decode=fun _ path _ -> error path s
   }
@@ -124,7 +134,18 @@ module Dec = struct
         List.mapi
           (fun i x -> d.decode dec (I i::path) x)
           l
-      | _ -> error path "expected bool"
+      | _ -> error path "expected list"
+  }
+
+  let map dk dv = {
+    decode=fun dec path c ->
+      let c = deref dec path c in
+      match c with
+      | `Map l ->
+        List.mapi
+          (fun i (k,v) -> dk.decode dec path k, dv.decode dec path v)
+          l
+      | _ -> error path "expected map"
   }
 
   let text = {
@@ -153,7 +174,7 @@ module Dec = struct
           | exception Not_found ->
             errorf path "cannot find field %S" key
         end
-      | _ -> error path "expected map"
+      | _ -> error path "expected map with string keys"
   }
 
   let fix f =
@@ -165,6 +186,10 @@ module Dec = struct
 
   let apply d c = {
     decode=fun dec path _ -> d.decode dec path c
+  }
+
+  let apply_l d cs = {
+    decode=fun dec path _ -> List.map (d.decode dec path) cs
   }
 
   let (let+) x f = {
@@ -190,8 +215,8 @@ module Dec = struct
     try Ok (p.decode cb [] cb.k)
     with Error (path, msg) ->
       let msg =
-        Format.asprintf "cbor_pack.Dec.error: %s@ path: %a"
-          msg pp_path path in
+        Format.asprintf "cbor_pack.Dec.error: %s@ (path: %a)@ (in: %a)"
+          msg pp_path path pp cb in
       Error msg
 
 end
