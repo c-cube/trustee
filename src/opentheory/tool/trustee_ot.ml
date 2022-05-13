@@ -100,6 +100,9 @@ let () =
   Arg.parse opts (fun _ -> failwith "invalid option") "trustee_ot [option*]";
   if !color then Fmt.set_color_default true;
   try main ~dir:!dir ~serve:!serve ~port:!port ()
-  with Trustee_core.Error.E err as exn ->
+  with
+  | Failure s ->
+    Fmt.eprintf "%s@." s;exit 1
+  | Trustee_core.Error.E err ->
     Fmt.eprintf "%a@." Trustee_core.Error.pp err;
-    raise exn
+    exit 1
