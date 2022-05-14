@@ -12,6 +12,7 @@ module Chash = Chash
 module Cname = Cname
 module Storage = Storage
 module LRU = LRU
+module Xdg = Xdg
 
 module Conv = Conv
 module Unif = Unif

@@ -55,7 +55,7 @@ and const = {
   c_name : Cname.t;
   c_args: const_args;
   c_ty: ty; (* free vars are [vs] if [c_args = C_ty_vars vs] *)
-  c_concrete: bool; (* if true, def can be erased *) (* TODO *)
+  c_concrete: bool; (* if true, def can be erased *)
 }
 and ty_const = const
 
@@ -794,7 +794,7 @@ module Const = struct
     let c_name = Cname.make name chash in
     let is_concrete = is_concrete_def def in
     if ctx.ctx_store_concrete_definitions || not is_concrete then (
-      Storage.store ctx.ctx_storage ~key:(key_const_def c_name)
+      Storage.store ctx.ctx_storage ~erase:false ~key:(key_const_def c_name)
         Const_def.enc def;
     );
     { c_name; c_concrete=is_concrete; c_ty=ty; c_args=args; }
@@ -1538,8 +1538,10 @@ module Ctx = struct
 
   let uid_ = ref 0
 
+  let lru_size_ = try int_of_string "LRU_SIZE" with _ -> 128
+
   let create
-      ?(def_cache_size=128)
+      ?(def_cache_size=lru_size_)
       ?(storage=Storage.in_memory ())
       ?(store_proofs=false)
       ?(store_concrete_definitions=false)

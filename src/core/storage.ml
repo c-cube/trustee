@@ -28,9 +28,9 @@ let get (self:t) ~key dec : _ option =
 (** Store value for [key] in storage.
     @param erase if true, the key is added unconditionally; if false, it
     is added only if not present already (default: false) *)
-let store (self:t) ?(erase=false) ~key enc x : unit =
+let store (self:t) ?erase ~key enc x : unit =
   let (module M) = self in
-  M.store ~key enc x
+  M.store ~key ?erase enc x
 
 (** Stores data in an in-memory table *)
 let in_memory ?(size=1024) () : t =
