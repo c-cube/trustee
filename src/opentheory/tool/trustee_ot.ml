@@ -35,6 +35,7 @@ let check = ref []
 let check_all = ref false
 let progress_ = ref false
 let store_proofs_ = ref false
+let use_sqlite = ref false
 
 (* TODO: storage: use sqlite *)
 
@@ -49,7 +50,10 @@ let main ~dir ~serve ~port () =
   let theories = Iter.of_list idx.Idx.theories |> Iter.map snd in
 
   (* TODO: use param for store_proofs *)
-  let ctx = K.Ctx.create ~store_proofs:!store_proofs_
+  let storage =
+    if !use_sqlite then Some (Trustee_sqlite.storage_xdg_cache()) else None in
+  let ctx = K.Ctx.create
+  ?storage ~store_proofs:!store_proofs_
     ~store_concrete_definitions:true () in
   let st =
     let progress_bar = !progress_ in
@@ -91,6 +95,7 @@ let () =
     "-d", Arg.Int set_debug, " set debug level";
     "--store-proofs", Arg.Set store_proofs_, " enable storage of proofs (takes a lot of ram)";
     "--progress", Arg.Set progress_, " progress bar";
+    "--sqlite", Arg.Set use_sqlite, " use Sqlite as main storage";
     "--serve", Arg.Set serve, " launch web server";
     "--port", Arg.Set_int port, " set port for web server";
     "-p", Arg.Set_int port, " set port for web server";
