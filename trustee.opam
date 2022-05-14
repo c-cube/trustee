@@ -22,6 +22,7 @@ depends: [
   "qcheck" {with-test}
   "odoc" {with-doc}
 ]
+depopts: ["sqlite3"]
 build: [
   ["dune" "subst"] {pinned}
   [
