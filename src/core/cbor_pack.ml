@@ -1,4 +1,5 @@
 
+let (let@) f x = f x
 module Fmt = CCFormat
 module Cbor = CBOR.Simple
 module Int_tbl = CCHashtbl.Make(CCInt)
@@ -303,6 +304,7 @@ module Dec = struct
 end
 
 let encode (enc:'a Enc.t) (x:'a) : Cbor.t =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"encode" () in
   let encoder = Enc.init() in
   let key = enc encoder x in
   let cb = Enc.finalize encoder ~key in
@@ -319,6 +321,7 @@ let encode_to_string enc x : string =
   Cbor.encode @@ encode enc x
 
 let decode (dec:'a Dec.t) (cbor:Cbor.t) : ('a, _) result =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"decode" () in
   match cbor with
   | `Map l ->
     begin match

@@ -3,4 +3,4 @@
  (public_name trustee.sqlite)
  (optional)
  (flags :standard -open Trustee_core)
- (libraries trustee.core sqlite3 unix))
+ (libraries trustee.core sqlite3 unix tracy))

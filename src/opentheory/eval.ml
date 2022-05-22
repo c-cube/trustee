@@ -134,6 +134,9 @@ let add_theory_items (idx:Idx.t) (th:K.Theory.t) =
 
 (* check a theory *)
 let rec eval_rec_ (self:state) (n:string) : K.Theory.t * eval_info =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"eval-rec" () in
+  Tracy.add_text _sp n;
+
   let th = Idx.find_thy self.idx n in
   let uv_name = Thy_file.name th in  (* un-versioned name *)
 
@@ -187,6 +190,10 @@ and eval_rec_real_ (self:state) uv_name (th:Thy_file.t) : K.Theory.t * eval_info
 
 (* check a sub-entry of a theory file *)
 and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t * eval_info =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"check-sub" () in
+  Tracy.add_text_f _sp (fun k->k"theory.name %S" th.name);
+  Tracy.add_text_f _sp (fun k->k"sub.name %S" sub.sub_name);
+
   (* process imports *)
   let imports, subs =
     let l = List.map (fun i -> i, process_import_ ~requires self th i)
@@ -230,10 +237,12 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t * eval_
         if imports=[] && Str_map.is_empty interp then (
           th_p, ei0
         ) else if imports=[] then (
+          let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"instantiate" () in
           K.Theory.instantiate ~interp:interp th_p,
           mk_ei ~time:(now() -. t0) ~info:"instantiate"
             ~sub:(("th", ei0) :: subs) ()
         ) else (
+          let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"compose" () in
           K.Theory.compose ~interp:interp imports th_p,
           mk_ei ~time:(now() -. t0)
             ~info:(spf "compose %s with [%s]" p
@@ -273,6 +282,8 @@ and check_sub_ (self:state) ~requires th (sub:Thy_file.sub) : K.Theory.t * eval_
 
 (* process an import of a sub, by checking it recursively now *)
 and process_import_ (self:state) ~requires th (name:string) : K.Theory.t * _ =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"process-import" () in
+  Tracy.add_text _sp name;
   let sub =
     try List.find (fun sub -> sub.Thy_file.sub_name=name) th.Thy_file.subs
     with Not_found -> Trustee_core.Error.failf (fun k->k"cannot find sub-theory `%s`" name)

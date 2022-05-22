@@ -16,12 +16,14 @@ type t = (module S)
 
 (** Is [key] in the storage? *)
 let mem (self:t) ~key : bool =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"mem" () in
   let (module M) = self in
   M.mem ~key
 
 (** Get the value for [key] from storage, using [dec] to
     deserialize it *)
 let get (self:t) ~key dec : _ option =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"get" () in
   let (module M) = self in
   M.get ~key dec
 
@@ -29,6 +31,7 @@ let get (self:t) ~key dec : _ option =
     @param erase if true, the key is added unconditionally; if false, it
     is added only if not present already (default: false) *)
 let store (self:t) ?erase ~key enc x : unit =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"store" () in
   let (module M) = self in
   M.store ~key ?erase enc x
 

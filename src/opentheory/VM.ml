@@ -672,8 +672,12 @@ let has_empty_stack self =
   match self.stack with [] -> true | _ -> false
 
 let parse_and_check_art_exn ~name (self:t) (input:input) : K.Theory.t * Article.t =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"parse-and-check-art" () in
+  Tracy.add_text _sp name;
+
   Log.debugf 5 (fun k->k"(@[open-theory.parse-and-check-art@ :name %s@])" name);
   Error.guard (Error.wrapf "opentheory.parse-and-check-art@ :name %s" name) @@ fun () ->
+
   let line_ = ref 0 in
 
   (* how to parse one line *)
@@ -709,10 +713,14 @@ let parse_and_check_art_exn ~name (self:t) (input:input) : K.Theory.t * Article.
         end
     end;
   in
+
   let th =
     K.Theory.with_ self.ctx ~name @@ fun th ->
     input.iter_lines (process_line th);
   in
+
+  Tracy.add_value _sp (Int64.of_int !line_); (* line count *)
+
   let art = article self in
   self.art <- Article.empty; (* clear article for next file, if any *)
   th, art

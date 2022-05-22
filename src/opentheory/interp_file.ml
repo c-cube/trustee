@@ -68,6 +68,7 @@ let item_of_string s =
   | Error e -> Error (Trustee_core.Error.make e)
 
 let of_string s =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"of-string" () in
   match P.parse_string parse s with
   | Ok x -> Ok x
   | Error e -> Error (Trustee_core.Error.make e)

@@ -77,6 +77,7 @@ let main ~dir ~serve ~port () =
 (* TODO: use Logs *)
 
 let () =
+  if Sys.getenv_opt "TRACY"=Some "1" then Tracy.enable();
   let dir = ref "" in
   let color = ref true in
   let serve = ref false in

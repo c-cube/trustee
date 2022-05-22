@@ -36,6 +36,9 @@ module G = struct
 end
 
 let list_dir dir : t =
+  let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"list-dir" () in
+  Tracy.add_text _sp dir;
+
   let errors = ref [] in
   let theories = ref [] in
   let interp = ref [] in
@@ -45,6 +48,9 @@ let list_dir dir : t =
   let g = CCIO.File.walk dir in
 
   let parse_thy file =
+    let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"parse-thy" () in
+    Tracy.add_text _sp file;
+
     let dir = Filename.dirname file in
     try
       if CCString.prefix ~pre:"group" (Filename.basename file)
@@ -62,6 +68,9 @@ let list_dir dir : t =
   in
 
   let parse_interp file =
+    let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"parse-interp" () in
+    Tracy.add_text _sp file;
+
     let name = Filename.basename file in
     try
       let s = CCIO.File.read_exn file in
