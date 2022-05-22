@@ -48,6 +48,14 @@ module Enc : sig
   val finalize : encoder -> key:cbor -> cbor_pack
 
   type 'a t = encoder -> 'a -> cbor
+
+  type 'a key
+
+  val make_key : (module Hashtbl.HashedType with type t = 'a) -> 'a key
+
+  val memo : 'a key -> 'a t -> 'a t
+  (** Memoized encoder using a key for finding if an entry exists
+    for this value *)
 end
 
 module Dec : sig
@@ -80,6 +88,12 @@ module Dec : sig
   val apply_l : 'a t -> cbor list -> 'a list t
 
   val delay : (unit -> 'a t) -> 'a t
+
+  type 'a key
+
+  val make_key : unit -> 'a key
+
+  val memo : 'a key -> 'a t -> 'a t
 
   val (let+) : 'a t -> ('a -> 'b) -> 'b t
 

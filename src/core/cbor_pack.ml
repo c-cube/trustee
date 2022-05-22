@@ -1,6 +1,7 @@
 
 module Fmt = CCFormat
 module Cbor = CBOR.Simple
+module Int_tbl = CCHashtbl.Make(CCInt)
 
 type cbor =
   [ `Array of cbor list
@@ -35,9 +36,35 @@ let ptr_tag = 6
 module Enc = struct
   type ptr = cbor
 
+  type key_view = ..
+  module type KEY = sig
+    type t
+    val n : int
+    val equal : t -> t -> bool
+    val hash : t -> int
+    type key_view += E of t
+  end
+
+  type 'a key = (module KEY with type t = 'a)
+  type any_key = Any_key : 'a key * key_view -> any_key
+
+  module Key_tbl = Hashtbl.Make(struct
+    type t = any_key
+    let equal (Any_key ((module K1), e1)) (Any_key ((module K2), e2)) =
+      K1.n = K2.n &&
+      (match e1, e2 with
+      | K1.E v1, K1.E v2 -> K1.equal v1 v2
+      | _ -> false)
+    let hash (Any_key ((module K1), e1)) =
+      match e1 with
+      | K1.E v1 -> CCHash.combine2 K1.n (K1.hash v1)
+      | _ -> assert false
+  end)
+
   type encoder = {
     eh: cbor Vec.t;
     hashcons: (cbor,ptr) Hashtbl.t;
+    cache: ptr Key_tbl.t;
   }
 
   type 'a t = encoder -> 'a -> cbor
@@ -60,10 +87,31 @@ module Enc = struct
   let init () = {
     eh=Vec.create();
     hashcons=Hashtbl.create 16;
+    cache=Key_tbl.create 8;
   }
 
   let finalize (self:encoder) ~key : cbor_pack =
     { h=self.eh; k=key }
+
+  let n_ = ref 0
+
+  let make_key (type a) (module T: Hashtbl.HashedType with type t = a) : a key =
+    let module K = struct
+      include T
+      let n= !n_
+      type key_view += E of a
+    end in
+    incr n_;
+    (module K)
+
+  let memo (type a) ((module Key : KEY with type t = a) as key) e (enc:encoder) x =
+    let k = Any_key (key, Key.E x) in
+    match Key_tbl.find_opt enc.cache k with
+    | Some ptr -> ptr
+    | None ->
+      let ptr = e enc x in
+      Key_tbl.add enc.cache k ptr;
+      ptr
 end
 
 module Dec = struct
@@ -80,8 +128,29 @@ module Dec = struct
     Format.pp_print_list ~pp_sep:(fun out () -> Format.fprintf out ".")
       pp_path_item out p
 
+  type key_view = ..
+
+  module type KEY = sig
+    type t
+    type key_view += E of t
+  end
+
+  type 'a key = (module KEY with type t = 'a)
+
+  let make_key (type a) () : _ key =
+    let module M = struct
+      type t = a
+      type key_view += E of a
+    end in
+    (module M)
+
+  type decoder = {
+    cb: cbor_pack;
+    cache: (cbor, key_view) Hashtbl.t;
+  }
+
   type 'a t = {
-    decode: cbor_pack -> path -> cbor -> 'a
+    decode: decoder -> path -> cbor -> 'a
   } [@@unboxed]
 
   exception Error of path * string
@@ -89,10 +158,10 @@ module Dec = struct
   let errorf path fmt = Format.kasprintf (error path) fmt
 
   (* dereference heap pointer *)
-  let rec deref dec path (c:cbor) = match c with
+  let rec deref (dec:decoder) path (c:cbor) = match c with
     | `Tag (t, `Int x) when t == ptr_tag ->
-      if x < Vec.size dec.h
-      then deref dec path (Vec.get dec.h x)
+      if x < Vec.size dec.cb.h
+      then deref dec path (Vec.get dec.cb.h x)
       else errorf path "cannot dereference pointer %d" x
     | c -> c
 
@@ -211,8 +280,21 @@ module Dec = struct
       (x,y)
   }
 
+  let memo (type a) (((module Key) : a key)  ) dec0 : _ t = {
+    decode=fun dec path c ->
+      let c = deref dec path c in
+      match Hashtbl.find_opt dec.cache c with
+      | Some (Key.E v) -> v
+      | Some _
+      | None ->
+        let v = dec0.decode dec path c in
+        Hashtbl.add dec.cache c (Key.E v);
+        v
+  }
+
   let run (p:_ t) cb : _ result =
-    try Ok (p.decode cb [] cb.k)
+    let decoder = {cb; cache=Hashtbl.create 8} in
+    try Ok (p.decode decoder [] cb.k)
     with Error (path, msg) ->
       let msg =
         Format.asprintf "cbor_pack.Dec.error: %s@ (path: %a)@ (in: %a)"
