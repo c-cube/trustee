@@ -494,30 +494,34 @@ end
 module Util_enc_ = struct
   open CB.Enc
 
+  let key_expr = make_key (module Expr0)
+
   let rec enc_var enc (v:var) =
     add_entry enc (list [text v.v_name; enc_expr enc v.v_ty])
 
   and enc_expr enc (e:expr) : ptr =
     let open Expr0 in
     let recurse = enc_expr enc in
-    match view e with
-    | E_kind -> assert false
-    | E_type -> add_entry enc @@ text "type"
-    | E_const (c,[]) when Cname.equal c.c_name Util_chash_.cname_bool ->
-      add_entry enc @@ text "bool"
-    | E_const (c,[a]) when Cname.equal c.c_name Util_chash_.cname_select ->
-      add_entry enc @@ list [text "select"; recurse a]
-    | E_const (c,[a]) when Cname.equal c.c_name Util_chash_.cname_eq ->
-      add_entry enc @@ list [text "="; recurse a]
-    | E_const (c,args) ->
-      add_entry enc @@ list [text "c"; enc_const enc c; list (List.map recurse args)]
-    | E_lam (str, ty, body) ->
-      add_entry enc @@ list [text "l"; text str; recurse ty; recurse body]
-    | E_app (f,a) -> add_entry enc @@ list [text "@"; recurse f; recurse a]
-    | E_arrow (a,b) -> add_entry enc @@ list [text ">"; recurse a; recurse b]
-    | E_var v -> add_entry enc @@ list [text "v"; enc_var enc v]
-    | E_bound_var v -> add_entry enc @@ list [text "bv"; int v.bv_idx; recurse v.bv_ty]
-    | E_box seq -> add_entry enc @@ list [text "box"; enc_seq enc seq]
+    let enc_expr_nonrec enc e =
+      match view e with
+      | E_kind -> assert false
+      | E_type -> add_entry enc @@ text "type"
+      | E_const (c,[]) when Cname.equal c.c_name Util_chash_.cname_bool ->
+        add_entry enc @@ text "bool"
+      | E_const (c,[a]) when Cname.equal c.c_name Util_chash_.cname_select ->
+        add_entry enc @@ list [text "select"; recurse a]
+      | E_const (c,[a]) when Cname.equal c.c_name Util_chash_.cname_eq ->
+        add_entry enc @@ list [text "="; recurse a]
+      | E_const (c,args) ->
+        add_entry enc @@ list [text "c"; enc_const enc c; list (List.map recurse args)]
+      | E_lam (str, ty, body) ->
+        add_entry enc @@ list [text "l"; text str; recurse ty; recurse body]
+      | E_app (f,a) -> add_entry enc @@ list [text "@"; recurse f; recurse a]
+      | E_arrow (a,b) -> add_entry enc @@ list [text ">"; recurse a; recurse b]
+      | E_var v -> add_entry enc @@ list [text "v"; enc_var enc v]
+      | E_bound_var v -> add_entry enc @@ list [text "bv"; int v.bv_idx; recurse v.bv_ty]
+      | E_box seq -> add_entry enc @@ list [text "box"; enc_seq enc seq]
+    in memo key_expr enc_expr_nonrec enc e
 
   and enc_const enc (c:const) : ptr =
     let {c_name; c_concrete; c_args; c_ty} = c in
@@ -564,6 +568,9 @@ end
 module Util_dec_ = struct
   open CB.Dec
 
+  let key_expr : expr key = make_key()
+  let key_const : const key = make_key()
+
   let rec dec_var ctx : var t =
     let* l = list value in
     match l with
@@ -572,7 +579,7 @@ module Util_dec_ = struct
     | _ -> fail "expected var"
 
   and dec_expr ctx : expr t =
-    delay @@ fun () ->
+    memo key_expr @@ delay @@ fun () ->
     let recurse = dec_expr ctx in
 
     let (module Mk : Expr0.MK) = match !Expr0.make_ with
@@ -612,6 +619,7 @@ module Util_dec_ = struct
     | _ -> fail (Fmt.asprintf "expected expr, got %s" (CBOR.Simple.to_diagnostic v))
 
   and dec_const ctx : const t =
+    memo key_const @@
     let dec_args =
       let* l = list value in
       match l with
