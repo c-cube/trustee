@@ -37,12 +37,16 @@ let storage (file:string) : Storage.t =
   DB.busy_timeout db 3_000;
   init_db_ db;
 
+  let mem_stmt =
+    DB.prepare db
+      {| SELECT EXISTS (SELECT * FROM trustee_storage WHERE key = ?); |}
+  in
+
   let module M = struct
     let mem ~key : bool =
       (*Format.printf "MEM %S@." key;*)
-      let@ stmt = with_stmt db
-          {| SELECT EXISTS (SELECT * FROM trustee_storage WHERE key = ?); |}
-      in
+      let stmt = mem_stmt in
+      DB.reset stmt |> check_rc_;
       DB.bind_text stmt 1 key |> check_rc_;
       let rc = DB.step stmt in
       assert (rc = DB.Rc.ROW);
