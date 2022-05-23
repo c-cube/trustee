@@ -3,6 +3,9 @@ OPTS?=-j 3 --profile=release
 all:
 	@dune build @all $(OPTS)
 
+opentheory:
+	@dune build @src/opentheory/all $(OPTS)
+
 WATCH?=@all
 watch:
 	@dune build $(OPTS) $(WATCH) -w
