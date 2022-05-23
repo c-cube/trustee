@@ -33,13 +33,21 @@ let now_ () = Unix.gettimeofday()
 
 let storage (file:string) : Storage.t =
   ignore (Sys.command (Filename.quote_command "mkdir" ["-p"; Filename.dirname file]): int);
-  let db = DB.db_open ~uri:false ~memory:false file in
+  let db = DB.db_open ~uri:false ~memory:false ~mutex:`NO file in
+  DB.exec db "pragma journal_mode=WAL;" |> check_rc_; (* WAL is often faster for insertion *)
   DB.busy_timeout db 3_000;
   init_db_ db;
 
   let mem_stmt =
     DB.prepare db
       {| SELECT EXISTS (SELECT * FROM trustee_storage WHERE key = ?); |}
+  in
+
+  let insert_stmt =
+    DB.prepare db {|
+      INSERT INTO trustee_storage VALUES (?1, ?2, ?3)
+      ON CONFLICT(key) DO UPDATE SET timestamp=max(timestamp, ?2);
+    |}
   in
 
   let module M = struct
@@ -71,10 +79,8 @@ let storage (file:string) : Storage.t =
       (*Format.printf "STORE %S@." key;*)
       let go = erase || not (mem ~key) in
       if go then (
-        let@ stmt = with_stmt db {|
-          INSERT INTO trustee_storage VALUES (?1, ?2, ?3)
-          ON CONFLICT(key) DO UPDATE SET timestamp=max(timestamp, ?2);
-        |} in
+        let stmt = insert_stmt in
+        DB.reset stmt |> check_rc_;
         DB.bind_text stmt 1 key |> check_rc_;
         DB.bind_double stmt 2 (now_()) |> check_rc_;
         DB.bind_blob stmt 3 (Cbor_pack.encode_to_string enc x) |> check_rc_;
