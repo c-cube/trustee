@@ -24,6 +24,7 @@ let mem (self:t) ~key : bool =
     deserialize it *)
 let get (self:t) ~key dec : _ option =
   let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"get" () in
+  Tracy.add_text _sp key;
   let (module M) = self in
   M.get ~key dec
 
@@ -32,6 +33,7 @@ let get (self:t) ~key dec : _ option =
     is added only if not present already (default: false) *)
 let store (self:t) ?erase ~key enc x : unit =
   let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"store" () in
+  Tracy.add_text _sp key;
   let (module M) = self in
   M.store ~key ?erase enc x
 

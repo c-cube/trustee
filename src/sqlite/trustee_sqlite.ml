@@ -72,6 +72,7 @@ let storage (file:string) : Storage.t =
         let data = DB.column_blob stmt 0 in
         let v =
           let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"decode" () in
+          Tracy.add_text_f _sp (fun k->k"size: %d" (String.length data));
           Cbor_pack.decode_string_exn dec data
         in
         Some v
@@ -93,6 +94,7 @@ let storage (file:string) : Storage.t =
           let@ _sp = Tracy.with_ ~file:__FILE__ ~line:__LINE__ ~name:"encode" () in
           Cbor_pack.encode_to_string enc x
         in
+        Tracy.add_text_f _sp (fun k->k"size: %d" (String.length data));
         DB.bind_blob stmt 3 data |> check_rc_;
         DB.step stmt |> check_rc_;
       )
