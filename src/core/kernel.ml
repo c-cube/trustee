@@ -570,6 +570,7 @@ module Util_dec_ = struct
 
   let key_expr : expr key = make_key()
   let key_const : const key = make_key()
+  let key_const_def : const_def key = make_key()
 
   let rec dec_var ctx : var t =
     let* l = list value in
@@ -644,6 +645,8 @@ module Util_dec_ = struct
   let dec_const_def ctx : const_def t =
     let dvar = dec_var ctx in
     let dexpr = dec_expr ctx in
+
+    memo key_const_def @@
     let* l = list value in
     match l with
     | [`Text "magic"; `Text str] ->

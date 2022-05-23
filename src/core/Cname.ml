@@ -32,6 +32,8 @@ let enc enc self =
 
 let dec =
   Cbor_pack.Dec.(
+    let key = make_key () in
+    memo key @@
     let* l = list value in
     match l with
     | [`Text name; chash] ->

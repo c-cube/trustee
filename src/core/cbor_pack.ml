@@ -282,7 +282,6 @@ module Dec = struct
 
   let memo (type a) (((module Key) : a key)  ) dec0 : _ t = {
     decode=fun dec path c ->
-      let c = deref dec path c in
       match Hashtbl.find_opt dec.cache c with
       | Some (Key.E v) -> v
       | Some _
