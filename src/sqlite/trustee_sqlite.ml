@@ -32,7 +32,7 @@ let init_db_ db =
 let now_ () = Unix.gettimeofday()
 
 let storage (file:string) : Storage.t =
-  ignore (Sys.command (Filename.quote_command "mkdir" ["-p"; Filename.dirname file]): int);
+  ignore (Sys.command (Printf.sprintf "mkdir -p %S" @@ Filename.dirname file): int);
   let db = DB.db_open ~uri:false ~memory:false ~mutex:`NO file in
   DB.exec db "pragma journal_mode=WAL;" |> check_rc_; (* WAL is often faster for insertion *)
   DB.busy_timeout db 3_000;
