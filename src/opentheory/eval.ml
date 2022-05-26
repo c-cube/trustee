@@ -114,7 +114,7 @@ let add_theory_items (idx:Idx.t) (th:K.Theory.t) =
   let consts =
     Iter.concat @@ Iter.of_list [
       (* constants in any sub-term *)
-      (exprs |> Iter.flat_map K.Expr.iter_dag'
+      (exprs |> Iter.flat_map (K.Expr.iter_dag' ~iter_ty:true)
        |> Iter.filter_map K.Expr.as_const |> Iter.map fst);
       (K.Theory.param_consts th |> Iter.of_list);
       (K.Theory.consts th |> Iter.of_list);
@@ -122,13 +122,13 @@ let add_theory_items (idx:Idx.t) (th:K.Theory.t) =
   in
 
   consts (fun c ->
-      let h = K.Const.cr_hash c in
-      K.Cr_hash.Tbl.replace idx.Idx.by_hash h (Idx.H_const c));
+      let h = K.Const.chash c in
+      Chash.Tbl.replace idx.Idx.by_hash h (Idx.H_const c));
 
   thms (fun th ->
       K.Thm.make_main_proof th;
-      let h = K.Thm.cr_hash th in
-      K.Cr_hash.Tbl.replace idx.Idx.by_hash h (Idx.H_thm th));
+      let h = K.Thm.chash th in
+      Chash.Tbl.replace idx.Idx.by_hash h (Idx.H_thm th));
 
   ()
 

@@ -21,7 +21,7 @@ type t = {
   interp_by_name: Interp_file.t Str_tbl.t;
   articles: path Str_tbl.t; (* basename -> path *)
   errors: (path * Trustee_core.Error.t) list;
-  by_hash: hashed_item K.Cr_hash.Tbl.t;
+  by_hash: hashed_item Chash.Tbl.t;
 }
 
 val list_dir : path -> t

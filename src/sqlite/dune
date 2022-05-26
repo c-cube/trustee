@@ -1,0 +1,6 @@
+(library
+ (name trustee_sqlite)
+ (public_name trustee.sqlite)
+ (optional)
+ (flags :standard -open Trustee_core)
+ (libraries trustee.core sqlite3 unix))

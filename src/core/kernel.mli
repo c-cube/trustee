@@ -6,6 +6,7 @@ open Sigs
 type ctx
 type expr
 type ty = expr
+type const_def
 type const
 type ty_const = const
 type thm
@@ -45,22 +46,11 @@ type expr_view =
   | E_arrow of expr * expr
   | E_box of sequent (* reified sequent *)
 
-(** Cryptographic hash *)
-module Cr_hash : sig
-  type t
-
-  include PP with type t := t
-  include EQ with type t := t
-  include HASH with type t := t
-
-  val of_string_exn : string -> t
-
-  module Tbl : CCHashtbl.S with type key = t
-end
-
 (** Logic constants *)
 module Const : sig
   type t = const
+  type def = const_def
+
   include Sigs.EQ with type t := t
   include PP with type t := t
 
@@ -69,26 +59,41 @@ module Const : sig
     | C_arity of int
 
   val name : t -> string
+  val cname : t -> Cname.t
+  val chash : t -> Chash.t
   val args : t -> args
   val ty : t -> ty
 
   val pp_args : args Fmt.printer
   val pp_with_ty : t Fmt.printer
 
-  val cr_hash : t -> Cr_hash.t
-
   val eq : ctx -> t
   val bool : ctx -> t
   val select : ctx -> t
   (** Choice constant *)
 
-  val is_eq_to_bool : t -> bool
-  val is_eq_to_eq : t -> bool
+  val get_def : ctx -> t -> def option
+  val get_def_exn : ctx -> t -> def
+end
 
-  val approx_def : t -> [`Other | `Erased | `Param | `Ty_def of expr | `Def of expr]
+(** Constant definitions.
+
+    The definition of a constant is saved separately and might be saved
+    on disk, erased (forgotten), stored remotely, etc. *)
+module Const_def : sig
+  type t = const_def
+
+  include PP with type t := t
+  include Sigs.SER1 with type t := t and type state := ctx
+
+  val approx_def : t -> [`Other | `Param | `Ty_def of expr | `Def of expr]
   (** An approximation of the definition *)
 end
 
+(** Proofs.
+
+  A proof is a series of steps that can be used to construct a theorem
+  using the base rules of HOL, and other existing theorems. *)
 module Proof : sig
   type arg =
     | Pr_expr of expr
@@ -123,6 +128,8 @@ module Var : sig
   include Sigs.PP with type t := t
   val pp_with_ty : t Fmt.printer
 
+  include Sigs.SER1 with type t := t and type state := ctx
+
   module Set : CCSet.S with type elt = t
   module Map : CCMap.S with type key = t
   module Tbl : CCHashtbl.S with type key = t
@@ -141,6 +148,7 @@ module Subst : sig
   include Sigs.PP with type t := t
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
+  include Sigs.SER1 with type t := t and type state := ctx
   val find_exn : var -> t -> expr
   val empty : t
   val is_empty : t -> bool
@@ -171,12 +179,13 @@ module Expr : sig
     | E_arrow of expr * expr
     | E_box of sequent (* reified sequent *)
 
-  val cr_hash : t -> Cr_hash.t
+  val chash : t -> Chash.t
 
   include Sigs.EQ with type t := t
   include Sigs.HASH with type t := t
   include Sigs.COMPARE with type t := t
   include Sigs.PP with type t := t
+  include Sigs.SER1 with type t := t and type state := ctx
 
   val pp_depth : max_depth:int -> t Fmt.printer
   (** Print the term and insert ellipsis in subterms above given depth.
@@ -222,10 +231,11 @@ module Expr : sig
   module Map : CCMap.S with type key = t
   module Tbl : CCHashtbl.S with type key = t
 
-  val iter_dag : f:(t -> unit) -> t -> unit
-  (** [iter_dag ~f e] calls [f] once on each unique subterm of [e]. *)
+  val iter_dag : iter_ty:bool -> f:(t -> unit) -> t -> unit
+  (** [iter_dag ~f e] calls [f] once on each unique subterm of [e].
+      @param iter_ty if true, also recurse in each subterm's type. *)
 
-  val iter_dag' : t -> t Iter.t
+  val iter_dag' : iter_ty:bool -> t -> t Iter.t
 
   type 'a with_ctx = ctx -> 'a
 
@@ -292,6 +302,9 @@ module Sequent : sig
   val iter_exprs : t -> Expr.t Iter.t
 
   include Sigs.PP with type t := t
+  (* TODO
+  include Sigs.SER with type t := t and type state := ctx
+  *)
 end
 
 (** Data returned by a new type definition *)
@@ -348,7 +361,7 @@ module Thm : sig
       are entirely made of fully concrete constants (as opposed
       to theory parameters) *)
 
-  val cr_hash : t -> Cr_hash.t
+  val chash : t -> Chash.t
 
   val proof : t -> Proof.t
   (** Recover stored proof. Actual proof are stored only
@@ -544,7 +557,17 @@ module Theory : sig
     interp:interpretation ->
     t -> t
   (** [instantiate ~interp theory] renames constants according to [interpr].
-      This can change the types of some terms if [interp] renames type constants. *)
+      This can change the types of some terms if [interp] renames type constants.
+
+      {b NOTE} to function properly, this requires that the context
+      the theory depends has real storage available, because interpreting
+      requires access to some definitions. The reason is that the {!Chash.t}
+      of a constant depends on its definition, and the definition can change
+      when interpreting a theory (since the parameters might also change),
+      therefore we need access to the definitions to change them.
+
+      @raise Error.E if definitions cannot be accessed.
+  *)
 
   val compose :
     ?interp:interpretation ->
@@ -573,9 +596,20 @@ module Ctx : sig
   type t = ctx
 
   val create :
-    ?erase_defs:bool ->
+    ?def_cache_size:int ->
+    ?storage:Storage.t ->
     ?store_proofs:bool ->
+    ?store_concrete_definitions:bool ->
     unit -> t
+  (** Create a new context.
+      @param storage storage backend for definitions, possibly proofs, etc.
+        By default we use the in-memory storage.
+      @param store_concrete_definitions if true, we store all constant
+        definitions using [storage]. If false (default) we only store
+        the definition of constants that depend on theory parameters, as it's
+        required for theory interpretations.
+      @param store_proofs if true and a real storage is provided,
+      theorems' proofs are stored in the storage. *)
 
   val pledge_no_more_axioms : t -> unit
   (** Forbid the creation of new axioms. From now on, this logical context

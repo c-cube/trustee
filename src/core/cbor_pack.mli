@@ -48,6 +48,14 @@ module Enc : sig
   val finalize : encoder -> key:cbor -> cbor_pack
 
   type 'a t = encoder -> 'a -> cbor
+
+  type 'a key
+
+  val make_key : (module Hashtbl.HashedType with type t = 'a) -> 'a key
+
+  val memo : 'a key -> 'a t -> 'a t
+  (** Memoized encoder using a key for finding if an entry exists
+    for this value *)
 end
 
 module Dec : sig
@@ -73,7 +81,19 @@ module Dec : sig
 
   val list : 'a t -> 'a list t
 
+  val map : 'a t -> 'b t -> ('a * 'b) list t
+
   val apply : 'a t -> cbor -> 'a t
+
+  val apply_l : 'a t -> cbor list -> 'a list t
+
+  val delay : (unit -> 'a t) -> 'a t
+
+  type 'a key
+
+  val make_key : unit -> 'a key
+
+  val memo : 'a key -> 'a t -> 'a t
 
   val (let+) : 'a t -> ('a -> 'b) -> 'b t
 
@@ -84,4 +104,18 @@ module Dec : sig
   val run : 'a t -> cbor_pack -> ('a, string) result
 end
 
+val encode : 'a Enc.t -> 'a -> cbor
 
+val encode_to_string : 'a Enc.t -> 'a -> string
+
+val cbor_to_string : cbor -> string
+
+val decode : 'a Dec.t -> cbor -> ('a, string) result
+
+val decode_string : 'a Dec.t -> string -> ('a, string) result
+
+val decode_string_exn : 'a Dec.t -> string -> 'a
+(** Same as {!decode_string} but can raise
+    @raise Failure if decoding failed. *)
+
+val cbor_of_string : string -> cbor

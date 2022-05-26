@@ -26,6 +26,19 @@ module type PP = sig
   val to_string : t -> string
 end
 
+module type SER = sig
+  type t
+  val enc : t Cbor_pack.Enc.t
+  val dec : t Cbor_pack.Dec.t
+end
+
+module type SER1 = sig
+  type t
+  type state
+  val enc : t Cbor_pack.Enc.t
+  val dec : state -> t Cbor_pack.Dec.t
+end
+
 let pp_list ?(sep=" ") ppx out l =
   Fmt.list ~sep:(fun out () -> Fmt.fprintf out "%s@," sep) ppx out l
 let pp_iter ?(sep=" ") ppx out iter =

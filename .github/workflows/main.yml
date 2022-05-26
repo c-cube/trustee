@@ -17,13 +17,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v2
+      with:
+        submodules:
+          recursive
     - uses: ocaml/setup-ocaml@v2
       with:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
     - run: opam pin -n .
     - run: opam depext -yt trustee trustee-itp trustee-script trustee-opentheory trustee-lsp
     - run: opam install -t . --deps-only
+    - run: opam install sqlite3
     - run: opam exec -- dune build -p trustee,trustee-itp,trustee-opentheory,trustee-script
     - run: opam exec -- dune runtest -p trustee,trustee-itp,trustee-opentheory,trustee-script
       if: ${{ matrix.os == 'ubuntu-latest'}}
     - run: opam exec -- dune build -p trustee,trustee-itp,trustee-opentheory,trustee-lsp,trustee-script
+    - run: opam exec -- ./trustee_ot.sh --dir vendor/opentheory/data/theories/ --check-all
