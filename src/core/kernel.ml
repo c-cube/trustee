@@ -1671,6 +1671,108 @@ module Proof = struct
     | Pr_step _ -> false
 end
 
+module Linear_proof = struct
+  type arg = Proof.arg =
+    | Pr_expr of expr
+    | Pr_subst of (var * expr) list
+
+  type step = {
+    concl: sequent;
+    rule: string;
+    args: arg list;
+    parents: int list;
+  }
+
+  type t = {
+    steps: step Vec.t;
+  }
+
+  let steps (self:t) : _ Iter.t =
+    fun k -> Vec.iteri (fun i s -> k(i,s)) self.steps
+
+  module Sequent_tbl = CCHashtbl.Make(Sequent)
+
+  let of_thm_proof (th0:thm) : t =
+    let steps = Vec.create() in
+    let idx = ref 0 in
+    let seen = Sequent_tbl.create 8 in
+
+    (* add step to the proof *)
+    let add_step ?(args=[]) ?(parents=[]) (seqt:sequent) (rule:string) : int =
+      let i = !idx in
+      incr idx;
+      Vec.push steps {concl=seqt; rule; args; parents} ;
+      i
+    in
+
+    let rec traverse seqt pr : int =
+      match Sequent_tbl.find_opt seen seqt with
+      | Some i -> i
+      | None ->
+        let i =
+          match pr with
+          | Proof.Pr_main pr' when seqt == th0.th_seq ->
+              emit_step seqt pr'
+          | _ -> emit_step seqt pr
+        in
+        Sequent_tbl.add seen seqt i;
+        i
+
+    and emit_step (seqt:sequent) (pr:proof) : int =
+      match pr with
+      | Proof.Pr_main _ -> add_step seqt "lemma" ~args:[]
+      | Proof.Pr_dummy -> add_step seqt "<dummy>" ~args:[]
+      | Proof.Pr_step { rule; args; parents} ->
+        let parents = List.map (fun th' -> traverse th'.th_seq th'.th_proof) parents in
+        add_step seqt rule ~args ~parents
+    in
+
+    ignore (traverse th0.th_seq th0.th_proof : int);
+    { steps }
+
+  let enc_arg enc = Cbor_pack.Enc.(function
+    | Pr_expr e -> list [text "e"; Expr.enc enc e]
+    | Pr_subst s ->
+      let s = list (List.map (fun (v,e) -> pair (Var.enc enc v) (Expr.enc enc e)) s) in
+      list [text "s"; s]
+  )
+
+  let dec_arg ctx = Cbor_pack.Dec.(
+    let* l = list value in
+    match l with
+    | [`Text "e"; e] ->
+      let+ e = apply (Expr.dec ctx) e in Pr_expr e
+    | [`Text "s"; s] ->
+      let+ s = apply (list (pair (Var.dec ctx) (Expr.dec ctx))) s in Pr_subst s
+    | _ -> fail "expected arg"
+  )
+
+  let enc_step enc (self:step) =
+    let open Cbor_pack.Enc in
+    let {rule; concl; parents; args} = self in
+    add_entry enc @@ map [
+      text "concl", Util_enc_.enc_seq enc concl;
+      text "r", add_entry enc (text rule);
+      text "p", list (List.map int parents);
+      text "as", list (List.map (enc_arg enc) args);
+    ]
+
+  let dec_step ctx = Cbor_pack.Dec.(
+    let+ concl = field "concl" (Util_dec_.dec_seq ctx)
+    and+ rule = field "r" text
+    and+ parents = field "p" (list int)
+    and+ args = field "as" (list @@ dec_arg ctx) in
+    {concl; rule; parents; args}
+  )
+
+  let enc enc (self:t) =
+    let open Cbor_pack.Enc in
+    let l = Vec.to_iter self.steps |> Iter.map (enc_step enc) |> Iter.to_list in
+    list l
+
+  let dec ctx = Cbor_pack.Dec.(let+ l = list (dec_step ctx) in {steps=Vec.of_list l})
+end
+
 module Thm = struct
   type t = thm
 

@@ -112,6 +112,33 @@ module Proof : sig
   val is_main_or_dummy : t -> bool
 end
 
+(** Linear proofs.
+
+    A linear proof is a sequential, step-by-step representation of the proof
+    of a theorem, using rules and other lemmas.
+    It is intended to be serializable and printable for human consumption.
+*)
+module Linear_proof : sig
+  type t
+
+  type arg = Proof.arg =
+    | Pr_expr of expr
+    | Pr_subst of (var * expr) list
+
+  type step = {
+    concl: sequent;
+    rule: string;
+    args: arg list;
+    parents: int list;
+  }
+
+  include Sigs.SER1 with type t := t and type state := ctx
+
+  val steps : t -> (int * step) Iter.t
+
+  val of_thm_proof : thm -> t
+end
+
 (** Free Variables *)
 module Var : sig
   type t = var

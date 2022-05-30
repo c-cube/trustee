@@ -83,6 +83,7 @@ module Enc = struct
   let blob x : cbor = `Bytes x
   let list x : cbor = `Array x
   let map x : cbor = `Map x
+  let pair x y = list [x;y]
 
   let init () = {
     eh=Vec.create();
@@ -279,6 +280,14 @@ module Dec = struct
       let y = y.decode dec path c in
       (x,y)
   }
+
+  let pair d1 d2 =
+    let* l = list value in
+    match l with
+    | [a;b] ->
+      let+ a = apply d1 a and+ b = apply d2 b in
+      a,b
+    | _ -> fail "expected a pair"
 
   let memo (type a) (((module Key) : a key)  ) dec0 : _ t = {
     decode=fun dec path c ->

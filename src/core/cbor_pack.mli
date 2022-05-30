@@ -35,6 +35,8 @@ module Enc : sig
 
   val list : cbor list -> cbor
 
+  val pair : cbor -> cbor -> cbor
+
   val text : string -> cbor
 
   val blob : string -> cbor
@@ -80,6 +82,8 @@ module Dec : sig
   val field : string -> 'a t -> 'a t
 
   val list : 'a t -> 'a list t
+
+  val pair : 'a t -> 'b t -> ('a * 'b) t
 
   val map : 'a t -> 'b t -> ('a * 'b) list t
 
