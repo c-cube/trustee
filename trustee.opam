@@ -11,13 +11,11 @@ bug-reports: "https://github.com/c-cube/trustee/issues"
 depends: [
   "dune" {>= "2.0"}
   "containers" {>= "3.3" & < "4.0"}
-  "pp_loc" {>= "1.0" & < "2.0"}
   "iter" {>= "1.0"}
   "ocaml" {>= "4.08.0"}
   "sha"
   "cbor"
   "ppx_deriving" {with-test}
-  "qtest" {with-test}
   "ounit2" {with-test}
   "qcheck" {with-test}
   "odoc" {with-doc}

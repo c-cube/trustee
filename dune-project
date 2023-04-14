@@ -19,40 +19,13 @@
     sqlite3)
   (depends
     (containers (and (>= 3.3) (< 4.0)))
-    (pp_loc (and (>= 1.0) (< 2.0)))
     (iter (>= 1.0))
     (ocaml (>= 4.08.0))
     sha
     cbor
     (ppx_deriving :with-test)
-    (qtest :with-test)
     (ounit2 :with-test)
     (qcheck :with-test)
-    (odoc :with-doc)))
-
-(package
-  (name trustee-script)
-  (synopsis "Script language around Trustee")
-  (license MIT)
-  (depends
-    (containers (and (>= 3.6) (< 4.0)))
-    (trustee (= :version))
-    ppx_deriving
-    menhir
-    pp_loc
-    (odoc :with-doc)))
-
-(package
-  (name trustee-script-jupyter)
-  (synopsis "Jupyter kernel for trustee-script")
-  (license MIT)
-  (depends
-    (containers (and (>= 3.6) (< 4.0)))
-    (trustee (= :version))
-    (trustee-script (= :version))
-    ppx_deriving
-    jupyter-kernel
-    tiny_httpd
     (odoc :with-doc)))
 
 (package
@@ -64,32 +37,5 @@
     (trustee (= :version))
     (tiny_httpd (>= 0.12))
     logs
-    (odoc :with-doc)))
-
-(package
-  (name trustee-itp)
-  (synopsis "Trustee-powered interactive theorem prover")
-  (depends
-    (containers (and (>= 3.0) (< 4.0)))
-    containers-thread
-    logs
-    cmdliner
-    (ocaml (>= 4.08.0))
-    (odoc :with-doc)))
-
-(package
-  (name trustee-lsp)
-  (synopsis "LSP server for trustee")
-  (license MIT)
-  (tags (logic proof HOL assistant))
-  (depends
-    (dune (>= "2.0"))
-    (containers (and (>= 3.0) (< 4.0)))
-    (trustee (= :version))
-    (trustee-itp (= :version))
-    lsp
-    logs
-    (linol (and (>= 0.4) (< 0.5)))
-    (ocaml (>= 4.06.0))
     (odoc :with-doc)))
 
