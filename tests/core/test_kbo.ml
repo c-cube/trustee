@@ -31,13 +31,13 @@ module Make() = struct
 end
 
 let str_cmp = function
-  | KBO.Lt -> "lt"
-  | KBO.Gt -> "gt"
-  | KBO.Eq -> "eq"
-  | KBO.Incomparable -> "incomparable"
+  | Kbo.Lt -> "lt"
+  | Kbo.Gt -> "gt"
+  | Kbo.Eq -> "eq"
+  | Kbo.Incomparable -> "incomparable"
 
 let assert_cmp_ exp t1 t2 =
-  assert_equal ~printer:str_cmp exp (KBO.compare t1 t2);
+  assert_equal ~printer:str_cmp exp (Kbo.compare t1 t2);
   ()
 
 let t1 _ctx =

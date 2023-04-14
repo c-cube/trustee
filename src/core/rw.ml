@@ -175,7 +175,7 @@ module Rule = struct
       (fun ctx _lhs subst ->
          let th = K.Thm.subst ctx ~recursive:false th subst in
          let lhs, rhs = thm_res_eqn th in
-         if KBO.gt lhs rhs then Some th else None)
+         if Kbo.gt lhs rhs then Some th else None)
 
   let pp out (self:t) =
     match self.rhs with
@@ -340,7 +340,7 @@ module AC_rule = struct
       | (rule, ordered) :: tl ->
         match Rule.to_conv rule ctx e with
         | Rw_step _ as r when ordered -> r
-        | Rw_step th as r when KBO.gt (thm_res_lhs th) (thm_res_rhs th) ->
+        | Rw_step th as r when Kbo.gt (thm_res_lhs th) (thm_res_rhs th) ->
           (* rewrite, but only in a decreasing way *)
           r
         | _ -> loop_ tl

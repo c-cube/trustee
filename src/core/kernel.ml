@@ -250,7 +250,7 @@ module Expr_hashcons = Hashcons.Make(struct
     let on_new e = ignore (Lazy.force e.e_ty : _ option)
     end)
 
-module Cname_LRU = LRU.Make(Cname)
+module Cname_LRU = Lru.Make(Cname)
 
 type const_kind = C_ty | C_term
 
