@@ -23,6 +23,8 @@ jobs:
     - uses: ocaml/setup-ocaml@v2
       with:
         ocaml-compiler: ${{ matrix.ocaml-compiler }}
+        dune-cache: true
+        allow-prerelease-opam: true
     - run: opam pin -n .
     - run: opam depext -yt trustee trustee-itp trustee-script trustee-opentheory trustee-lsp
     - run: opam install -t . --deps-only
