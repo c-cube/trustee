@@ -1,5 +1,4 @@
 
-module Stdlib = CCShims_.Stdlib
 module Option = CCOpt
 module Fmt = CCFormat
 
