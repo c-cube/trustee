@@ -1,20 +1,25 @@
+(rule
+ (targets basic_hol.parsed)
+ (deps basic_hol.trustee)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run ../../../src/tools/trustee_bin.exe cat %{deps}))))
 
 (rule
-  (targets basic_hol.parsed)
-  (deps basic_hol.trustee)
-  (action
-    (with-stdout-to %{targets} (run ../../../src/tools/trustee_bin.exe cat %{deps}))))
+ (alias runtest)
+ (action
+  (diff basic_hol.parsed.expected basic_hol.parsed)))
 
 (rule
-  (alias runtest)
-  (action (diff basic_hol.parsed.expected basic_hol.parsed)))
+ (targets bad.parsed)
+ (deps bad.trustee)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run ../../../src/tools/trustee_bin.exe cat %{deps}))))
 
 (rule
-  (targets bad.parsed)
-  (deps bad.trustee)
-  (action
-    (with-stdout-to %{targets} (run ../../../src/tools/trustee_bin.exe cat %{deps}))))
-
-(rule
-  (alias runtest)
-  (action (diff bad.parsed.expected bad.parsed)))
+ (alias runtest)
+ (action
+  (diff bad.parsed.expected bad.parsed)))

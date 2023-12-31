@@ -1,4 +1,3 @@
-
 (** {1 Converters} *)
 
 open Sigs
@@ -9,7 +8,7 @@ module E = K.Expr
 type rw_step =
   | Same
   | Rw_step of K.thm
-    (** A theorem [A |- a=b] where [a] is the initial term, and [b] the result. *)
+      (** A theorem [A |- a=b] where [a] is the initial term, and [b] the result. *)
 
 val pp_rw_step : rw_step Fmt.printer
 

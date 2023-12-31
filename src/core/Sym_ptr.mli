@@ -1,4 +1,3 @@
-
 (** A symbolic identifier for a runtime in a file.
 
     This should be stable when parsing the same file several times,
@@ -11,6 +10,7 @@ module Component : sig
     | Int of int
 
   val equal : t -> t -> bool
+
   val compare : t -> t -> int
 end
 
@@ -18,14 +18,19 @@ type t = private {
   path: Component.t list;
   name: Component.t;
 }
+
 type sym_ptr = t
 
 val str : string -> t
+
 val pos : int -> t
+
 val namespace : string -> t -> t
 
 include Sigs.EQ with type t := t
+
 include Sigs.HASH with type t := t
+
 include Sigs.PP with type t := t
 
 module Tbl : CCHashtbl.S with type key = t
@@ -53,4 +58,3 @@ module Map : sig
 
   val to_iter : 'a t -> (sym_ptr * 'a) Iter.t
 end
-

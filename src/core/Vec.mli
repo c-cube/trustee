@@ -1,4 +1,3 @@
-
 (** Vectors
 
     A resizable array, workhorse of imperative programming :-).
@@ -110,6 +109,8 @@ val equal : ('a -> 'b -> bool) -> 'a t -> 'b t -> bool
 val pp :
   ?sep:string ->
   (Format.formatter -> 'a -> unit) ->
-  Format.formatter -> 'a t -> unit
+  Format.formatter ->
+  'a t ->
+  unit
 
 val unsafe_array_ : 'a t -> 'a array

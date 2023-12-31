@@ -1,76 +1,73 @@
 module K = Trustee_core.Kernel
 module E = K.Expr
 module A = Parse_ast
-
 open OUnit2
 
-let test_sexp1 = "test_sexp1" >:: fun ctxt ->
+let test_sexp1 =
+  "test_sexp1" >:: fun ctxt ->
   let str = {|(foo (bar "hello world") [1 2 {3}])|} in
-  begin match Sexp_loc.of_string ~filename:"t1" str with
-    | None -> assert_failure "no parse"
-    | Some s2 ->
-      assert_equal ~ctxt str (Sexp_loc.to_string s2)
-        ~printer:CCFun.id
-  end
+  match Sexp_loc.of_string ~filename:"t1" str with
+  | None -> assert_failure "no parse"
+  | Some s2 -> assert_equal ~ctxt str (Sexp_loc.to_string s2) ~printer:CCFun.id
 
-let test_sexp2 = "test_sexp2" >:: fun ctxt ->
-    let str = {|(foo (bar "hello world")
+let test_sexp2 =
+  "test_sexp2" >:: fun ctxt ->
+  let str =
+    {|(foo (bar "hello world")
     ; comment
     [1 2  ; oh?
     {3}]
 
-    )  |} in
-  begin match Sexp_loc.of_string ~filename:"t2" str with
-    | None -> assert_failure "no parse"
-    | Some s2 ->
-      let str_expect = {|(foo (bar "hello world") [1 2 {3}])|} in
-      assert_equal ~ctxt str_expect (Sexp_loc.to_string s2)
-        ~printer:CCFun.id
-  end
+    )  |}
+  in
+  match Sexp_loc.of_string ~filename:"t2" str with
+  | None -> assert_failure "no parse"
+  | Some s2 ->
+    let str_expect = {|(foo (bar "hello world") [1 2 {3}])|} in
+    assert_equal ~ctxt str_expect (Sexp_loc.to_string s2) ~printer:CCFun.id
 
-let test_sexp3 = "test_sexp3" >:: fun ctxt ->
-    let str = {|(foo (bar $ 1 + 1 $) [1 $ let x=1
+let test_sexp3 =
+  "test_sexp3" >:: fun ctxt ->
+  let str =
+    {|(foo (bar $ 1 + 1 $) [1 $ let x=1
     in x+
     {yolo}
-    $ 2 {3}])|} in
-  begin match Sexp_loc.of_string ~filename:"t3" str with
-    | None -> assert_failure "no parse"
-    | Some s2 ->
-      assert_equal ~ctxt str (Sexp_loc.to_string s2)
-        ~printer:CCFun.id
-  end
+    $ 2 {3}])|}
+  in
+  match Sexp_loc.of_string ~filename:"t3" str with
+  | None -> assert_failure "no parse"
+  | Some s2 -> assert_equal ~ctxt str (Sexp_loc.to_string s2) ~printer:CCFun.id
 
-let test_sexp4 = "test_sexp4" >:: fun ctxt ->
-    match Sexp_loc.of_string ~filename:"t4" "[]" with
-    | Some {Sexp_loc.view=Sexp_loc.Bracket_list []; _} -> ()
-    | Some s ->
-      assert_failure (Fmt.asprintf "wrong parse for '[]', got %a" Sexp_loc.pp s)
-    | None -> assert_failure "wrong parse for '[]'"
-
+let test_sexp4 =
+  "test_sexp4" >:: fun ctxt ->
+  match Sexp_loc.of_string ~filename:"t4" "[]" with
+  | Some { Sexp_loc.view = Sexp_loc.Bracket_list []; _ } -> ()
+  | Some s ->
+    assert_failure (Fmt.asprintf "wrong parse for '[]', got %a" Sexp_loc.pp s)
+  | None -> assert_failure "wrong parse for '[]'"
 
 module T_expr = struct
   let i = ref 0
+
   let mk_test str str2 =
     let name = Printf.sprintf "test_expr%d" !i in
     incr i;
     name >:: fun ctxt ->
-      let notation = Notation.Ref.create() in
-      match Parser.parse_string_exn ~notation str Parser.P_expr.top with
-      | [e] ->
-        let str_e = A.Expr.to_string e in
-        assert_equal ~ctxt ~printer:CCFun.id str2 str_e
-      | l ->
-        let s = Fmt.asprintf "expected one expr, got %d:@. %a"
-            (List.length l) (Fmt.Dump.list A.Expr.pp) l in
-        assert_failure s
-
+    let notation = Notation.Ref.create () in
+    match Parser.parse_string_exn ~notation str Parser.P_expr.top with
+    | [ e ] ->
+      let str_e = A.Expr.to_string e in
+      assert_equal ~ctxt ~printer:CCFun.id str2 str_e
+    | l ->
+      let s =
+        Fmt.asprintf "expected one expr, got %d:@. %a" (List.length l)
+          (Fmt.Dump.list A.Expr.pp) l
+      in
+      assert_failure s
 end
 
-let test_exprs = [
-  T_expr.mk_test "bool" "bool";
-  T_expr.mk_test " (   ?f ?x )" "(?f ?x)";
-]
-
+let test_exprs =
+  [ T_expr.mk_test "bool" "bool"; T_expr.mk_test " (   ?f ?x )" "(?f ?x)" ]
 
 (*$inject
   open Sigs
@@ -177,12 +174,12 @@ let test_exprs = [
 *)
 
 (* FIXME: reinstate that, after we declare symbols properly to the type env
-(* test type inference *)
-(*     $= & ~cmp:E.equal ~printer:E.to_string
-  M.(tau @-> tau) (K.Const.ty M.f1)
-  M.(const f1 @@ v (v' "a" tau)) (parse_e "f1 a")
-*)
+   (* test type inference *)
+   (*     $= & ~cmp:E.equal ~printer:E.to_string
+     M.(tau @-> tau) (K.Const.ty M.f1)
+     M.(const f1 @@ v (v' "a" tau)) (parse_e "f1 a")
    *)
+*)
 
 (* test lexer *)
 (*$inject
@@ -246,13 +243,8 @@ let test_exprs = [
 *)
 
 let suite =
-  let l = [
-    [
-      test_sexp1;
-      test_sexp2;
-      test_sexp3;
-      test_sexp4;
-    ];
-    test_exprs;
-  ] |> List.flatten in
+  let l =
+    [ [ test_sexp1; test_sexp2; test_sexp3; test_sexp4 ]; test_exprs ]
+    |> List.flatten
+  in
   "syntax" >::: l

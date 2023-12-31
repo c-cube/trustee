@@ -1,12 +1,12 @@
-
 (executable
-  (name run_tests)
-  (modes native)
-  (flags :standard  -w -a -warn-error -a+8
-         -open Trustee_core -open Trustee_core.Sigs -open Trustee_syntax)
-  (libraries trustee.core trustee.syntax ounit2))
+ (name run_tests)
+ (modes native)
+ (flags :standard -w -a -warn-error -a+8 -open Trustee_core -open
+   Trustee_core.Sigs -open Trustee_syntax)
+ (libraries trustee.core trustee.syntax ounit2))
 
 (rule
-  (alias runtest)
+ (alias runtest)
  (locks /test)
-  (action (run ./run_tests.exe -ci false -runner sequential)))
+ (action
+  (run ./run_tests.exe -ci false -runner sequential)))

@@ -7,6 +7,7 @@ type t = {
 }
 
 val empty : t
+
 include PP with type t := t
 
 type item =
@@ -15,4 +16,5 @@ type item =
   | I_thm of K.Thm.t
 
 val items : t -> item Iter.t
+
 val pp_stats : t Fmt.printer

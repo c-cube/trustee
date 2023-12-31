@@ -1,7 +1,5 @@
-
 include Common_
 include Trustee_loc
-
 module Error = Error
 module Expr_printer = Expr_printer
 module ID = ID
@@ -18,4 +16,3 @@ module Queryable = Queryable
 module Lstream = Lstream
 module Notation = Notation
 module Error_set = Error_set
-

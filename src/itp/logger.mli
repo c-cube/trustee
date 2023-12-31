@@ -1,4 +1,3 @@
-
 (** Log reporter *)
 
 type t

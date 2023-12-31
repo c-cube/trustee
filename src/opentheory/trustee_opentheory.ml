@@ -1,4 +1,3 @@
-
 (** {1 OpenTheory library}
 
     Support for parsing {{: http://www.gilith.com/opentheory/} opentheory}
@@ -6,7 +5,6 @@
     *)
 
 module Common_ = Common_
-
 module Name = Name
 module Article = Article
 module VM = VM

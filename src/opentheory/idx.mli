@@ -1,4 +1,3 @@
-
 (** {1 Index the OpenTheory development}
 
     The index is used to list all thy/int/art files and build the dependency
@@ -13,7 +12,6 @@ type hashed_item =
   | H_expr of K.Expr.t
   | H_thm of K.Thm.t
 
-(** Results of listing a directory *)
 type t = {
   theories: (path * Thy_file.t) list;
   thy_by_name: Thy_file.t Str_tbl.t;
@@ -23,6 +21,7 @@ type t = {
   errors: (path * Trustee_core.Error.t) list;
   by_hash: hashed_item Chash.Tbl.t;
 }
+(** Results of listing a directory *)
 
 val list_dir : path -> t
 

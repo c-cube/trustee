@@ -1,21 +1,28 @@
-
 (** {1 Kernel of trust} *)
 
 open Sigs
 
 type ctx
+
 type expr
+
 type ty = expr
+
 type const_def
+
 type const
+
 type ty_const = const
+
 type thm
+
 type theory
 
 type var = {
   v_name: string;
   v_ty: ty;
 }
+
 type ty_var = var
 
 type bvar = {
@@ -26,13 +33,13 @@ type bvar = {
 type expr_set
 (** A set of expressions. *)
 
-(** A sequent [hyps |- concl]. It does not necessarily represent
-    a valid theorem; it can also represent an hypothesis,
-    or a goal. *)
 type sequent = private {
   concl: expr;
   hyps: expr_set;
 }
+(** A sequent [hyps |- concl]. It does not necessarily represent
+    a valid theorem; it can also represent an hypothesis,
+    or a goal. *)
 
 (** Main view on expressions *)
 type expr_view =
@@ -49,9 +56,11 @@ type expr_view =
 (** Logic constants *)
 module Const : sig
   type t = const
+
   type def = const_def
 
   include Sigs.EQ with type t := t
+
   include PP with type t := t
 
   type args =
@@ -59,20 +68,28 @@ module Const : sig
     | C_arity of int
 
   val name : t -> string
+
   val cname : t -> Cname.t
+
   val chash : t -> Chash.t
+
   val args : t -> args
+
   val ty : t -> ty
 
   val pp_args : args Fmt.printer
+
   val pp_with_ty : t Fmt.printer
 
   val eq : ctx -> t
+
   val bool : ctx -> t
+
   val select : ctx -> t
   (** Choice constant *)
 
   val get_def : ctx -> t -> def option
+
   val get_def_exn : ctx -> t -> def
 end
 
@@ -84,9 +101,10 @@ module Const_def : sig
   type t = const_def
 
   include PP with type t := t
+
   include Sigs.SER1 with type t := t and type state := ctx
 
-  val approx_def : t -> [`Other | `Param | `Ty_def of expr | `Def of expr]
+  val approx_def : t -> [ `Other | `Param | `Ty_def of expr | `Def of expr ]
   (** An approximation of the definition *)
 end
 
@@ -109,6 +127,7 @@ module Proof : sig
       }
 
   val is_main : t -> bool
+
   val is_main_or_dummy : t -> bool
 end
 
@@ -144,48 +163,75 @@ module Var : sig
   type t = var
 
   val name : t -> string
+
   val ty : t -> ty
+
   val make : string -> ty -> t
+
   val makef : ('a, Format.formatter, unit, t) format4 -> ty -> 'a
+
   val map_ty : t -> f:(ty -> ty) -> t
 
   include Sigs.EQ with type t := t
+
   include Sigs.HASH with type t := t
+
   include Sigs.COMPARE with type t := t
+
   include Sigs.PP with type t := t
+
   val pp_with_ty : t Fmt.printer
 
   include Sigs.SER1 with type t := t and type state := ctx
 
   module Set : CCSet.S with type elt = t
+
   module Map : CCMap.S with type key = t
+
   module Tbl : CCHashtbl.S with type key = t
 end
 
 (** Bound variables *)
 module BVar : sig
   type t = bvar
+
   val make : int -> ty -> t
+
   include Sigs.PP with type t := t
 end
 
 (** Substitutions *)
 module Subst : sig
   type t
+
   include Sigs.PP with type t := t
+
   include Sigs.EQ with type t := t
+
   include Sigs.HASH with type t := t
+
   include Sigs.SER1 with type t := t and type state := ctx
+
   val find_exn : var -> t -> expr
+
   val empty : t
+
   val is_empty : t -> bool
+
   val is_renaming : t -> bool
+
   val mem : var -> t -> bool
+
   val bind : t -> var -> expr -> t
+
   val bind' : var -> expr -> t -> t
+
   val size : t -> int
+
   val to_iter : t -> (var * expr) Iter.t
+
   val of_list : (var * expr) list -> t
+
   val of_iter : (var * expr) Iter.t -> t
 end
 
@@ -209,9 +255,13 @@ module Expr : sig
   val chash : t -> Chash.t
 
   include Sigs.EQ with type t := t
+
   include Sigs.HASH with type t := t
+
   include Sigs.COMPARE with type t := t
+
   include Sigs.PP with type t := t
+
   include Sigs.SER1 with type t := t and type state := ctx
 
   val pp_depth : max_depth:int -> t Fmt.printer
@@ -219,16 +269,24 @@ module Expr : sig
       Useful to print very deep terms *)
 
   val view : t -> view
+
   val ty : t -> ty option
+
   val ty_exn : t -> ty
+
   val is_closed : t -> bool
+
   val is_eq_to_type : t -> bool
+
   val is_eq_to_bool : t -> bool
+
   val is_a_bool : t -> bool
+
   val is_a_type : t -> bool
   (** Is the type of [e] equal to [Type]? *)
 
   val is_lam : t -> bool
+
   val is_arrow : t -> bool
 
   val iter : f:(bool -> t -> unit) -> t -> unit
@@ -243,19 +301,27 @@ module Expr : sig
   (** Do all immediate subterms of [t] satisfy [f]? *)
 
   val contains : t -> sub:t -> bool
+
   val free_vars : ?init:Var.Set.t -> t -> Var.Set.t
+
   val free_vars_iter : t -> var Iter.t
 
   val unfold_app : t -> t * t list
+
   val unfold_eq : t -> (t * t) option
+
   val unfold_arrow : t -> t list * t
 
   val return_ty : t -> t
+
   val as_const : t -> (Const.t * ty list) option
+
   val as_const_exn : t -> Const.t * ty list
 
   module Set : CCSet.S with type elt = t
+
   module Map : CCMap.S with type key = t
+
   module Tbl : CCHashtbl.S with type key = t
 
   val iter_dag : iter_ty:bool -> f:(t -> unit) -> t -> unit
@@ -269,20 +335,35 @@ module Expr : sig
   val subst : (recursive:bool -> t -> Subst.t -> t) with_ctx
 
   val type_ : t with_ctx
+
   val bool : t with_ctx
+
   val eq : (ty -> t) with_ctx
+
   val select : (ty -> t) with_ctx
+
   val var : (var -> t) with_ctx
+
   val const : (const -> ty list -> t) with_ctx
+
   val var_name : (string -> ty -> t) with_ctx
+
   val bvar : (int -> ty -> t) with_ctx
+
   val app : (t -> t -> t) with_ctx
+
   val app_l : (t -> t list -> t) with_ctx
+
   val app_eq : (t -> t -> t) with_ctx
+
   val lambda : (var -> t -> t) with_ctx
+
   val lambda_l : (var list -> t -> t) with_ctx
+
   val lambda_db : (name:string -> ty_v:ty -> t -> t) with_ctx
+
   val arrow : (t -> t -> t) with_ctx
+
   val arrow_l : (t list -> t -> t) with_ctx
 
   val box : (sequent -> t) with_ctx
@@ -298,7 +379,7 @@ module Expr : sig
   (** [map ~f t] maps [f] over the immediate subterms, giving
       it [true] if it enters a binder, [false] if not. *)
 
-  val db_shift: (t -> int -> t) with_ctx
+  val db_shift : (t -> int -> t) with_ctx
 
   val open_lambda : (t -> (var * t) option) with_ctx
   (** [open_lambda (\x. t)] introduces a new free variable [y],
@@ -316,50 +397,42 @@ module Sequent : sig
   }
 
   val equal : t -> t -> bool
+
   val make : expr_set -> Expr.t -> t
+
   val make_l : Expr.t list -> Expr.t -> t
+
   val make_nohyps : Expr.t -> t
 
   val concl : t -> Expr.t
+
   val hyps : t -> expr_set
+
   val n_hyps : t -> int
+
   val hyps_l : t -> Expr.t list
+
   val hyps_iter : t -> Expr.t iter
 
   val iter_exprs : t -> Expr.t Iter.t
 
   include Sigs.PP with type t := t
   (* TODO
-  include Sigs.SER with type t := t and type state := ctx
+     include Sigs.SER with type t := t and type state := ctx
   *)
 end
 
 (** Data returned by a new type definition *)
 module New_ty_def : sig
   type t = {
-    tau: ty_const;
-    (** The new type constructor *)
-
-    fvars: var list;
-    (** List of type variables *)
-
-    c_abs: const;
-    (** Function from the general type to [tau] *)
-
-    c_repr: const;
-    (** Function from [tau] back to the general type *)
-
-    abs_thm: thm;
-    (** [abs_thm] is [|- abs (repr x) = x] *)
-
-    abs_x: var;
-    (** Variable used in [abs_thm] *)
-
-    repr_thm: thm;
-    (** [repr_thm] is [|- Phi x <=> repr (abs x) = x] *)
-
-    repr_x: var;
-    (** Variable used in [repr_thm] *)
+    tau: ty_const;  (** The new type constructor *)
+    fvars: var list;  (** List of type variables *)
+    c_abs: const;  (** Function from the general type to [tau] *)
+    c_repr: const;  (** Function from [tau] back to the general type *)
+    abs_thm: thm;  (** [abs_thm] is [|- abs (repr x) = x] *)
+    abs_x: var;  (** Variable used in [abs_thm] *)
+    repr_thm: thm;  (** [repr_thm] is [|- Phi x <=> repr (abs x) = x] *)
+    repr_x: var;  (** Variable used in [repr_thm] *)
   }
 end
 
@@ -373,15 +446,19 @@ module Thm : sig
   type t = thm
 
   include Sigs.PP with type t := t
+
   val pp_depth : max_depth:int -> t Fmt.printer
+
   val pp_quoted : t Fmt.printer
 
   val concl : t -> expr
+
   include Sigs.EQ with type t := t
+
   include Sigs.HASH with type t := t
 
-  (** View theorem as a sequent. *)
   val sequent : t -> Sequent.t
+  (** View theorem as a sequent. *)
 
   val is_fully_concrete : t -> bool
   (** [is_fully_concrete th] is true iff [th]'s expressions
@@ -454,7 +531,7 @@ module Thm : sig
       This is the boolean equivalent of transitivity. *)
 
   val bool_eq_intro : (t -> t -> t) with_ctx
-    (** [bool_eq_intro (F1, a |- b) (F2, b |- a)] is [F1, F2 |- b=a].
+  (** [bool_eq_intro (F1, a |- b) (F2, b |- a)] is [F1, F2 |- b=a].
         This is a way of building a boolean [a=b] from proofs of
         [a|-b] and [b|-a]. *)
 
@@ -479,7 +556,8 @@ module Thm : sig
     repr:string ->
     thm_inhabited:thm ->
     unit ->
-    New_ty_def.t) with_ctx
+    New_ty_def.t)
+    with_ctx
   (** Introduce a new type operator.
 
       Here, too, we follow HOL light:
@@ -534,9 +612,7 @@ module Theory : sig
 
   include Sigs.PP with type t := t
 
-  val with_ :
-    ctx -> name:string ->
-    (t -> unit) -> t
+  val with_ : ctx -> name:string -> (t -> unit) -> t
 
   val name : t -> string
 
@@ -571,18 +647,18 @@ module Theory : sig
   (** Find a type constant used or defined in this theory by its name *)
 
   val param_consts : t -> const list
+
   val param_theorems : t -> thm list
 
   val consts : t -> const list
+
   val theorems : t -> thm list
 
   (** {3 Composition} *)
 
   type interpretation = string Str_map.t
 
-  val instantiate :
-    interp:interpretation ->
-    t -> t
+  val instantiate : interp:interpretation -> t -> t
   (** [instantiate ~interp theory] renames constants according to [interpr].
       This can change the types of some terms if [interp] renames type constants.
 
@@ -596,9 +672,7 @@ module Theory : sig
       @raise Error.E if definitions cannot be accessed.
   *)
 
-  val compose :
-    ?interp:interpretation ->
-    t list -> t -> t
+  val compose : ?interp:interpretation -> t list -> t -> t
   (** [compose l theory], where [theory = Gamma |> Delta] proves [Delta]
       under assumptions [Gamma], and where [l = [Gamma1 |> Delta1, …]]
       is a list of theories, returns
@@ -627,7 +701,8 @@ module Ctx : sig
     ?storage:Storage.t ->
     ?store_proofs:bool ->
     ?store_concrete_definitions:bool ->
-    unit -> t
+    unit ->
+    t
   (** Create a new context.
       @param storage storage backend for definitions, possibly proofs, etc.
         By default we use the in-memory storage.
@@ -651,7 +726,8 @@ module Ctx : sig
   val new_skolem_ty_const : t -> string -> arity:int -> const
 end
 
-
 (**/**)
-val __pp_ids: bool ref
+
+val __pp_ids : bool ref
+
 (**/**)

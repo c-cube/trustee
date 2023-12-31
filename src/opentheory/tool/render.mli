@@ -1,4 +1,3 @@
-
 (** Render to HTML *)
 
 open Trustee_opentheory.Common_
@@ -6,16 +5,12 @@ open Trustee_opentheory.Common_
 module Config : sig
   type t = {
     open_namespaces: string list;
-    (** Do not print prefixes for these namespaces *)
-
-    open_all_namespaces: bool;
-    (** Always strip prefix *)
+        (** Do not print prefixes for these namespaces *)
+    open_all_namespaces: bool;  (** Always strip prefix *)
   }
 
   val make :
-    ?open_namespaces:string list ->
-    ?open_all_namespaces:bool ->
-    unit -> t
+    ?open_namespaces:string list -> ?open_all_namespaces:bool -> unit -> t
 end
 
 val expr_to_html : ?config:Config.t -> K.Expr.t -> Html.elt

@@ -1,5 +1,5 @@
-
 (tests
-  (names t1 t2 t3)
-  (flags :standard -open Trustee_core -open Trustee_script -open Trustee_core.Sigs)
-  (libraries trustee.core trustee-script))
+ (names t1 t2 t3)
+ (flags :standard -open Trustee_core -open Trustee_script -open
+   Trustee_core.Sigs)
+ (libraries trustee.core trustee-script))

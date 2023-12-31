@@ -1,15 +1,13 @@
-
 (** Stream of tokens
 
     Imitation of stdlib's {!Stream}, specialized for parsing.
     It provides limited lookahead. *)
 
 type 'a t
+
 type is_done = bool
 
-val create :
-  next:(unit -> 'a * Loc.t * is_done) ->
-  unit -> 'a t
+val create : next:(unit -> 'a * Loc.t * is_done) -> unit -> 'a t
 
 val is_done : _ t -> is_done
 

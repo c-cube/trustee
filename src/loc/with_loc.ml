@@ -1,4 +1,3 @@
-
 open Common_
 
 type 'a t = {
@@ -7,4 +6,5 @@ type 'a t = {
 }
 
 let[@inline] loc self = self.loc
+
 let[@inline] view self = self.view

@@ -1,7 +1,8 @@
-
 module type KEY = sig
   type t
+
   include Sigs.EQ with type t := t
+
   include Sigs.HASH with type t := t
 end
 
@@ -19,9 +20,10 @@ module type S = sig
   val get : 'a t -> compute:(key -> 'a) -> key -> 'a
 end
 
-module Make(K : KEY) : S with type key = K.t = struct
+module Make (K : KEY) : S with type key = K.t = struct
   type key = K.t
-  module H = Hashtbl.Make(K)
+
+  module H = Hashtbl.Make (K)
 
   type 'a bucket = {
     k: key;
@@ -37,15 +39,18 @@ module Make(K : KEY) : S with type key = K.t = struct
   }
 
   let size self = H.length self.tbl
+
   let max_size self = self.max_size
 
   let create ~size () : _ t =
-    { first=None;
-      tbl=H.create (min 64 size);
-      max_size=size; }
+    { first = None; tbl = H.create (min 64 size); max_size = size }
 
-  let move_first_ self (b:_ bucket) =
-    let first = match self.first with None -> assert false | Some b -> b in
+  let move_first_ self (b : _ bucket) =
+    let first =
+      match self.first with
+      | None -> assert false
+      | Some b -> b
+    in
     if first != b then (
       (* remove b *)
       b.prev.next <- b.next;
@@ -69,30 +74,24 @@ module Make(K : KEY) : S with type key = K.t = struct
       H.remove self.tbl last.k
 
   let add_bucket self k v =
-    let rec b = {k; v; prev=b; next=b} in
+    let rec b = { k; v; prev = b; next = b } in
     H.add self.tbl k b;
     match self.first with
     | None -> self.first <- Some b
     | Some _ -> move_first_ self b
 
-  let get (self:_ t) ~compute:f (k:key) : 'a =
+  let get (self : _ t) ~compute:f (k : key) : 'a =
     match H.find self.tbl k with
     | bucket ->
       move_first_ self bucket;
       bucket.v
-
     | exception Not_found ->
-
       let v = f k in
 
       (* make room, if required *)
-      if H.length self.tbl = self.max_size then (
-        remove_last_ self;
-      );
+      if H.length self.tbl = self.max_size then remove_last_ self;
       assert (H.length self.tbl < self.max_size);
 
       add_bucket self k v;
       v
-
-
 end

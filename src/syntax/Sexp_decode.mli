@@ -1,51 +1,74 @@
-
 open Common_
 
 type sexp = Sexp_loc.t
 
 type +'a t
+
 type 'a m = 'a t
+
 val return : 'a -> 'a t
 
 val fail : string -> _ t
-val failf : ((('a, Format.formatter, unit, string) format4 -> 'a) -> string) -> 'b m
+
+val failf :
+  ((('a, Format.formatter, unit, string) format4 -> 'a) -> string) -> 'b m
 
 type err
 (** Internal type of errors. See {!Err} to manipulate them. *)
 
 module Infix : sig
   val ( let+ ) : 'a t -> ('a -> 'b) -> 'b t
+
   val ( >|= ) : 'a t -> ('a -> 'b) -> 'b t
+
   val ( let* ) : 'a t -> ('a -> 'b t) -> 'b t
+
   val ( >>= ) : 'a t -> ('a -> 'b t) -> 'b t
+
   val ( and+ ) : 'a t -> 'b t -> ('a * 'b) t
+
   val ( and* ) : 'a t -> 'b t -> ('a * 'b) t
 end
+
 include module type of Infix
 
 val value : sexp t
+
 val loc : Loc.t t
+
 val atom : string t
+
 val dollar_str : string t
+
 val quoted_str : string t
+
 val list : sexp list t
+
 val list_of : ?what:string -> 'a t -> 'a list t
+
 val bracket_list_of : ?what:string -> 'a t -> 'a list t
+
 val brace_list_of : ?what:string -> 'a t -> 'a list t
+
 val list_or_bracket_list_of : ?what:string -> 'a t -> 'a list t
+
 val list_or_brace_list_of : ?what:string -> 'a t -> 'a list t
+
 val pair : 'a t -> 'b t -> ('a * 'b) t
 
-val tuple2: 'a t -> 'b t -> ('a * 'b) t
-val tuple3: 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) t
+val tuple2 : 'a t -> 'b t -> ('a * 'b) t
+
+val tuple3 : 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) t
 
 val map : ('a -> 'b) -> 'a t -> 'b t
+
 val guard : msg:string -> ('a -> bool) -> 'a t -> 'a t
 
 val string : string t
 (** Alias to {!quoted_str} *)
 
 val int : int t
+
 val bool : bool t
 
 val atom_or_atom_list : string list t
@@ -56,22 +79,29 @@ val keyword : msg:string -> (string * 'a) list -> 'a t
 type predicate = bool t
 
 val is_atom : predicate
+
 val is_atom_of : string -> predicate
+
 val is_atom_if : (string -> bool) -> predicate
+
 val is_dollar_str : predicate
+
 val is_quoted_str : predicate
+
 val is_list : predicate
+
 val is_bracket_list : predicate
+
 val is_brace_list : predicate
 
-val succeeds: 'a t -> predicate
+val succeeds : 'a t -> predicate
 (** [succeeds d] returns [true] if [d] parses the S-expr, and [false] otherwise. *)
 
 val is_applied : string -> predicate
 (** [is_applied "foo"] is the recognizer that
     accepts expressions of the form [("foo" …)] *)
 
-val try_succeed : 'a t -> (predicate * 'a t)
+val try_succeed : 'a t -> predicate * 'a t
 (** [try_succeed d] is [succeeds d, d] *)
 
 val try_l : ?else_:'a t -> msg:string -> (predicate * 'a t) list -> 'a t
@@ -89,19 +119,27 @@ val with_msg : msg:string -> 'a t -> 'a t
     [d]'s errors with [msg] *)
 
 val map_l : ('a -> 'b t) -> 'a list -> 'b list t
+
 val fold_l : ('b -> 'a -> 'b t) -> 'b -> 'a list -> 'b t
 
 val fix : ('a t -> 'a t) -> 'a t
+
 val sub : 'a t -> sexp -> 'a t
+
 val sub_l : 'a t -> sexp list -> 'a list t
 
 val try_catch : 'a t -> ('a, err) result t
 
 val applied : string -> 'a t -> 'a list t
+
 val applied0 : string -> unit t
+
 val applied1 : string -> 'a t -> 'a t
+
 val applied2 : string -> 'a t -> 'b t -> ('a * 'b) t
+
 val applied3 : string -> 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) t
+
 val applied4 : string -> 'a t -> 'b t -> 'c t -> 'd t -> ('a * 'b * 'c * 'd) t
 
 val try_apply : string -> (sexp list -> 'a t) -> 'a t -> 'a t
@@ -142,10 +180,13 @@ val applied_fields : string -> Fields.t t
     and returns the corresponding list of fields. *)
 
 val run : 'a t -> sexp -> ('a, err) result
+
 val run' : 'a t -> sexp -> ('a, string) result
 
 module Err : sig
   type t = err
+
   val loc : t -> Loc.t
+
   val to_error : t -> Error.t
 end

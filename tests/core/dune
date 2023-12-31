@@ -1,21 +1,27 @@
-
 (executable
-  (name run_tests)
-  (modes native)
-  (flags :standard  -w -a -warn-error -a+8)
-  (libraries trustee.core ounit2 qcheck-core qcheck-ounit))
+ (name run_tests)
+ (modes native)
+ (flags :standard -w -a -warn-error -a+8)
+ (libraries trustee.core ounit2 qcheck-core qcheck-ounit))
 
 (rule
-  (targets test_rw.ml)
-  (enabled_if (>= %{ocaml_version} 4.08.0))
-  (action (copy test_rw.408.ml %{targets})))
+ (targets test_rw.ml)
+ (enabled_if
+  (>= %{ocaml_version} 4.08.0))
+ (action
+  (copy test_rw.408.ml %{targets})))
 
 (rule
-  (targets test_rw.ml)
-  (enabled_if (< %{ocaml_version} 4.08.0))
-  (action (with-stdout-to %{targets} (echo "let suite=OUnit2.(\"rw\">:::[])"))))
+ (targets test_rw.ml)
+ (enabled_if
+  (< %{ocaml_version} 4.08.0))
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo "let suite=OUnit2.(\"rw\">:::[])"))))
 
 (rule
-  (alias runtest)
-  (locks /test)
-  (action (run ./run_tests.exe -ci false -runner sequential)))
+ (alias runtest)
+ (locks /test)
+ (action
+  (run ./run_tests.exe -ci false -runner sequential)))

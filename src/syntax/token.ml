@@ -1,27 +1,21 @@
-
 open Common_
 
 type t =
   | LPAREN
   | RPAREN
-
   | COLON
   | DOT
   | COMMA
-
   | WILDCARD
   | QUESTION_MARK
-
   | LET
   | IN
   | EQDEF
-
   | QUESTION_MARK_STR of string
   | SYM of string
   | QUOTE_STR of string (* 'foo *)
   | QUOTED_STR of string
   | NUM of string
-
   | ERROR of char
   | EOF
 
@@ -43,5 +37,7 @@ let pp out = function
   | NUM s -> Fmt.fprintf out "(NUM %S)" s
   | ERROR c -> Fmt.fprintf out "(ERROR '%c')" c
   | EOF -> Fmt.string out "EOF"
+
 let to_string = Fmt.to_string pp
-let equal : t -> t -> bool = (=)
+
+let equal : t -> t -> bool = ( = )

@@ -1,4 +1,3 @@
-
 (** Virtual machine.
 
     We embed a little virtual machine, with instructions manipulating
@@ -16,8 +15,11 @@ module K = Kernel
 type 'a vec
 
 type vm
+
 type thunk
+
 type chunk
+
 type primitive
 
 (** Values manipulated by the VM. *)
@@ -25,49 +27,73 @@ module Value : sig
   type t
 
   val nil : t
+
   val bool : bool -> t
+
   val int : int -> t
+
   val string : string -> t
+
   val array : t vec -> t
+
   val expr : K.Expr.t -> t
+
   val thm : K.Thm.t -> t
+
   val var : K.Var.t -> t
+
   val subst : K.Subst.t -> t
+
   val theory : K.Theory.t -> t
+
   val prim : primitive -> t
+
   val chunk : chunk -> t
+
   val thunk : thunk -> t
 
   (* TODO: custom values? *)
 
   val equal : t -> t -> bool
+
   val pp : t Fmt.printer
+
   val show : t -> string
 
   type 'a conv_to = t -> 'a option
+
   type 'a conv_to_exn = t -> 'a
 
   val to_str : string conv_to
+
   val to_bool : bool conv_to
+
   val to_int : int conv_to
 
   val to_str_exn : string conv_to_exn
+
   val to_bool_exn : bool conv_to_exn
+
   val to_int_exn : int conv_to_exn
 end
 
 (** Instructions for the VM *)
 module Instr : sig
   type t = VM_instr_.t
+
   include module type of VM_instr_.Build
+
   include Sigs.PP with type t := t
 end
 
 (** Chunk of executable bytecode. *)
 module Chunk : sig
   type t = chunk
+
   val strip_comments : t -> unit
+
   include PP with type t := t
+
   val debug : t Fmt.printer
 end
 
@@ -83,14 +109,13 @@ end
 *)
 module Primitive : sig
   type t = primitive
+
   include PP with type t := t
+
   val name : t -> string
 
+  val make : name:string -> eval:(vm -> unit) -> unit -> t
   (** Make a new primitive. *)
-  val make :
-    name:string ->
-    eval:(vm -> unit) ->
-    unit -> t
 end
 
 (** Thunks.
@@ -98,6 +123,7 @@ end
     A thunk is a delayed/lazy computation of some {!Chunk.t}. *)
 module Thunk : sig
   type t = thunk
+
   include PP with type t := t
 
   val debug : t Fmt.printer
@@ -130,19 +156,17 @@ module Stanza : sig
         name: string;
         ty: Thunk.t;
       }
-
     | Define of {
         name: string;
         body: Thunk.t;
       }
-
     | Prove of {
         name: string;
-        deps: (string * [`Eager | `Lazy] * string) list;
+        deps: (string * [ `Eager | `Lazy ] * string) list;
         goal: Thunk.t; (* sequent *)
         proof: Thunk.t; (* thm *)
       }
-      (** Proof a goal using a chunk and some dependencies.
+        (** Proof a goal using a chunk and some dependencies.
           Dependencies are previous "Prove" steps and each dependency
           [local, kind, name] can be either:
 
@@ -154,20 +178,15 @@ module Stanza : sig
             A later step will have to resolve the result with the actual
             boxed proof of the step at [name].
         *)
-
     | Define_thunk of {
         name: string;
         value: Thunk.t;
-      } (** Define a meta-level chunk *)
-
+      }  (** Define a meta-level chunk *)
     | Define_chunk of {
         name: string;
         value: Chunk.t;
-      } (** Define a meta-level chunk *)
-
-    | Eval of {
-        value: Thunk.t;
-      }
+      }  (** Define a meta-level chunk *)
+    | Eval of { value: Thunk.t }
 
   val make : id:Sym_ptr.t -> view -> t
 
@@ -185,11 +204,7 @@ end
 module Chunk_builder : sig
   type t
 
-  val create :
-    ?allow_comments:bool ->
-    n_args:int ->
-    n_ret:int ->
-    unit -> t
+  val create : ?allow_comments:bool -> n_args:int -> n_ret:int -> unit -> t
   (** Create a new chunk builder.
       @param n_args number of arguments the chunk takes
       @param n_ret number of values returned by the chunk *)
@@ -221,9 +236,7 @@ end
 type t = vm
 (** Virtual machine *)
 
-val create :
-  ctx:K.Ctx.t ->
-  unit -> t
+val create : ctx:K.Ctx.t -> unit -> t
 (** Create a new VM.
     @param ctx the logical context to use to create expressions and
     theorems
@@ -246,22 +259,14 @@ val pop : t -> Value.t option
 
 val pop_exn : t -> Value.t
 
-val run :
-  t -> Chunk.t ->
-  unit
+val run : t -> Chunk.t -> unit
 
 val eval_thunk :
-  ?debug_hook:debug_hook ->
-  K.Ctx.t ->
-  Thunk.t ->
-  (Value.t list, Error.t) result
+  ?debug_hook:debug_hook -> K.Ctx.t -> Thunk.t -> (Value.t list, Error.t) result
 (** Evaluate a thunk (and possibly its dependencies, recursively) *)
 
 val eval_thunk1 :
-  ?debug_hook:debug_hook ->
-  K.Ctx.t ->
-  Thunk.t ->
-  (Value.t, Error.t) result
+  ?debug_hook:debug_hook -> K.Ctx.t -> Thunk.t -> (Value.t, Error.t) result
 
 module Eval_effect : sig
   type t =
@@ -277,16 +282,10 @@ module Eval_effect : sig
 end
 
 val eval_stanza :
-  ?debug_hook:debug_hook ->
-  K.Ctx.t -> Stanza.t ->
-  Eval_effect.t list
+  ?debug_hook:debug_hook -> K.Ctx.t -> Stanza.t -> Eval_effect.t list
 
-val eval_stanza_pp :
-  ?debug_hook:debug_hook ->
-  K.Ctx.t -> Stanza.t ->
-  unit
+val eval_stanza_pp : ?debug_hook:debug_hook -> K.Ctx.t -> Stanza.t -> unit
 
 val dump : t Fmt.printer
 (** Debug printer for the VM.
     Output is not specified, and not guaranteed to be stable. *)
-

@@ -1,4 +1,3 @@
-
 (** Fixity
 
     Symbols can be infix, prefix, misfix, etc. with various precedence.
@@ -19,18 +18,26 @@ type t =
   | F_binder of precedence
 
 val pp : t Fmt.printer
+
 val to_string : t -> string
 
 val normal : t
+
 val lassoc : precedence -> t
+
 val rassoc : precedence -> t
+
 val prefix : precedence -> t
+
 val postfix : precedence -> t
+
 val binder : precedence -> t
+
 val infix : precedence -> t
 
 val get_prec : t -> precedence
 
 val pp_syntax : t Fmt.printer
+
 val to_string_syntax : t -> string
 (** Print in a re-parsable way. *)

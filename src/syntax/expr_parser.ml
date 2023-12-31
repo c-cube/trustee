@@ -1,4 +1,3 @@
-
 (** {1 Expression parser} *)
 
 open Common_
@@ -12,34 +11,29 @@ module P_state = struct
     bindings: A.Expr.var Str_tbl.t;
   }
 
-  let create (src: Lexer.t) ~notation : t =
-    { lex=src;
-      notation;
-      bindings=Str_tbl.create 16;
-    }
+  let create (src : Lexer.t) ~notation : t =
+    { lex = src; notation; bindings = Str_tbl.create 16 }
 
   let eat_p ~msg self ~f : Token.t * Loc.t =
     let t2, loc = Lexer.S.cur self.lex in
     if f t2 then (
       Lexer.S.consume self.lex;
       t2, loc
-    ) else (
-      Error.failf ~loc
-        (fun k->k "unexpected token %a while parsing;@ %s"
-            Token.pp t2 msg)
-    )
+    ) else
+      Error.failf ~loc (fun k ->
+          k "unexpected token %a while parsing;@ %s" Token.pp t2 msg)
 
-  let eat_p' ~msg self ~f : unit =
-    ignore (eat_p ~msg self ~f : Token.t * _)
+  let eat_p' ~msg self ~f : unit = ignore (eat_p ~msg self ~f : Token.t * _)
 
-  let eat_eq ~msg self (t:Token.t) : Loc.t =
+  let eat_eq ~msg self (t : Token.t) : Loc.t =
     snd @@ eat_p ~msg self ~f:(Token.equal t)
 
-  let eat_eq' ~msg self (t:Token.t) : unit =
+  let eat_eq' ~msg self (t : Token.t) : unit =
     eat_p' ~msg self ~f:(Token.equal t)
 end
 
 type state = P_state.t
+
 type 'a parser_ = state -> 'a
 
 (* We follow a mix of:
@@ -48,20 +42,29 @@ type 'a parser_ = state -> 'a
 *)
 module P_expr : sig
   val expr : ?ty_expect:A.Expr.t -> A.Expr.t parser_
+
   val expr_atomic : ?ty_expect:A.Expr.t -> A.Expr.t parser_
+
   val expr_and_eof : A.Expr.t parser_
+
   val p_tyvars_until :
-    f:(Token.t -> bool) -> state -> A.Expr.var list -> Token.t * Loc.t * A.Expr.var list
+    f:(Token.t -> bool) ->
+    state ->
+    A.Expr.var list ->
+    Token.t * Loc.t * A.Expr.var list
+
   val p_const : A.Const.t parser_
+
   val p_ident : state -> string * Loc.t
 end = struct
   open P_state
   open Loc.Infix
 
   type precedence = Fixity.precedence
+
   type t = P_state.t
 
-  let fixity_ (self:t) (s:string) : Fixity.t =
+  let fixity_ (self : t) (s : string) : Fixity.t =
     let module F = Fixity in
     match s with
     | "->" -> F.rassoc 100
@@ -76,14 +79,13 @@ end = struct
     | SYM s, loc ->
       Lexer.S.consume self.lex;
       s, loc
-    | _, loc ->
-      Error.fail ~loc "expected identifier"
+    | _, loc -> Error.fail ~loc "expected identifier"
 
-  let p_const (self:t) : A.Const.t =
+  let p_const (self : t) : A.Const.t =
     let name, loc = p_ident self in
     A.Const.make ~loc name
 
-  let expr_of_string_ (self:t) ~loc (s:string) : A.Expr.t =
+  let expr_of_string_ (self : t) ~loc (s : string) : A.Expr.t =
     match Str_tbl.find self.bindings s with
     | u -> A.Expr.var ~loc u
     | exception Not_found -> A.Expr.var ~loc (A.Var.make ~loc s None)
@@ -95,22 +97,21 @@ end = struct
     eat_eq' self EQDEF ~msg:"`:=` in let binding";
     let e = p_expr_ ~ty_expect:None self 0 in
     eat_eq' self IN ~msg:"expect `in` after let binding";
-    [v, e]
+    [ v, e ]
 
   and p_tyvar_grp_ self : A.Expr.var list =
     let rec loop names =
       match Lexer.S.cur self.lex with
       | SYM s, loc ->
         Lexer.S.consume self.lex;
-        loop ((s,loc)::names)
+        loop ((s, loc) :: names)
       | COLON, _loc ->
         Lexer.S.consume self.lex;
         let ty = p_expr_ ~ty_expect:(Some A.Expr.type_) self 0 in
-        List.rev_map (fun (v,loc) -> A.Var.make ~loc v (Some ty)) names
+        List.rev_map (fun (v, loc) -> A.Var.make ~loc v (Some ty)) names
       | (RPAREN | DOT), _loc ->
-        List.rev_map (fun (v,loc) -> A.Var.make ~loc v None) names
-      | _, loc ->
-        Error.fail ~loc"expected group of typed variables"
+        List.rev_map (fun (v, loc) -> A.Var.make ~loc v None) names
+      | _, loc -> Error.fail ~loc "expected group of typed variables"
     in
     loop []
 
@@ -130,20 +131,23 @@ end = struct
         p_tyvars_until ~f self (List.rev_append l acc)
       | SYM _, loc ->
         let l = p_tyvar_grp_ self in
-        let last, _ = eat_p self ~f ~msg:"`.` terminating list of bound variables" in
+        let last, _ =
+          eat_p self ~f ~msg:"`.` terminating list of bound variables"
+        in
         last, loc, List.rev @@ List.rev_append l acc
-      | _, loc ->
-        Error.fail ~loc "expected list of (typed) variables"
+      | _, loc -> Error.fail ~loc "expected list of (typed) variables"
     )
 
   and p_tyvars_and_dot self acc : A.Expr.var list =
     let _d, _loc, l =
-      p_tyvars_until self acc ~f:(function DOT -> true | _ -> false)
+      p_tyvars_until self acc ~f:(function
+        | DOT -> true
+        | _ -> false)
     in
     l
 
-  and p_nullary_ ~loc (self:t) (s:string) : A.Expr.t =
-    Log.debugf 6 (fun k->k"nullary `%s` loc=%a" s Loc.pp_compact loc);
+  and p_nullary_ ~loc (self : t) (s : string) : A.Expr.t =
+    Log.debugf 6 (fun k -> k "nullary `%s` loc=%a" s Loc.pp_compact loc);
     match Lexer.S.cur self.lex with
     | COLON, _ ->
       Lexer.S.consume self.lex;
@@ -151,17 +155,15 @@ end = struct
       let loc = A.Expr.loc ty ++ loc in
       A.Expr.var ~loc (A.Var.make ~loc s (Some ty))
     | _ ->
-      if s<>"" then (
+      if s <> "" then
         expr_of_string_ ~loc self s
-      ) else (
-        Error.failf ~loc (fun k->k"unknown symbol `%s`" s)
-      )
+      else
+        Error.failf ~loc (fun k -> k "unknown symbol `%s`" s)
 
-  and p_expr_atomic_ ~ty_expect (self:t) : A.Expr.t =
+  and p_expr_atomic_ ~ty_expect (self : t) : A.Expr.t =
     let t, loc_t = Lexer.S.cur self.lex in
     match t with
-    | ERROR c ->
-      Error.failf ~loc:loc_t (fun k->k"invalid char '%c'" c)
+    | ERROR c -> Error.failf ~loc:loc_t (fun k -> k "invalid char '%c'" c)
     | LPAREN ->
       Lexer.S.consume self.lex;
       let e = p_expr_ ~ty_expect self 0 in
@@ -170,41 +172,38 @@ end = struct
     | LET ->
       Lexer.S.consume self.lex;
       (* parse `let x = e in e2` *)
-      Log.debugf 5 (fun k->k"parsing let");
+      Log.debugf 5 (fun k -> k "parsing let");
       let bs = p_bindings_ self in
-      List.iter (fun (v,_) -> Str_tbl.add self.bindings v.A.Var.name v) bs;
+      List.iter (fun (v, _) -> Str_tbl.add self.bindings v.A.Var.name v) bs;
       let bod = p_expr_ ~ty_expect self 0 in
-      List.iter (fun (v,_) -> Str_tbl.remove self.bindings v.A.Var.name) bs;
+      List.iter (fun (v, _) -> Str_tbl.remove self.bindings v.A.Var.name) bs;
       A.Expr.let_ ~loc:(loc_t ++ A.Expr.loc bod) bs bod
     | SYM s ->
       Lexer.S.consume self.lex;
-      begin match fixity_ self s with
-        | _ when fst (Lexer.S.cur self.lex) = RPAREN ->
-          (* case: `(=)` or `(+)`: return the sybol *)
-          p_nullary_ ~loc:loc_t self s
-        | F_normal -> p_nullary_ ~loc:loc_t self s
-        | F_prefix i ->
-          (* TODO: parse a list? *)
-          let arg = p_expr_ ~ty_expect:None self i in
-          let lhs = expr_of_string_ ~loc:loc_t self s in
-          A.Expr.app lhs [arg]
-        | F_binder i ->
-          let vars = p_tyvars_and_dot self [] in
-          let body = p_expr_ ~ty_expect self i in
-          let loc = loc_t ++ A.Expr.loc body in
-          begin match s with
-            | "\\" -> A.Expr.lambda ~loc vars body
-            | "with" -> A.Expr.with_ ~loc vars body
-            | _ ->
-              let b = A.Const.make ~loc:loc_t s in
-              A.Expr.bind ~loc b vars body
-          end
-        | (F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _) ->
-          Error.failf ~loc:loc_t
-            (fun k->k
-                "unexpected infix operator `%s`@ \
-                 while parsing atomic expression" s)
-      end
+      (match fixity_ self s with
+      | _ when fst (Lexer.S.cur self.lex) = RPAREN ->
+        (* case: `(=)` or `(+)`: return the sybol *)
+        p_nullary_ ~loc:loc_t self s
+      | F_normal -> p_nullary_ ~loc:loc_t self s
+      | F_prefix i ->
+        (* TODO: parse a list? *)
+        let arg = p_expr_ ~ty_expect:None self i in
+        let lhs = expr_of_string_ ~loc:loc_t self s in
+        A.Expr.app lhs [ arg ]
+      | F_binder i ->
+        let vars = p_tyvars_and_dot self [] in
+        let body = p_expr_ ~ty_expect self i in
+        let loc = loc_t ++ A.Expr.loc body in
+        (match s with
+        | "\\" -> A.Expr.lambda ~loc vars body
+        | "with" -> A.Expr.with_ ~loc vars body
+        | _ ->
+          let b = A.Const.make ~loc:loc_t s in
+          A.Expr.bind ~loc b vars body)
+      | F_left_assoc _ | F_right_assoc _ | F_postfix _ | F_infix _ ->
+        Error.failf ~loc:loc_t (fun k ->
+            k "unexpected infix operator `%s`@ while parsing atomic expression"
+              s))
     | WILDCARD ->
       Lexer.S.consume self.lex;
       A.Expr.wildcard ~loc:loc_t ()
@@ -214,17 +213,16 @@ end = struct
     | QUOTE_STR s ->
       Lexer.S.consume self.lex;
       A.Expr.ty_var ~loc:loc_t s
-    | QUESTION_MARK -> Error.fail ~loc:loc_t "TODO: `?`"
+    | QUESTION_MARK ->
+      Error.fail ~loc:loc_t "TODO: `?`"
       (* TODO: remove interpolation and use this for free variables instead?
-      begin match self.q_args with
-        | [] -> errorf (fun k->k"no interpolation arg at %a" Loc.pp loc_t)
-        | t :: tl -> self.q_args <- tl; A.Expr.of_k_expr ~loc:loc_t t
-      end
-           *)
-    | NUM _ ->
-      Error.fail ~loc:loc_t "TODO: parse numbers" (* TODO *)
-    | RPAREN | COLON | DOT | IN | EOF | QUOTED_STR _
-    | EQDEF | COMMA ->
+         begin match self.q_args with
+           | [] -> errorf (fun k->k"no interpolation arg at %a" Loc.pp loc_t)
+           | t :: tl -> self.q_args <- tl; A.Expr.of_k_expr ~loc:loc_t t
+         end
+      *)
+    | NUM _ -> Error.fail ~loc:loc_t "TODO: parse numbers" (* TODO *)
+    | RPAREN | COLON | DOT | IN | EOF | QUOTED_STR _ | EQDEF | COMMA ->
       Error.fail ~loc:loc_t "expected expression"
 
   and p_expr_app_ ~ty_expect self : A.Expr.t =
@@ -236,18 +234,20 @@ end = struct
         Lexer.S.consume self.lex;
         let e2 = p_expr_ self ~ty_expect:None 0 in
         eat_eq' self RPAREN ~msg:"expect `)` to close sub-expression";
-        e := A.Expr.app !e [e2];
+        e := A.Expr.app !e [ e2 ]
       | SYM s, loc_s when fixity_ self s = Fixity.F_normal ->
         Lexer.S.consume self.lex;
         let e2 = p_nullary_ ~loc:loc_s self s in
-        e := A.Expr.app !e [e2];
-      | _ -> continue := false;
+        e := A.Expr.app !e [ e2 ]
+      | _ -> continue := false
     done;
     !e
 
-  and p_expr_ ~ty_expect (self:t) (p:precedence) : A.Expr.t =
+  and p_expr_ ~ty_expect (self : t) (p : precedence) : A.Expr.t =
     let lhs = ref (p_expr_app_ ~ty_expect self) in
-    Log.debugf 6 (fun k->k"lhs: `%a`, prec: %d, loc=%a" A.Expr.pp !lhs p Loc.pp_compact (A.Expr.loc !lhs));
+    Log.debugf 6 (fun k ->
+        k "lhs: `%a`, prec: %d, loc=%a" A.Expr.pp !lhs p Loc.pp_compact
+          (A.Expr.loc !lhs));
     let p = ref p in
     let continue = ref true in
     while !continue do
@@ -257,80 +257,76 @@ end = struct
         Lexer.S.consume self.lex;
         let e = p_expr_ ~ty_expect:None self 0 in
         eat_eq' self ~msg:"expression" RPAREN;
-        lhs := A.Expr.app !lhs [e]
-      | (RPAREN | WILDCARD | COLON | DOT | IN | COMMA | LET), _loc -> continue
-        := false
-      | (QUESTION_MARK | QUOTED_STR _ | QUOTE_STR _
-        | QUESTION_MARK_STR _ | NUM _), _ ->
+        lhs := A.Expr.app !lhs [ e ]
+      | (RPAREN | WILDCARD | COLON | DOT | IN | COMMA | LET), _loc ->
+        continue := false
+      | ( ( QUESTION_MARK | QUOTED_STR _ | QUOTE_STR _ | QUESTION_MARK_STR _
+          | NUM _ ),
+          _ ) ->
         let e = p_expr_atomic_ ~ty_expect:None self in
-        lhs := A.Expr.app !lhs [e];
+        lhs := A.Expr.app !lhs [ e ]
       | SYM s, loc_s ->
         Lexer.S.consume self.lex;
         let f = fixity_ self s in
-        begin match f with
-          | (F_left_assoc p' | F_right_assoc p' | F_infix p') when p' >= !p ->
-            let rhs = ref (p_expr_app_ ~ty_expect:None self) in
-            let continue2 = ref true in
-            (* parse right-assoc series *)
-            while !continue2 do
-              match Lexer.S.cur self.lex with
-              | SYM s2, loc_s2 ->
-                begin match fixity_ self s2 with
-                  | F_right_assoc p2 when p2 = p' ->
-                    Lexer.S.consume self.lex;
-                    let e = p_expr_ self ~ty_expect:None p2 in
-                    rhs := (
-                      if s2 = "->" then (
-                        let loc = loc_s2 ++ A.Expr.loc e in
-                        A.Expr.ty_arrow ~loc [!rhs] e
-                      ) else (
-                        let op2 = expr_of_string_ ~loc:loc_s2 self s2 in
-                        A.Expr.app op2 [!rhs; e]
-                      )
-                    )
-                  | _ -> continue2 := false
-                end
-              | _ -> continue2 := false
-            done;
-            lhs := (
-              let loc = loc_s ++ A.Expr.loc !lhs ++ A.Expr.loc !rhs in
-              if s = "->" then A.Expr.ty_arrow ~loc [!lhs] !rhs
-              else if s = "=" then A.Expr.eq ~loc !lhs !rhs
-              else (
-                let op = expr_of_string_ ~loc:loc_s self s in
-                A.Expr.app op [!lhs; !rhs]
-              )
+        (match f with
+        | (F_left_assoc p' | F_right_assoc p' | F_infix p') when p' >= !p ->
+          let rhs = ref (p_expr_app_ ~ty_expect:None self) in
+          let continue2 = ref true in
+          (* parse right-assoc series *)
+          while !continue2 do
+            match Lexer.S.cur self.lex with
+            | SYM s2, loc_s2 ->
+              (match fixity_ self s2 with
+              | F_right_assoc p2 when p2 = p' ->
+                Lexer.S.consume self.lex;
+                let e = p_expr_ self ~ty_expect:None p2 in
+                rhs :=
+                  if s2 = "->" then (
+                    let loc = loc_s2 ++ A.Expr.loc e in
+                    A.Expr.ty_arrow ~loc [ !rhs ] e
+                  ) else (
+                    let op2 = expr_of_string_ ~loc:loc_s2 self s2 in
+                    A.Expr.app op2 [ !rhs; e ]
+                  )
+              | _ -> continue2 := false)
+            | _ -> continue2 := false
+          done;
+          lhs :=
+            let loc = loc_s ++ A.Expr.loc !lhs ++ A.Expr.loc !rhs in
+            if s = "->" then
+              A.Expr.ty_arrow ~loc [ !lhs ] !rhs
+            else if s = "=" then
+              A.Expr.eq ~loc !lhs !rhs
+            else (
+              let op = expr_of_string_ ~loc:loc_s self s in
+              A.Expr.app op [ !lhs; !rhs ]
             )
-          | F_normal ->
-            let arg = p_nullary_ ~loc:loc_s self s in
-            lhs := A.Expr.app !lhs [arg]
-          | F_prefix _ | F_postfix _ | F_binder _ ->
-            (* TODO: in case of prefix, we could just parse an appliation *)
-            Error.fail ~loc:loc_s "expected infix operator"
-          | F_left_assoc _ | F_right_assoc _ | F_infix _ ->
-            (* lower precedence *)
-            continue := false
-        end
+        | F_normal ->
+          let arg = p_nullary_ ~loc:loc_s self s in
+          lhs := A.Expr.app !lhs [ arg ]
+        | F_prefix _ | F_postfix _ | F_binder _ ->
+          (* TODO: in case of prefix, we could just parse an appliation *)
+          Error.fail ~loc:loc_s "expected infix operator"
+        | F_left_assoc _ | F_right_assoc _ | F_infix _ ->
+          (* lower precedence *)
+          continue := false)
       | ERROR c, loc ->
-        Error.failf ~loc (fun k->k "lexing error: unexpected char '%c'" c)
+        Error.failf ~loc (fun k -> k "lexing error: unexpected char '%c'" c)
     done;
     !lhs
 
-  let expr_atomic ?ty_expect self : A.Expr.t =
-    p_expr_atomic_ ~ty_expect self
+  let expr_atomic ?ty_expect self : A.Expr.t = p_expr_atomic_ ~ty_expect self
 
-  let expr ?ty_expect (self:t) : A.Expr.t =
-    p_expr_ ~ty_expect self 0
+  let expr ?ty_expect (self : t) : A.Expr.t = p_expr_ ~ty_expect self 0
 
   (* main entry point for expressions *)
-  let expr_and_eof (self:t) : A.Expr.t =
+  let expr_and_eof (self : t) : A.Expr.t =
     let e = expr self in
     let last_tok, _loc = Lexer.S.cur self.lex in
-    if last_tok <> EOF then (
-      Error.failf ~loc:_loc
-        (fun k->k"expected end of input after parsing expression, but got %a"
+    if last_tok <> EOF then
+      Error.failf ~loc:_loc (fun k ->
+          k "expected end of input after parsing expression, but got %a"
             Token.pp last_tok);
-    );
     e
 end
 
@@ -344,12 +340,13 @@ let parse_expr ~notation lex : A.Expr.t or_error =
     Ok e
   with Error.E err ->
     (* best effort location *)
-    let loc = match Error.loc err with
+    let loc =
+      match Error.loc err with
       | Some l -> l
       | None -> snd @@ Lexer.S.cur lex
     in
-    Error (loc,err)
+    Error (loc, err)
 
-let expr_of_string ?loc_offset ?src_string ?(file="<string>") ~notation
-    s : A.Expr.t or_error =
+let expr_of_string ?loc_offset ?src_string ?(file = "<string>") ~notation s :
+    A.Expr.t or_error =
   parse_expr ~notation (Lexer.create ?loc_offset ?src_string ~file s)

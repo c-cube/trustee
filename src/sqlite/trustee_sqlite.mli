@@ -1,4 +1,3 @@
-
 val storage : string -> Storage.t
 (** Use the given filename to provide storage using Sqlite *)
 

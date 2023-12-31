@@ -1,4 +1,3 @@
-
 open Sigs
 module K = Kernel
 module Su = K.Subst
@@ -11,10 +10,9 @@ exception Fail
 let[@unroll 2] rec deref subst e =
   match E.view e with
   | E.E_var v ->
-    begin match Su.find_exn v subst with
-      | exception Not_found -> e
-      | e' -> deref subst e'
-    end
+    (match Su.find_exn v subst with
+    | exception Not_found -> e
+    | e' -> deref subst e')
   | _ -> e
 
 (* occur check: does [v] occur in [e]? *)
@@ -30,7 +28,8 @@ let unif_rec_ subst a b : subst =
     let b = deref subst b in
 
     (* unify types first *)
-    let subst = match E.ty a, E.ty b with
+    let subst =
+      match E.ty a, E.ty b with
       | None, None -> subst
       | Some ty1, Some ty2 when E.equal ty1 ty2 -> subst
       | Some ty1, Some ty2 -> loop subst ty1 ty2
@@ -46,7 +45,7 @@ let unif_rec_ subst a b : subst =
       if occ_check subst v a then raise Fail;
       Su.bind subst v a
     | E.E_const (c1, l1), E.E_const (c2, l2) when K.Const.equal c1 c2 ->
-      assert (List.length l1=List.length l2);
+      assert (List.length l1 = List.length l2);
       List.fold_left2 loop subst l1 l2
     | E.E_bound_var v1, E.E_bound_var v2 when v1.bv_idx = v2.bv_idx ->
       subst (* types are already unified *)
@@ -57,22 +56,22 @@ let unif_rec_ subst a b : subst =
     | E.E_lam (_, ty1, bod1), E.E_lam (_, ty2, bod2) ->
       let subst = loop subst ty1 ty2 in
       loop subst bod1 bod2
-    | (E.E_kind | E.E_type | E.E_app _ | E.E_arrow _
-      | E.E_const _ | E.E_bound_var _ | E.E_lam _ | E.E_box _), _ ->
+    | ( ( E.E_kind | E.E_type | E.E_app _ | E.E_arrow _ | E.E_const _
+        | E.E_bound_var _ | E.E_lam _ | E.E_box _ ),
+        _ ) ->
       raise Fail
   in
   loop subst a b
 
-let unify_exn ?(subst=Su.empty) a b = unif_rec_ subst a b
+let unify_exn ?(subst = Su.empty) a b = unif_rec_ subst a b
 
-let unify ?subst a b =
-  try Some (unify_exn ?subst a b)
-  with Fail -> None
+let unify ?subst a b = try Some (unify_exn ?subst a b) with Fail -> None
 
 let match_rec_ subst a b : subst =
   let rec loop subst a b =
     (* match types first *)
-    let subst = match E.ty a, E.ty b with
+    let subst =
+      match E.ty a, E.ty b with
       | None, None -> subst
       | Some ty1, Some ty2 when E.equal ty1 ty2 -> subst
       | Some ty1, Some ty2 -> loop subst ty1 ty2
@@ -82,11 +81,14 @@ let match_rec_ subst a b : subst =
     | E.E_var v1, _ when Su.mem v1 subst ->
       (* follow substitution but only once *)
       let t = Su.find_exn v1 subst in
-      if E.equal t b then subst else raise Fail
+      if E.equal t b then
+        subst
+      else
+        raise Fail
     | E.E_var v1, E.E_var v2 when K.Var.equal v1 v2 -> subst
     | E.E_var v, _ -> Su.bind subst v b
     | E.E_const (c1, l1), E.E_const (c2, l2) when K.Const.equal c1 c2 ->
-      assert (List.length l1=List.length l2);
+      assert (List.length l1 = List.length l2);
       List.fold_left2 loop subst l1 l2
     | E.E_bound_var v1, E.E_bound_var v2 when v1.bv_idx = v2.bv_idx ->
       subst (* types are already matched *)
@@ -97,26 +99,25 @@ let match_rec_ subst a b : subst =
     | E.E_lam (_, ty1, bod1), E.E_lam (_, ty2, bod2) ->
       let subst = loop subst ty1 ty2 in
       loop subst bod1 bod2
-    | (E.E_kind | E.E_type | E.E_app _ | E.E_arrow _
-      | E.E_const _ | E.E_bound_var _ | E.E_lam _ | E.E_box _), _ ->
+    | ( ( E.E_kind | E.E_type | E.E_app _ | E.E_arrow _ | E.E_const _
+        | E.E_bound_var _ | E.E_lam _ | E.E_box _ ),
+        _ ) ->
       raise Fail
   in
   loop subst a b
 
-let match_exn ?(subst=Su.empty) a b = match_rec_ subst a b
+let match_exn ?(subst = Su.empty) a b = match_rec_ subst a b
 
-let match_ ?subst a b =
-  try Some (match_exn ?subst a b)
-  with Fail -> None
+let match_ ?subst a b = try Some (match_exn ?subst a b) with Fail -> None
 
 let alpha_equiv_exn ?subst a b =
   let subst = match_exn ?subst a b in
-  if K.Subst.is_renaming subst then subst
-  else raise Fail
+  if K.Subst.is_renaming subst then
+    subst
+  else
+    raise Fail
 
 let alpha_equiv ?subst a b =
-  try Some (alpha_equiv_exn ?subst a b)
-  with Fail -> None
+  try Some (alpha_equiv_exn ?subst a b) with Fail -> None
 
-let is_alpha_equiv ?subst a b : bool =
-  Option.is_some (alpha_equiv ?subst a b)
+let is_alpha_equiv ?subst a b : bool = Option.is_some (alpha_equiv ?subst a b)

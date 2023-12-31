@@ -1,8 +1,8 @@
-
 (library
-  (name trustee_syntax)
-  (public_name trustee.syntax)
-  (libraries trustee.core trustee.loc containers pp_loc)
-  (flags :standard -warn-error -a+8 -open Trustee_core.Sigs -open Trustee_loc))
+ (name trustee_syntax)
+ (public_name trustee.syntax)
+ (libraries trustee.core trustee.loc containers pp_loc)
+ (flags :standard -warn-error -a+8 -open Trustee_core.Sigs -open Trustee_loc))
 
-(ocamllex (modules sexp_lex))
+(ocamllex
+ (modules sexp_lex))

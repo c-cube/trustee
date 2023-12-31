@@ -1,4 +1,3 @@
-
 (** Main error type.
 
     This error type has an optional location, unlike {!Trustee_core.Error}.

@@ -1,13 +1,12 @@
-
-let top = parse_top_str ~filename:"t1"
-{|fn f(x,y) {
+let top = parse_top_str ~filename:"t1" {|fn f(x,y) {
    f(x,y) }
 |};;
 
-Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top;;
+Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top
 
-let top = parse_top_str ~filename:"t1"
-{|fn f(x,y) {
+let top =
+  parse_top_str ~filename:"t1"
+    {|fn f(x,y) {
   let z1 = f(g(h(x), y), z1, z2);
   g(z1, z1);
   z1
@@ -16,12 +15,14 @@ let top = parse_top_str ~filename:"t1"
 f(1, "yolo");
 
 fn g(x) { x }
-|};;
+|}
+;;
 
-Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top;;
+Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top
 
-let top = parse_top_str ~filename:"t1"
-{|fn f(x,y, z, ) {
+let top =
+  parse_top_str ~filename:"t1"
+    {|fn f(x,y, z, ) {
   while p(x,z) {
     var y = f(x+1,"foo");
     y = z + 1 + $ \x (y z: foo). x (x y) z $;
@@ -41,9 +42,7 @@ let top = parse_top_str ~filename:"t1"
 }
 
 call_some_fun(g(:atom, :atom2), "bang!");
-|};;
+|}
+;;
 
-Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top;;
-
-
-
+Format.printf "parsed:@ %a@." (pp_or_error Ast.pp_top) top

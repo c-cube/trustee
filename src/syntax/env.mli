@@ -1,4 +1,3 @@
-
 (** Typing environment.
 
     The environment maps names to types, constants, meta constants, etc.
@@ -23,4 +22,3 @@ val completions : t -> string -> TA.Const.t Iter.t
 val pp : t Fmt.printer
 
 (* TODO: modules? merge? maybe not before hierarchical names *)
-

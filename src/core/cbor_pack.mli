@@ -1,9 +1,5 @@
-
 (** Cbor-pack *)
 
-(** CBOR value.
-
-    Compatible with the "CBOR.Simple" module. *)
 type cbor =
   [ `Array of cbor list
   | `Bool of bool
@@ -15,7 +11,11 @@ type cbor =
   | `Simple of int
   | `Tag of int * cbor
   | `Text of string
-  | `Undefined ]
+  | `Undefined
+  ]
+(** CBOR value.
+
+    Compatible with the "CBOR.Simple" module. *)
 
 type t = {
   h: cbor Vec.t; (* heap *)
@@ -99,11 +99,11 @@ module Dec : sig
 
   val memo : 'a key -> 'a t -> 'a t
 
-  val (let+) : 'a t -> ('a -> 'b) -> 'b t
+  val ( let+ ) : 'a t -> ('a -> 'b) -> 'b t
 
-  val (and+) : 'a t -> 'b t -> ('a * 'b) t
+  val ( and+ ) : 'a t -> 'b t -> ('a * 'b) t
 
-  val (let* ) : 'a t -> ('a -> 'b t) -> 'b t
+  val ( let* ) : 'a t -> ('a -> 'b t) -> 'b t
 
   val run : 'a t -> cbor_pack -> ('a, string) result
 end

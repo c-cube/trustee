@@ -1,11 +1,10 @@
-
 type t = private {
   path: string list;
   name: string;
 }
 
-(** Remove quotes around a string of the form ["foo"] *)
 val unescape : string -> string
+(** Remove quotes around a string of the form ["foo"] *)
 
 include PP with type t := t
 

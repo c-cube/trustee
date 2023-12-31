@@ -1,4 +1,3 @@
-
 (** {1 Rewriting}
 
     This module contains rewriting structures and algorithms that use
@@ -21,6 +20,7 @@ val bottom_up_apply : conv -> K.ctx -> K.expr -> K.thm
 (** Position in term *)
 module Pos : sig
   type t
+
   val pp : t Fmt.printer
 
   val root : t
@@ -32,7 +32,7 @@ module Pos : sig
   val app1 : t -> t
   (** [app1 p (f a)] is [p] in [a] *)
 
-(*   val app_n : int -> t -> t *)
+  (*   val app_n : int -> t -> t *)
 
   val eqn0 : t -> t
   (** [eqn0 p (= a b)] is [p] in [a] *)
@@ -74,10 +74,7 @@ module Rule : sig
   (** [mk_non_oriented [|- t=u] rewrites [t] into [u], but only
       if [t\sigma >_kbo u\sigma]. *)
 
-  val mk_dynamic :
-    K.expr ->
-    (K.ctx -> K.expr -> K.Subst.t -> K.thm option) ->
-    t
+  val mk_dynamic : K.expr -> (K.ctx -> K.expr -> K.Subst.t -> K.thm option) -> t
   (** [mk_dynamic lhs f] can generate a rule [|- subst(lhs) = rhs]
       on the fly, or [None] *)
 
@@ -89,9 +86,11 @@ module RuleSet : sig
   type t
 
   val empty : t
+
   val size : t -> int
 
   val of_list : Rule.t list -> t
+
   val to_iter : t -> Rule.t Iter.t
 
   val to_conv : t -> conv
@@ -104,15 +103,10 @@ end
 
 (** AC rewrite rules *)
 module AC_rule : sig
-  (** AC-rewrite rule for one symbol. *)
   type t
+  (** AC-rewrite rule for one symbol. *)
 
-  val make :
-    K.ctx ->
-    f:K.expr ->
-    assoc:K.thm ->
-    comm:K.thm ->
-    unit -> t
+  val make : K.ctx -> f:K.expr -> assoc:K.thm -> comm:K.thm -> unit -> t
 
   val pp : t Fmt.printer
 

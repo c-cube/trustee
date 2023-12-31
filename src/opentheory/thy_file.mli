@@ -1,4 +1,3 @@
-
 (** {1 Theory files} *)
 
 open Common_
@@ -21,15 +20,19 @@ type t = {
 }
 
 val pp_sub : sub Fmt.printer
+
 val pp : t Fmt.printer
 
 val sub_to_html : sub -> Html.elt
+
 val to_html : t -> Html.elt
 
 val equal : t -> t -> bool
+
 val hash : t -> int
 
 val name : t -> string
+
 val versioned_name : t -> string
 
 val requires : t -> string list
@@ -41,5 +44,5 @@ val sub_packages : t -> string list
 module P = CCParse
 
 val parse : dir:string -> t P.t
-val of_string : dir:string -> string -> t Trustee_core.Error.or_error
 
+val of_string : dir:string -> string -> t Trustee_core.Error.or_error
