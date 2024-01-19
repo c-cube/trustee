@@ -254,7 +254,8 @@ let h_stats self : unit =
   reply_page ~title:"/stats" req [res]
 
 let serve st ~port : unit =
-  let server = H.create ~port () in
+  let server = H.create ~addr:"0.0.0.0" ~port () in
+  Tiny_httpd_prometheus.(instrument_server server  global);
   let state = {server; st } in
   h_root state;
   h_thy state;
