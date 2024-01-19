@@ -69,9 +69,19 @@ let main ~dir ~serve ~port () =
   in
 
   let th_serve =
-    if serve then
+    if serve then (
+      let _th_metrics =
+        Thread.create
+          (fun () ->
+            let gc = Tiny_httpd_prometheus.(GC_metrics.create global) in
+            while true do
+              Thread.delay 1.;
+              Tiny_httpd_prometheus.GC_metrics.update gc
+            done)
+          ()
+      in
       Some (Thread.create (fun () -> Serve.serve st ~port) ())
-    else
+    ) else
       None
   in
 
