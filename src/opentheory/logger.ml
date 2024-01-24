@@ -135,7 +135,7 @@ let setup_logs ?(files = []) ~(style : [ `COLOR | `SYSTEMD ]) ~debug ~level () =
        (if debug then
          Logs.Debug
        else
-         Logs.Warning));
+         Logs.Info));
   Trustee_core.Log.set_level level;
   Logs.app (fun k -> k "logs are set up (debug=%b)" debug);
   List.iter
