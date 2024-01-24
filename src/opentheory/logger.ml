@@ -16,7 +16,7 @@ let create () : t =
 
 let log_to_chan self oc : unit = self.chans <- oc :: self.chans
 
-let show_lvl = function
+let show_lvl_basic = function
   | Logs.Debug -> "<7>DEBUG"
   | Logs.Info -> "<6>INFO"
   | Logs.Error -> "<3>ERROR"
@@ -73,7 +73,7 @@ let as_basic_reporter (self : t) : Logs.reporter =
             | None -> ""
             | Some s -> Printf.sprintf "[%s]" s
           in
-          Fmt.fprintf out "%s%s: " (show_lvl lvl) src
+          Fmt.fprintf out "%s%s: " (show_lvl_basic lvl) src
         in
 
         if self.chans <> [] then (
@@ -126,11 +126,7 @@ let setup_logs ?(files = []) ~(style : [ `COLOR | `SYSTEMD ]) ~debug ~level () =
   let rep =
     match style with
     | `COLOR -> as_reporter l
-    | `SYSTEMD ->
-      Logs.set_reporter_mutex
-        ~lock:(fun () -> Mutex.lock l.lock)
-        ~unlock:(fun () -> Mutex.unlock l.lock);
-      as_basic_reporter l
+    | `SYSTEMD -> as_basic_reporter l
   in
 
   Logs.set_reporter rep;
