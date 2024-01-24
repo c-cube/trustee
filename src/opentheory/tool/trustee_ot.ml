@@ -65,7 +65,13 @@ let main ~dir ~serve ~port () =
   in
   let st =
     let progress_bar = !progress_ in
-    St.create ~cb:(new Eval.print_callbacks) ~progress_bar ~ctx ~idx ()
+    let cb =
+      if serve then
+        new Eval.log_callbacks
+      else
+        new Eval.print_callbacks
+    in
+    St.create ~cb ~progress_bar ~ctx ~idx ()
   in
 
   let th_serve =

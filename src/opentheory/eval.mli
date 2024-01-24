@@ -21,6 +21,8 @@ class default_callbacks : callbacks
 
 class print_callbacks : callbacks
 
+class log_callbacks : callbacks
+
 (** {2 Evaluation of theories} *)
 
 type state

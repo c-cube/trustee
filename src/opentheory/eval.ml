@@ -3,6 +3,8 @@
 open Common_
 module Log = Trustee_core.Log
 
+module Log_ = (val Logs.(src_log @@ Src.create "trustee.eval"))
+
 type 'a or_error = 'a Trustee_core.Error.or_error
 
 let now () = Unix.gettimeofday ()
@@ -51,6 +53,25 @@ class print_callbacks : callbacks =
     method done_article art_name art ~time_s =
       Fmt.printf "@{<green>@<1>✔ checked@} article `%s`: %a in %.3fs@." art_name
         Article.pp_stats art time_s
+  end
+
+class log_callbacks : callbacks =
+  object
+    method start_theory name = Log_.app (fun k -> k "checking theory `%s`" name)
+
+    method done_theory name ~ok ~time_s =
+      if ok then
+        Log_.app (fun k -> k "checked theory `%s` in %.3fs" name time_s)
+      else
+        Log_.err (fun k -> k "error theory `%s` in %.3fs" name time_s)
+
+    method start_article art_name =
+      Log_.info (fun k -> k "checking article '%s'" art_name)
+
+    method done_article art_name art ~time_s =
+      Log_.app (fun k ->
+          k "✔ checked article `%s`: %a in %.3fs" art_name Article.pp_stats art
+            time_s)
   end
 
 (* ## main checking state ## *)
