@@ -101,9 +101,8 @@ let () =
   let serve = ref false in
   let port = ref 8089 in
   let set_debug n =
-    if n > 1 then H._enable_debug true;
     Log.set_level n;
-    Logger.setup_logs ~debug:(n > 1) ~level:n ()
+    Logger.setup_logs ~debug:(n > 1) ~style:`SYSTEMD ~level:n ()
   in
   let opts =
     [

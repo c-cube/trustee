@@ -8,7 +8,13 @@ val as_reporter : t -> Logs.reporter
 
 val log_to_chan : t -> out_channel -> unit
 
-val setup_logs : ?files:string list -> debug:bool -> level:int -> unit -> unit
+val setup_logs :
+  ?files:string list ->
+  style:[ `COLOR | `SYSTEMD ] ->
+  debug:bool ->
+  level:int ->
+  unit ->
+  unit
 (** Setup reporter and debug level for {!Logs} *)
 
 val setup_trustee : unit -> unit

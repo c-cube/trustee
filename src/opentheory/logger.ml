@@ -16,22 +16,29 @@ let create () : t =
 
 let log_to_chan self oc : unit = self.chans <- oc :: self.chans
 
+let show_lvl = function
+  | Logs.Debug -> "<7>DEBUG"
+  | Logs.Info -> "<6>INFO"
+  | Logs.Error -> "<3>ERROR"
+  | Logs.Warning -> "<4>WARNING"
+  | Logs.App -> "<5>APP"
+
+let pp_level_color out = function
+  | Logs.Debug -> Fmt.fprintf out "@{<bold>debug@}"
+  | Logs.Info -> Fmt.fprintf out "@{<Blue>INFO@}"
+  | Logs.App -> Fmt.fprintf out "APP"
+  | Logs.Error -> Fmt.fprintf out "@{<Red>ERROR@}"
+  | Logs.Warning -> Fmt.fprintf out "@{<Yellow>WARN@}"
+
+let output_all (self : t) =
+  let s = Buffer.contents self.buf in
+  List.iter
+    (fun oc ->
+      output_string oc s;
+      flush oc)
+    self.chans
+
 let as_reporter self : Logs.reporter =
-  let output_all () =
-    let s = Buffer.contents self.buf in
-    List.iter
-      (fun oc ->
-        output_string oc s;
-        flush oc)
-      self.chans
-  in
-  let pp_level_ out = function
-    | Logs.Debug -> Fmt.fprintf out "@{<bold>debug@}"
-    | Logs.Info -> Fmt.fprintf out "@{<Blue>INFO@}"
-    | Logs.App -> Fmt.fprintf out "APP"
-    | Logs.Error -> Fmt.fprintf out "@{<Red>ERROR@}"
-    | Logs.Warning -> Fmt.fprintf out "@{<Yellow>WARN@}"
-  in
   {
     Logs.report =
       (fun src lvl ~over k msg ->
@@ -39,7 +46,7 @@ let as_reporter self : Logs.reporter =
           Mutex.lock self.lock;
           CCFun.protect ~finally:(fun () -> Mutex.unlock self.lock) @@ fun () ->
           Buffer.clear self.buf;
-          Fmt.fprintf self.fmt "(@[%a[%s" pp_level_ lvl (Logs.Src.name src);
+          Fmt.fprintf self.fmt "(@[%a[%s" pp_level_color lvl (Logs.Src.name src);
           msg (fun ?header ?(tags = Logs.Tag.empty) fmt ->
               Option.iter (fun s -> Fmt.fprintf self.fmt ",%s" s) header;
               if not (Logs.Tag.is_empty tags) then Logs.Tag.pp_set self.fmt tags;
@@ -47,7 +54,45 @@ let as_reporter self : Logs.reporter =
               Fmt.kfprintf
                 (fun _ ->
                   Fmt.fprintf self.fmt "@])@.";
-                  output_all ();
+                  output_all self;
+                  (* output content of [self.buf] *)
+                  over ();
+                  k ())
+                self.fmt fmt)
+        ) else
+          k ());
+  }
+
+let as_basic_reporter (self : t) : Logs.reporter =
+  {
+    Logs.report =
+      (fun src lvl ~over k msg ->
+        let pp_header out (lvl, src) : unit =
+          let src =
+            match src with
+            | None -> ""
+            | Some s -> Printf.sprintf "[%s]" s
+          in
+          Fmt.fprintf out "%s%s: " (show_lvl lvl) src
+        in
+
+        if self.chans <> [] then (
+          Mutex.lock self.lock;
+          CCFun.protect ~finally:(fun () -> Mutex.unlock self.lock) @@ fun () ->
+          Buffer.clear self.buf;
+          let src = Logs.Src.name src in
+          let src =
+            if src = "" then
+              None
+            else
+              Some src
+          in
+          pp_header self.fmt (lvl, src);
+          msg (fun ?header:_ ?tags:_ fmt ->
+              Fmt.kfprintf
+                (fun _ ->
+                  Fmt.fprintf self.fmt "@.";
+                  output_all self;
                   (* output content of [self.buf] *)
                   over ();
                   k ())
@@ -74,11 +119,21 @@ let setup_trustee_ =
 
 let setup_trustee () = Lazy.force setup_trustee_
 
-let setup_logs ?(files = []) ~debug ~level () =
+let setup_logs ?(files = []) ~(style : [ `COLOR | `SYSTEMD ]) ~debug ~level () =
   setup_trustee ();
   let l = create () in
   log_to_chan l stdout;
-  Logs.set_reporter (as_reporter l);
+  let rep =
+    match style with
+    | `COLOR -> as_reporter l
+    | `SYSTEMD ->
+      Logs.set_reporter_mutex
+        ~lock:(fun () -> Mutex.lock l.lock)
+        ~unlock:(fun () -> Mutex.unlock l.lock);
+      as_basic_reporter l
+  in
+
+  Logs.set_reporter rep;
   Logs.set_level ~all:true
     (Some
        (if debug then
