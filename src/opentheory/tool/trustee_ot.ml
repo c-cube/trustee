@@ -100,10 +100,7 @@ let () =
   let color = ref true in
   let serve = ref false in
   let port = ref 8089 in
-  let set_debug n =
-    Log.set_level n;
-    Logger.setup_logs ~debug:(n > 1) ~style:`SYSTEMD ~level:n ()
-  in
+  let debug = ref 1 in
   let opts =
     [
       "--dir", Arg.Set_string dir, " set opentheory directory";
@@ -113,7 +110,7 @@ let () =
         " check given theories" );
       "--check-all", Arg.Set check_all, " check all";
       "-nc", Arg.Clear color, " disable colors";
-      "-d", Arg.Int set_debug, " set debug level";
+      "-d", Arg.Set_int debug, " set debug level";
       ( "--store-proofs",
         Arg.Set store_proofs_,
         " enable storage of proofs (takes a lot of ram)" );
@@ -129,6 +126,10 @@ let () =
     ]
     |> Arg.align
   in
+
+  Log.set_level !debug;
+  Logger.setup_logs ~debug:(!debug > 1) ~style:`SYSTEMD ~level:!debug ();
+
   Arg.parse opts (fun _ -> failwith "invalid option") "trustee_ot [option*]";
   if !color then Fmt.set_color_default true;
   try main ~dir:!dir ~serve:!serve ~port:!port () with
