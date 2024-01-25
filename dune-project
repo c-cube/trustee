@@ -49,7 +49,7 @@
   (depends
     (containers (and (>= 3.6) (< 4.0)))
     (trustee (= :version))
-    (tiny_httpd (>= 0.12))
+    (tiny_httpd (>= 0.16))
     logs
     (odoc :with-doc)))
 
