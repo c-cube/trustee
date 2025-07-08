@@ -1,8 +1,7 @@
 (** {1 OpenTheory library}
 
-    Support for parsing {{: http://www.gilith.com/opentheory/} opentheory}
-    articles and theories.
-    *)
+    Support for parsing {{:http://www.gilith.com/opentheory/} opentheory}
+    articles and theories. *)
 
 module Common_ = Common_
 module Name = Name

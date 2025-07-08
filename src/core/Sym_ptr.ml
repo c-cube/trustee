@@ -46,7 +46,6 @@ let str (n : string) : t =
   { path = []; name = Str n }
 
 let pos (i : int) : t = { path = []; name = Int i }
-
 let namespace s n : t = { n with path = Str s :: n.path }
 
 let equal a b =
@@ -85,7 +84,6 @@ module As_key = struct
   type nonrec t = t
 
   let equal = equal
-
   let hash = hash
 end
 
@@ -100,7 +98,6 @@ module Map = struct
   }
 
   let[@inline] mk_ value sub : _ t = { value; sub }
-
   let empty : _ t = mk_ None M.empty
 
   let find_sub_exn k self : _ =

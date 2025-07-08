@@ -23,15 +23,10 @@ let[@inline] arg_n i e =
     Error.failf (fun k -> k "`%a` does not have %d args" K.Expr.pp e (i + 1))
 
 let arg0 = arg_n 0
-
 let arg1 = arg_n 1
-
 let[@inline] eq_lhs e = fst (unfold_eqn_ e)
-
 let[@inline] eq_rhs e = snd (unfold_eqn_ e)
-
 let[@inline] thm_res_rhs th : E.t = snd (thm_res_eqn th)
-
 let[@inline] thm_res_lhs th : E.t = fst (thm_res_eqn th)
 
 let bottom_up (conv : conv) : conv =
@@ -106,16 +101,12 @@ module Pos = struct
     | Lam_body p -> Fmt.fprintf out "body.%a" pp p
 
   let root = Root
-
   let app0 p = App0 p
-
   let app1 p = App1 p
 
   (*   let app_n i p = App_n (i,p) *)
   let eqn0 p = app0 @@ app1 p
-
   let eqn1 p = app1 p
-
   let lam_body p = Lam_body p
 end
 
@@ -210,11 +201,8 @@ module RuleSet = struct
   type t = Rule.t list
 
   let empty : t = []
-
   let size = List.length
-
   let of_list l : t = l
-
   let to_iter = Iter.of_list
 
   exception Step of K.thm
@@ -243,8 +231,8 @@ module AC_rule = struct
     assoc: K.thm;  (** Theorem [|- f (f x y) z = f x (f y z)] *)
     comm: K.thm;  (** Theorem [|- f x y = f y x] *)
     rules: (Rule.t * ordered) list;
-        (** List of rules, with a flag stating whether they are already
-        oriented left-to-right or not. *)
+        (** List of rules, with a flag stating whether they are already oriented
+            left-to-right or not. *)
   }
 
   let make ctx ~f ~assoc ~comm () : t =

@@ -24,7 +24,5 @@ type t = {
 (** Results of listing a directory *)
 
 val list_dir : path -> t
-
 val find_thy : t -> string -> Thy_file.t
-
 val find_article : t -> string -> string

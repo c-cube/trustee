@@ -354,9 +354,9 @@ let proof_to_html ?(config = Config.make ()) (th0 : K.Thm.t) : Html.elt =
           [
             txtf "%s%d"
               (if i > 0 then
-                ", "
-              else
-                "")
+                 ", "
+               else
+                 "")
               n;
           ]
       in
@@ -365,14 +365,14 @@ let proof_to_html ?(config = Config.make ()) (th0 : K.Thm.t) : Html.elt =
           [
             span [] (txt rule :: List.map arg_to_html args);
             (if parents = [] then
-              span [] []
-            else
-              span' []
-                [
-                  sub_e @@ txt "[";
-                  sub_l @@ List.mapi render_parent parents;
-                  sub_e @@ txt "]";
-                ]);
+               span [] []
+             else
+               span' []
+                 [
+                   sub_e @@ txt "[";
+                   sub_l @@ List.mapi render_parent parents;
+                   sub_e @@ txt "]";
+                 ]);
           ]
       in
       add_step thm step

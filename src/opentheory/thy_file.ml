@@ -21,9 +21,7 @@ type t = {
 }
 
 let equal a b = a.name = b.name
-
 let hash a = CCHash.string a.name
-
 let pp_kv k out v = Fmt.fprintf out "%s: %s" k v
 
 let pp_sub out (s : sub) =
@@ -44,14 +42,14 @@ let sub_to_table (self : sub) =
   [
     sub_e @@ tr [] [ td [] [ txt "name" ]; td [] [ txt self.sub_name ] ];
     (if self.imports = [] then
-      sub_empty
-    else
-      sub_e
-      @@ tr []
-           [
-             td [] [ txt "imports" ];
-             td [] [ ul [] (List.map (fun s -> li [] [ txt s ]) self.imports) ];
-           ]);
+       sub_empty
+     else
+       sub_e
+       @@ tr []
+            [
+              td [] [ txt "imports" ];
+              td [] [ ul [] (List.map (fun s -> li [] [ txt s ]) self.imports) ];
+            ]);
     (match self.package with
     | None -> sub_empty
     | Some p ->
@@ -76,21 +74,21 @@ let sub_to_table (self : sub) =
                ];
            ]);
     (if Interp_file.is_empty self.interp then
-      sub_empty
-    else
-      sub_e
-      @@ tr []
-           [
-             td [] [ txt "interpretation" ];
-             td []
-               [
-                 details []
-                   [
-                     summary [] [ txt "interpretation" ];
-                     Interp_file.to_html self.interp;
-                   ];
-               ];
-           ]);
+       sub_empty
+     else
+       sub_e
+       @@ tr []
+            [
+              td [] [ txt "interpretation" ];
+              td []
+                [
+                  details []
+                    [
+                      summary [] [ txt "interpretation" ];
+                      Interp_file.to_html self.interp;
+                    ];
+                ];
+            ]);
   ]
 
 let sub_to_html (self : sub) : Html.elt =
@@ -141,27 +139,26 @@ let to_html (self : t) : Html.elt =
                  self.meta);
             sub_e @@ sub_to_html self.main;
             (if self.subs = [] then
-              sub_empty
-            else
-              sub_e
-              @@ tr []
-                   [
-                     td [] [ txt "subs" ];
-                     td []
-                       [
-                         details []
-                           (summary []
-                              [ txtf "%d subs" (List.length self.subs) ]
-                           :: List.map
-                                (fun s -> div [ cls "row" ] [ sub_to_html s ])
-                                self.subs);
-                       ];
-                   ]);
+               sub_empty
+             else
+               sub_e
+               @@ tr []
+                    [
+                      td [] [ txt "subs" ];
+                      td []
+                        [
+                          details []
+                            (summary []
+                               [ txtf "%d subs" (List.length self.subs) ]
+                            :: List.map
+                                 (fun s -> div [ cls "row" ] [ sub_to_html s ])
+                                 self.subs);
+                        ];
+                    ]);
           ];
       ])
 
 let name self = self.name
-
 let versioned_name self = spf "%s-%s" self.name self.version
 
 let requires self : _ list =

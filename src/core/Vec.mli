@@ -1,17 +1,16 @@
 (** Vectors
 
-    A resizable array, workhorse of imperative programming :-).
-    This implementation originated in alt-ergo-zero but has been basically rewritten
-    from scratch several times since.
-*)
+    A resizable array, workhorse of imperative programming :-). This
+    implementation originated in alt-ergo-zero but has been basically rewritten
+    from scratch several times since. *)
 
 type 'a t
 (** Abstract type of vectors of 'a *)
 
 val make : int -> 'a -> 'a t
-(** [make cap dummy] creates a new vector filled with [dummy]. The vector
-    is initially empty but its underlying array has capacity [cap].
-    [dummy] will stay alive as long as the vector *)
+(** [make cap dummy] creates a new vector filled with [dummy]. The vector is
+    initially empty but its underlying array has capacity [cap]. [dummy] will
+    stay alive as long as the vector *)
 
 val create : unit -> 'a t
 
@@ -19,9 +18,7 @@ val to_list : 'a t -> 'a list
 (** Returns the list of elements of the vector *)
 
 val to_array : 'a t -> 'a array
-
 val of_list : 'a list -> 'a t
-
 val to_seq : 'a t -> 'a Iter.t
 
 val clear : 'a t -> unit
@@ -34,8 +31,8 @@ val ensure_size_with : 'a t -> (unit -> 'a) -> int -> unit
 (** ensure size is at least [n] *)
 
 val shrink : 'a t -> int -> unit
-(** [shrink vec sz] resets size of [vec] to [sz].
-    Assumes [sz >=0 && sz <= size vec] *)
+(** [shrink vec sz] resets size of [vec] to [sz]. Assumes
+    [sz >=0 && sz <= size vec] *)
 
 val pop_exn : 'a t -> 'a
 (** Pop last element and return it.
@@ -48,7 +45,6 @@ val last_exn : 'a t -> 'a
     @raise Invalid_argument if the vector is empty *)
 
 val size : 'a t -> int
-
 val is_empty : 'a t -> bool
 
 val is_full : 'a t -> bool
@@ -62,27 +58,27 @@ val get : 'a t -> int -> 'a
     @raise Invalid_argument if the index is not valid *)
 
 val set : 'a t -> int -> 'a -> unit
-(** set the element at the given index, either already set or the first
-    free slot if [not (is_full vec)], or
+(** set the element at the given index, either already set or the first free
+    slot if [not (is_full vec)], or
     @raise Invalid_argument if the index is not valid *)
 
 val copy : 'a t -> 'a t
 (** Fresh copy *)
 
 val fast_remove : 'a t -> int -> unit
-(** Remove element at index [i] without preserving order
-    (swap with last element) *)
+(** Remove element at index [i] without preserving order (swap with last
+    element) *)
 
 val append : into:'a t -> 'a t -> unit
 (** [append ~into v] pushes elements of [v] in the vector [into] *)
 
 val prepend : 'a t -> into:'a t -> unit
-(** [prepend v ~into] pushes all elements of [v] into [into],
-    at the beginning. consumes [v]. *)
+(** [prepend v ~into] pushes all elements of [v] into [into], at the beginning.
+    consumes [v]. *)
 
 val filter_in_place : ('a -> bool) -> 'a t -> unit
-(** [filter_in_place f v] removes from [v] the elements that do
-    not satisfy [f] *)
+(** [filter_in_place f v] removes from [v] the elements that do not satisfy [f]
+*)
 
 val sort : 'a t -> ('a -> 'a -> int) -> unit
 (** Sort in place the array *)

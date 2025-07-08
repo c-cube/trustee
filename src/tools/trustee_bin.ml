@@ -1,7 +1,5 @@
 open Trustee_core.Sigs
-
 module Log = (val Logs.src_log @@ Logs.Src.create "bin")
-
 module TC = Trustee_core
 module TS = Trustee_syntax
 module ITP = Trustee_itp
@@ -17,7 +15,6 @@ module TA = Trustee_syntax.Type_ast
 
 module Cat = struct
   let debug = ref false
-
   let args = [ "-d", Arg.Set debug, " enable debug" ] |> Arg.align
 
   let run args =
@@ -88,7 +85,6 @@ module OT_check = struct
   module VM = Trustee_opentheory.VM
 
   let cat_ = ref false
-
   let debug = ref false
 
   let args =

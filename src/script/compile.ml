@@ -4,9 +4,7 @@ module Sym_ptr = Trustee_core.Sym_ptr
 module A = Ast
 
 type stanza = VM.Stanza.t
-
 type thunk = VM.Thunk.t
-
 type chunk = VM.Chunk.t
 
 module Env = struct
@@ -19,11 +17,8 @@ module Env = struct
   type t = { vals: value M.t }
 
   let empty : t = { vals = M.empty }
-
   let find name (self : t) : value option = M.find_opt name self.vals
-
   let add_thunk name th (self : t) : t = { vals = M.add name (T th) self.vals }
-
   let add_chunk name ch (self : t) : t = { vals = M.add name (C ch) self.vals }
 
   let add_stanza self (st : VM.Stanza.t) : t =
@@ -388,5 +383,4 @@ module Compile_ = struct
 end
 
 let compile = Compile_.top
-
 let compile_l = CCList.fold_flat_map compile

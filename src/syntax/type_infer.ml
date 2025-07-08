@@ -4,9 +4,7 @@ module TA = Type_ast
 module Log = Trustee_core.Log
 
 type expr = TA.expr
-
 type ty = TA.ty
-
 type 'a meta_var = 'a TA.Meta_var.t
 
 let ( let@ ) f x = f x
@@ -31,26 +29,20 @@ type 'a or_error = 'a Or_error.t
 
 (** State used for type inference.
 
-    In particular it stores the environment in which expressions
-    are typed. *)
+    In particular it stores the environment in which expressions are typed. *)
 module State : sig
   type t
 
   val create : env:Env.t -> unit -> t
-
   val to_generalize : t -> ty meta_var list
-
   val find_free_var : t -> string -> TA.Expr.var option
-
   val add_fvar : t -> TA.Var.t -> unit
-
   val reset : t -> unit
 
   val new_ty_meta : t -> loc:Loc.t -> TA.expr
   (** Allocate a new type metavariable *)
 
   val update_env : t -> (Env.t -> Env.t) -> unit
-
   val env : t -> Env.t
 end = struct
   let names_ = "abcdefghijkl"
@@ -63,11 +55,8 @@ end = struct
   }
 
   let to_generalize self = self.to_gen
-
   let update_env self f = self.env <- f self.env
-
   let env self = self.env
-
   let find_free_var self (s : string) = Str_map.find_opt s self.fvars
 
   let reset self =
@@ -104,13 +93,11 @@ module type S = sig
 
   module Expr : sig
     val infer : A.Expr.t -> TA.Expr.t or_error
-
     val infer_reify : A.Expr.t -> TA.Expr.t
   end
 
   module Top : sig
     val infer : A.Top.t -> TA.Top.t list or_error
-
     val infer_reify : A.Top.t -> TA.Top.t list
   end
 end
@@ -178,8 +165,8 @@ end) : S = struct
 
     (** Unification.
 
-        Unification is intended to work on types, more precisely
-        on types with meta-variables. It is required for type inference. *)
+        Unification is intended to work on types, more precisely on types with
+        meta-variables. It is required for type inference. *)
     module Unif : sig
       type err_trace = (expr * expr) list
       (** Error trace in case of unification failure *)
@@ -193,7 +180,8 @@ end) : S = struct
       (** [ty_app_l f args] computes the type of [f args] *)
 
       val unify : t -> t -> (unit, err_trace) result
-      (** [unify a b] unifies the expressions [a] and [b], modifying their meta-variables.
+      (** [unify a b] unifies the expressions [a] and [b], modifying their
+          meta-variables.
           @raise E if it fails. *)
     end = struct
       type err_trace = (expr * expr) list
@@ -330,7 +318,6 @@ end) : S = struct
     end
 
     let type_ = TA.Init_.type_
-
     let ty_var ~loc s : t = mk_ ~loc ~ty:type_ (Var (TA.Var.make ~loc s type_))
 
     let ty_meta ~loc (id : ID.t) : ty =
@@ -342,9 +329,7 @@ end) : S = struct
       CCList.fold_right (ty_arrow ~loc) args ret
 
     let bvar ~loc (v : bvar) : t = mk_ ~loc ~ty:v.ty (BVar v)
-
     let var ~loc (v : var) : t = mk_ ~loc ~ty:v.ty (Var v)
-
     let var' ~loc v ty : t = var ~loc (TA.Var.make ~loc v ty)
 
     let bool : t =
@@ -360,7 +345,6 @@ end) : S = struct
       mk_ ~loc ~ty @@ Lambda (v, bod)
 
     let lambda_l ~loc vs bod = CCList.fold_right (lambda ~loc) vs bod
-
     let error ~loc ~ty err : t = mk_ ~loc ~ty @@ Error err
 
     let[@inline] is_equal_to_type (self : t) : bool =

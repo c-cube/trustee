@@ -8,23 +8,13 @@ open Common_
 type t
 
 val pp : t Fmt.printer
-
 val line : t -> int
-
 val col : t -> int
-
 val none : t
-
 val make : line:int -> col:int -> t
-
 val of_lex : Lexing.position -> t
-
 val ( <= ) : t -> t -> bool
-
 val ( < ) : t -> t -> bool
-
 val ( = ) : t -> t -> bool
-
 val min : t -> t -> t
-
 val max : t -> t -> t

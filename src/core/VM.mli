@@ -1,25 +1,19 @@
 (** Virtual machine.
 
-    We embed a little virtual machine, with instructions manipulating
-    the stack and some locally allocated registers (slots in a stack frame,
-    really).
+    We embed a little virtual machine, with instructions manipulating the stack
+    and some locally allocated registers (slots in a stack frame, really).
 
     This machine is not typed, but must be a good target for a typed
-    meta-language. It should also allow for more efficient implementations
-    in other languages (rust, C, etc.)
-*)
+    meta-language. It should also allow for more efficient implementations in
+    other languages (rust, C, etc.) *)
 
 open Sigs
 module K = Kernel
 
 type 'a vec
-
 type vm
-
 type thunk
-
 type chunk
-
 type primitive
 
 (** Values manipulated by the VM. *)
@@ -27,53 +21,33 @@ module Value : sig
   type t
 
   val nil : t
-
   val bool : bool -> t
-
   val int : int -> t
-
   val string : string -> t
-
   val array : t vec -> t
-
   val expr : K.Expr.t -> t
-
   val thm : K.Thm.t -> t
-
   val var : K.Var.t -> t
-
   val subst : K.Subst.t -> t
-
   val theory : K.Theory.t -> t
-
   val prim : primitive -> t
-
   val chunk : chunk -> t
-
   val thunk : thunk -> t
 
   (* TODO: custom values? *)
 
   val equal : t -> t -> bool
-
   val pp : t Fmt.printer
-
   val show : t -> string
 
   type 'a conv_to = t -> 'a option
-
   type 'a conv_to_exn = t -> 'a
 
   val to_str : string conv_to
-
   val to_bool : bool conv_to
-
   val to_int : int conv_to
-
   val to_str_exn : string conv_to_exn
-
   val to_bool_exn : bool conv_to_exn
-
   val to_int_exn : int conv_to_exn
 end
 
@@ -82,7 +56,6 @@ module Instr : sig
   type t = VM_instr_.t
 
   include module type of VM_instr_.Build
-
   include Sigs.PP with type t := t
 end
 
@@ -99,14 +72,13 @@ end
 
 (** Primitive operation.
 
-    A primitive is a function implemented in OCaml (or the host language,
-    in general), that operates over the VM, and can perform computations
-    more efficiently. It should be referentially transparent.
+    A primitive is a function implemented in OCaml (or the host language, in
+    general), that operates over the VM, and can perform computations more
+    efficiently. It should be referentially transparent.
 
     A good use of primitives is to implement logical algorithms such as
-    unification, rewriting, congruence closure, etc. and expose them
-    as fast primitive operations to help user programs reason.
-*)
+    unification, rewriting, congruence closure, etc. and expose them as fast
+    primitive operations to help user programs reason. *)
 module Primitive : sig
   type t = primitive
 
@@ -134,19 +106,18 @@ end
 
 (** Low level proof/meta stanzas.
 
-    These stanzas provide the basic building blocks for interacting with
-    all of Trustee's kernel. A low level proof file is composed of many of
-    these stanzas.
+    These stanzas provide the basic building blocks for interacting with all of
+    Trustee's kernel. A low level proof file is composed of many of these
+    stanzas.
 
-    Stanzas rely on VM chunks to define and manipulate logic objects (expressions,
-    theorems, substitutions, etc.); however, chunks cannot perform side effects,
-    only take and return values, which are then injected into the global
-    environment by their containing stanzas.
+    Stanzas rely on VM chunks to define and manipulate logic objects
+    (expressions, theorems, substitutions, etc.); however, chunks cannot perform
+    side effects, only take and return values, which are then injected into the
+    global environment by their containing stanzas.
 
-    In that way, a proof file is, at a high level, declarative. Just looking
-    at the stanzas is enough to see what is defined or proved, and where it is.
-    Evaluating chunks only has local impact.
-*)
+    In that way, a proof file is, at a high level, declarative. Just looking at
+    the stanzas is enough to see what is defined or proved, and where it is.
+    Evaluating chunks only has local impact. *)
 module Stanza : sig
   type t
   (** A single stanza *)
@@ -166,18 +137,16 @@ module Stanza : sig
         goal: Thunk.t; (* sequent *)
         proof: Thunk.t; (* thm *)
       }
-        (** Proof a goal using a chunk and some dependencies.
-          Dependencies are previous "Prove" steps and each dependency
-          [local, kind, name] can be either:
+        (** Proof a goal using a chunk and some dependencies. Dependencies are
+            previous "Prove" steps and each dependency [local, kind, name] can
+            be either:
 
-          - {b eager}, in which case we have to prove the step [name]
-            and we bind the [local] name to the {b theorem} proved
-            at [name]; or:
-          - {b lazy}, in which case we just compute the goal of the
-            step [name] and we bind [local] to the {b box} of that goal.
-            A later step will have to resolve the result with the actual
-            boxed proof of the step at [name].
-        *)
+            - {b eager}, in which case we have to prove the step [name] and we
+              bind the [local] name to the {b theorem} proved at [name]; or:
+            - {b lazy}, in which case we just compute the goal of the step
+              [name] and we bind [local] to the {b box} of that goal. A later
+              step will have to resolve the result with the actual boxed proof
+              of the step at [name]. *)
     | Define_thunk of {
         name: string;
         value: Thunk.t;
@@ -224,13 +193,13 @@ module Chunk_builder : sig
   (** Add short comment on the current instruction *)
 
   val cur_pos : t -> int
-  (** current position in the list of instructions. This can be
-      useful for emitting a jump to this instruction later on. *)
+  (** current position in the list of instructions. This can be useful for
+      emitting a jump to this instruction later on. *)
 
   val set_i : t -> int -> Instr.t -> unit
-  (** [set_i builder off instr] sets the existing instruction
-      at offset [off] to [instr]. This is useful to emit a forward
-      jump once the offset it jumps to, is known. *)
+  (** [set_i builder off instr] sets the existing instruction at offset [off] to
+      [instr]. This is useful to emit a forward jump once the offset it jumps
+      to, is known. *)
 end
 
 type t = vm
@@ -238,10 +207,8 @@ type t = vm
 
 val create : ctx:K.Ctx.t -> unit -> t
 (** Create a new VM.
-    @param ctx the logical context to use to create expressions and
-    theorems
-    @param env current environment for values in scope.
-*)
+    @param ctx the logical context to use to create expressions and theorems
+    @param env current environment for values in scope. *)
 
 type debug_hook = t -> Instr.t -> unit
 
@@ -252,13 +219,9 @@ val clear_debug_hook : t -> unit
 (** Remove debug hook *)
 
 val reset : t -> unit
-
 val push : t -> Value.t -> unit
-
 val pop : t -> Value.t option
-
 val pop_exn : t -> Value.t
-
 val run : t -> Chunk.t -> unit
 
 val eval_thunk :
@@ -287,5 +250,5 @@ val eval_stanza :
 val eval_stanza_pp : ?debug_hook:debug_hook -> K.Ctx.t -> Stanza.t -> unit
 
 val dump : t Fmt.printer
-(** Debug printer for the VM.
-    Output is not specified, and not guaranteed to be stable. *)
+(** Debug printer for the VM. Output is not specified, and not guaranteed to be
+    stable. *)

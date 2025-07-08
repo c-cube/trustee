@@ -19,19 +19,12 @@ and view =
 type sexp = t
 
 let mk ~loc view : t = { loc; view }
-
 let atom ~loc s : t = mk ~loc (Atom s)
-
 let list ~loc s : t = mk ~loc (List s)
-
 let bracket_list ~loc s : t = mk ~loc (Bracket_list s)
-
 let brace_list ~loc s : t = mk ~loc (Brace_list s)
-
 let dollar ~loc s : t = mk ~loc (Dollar s)
-
 let quoted_str ~loc s : t = mk ~loc (Quoted_string s)
-
 let error ~loc s : t = mk ~loc (Error s)
 
 module PP = struct
@@ -70,7 +63,6 @@ module PP = struct
 end
 
 let pp = PP.pp
-
 let to_string = Fmt.to_string pp
 
 module Parse = struct
@@ -108,7 +100,6 @@ module Parse = struct
   let[@inline] consume t = t.cur_tok <- None
 
   exception E_end
-
   exception E_error of Loc.t * Error.t
 
   let[@inline] loc_ (self : t) : Loc.t =

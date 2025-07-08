@@ -12,13 +12,9 @@ module Const = struct
   type t = string with_loc
 
   let make ~loc (name : string) : t = { view = name; loc }
-
   let pp out (self : t) = Fmt.string out self.view
-
   let name (self : t) : string = self.view
-
   let loc (self : t) = self.loc
-
   let bool : t = make ~loc:Loc.none "bool"
 end
 
@@ -39,9 +35,7 @@ module Var = struct
   }
 
   let make ?(kind = V_normal) ~loc name ty : _ t = { name; ty; kind; loc }
-
   let pp out v = Fmt.string out v.name
-
   let to_string v = Fmt.to_string pp v
 
   let pp_with_ty ppty out self =
@@ -53,11 +47,8 @@ end
 (** A logical expression. *)
 module Expr = struct
   type t = view with_loc
-
   and ty = t
-
   and var = ty Var.t
-
   and binding = var * t
 
   and view =
@@ -121,30 +112,20 @@ module Expr = struct
   and pp_var_ty out v = Var.pp_with_ty pp_sexp out v
 
   let pp out e = Fmt.fprintf out "@[%a@]" pp_sexp e
-
   let mk_ ~loc view : t = { view; loc }
-
   let[@inline] view e = e.view
-
   let[@inline] loc e = e.loc
-
   let pp_quoted = Fmt.within "`" "`" @@ pp
-
   let type_ : t = mk_ ~loc:Loc.none Type
-
   let ty_var ~loc s : t = mk_ ~loc (Var (Var.make ~loc s (Some type_)))
 
   let ty_meta ~loc (s : string) : ty =
     mk_ ~loc (Meta { ty = Some type_; name = s })
 
   let ty_arrow ~loc a b : ty = mk_ ~loc (Ty_arrow (a, b))
-
   let var ~loc (v : var) : t = mk_ ~loc (Var v)
-
   let var' ~loc v ty : t = var ~loc (Var.make ~loc v ty)
-
   let bool : t = var' ~loc:Loc.none "bool" (Some type_)
-
   let meta ~loc (s : string) ty : t = mk_ ~loc (Meta { ty; name = s })
 
   let app (f : t) (args : t list) : t =
@@ -154,19 +135,12 @@ module Expr = struct
       mk_ ~loc:Loc.(union_l f.loc ~f:(fun e -> e.loc) args) (App (f, args))
 
   let let_ ~loc bs bod : t = mk_ ~loc (Let (bs, bod))
-
   let with_ ~loc vs bod : t = mk_ ~loc (With (vs, bod))
-
   let lambda ~loc vs bod : t = mk_ ~loc (Lambda (vs, bod))
-
   let bind ~loc b vars body : t = mk_ ~loc (Bind { b; vars; body })
-
   let eq ~loc a b : t = mk_ ~loc (Eq (a, b))
-
   let wildcard ~loc () : t = mk_ ~loc Wildcard
-
   let error ~loc err : t = mk_ ~loc (Error err)
-
   let to_string = Fmt.to_string @@ Fmt.hvbox pp
 
   let rec iter_errors yield e =
@@ -235,16 +209,13 @@ module Goal = struct
     | Error of Error.t
 
   let[@inline] mk ~loc view : t = { loc; view }
-
   let[@inline] view self = self.view
-
   let[@inline] loc self = self.loc
 
   let goal ~loc ?(new_vars = []) ~hyps concl : t =
     mk ~loc @@ Goal { hyps; concl; new_vars }
 
   let goal_nohyps ~loc c : t = goal ~loc ~hyps:[] c
-
   let error ~loc err : t = mk ~loc @@ Error err
 
   let pp out (self : t) =
@@ -279,9 +250,7 @@ module Meta_ty = struct
     | Error of Error.t
 
   let[@inline] mk ~loc view : t = { view; loc }
-
   let[@inline] loc self = self.loc
-
   let[@inline] view self = self.view
 
   let rec pp out (self : t) =
@@ -292,7 +261,6 @@ module Meta_ty = struct
     | Error err -> Fmt.fprintf out "(@[error@ %a@])" Error.pp err
 
   let const c : t = mk ~loc:c.loc (Const c)
-
   let const_str ~loc s : t = const (Const.make ~loc s)
 
   let arrow args ret =
@@ -319,13 +287,11 @@ end
 
 (** An expression of the meta language.
 
-    The meta language is a basic ML-like, with an imperative flavor,
-    designed to produce proofs and expressions when executed.
-    It has no logical meaning in itself.
-*)
+    The meta language is a basic ML-like, with an imperative flavor, designed to
+    produce proofs and expressions when executed. It has no logical meaning in
+    itself. *)
 module Meta_expr = struct
   type ty = Meta_ty.t
-
   type var = ty Var.t
 
   type value =
@@ -415,7 +381,6 @@ module Meta_expr = struct
   (* TODO: Blk_while of t * block_stmt list ? *)
 
   let mk_bl ~loc view : block_stmt = { loc; view }
-
   let pp_accessor : accessor Fmt.printer = Const.pp
 
   let rec pp_rec out (self : t) : unit =
@@ -483,9 +448,7 @@ module Meta_expr = struct
     | Blk_error err -> Fmt.fprintf out "(@[error@ %a@])" Error.pp err
 
   let pp out e = Fmt.fprintf out "@[%a@]" pp_rec e
-
   let mk ~loc view : t = { view; loc }
-
   let expr_lit ~loc e : t = mk ~loc (Expr_lit e)
 
   let apply f args : t =
@@ -496,7 +459,6 @@ module Meta_expr = struct
       mk ~loc (App (f, args))
 
   let[@inline] view (e : t) = e.view
-
   let[@inline] loc (e : t) = e.loc
 
   let rec iter_errors f (e : t) =
@@ -553,14 +515,14 @@ end
 
 (** Structured proofs.
 
-    We draw some inspiration from Lamport's
-    "how to write a 21st century proof". *)
+    We draw some inspiration from Lamport's "how to write a 21st century proof".
+*)
 module Proof = struct
   (** A local goal in a proof *)
 
   type proof_var = Const.t
-  (** A variable refering to the theorem obtained from another proof,
-      or from earlier in the same proof. *)
+  (** A variable refering to the theorem obtained from another proof, or from
+      earlier in the same proof. *)
 
   type t = view with_loc
   (** A (structured) proof. *)
@@ -571,8 +533,8 @@ module Proof = struct
         thm_args: proof_var list;
         solver: Meta_expr.t;
       }
-        (** Call a solver on the goal, with the list of given theorems
-                as first parameter. *)
+        (** Call a solver on the goal, with the list of given theorems as first
+            parameter. *)
     | Structured of {
         goal: Goal.t;  (** The initial goal to prove. *)
         block: block;
@@ -582,13 +544,11 @@ module Proof = struct
   and block = {
     steps: block_elt list;  (** Intermediate steps in the proof. *)
     qed: t;
-        (** The justification for the last required goal, expected to
-        use results from {!steps}.
+        (** The justification for the last required goal, expected to use
+            results from {!steps}.
 
-        The sequent this must prove is the one from
-        the latest "SS_suffices" in {!steps}, or, if no such step
-        exists, the initial goal.
-    *)
+            The sequent this must prove is the one from the latest "SS_suffices"
+            in {!steps}, or, if no such step exists, the initial goal. *)
   }
   (** Structured proof *)
 
@@ -614,8 +574,7 @@ module Proof = struct
         cond: Expr.t;
         proof: block;
       }
-        (** Introduce a new variable using "select" and
-            a proof of existence. *)
+        (** Introduce a new variable using "select" and a proof of existence. *)
     (* TODO: case *)
     | Block_error of Error.t  (** Parse error in a statement *)
 
@@ -659,21 +618,13 @@ module Proof = struct
     | Block_error err -> Fmt.fprintf out "(@[error@ %a@])" Error.pp err
 
   let[@inline] mk ~loc view : t = { loc; view }
-
   let[@inline] view (self : t) = self.view
-
   let[@inline] loc (self : t) = self.loc
-
   let exact ~loc e : t = mk ~loc (Exact e)
-
   let by ~loc solver thm_args : t = mk ~loc (By { solver; thm_args })
-
   let structured ~loc goal block : t = mk ~loc (Structured { goal; block })
-
   let error ~loc e : t = mk ~loc (Error e)
-
   let mk_bl ~loc view : block_elt = { loc; view }
-
   let bl_error ~loc e : block_elt = mk_bl ~loc @@ Block_error e
 
   let bl_suffices ~loc goal proof : block_elt =
@@ -769,7 +720,6 @@ module Top = struct
   (* TODO: | Top_def_tactic *)
 
   let[@inline] view st = st.view
-
   let[@inline] loc st = st.loc
 
   let pp out (self : t) : unit =
@@ -804,31 +754,23 @@ module Top = struct
     | Error e -> Fmt.fprintf out "(@[<hov1>error@ @[%a@]@])" Error.pp e
 
   let to_string = Fmt.to_string pp
-
   let pp_quoted = Fmt.within "`" "`" pp
-
   let make ~loc view : t = { loc; view }
-
   let enter_file ~loc f : t = make ~loc (Enter_file f)
 
   let def ~loc name vars ret body : t =
     make ~loc (Def { name; ret; vars; body })
 
   let decl ~loc name ty : t = make ~loc (Decl { name; ty })
-
   let fixity ~loc name f : t = make ~loc (Fixity { name; fixity = f })
-
   let axiom ~loc name e : t = make ~loc (Axiom { name; thm = e })
-
   let goal ~loc goal proof : t = make ~loc (Goal { goal; proof })
 
   let theorem ~loc name g p : t =
     make ~loc (Theorem { name; goal = g; proof = p })
 
   let show ~loc e : t = make ~loc (Show e)
-
   let eval ~loc e : t = make ~loc (Eval e)
-
   let error ~loc e : t = make ~loc (Error e)
 
   let iter_errors f (self : t) : unit =

@@ -64,7 +64,6 @@ let unif_rec_ subst a b : subst =
   loop subst a b
 
 let unify_exn ?(subst = Su.empty) a b = unif_rec_ subst a b
-
 let unify ?subst a b = try Some (unify_exn ?subst a b) with Fail -> None
 
 let match_rec_ subst a b : subst =
@@ -107,7 +106,6 @@ let match_rec_ subst a b : subst =
   loop subst a b
 
 let match_exn ?(subst = Su.empty) a b = match_rec_ subst a b
-
 let match_ ?subst a b = try Some (match_exn ?subst a b) with Fail -> None
 
 let alpha_equiv_exn ?subst a b =

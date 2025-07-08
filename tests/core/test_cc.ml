@@ -6,9 +6,7 @@ module Make () = struct
   include Make ()
 
   let a = const a []
-
   let b = const b []
-
   let c = const c []
 
   let f1 =
@@ -16,19 +14,12 @@ module Make () = struct
     fun x y -> app_l f1 [ x; y ]
 
   let f2 x y = app_l (const f2 []) [ x; y ]
-
   let c_0 = const (new_const "c_0" tau) []
-
   let c_1 = const (new_const "c_1" tau) []
-
   let c_2 = const (new_const "c_2" tau) []
-
   let c6 = const (new_const "c6" tau) []
-
   let c7 = const (new_const "c7" tau) []
-
   let c8 = const (new_const "c8" tau) []
-
   let c9 = const (new_const "c9" tau) []
 end
 

@@ -9,7 +9,6 @@ module CB = Cbor_pack
 module Int_map = CCMap.Make (CCInt)
 
 let ctx_id_bits = 5
-
 let ctx_id_mask = (1 lsl ctx_id_bits) - 1
 
 type expr_view =
@@ -45,7 +44,6 @@ and bvar = {
 }
 
 and ty = expr
-
 and expr_set = expr Int_map.t
 
 and sequent = {
@@ -96,21 +94,13 @@ type const_def =
   | C_def_magic of string
 
 let[@inline] expr_eq (e1 : expr) e2 : bool = e1 == e2
-
 let[@inline] expr_hash (e : expr) = H.int e.e_id
-
 let[@inline] expr_compare (e1 : expr) e2 : int = CCInt.compare e1.e_id e2.e_id
-
 let[@inline] expr_db_depth e = e.e_flags lsr (1 + ctx_id_bits)
-
 let[@inline] expr_has_fvars e = (e.e_flags lsr ctx_id_bits) land 1 == 1
-
 let[@inline] expr_ctx_uid e : int = e.e_flags land ctx_id_mask
-
 let[@inline] var_eq v1 v2 = v1.v_name = v2.v_name && expr_eq v1.v_ty v2.v_ty
-
 let[@inline] var_hash v1 = H.combine3 5 (H.string v1.v_name) (expr_hash v1.v_ty)
-
 let[@inline] var_pp out v1 = Fmt.string out v1.v_name
 
 let[@inline] sequent_eq s1 s2 =
@@ -121,32 +111,21 @@ let[@inline] sequent_hash s =
     (H.iter expr_hash @@ Iter.map snd @@ Int_map.to_iter s.hyps)
 
 let[@inline] const_eq (c1 : const) c2 : bool = Cname.equal c1.c_name c2.c_name
-
 let const_hash c = Cname.hash c.c_name
 
 module Expr_set = struct
   type t = expr_set
 
   let empty : t = Int_map.empty
-
   let is_empty = Int_map.is_empty
-
   let iter k (self : t) = Int_map.iter (fun _ x -> k x) self
-
   let size = Int_map.cardinal
-
   let equal = Int_map.equal expr_eq
-
   let singleton e = Int_map.singleton e.e_id e
-
   let mem e self = Int_map.mem e.e_id self
-
   let add e self = Int_map.add e.e_id e self
-
   let remove e self = Int_map.remove e.e_id self
-
   let to_list self = Int_map.fold (fun _ x l -> x :: l) self []
-
   let to_iter (self : t) k = Int_map.iter (fun _ x -> k x) self
 
   let of_list l : t =
@@ -366,16 +345,13 @@ let[@inline] ctx_check_th_uid ctx (th : thm) =
   assert (ctx.ctx_uid == thm_ctx_uid th)
 
 let id_bool = "bool"
-
 let id_eq = "="
-
 let id_select = "select"
 
 module Expr0 = struct
   type t = expr
 
   let[@inline] ty e = Lazy.force e.e_ty
-
   let[@inline] view e = e.e_view
 
   let[@inline] ty_exn e =
@@ -384,16 +360,13 @@ module Expr0 = struct
     | (lazy (Some ty)) -> ty
 
   let equal = expr_eq
-
   let hash = expr_hash
 
   module AsKey = struct
     type nonrec t = t
 
     let equal = equal
-
     let compare = compare
-
     let hash = hash
   end
 
@@ -441,25 +414,15 @@ module Expr0 = struct
     type 'a with_ctx = ctx -> 'a
 
     val type_ : t with_ctx
-
     val eq : (t -> t) with_ctx
-
     val bool : t with_ctx
-
     val select : (t -> t) with_ctx
-
     val var : (var -> t) with_ctx
-
     val const : (const -> ty list -> t) with_ctx
-
     val bvar : (int -> ty -> t) with_ctx
-
     val app : (t -> t -> t) with_ctx
-
     val lambda_db : (name:string -> ty_v:ty -> t -> t) with_ctx
-
     val arrow : (t -> t -> t) with_ctx
-
     val box : (sequent -> t) with_ctx
   end
 
@@ -580,11 +543,8 @@ module Util_chash_ = struct
     Cname.make name chash
 
   let cname_magic_ name = cname_of_def_ ~name ~def:(C_def_magic name)
-
   let cname_bool = cname_magic_ id_bool
-
   let cname_eq = cname_magic_ id_eq
-
   let cname_select = cname_magic_ id_select
 end
 
@@ -677,9 +637,7 @@ module Util_dec_ = struct
   open CB.Dec
 
   let key_expr : expr key = make_key ()
-
   let key_const : const key = make_key ()
-
   let key_const_def : const_def key = make_key ()
 
   let rec dec_var ctx : var t =
@@ -820,9 +778,7 @@ module Const_def = struct
     | C_def_magic ma -> Fmt.fprintf out "(magic %S)" ma
 
   let to_string = Fmt.to_string pp
-
   let enc = Util_enc_.enc_const_def
-
   let dec = Util_dec_.dec_const_def
 
   let map ~f (def : t) : t =
@@ -848,7 +804,6 @@ end
 
 module Const = struct
   type t = const
-
   type def = const_def
 
   type args = const_args =
@@ -856,19 +811,12 @@ module Const = struct
     | C_arity of int
 
   let[@inline] pp out c = Fmt.string out (Cname.name c.c_name)
-
   let[@inline] pp_cname out c = Cname.pp out c.c_name
-
   let[@inline] to_string c = Fmt.to_string pp c
-
   let[@inline] cname c = c.c_name
-
   let[@inline] name c = c.c_name.name
-
   let[@inline] equal c1 c2 = Cname.equal c1.c_name c2.c_name
-
   let[@inline] args c = c.c_args
-
   let[@inline] ty c = c.c_ty
 
   (* obtain the hash *)
@@ -881,13 +829,9 @@ module Const = struct
     Fmt.fprintf out "`@[%a@ : %a@]`" Cname.pp_name c.c_name expr_pp_ c.c_ty
 
   let enc = Util_enc_.enc_const
-
   let dec = Util_dec_.dec_const
-
   let[@inline] eq ctx = Lazy.force ctx.ctx_eq_c
-
   let[@inline] bool ctx = Lazy.force ctx.ctx_bool_c
-
   let[@inline] select ctx = Lazy.force ctx.ctx_select_c
 
   let pp_args out = function
@@ -919,9 +863,7 @@ module Const = struct
       false
 
   let cname_bool = Util_chash_.cname_bool
-
   let cname_eq = Util_chash_.cname_eq
-
   let cname_select = Util_chash_.cname_select
 
   (* make a constant *)
@@ -960,19 +902,12 @@ module Var = struct
   type t = var
 
   let[@inline] name v = v.v_name
-
   let[@inline] ty v = v.v_ty
-
   let[@inline] map_ty v ~f = { v with v_ty = f v.v_ty }
-
   let make v_name v_ty : t = { v_name; v_ty }
-
   let makef fmt ty = Fmt.kasprintf (fun s -> make s ty) fmt
-
   let equal = var_eq
-
   let hash = var_hash
-
   let pp = var_pp
 
   let pp_with_ty out v =
@@ -987,16 +922,13 @@ module Var = struct
       expr_compare a.v_ty b.v_ty
 
   let enc = Util_enc_.enc_var
-
   let dec = Util_dec_.dec_var
 
   module AsKey = struct
     type nonrec t = t
 
     let equal = equal
-
     let compare = compare
-
     let hash = hash
   end
 
@@ -1014,9 +946,7 @@ module BVar = struct
   type t = bvar
 
   let make i ty : t = { bv_idx = i; bv_ty = ty }
-
   let pp out v = Fmt.fprintf out "db_%d" v.bv_idx
-
   let to_string = Fmt.to_string pp
 end
 
@@ -1035,15 +965,10 @@ module Expr = struct
     | E_box of sequent
 
   let pp = expr_pp_
-
   let to_string = Fmt.to_string pp
-
   let pp_depth = expr_pp_with_
-
   let compare = expr_compare
-
   let db_depth = expr_db_depth
-
   let has_fvars = expr_has_fvars
 
   type 'a with_ctx = ctx -> 'a
@@ -1106,20 +1031,17 @@ module Expr = struct
       e_h.e_flags <-
         (compute_db_depth_ e lsl (1 + ctx_id_bits))
         lor (if has_fvars then
-              1 lsl ctx_id_bits
-            else
-              0)
+               1 lsl ctx_id_bits
+             else
+               0)
         lor ctx.ctx_uid;
       ctx_check_e_uid ctx e_h
     );
     e_h
 
   let enc = Util_enc_.enc_expr
-
   let dec = Util_dec_.dec_expr
-
   let kind ctx = Lazy.force ctx.ctx_kind
-
   let type_ ctx = Lazy.force ctx.ctx_type
 
   let[@inline] is_eq_to_type e =
@@ -1262,7 +1184,6 @@ module Expr = struct
     Const.make ctx ~def name (C_arity n) (type_ ctx)
 
   let mk_const_ ctx c args ty : t = make_ ctx (E_const (c, args)) ty
-
   let subst_empty_ : subst = { ty = Var.Map.empty; m = Var.Map.empty }
 
   let subst_pp_ out (self : subst) : unit =
@@ -1302,9 +1223,9 @@ module Expr = struct
           map ctx e ~f:(fun inbind u ->
               loop u
                 (if inbind then
-                  k + 1
-                else
-                  k))
+                   k + 1
+                 else
+                   k))
       )
     in
     assert (n >= 0);
@@ -1317,7 +1238,6 @@ module Expr = struct
     type t = expr * int
 
     let equal (t1, k1) (t2, k2) = equal t1 t2 && k1 == k2
-
     let hash (t, k) = H.combine3 27 (hash t) (H.int k)
   end)
 
@@ -1377,9 +1297,9 @@ module Expr = struct
         map ctx e ~f:(fun inb u ->
             loop
               (if inb then
-                k + 1
-              else
-                k)
+                 k + 1
+               else
+                 k)
               u)
     in
 
@@ -1456,9 +1376,9 @@ module Expr = struct
                map ctx e ~f:(fun inb u ->
                    aux u
                      (if inb then
-                       k + 1
-                     else
-                       k))
+                        k + 1
+                      else
+                        k))
              in
              E_int_tbl.add cache_ (e, k) r;
              r)
@@ -1576,25 +1496,15 @@ module Expr = struct
       type 'a with_ctx = ctx -> 'a
 
       let type_ = type_
-
       let bool = bool
-
       let select = select
-
       let eq = eq
-
       let lambda_db = lambda_db
-
       let box = box
-
       let arrow = arrow
-
       let app = app
-
       let var = var
-
       let const = const
-
       let bvar = bvar
     end in
     Expr0.make_ := Some (module M)
@@ -1663,15 +1573,10 @@ module Subst = struct
       Var.Map.mem x s.m
 
   let empty = Expr.subst_empty_
-
   let bind = Expr.subst_bind_
-
   let pp = Expr.subst_pp_
-
   let to_list s = List.rev_append (Var.Map.to_list s.ty) (Var.Map.to_list s.m)
-
   let[@inline] bind' x t s : t = bind s x t
-
   let[@inline] size self = Var.Map.cardinal self.m + Var.Map.cardinal self.ty
 
   let[@inline] to_iter self =
@@ -1716,9 +1621,7 @@ module Subst = struct
     { m; ty }
 
   let[@inline] bind_uncurry_ s (x, t) = bind s x t
-
   let of_list = List.fold_left bind_uncurry_ empty
-
   let of_iter = Iter.fold bind_uncurry_ empty
 end
 
@@ -1754,29 +1657,17 @@ module Sequent = struct
   }
 
   let equal = sequent_eq
-
   let hash = sequent_hash
-
   let make hyps concl : t = { hyps; concl }
-
   let make_l h c = make (Expr_set.of_list h) c
-
   let make_nohyps c : t = make Expr_set.empty c
-
   let[@inline] chash self : Chash.t = Chash.run Util_chash_.hasher_seq_ self
-
   let[@inline] concl g = g.concl
-
   let[@inline] n_hyps self = Int_map.cardinal self.hyps
-
   let[@inline] hyps g = g.hyps
-
   let[@inline] hyps_iter g = Expr_set.to_iter g.hyps
-
   let[@inline] hyps_l g = Expr_set.to_list g.hyps
-
   let enc = Util_enc_.enc_seq
-
   let iter_exprs self = Iter.cons (concl self) (hyps_iter self)
 
   let pp out (self : t) : unit =
@@ -1792,14 +1683,12 @@ end
 
 (** {2 Context}
 
-    The context is storing the term state, list of axioms,
-    and other parameters.
+    The context is storing the term state, list of axioms, and other parameters.
     Terms from distinct contexts must never be mixed. *)
 module Ctx = struct
   type t = ctx
 
   let uid_ = ref 0
-
   let lru_size_ = try int_of_string "LRU_SIZE" with _ -> 128
 
   let create ?(def_cache_size = lru_size_) ?(storage = Storage.in_memory ())
@@ -1909,11 +1798,8 @@ module Proof = struct
     | Pr_subst of (var * expr) list
 
   let a_expr e : arg = Pr_expr e
-
   let a_subst (s : subst) : arg = Pr_subst (Subst.to_list s)
-
   let dummy : t = Pr_dummy
-
   let main self : t = Pr_main self
 
   let step ?(args = []) ?(parents = []) (rule : string) : t =
@@ -2044,21 +1930,13 @@ module Thm = struct
   type t = thm
 
   let[@inline] concl self = self.th_seq.concl
-
   let[@inline] sequent self = self.th_seq
-
   let[@inline] hyps_ self = self.th_seq.hyps
-
   let[@inline] hyps_iter self k = Expr_set.iter k self.th_seq.hyps
-
   let[@inline] hyps_l self = Expr_set.to_list self.th_seq.hyps
-
   let hyps_sorted_l = hyps_l
-
   let iter_exprs self = Sequent.iter_exprs self.th_seq
-
   let[@inline] has_hyps self = not (Expr_set.is_empty self.th_seq.hyps)
-
   let n_hyps self = Expr_set.size self.th_seq.hyps
 
   let is_fully_concrete self =
@@ -2092,14 +1970,12 @@ module Thm = struct
       self.th_proof <- Pr_main self.th_proof
 
   let[@inline] equal a b = Sequent.equal a.th_seq b.th_seq
-
   let hash (self : t) = Sequent.hash self.th_seq
 
   module Tbl = CCHashtbl.Make (struct
     type t = thm
 
     let equal = equal
-
     let hash = hash
   end)
 
@@ -2114,9 +1990,7 @@ module Thm = struct
       Fmt.fprintf out "@[<1>|-@ %a@]" pp_t (concl th)
 
   let pp = pp_depth ~max_depth:max_int
-
   let to_string = Fmt.to_string pp
-
   let pp_quoted = Fmt.within "`" "`" pp
 
   let is_proof_of self (g : Sequent.t) : bool =
@@ -2530,7 +2404,6 @@ module Theory = struct
     Name_k_map.values self.theory_defined_constants |> Iter.to_list
 
   let theorems self = self.theory_defined_theorems
-
   let pp_name out self = Fmt.string out self.theory_name
 
   let pp out (self : t) : unit =
@@ -2628,7 +2501,6 @@ module Theory = struct
       Name_k_map.add (kind, key) c self.theory_defined_constants
 
   let add_const = add_const_
-
   let add_ty_const = add_const_
 
   let[@inline] find_const self s : _ option =
@@ -2850,7 +2722,6 @@ module Theory = struct
     type t = string * Expr.t
 
     let equal (n1, ty1) (n2, ty2) = String.equal n1 n2 && Expr.equal ty1 ty2
-
     let hash (n, ty) = H.(combine3 25 (H.string n) (Expr.hash ty))
   end)
 

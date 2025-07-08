@@ -14,15 +14,9 @@ module Config : sig
 end
 
 val expr_to_html : ?config:Config.t -> K.Expr.t -> Html.elt
-
 val proof_to_html : ?config:Config.t -> K.Thm.t -> Html.elt
-
 val thm_to_html : ?config:Config.t -> K.Thm.t -> Html.elt
-
 val const_to_html : ?config:Config.t -> K.Const.t -> Html.elt
-
 val const_def_to_html : ?config:Config.t -> K.Ctx.t -> K.Const.t -> Html.elt
-
 val subst_to_html : ?config:Config.t -> K.Subst.t -> Html.elt
-
 val theory_to_html : ?config:Config.t -> K.Theory.t -> Html.elt

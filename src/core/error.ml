@@ -1,7 +1,6 @@
 open Sigs
 
 module type S = Error_intf.S
-
 module type LOC = Error_intf.LOC
 
 module Make (Loc : LOC) : S with type loc = Loc.t = struct
@@ -18,13 +17,9 @@ module Make (Loc : LOC) : S with type loc = Loc.t = struct
   exception E of t
 
   let raise x = raise (E x)
-
   let msg self = self.msg ()
-
   let msg' self = self.msg
-
   let loc self = self.loc
-
   let ctx_of self = self.ctx_of
 
   let unwrap_ctx self =
@@ -36,9 +31,7 @@ module Make (Loc : LOC) : S with type loc = Loc.t = struct
     aux [] self
 
   let make' ?loc msg = { msg; loc; ctx_of = None }
-
   let make ?loc msg : t = make' ?loc (fun () -> msg)
-
   let makef ?loc fmt = Fmt.kasprintf (make ?loc) fmt
 
   let of_exn exn =
@@ -52,13 +45,9 @@ module Make (Loc : LOC) : S with type loc = Loc.t = struct
       make res
 
   let wrap' ?loc msg e = { msg; loc; ctx_of = Some e }
-
   let wrap ?loc msg e = wrap' ?loc (fun () -> msg) e
-
   let wrapf ?loc fmt = Fmt.kasprintf (wrap ?loc) fmt
-
   let fail' ?loc msg = raise (make' ?loc msg)
-
   let fail ?loc msg = raise (make ?loc msg)
 
   let failf ?loc k =
@@ -83,7 +72,6 @@ module Make (Loc : LOC) : S with type loc = Loc.t = struct
     | None -> fail (msg ())
 
   let unwrap_opt msg o = unwrap_opt' (fun () -> msg) o
-
   let hbar = String.make 60 '-'
 
   let pp out (self : t) =
@@ -109,7 +97,8 @@ end
 
 module Conv
     (E : S)
-    (E2 : S) (Conv : sig
+    (E2 : S)
+    (Conv : sig
       val conv : E.loc -> E2.loc option
     end) =
 struct

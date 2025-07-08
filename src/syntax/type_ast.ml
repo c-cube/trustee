@@ -1,12 +1,11 @@
 (** Typed AST.
 
-    This is the main AST representation that we use in the LSP
-    and to manipulate the syntactic form of logic.
+    This is the main AST representation that we use in the LSP and to manipulate
+    the syntactic form of logic.
 
     Heavier lifting and actual proof checking are done with the
-    {!Trustee_core.Kernel} expressions. However, these don't have any
-    syntactic sugar nor locations so they are not well suited to
-    user-facing processing.
+    {!Trustee_core.Kernel} expressions. However, these don't have any syntactic
+    sugar nor locations so they are not well suited to user-facing processing.
 *)
 
 open Common_
@@ -39,8 +38,8 @@ module Init_ = struct
   }
   (** A meta-variable.
 
-      These variables are used for type inference. They're to be bound
-      to an actual type as type inference progresses. *)
+      These variables are used for type inference. They're to be bound to an
+      actual type as type inference progresses. *)
 
   type expr = {
     view: expr_view;
@@ -91,7 +90,6 @@ module Init_ = struct
   and binding = ty bvar * expr
 
   let kind : expr = { view = Kind; ty = None; loc = Loc.none }
-
   let type_ : expr = { view = Type; loc = Loc.none; ty = Some kind }
 end
 
@@ -113,21 +111,13 @@ module Const = struct
   }
 
   let pp out (self : t) = Fmt.string out self.name
-
   let to_string self = self.name
-
   let[@inline] equal (a : t) (b : t) = String.equal a.name b.name
-
   let[@inline] name (self : t) : string = self.name
-
   let[@inline] loc (self : t) = self.loc
-
   let[@inline] args (self : t) = self.args
-
   let make ~loc ~ty ~args name : t = { loc; ty; args; name }
-
   let make_str ~loc ~ty ~args s : t = make ~loc ~ty ~args s
-
   let bool : t = make_str ~loc:Loc.none "bool" ~ty:type_ ~args:(C_arity 0)
 end
 
@@ -144,9 +134,7 @@ module Var = struct
   }
 
   let make ~loc name ty : t = { name; ty; loc }
-
   let pp out v = Fmt.string out v.name
-
   let to_string v = Fmt.to_string pp v
 
   let pp_with_ty ppty out self =
@@ -160,17 +148,11 @@ module BVar = struct
   type 'a t = 'a bvar
 
   let[@inline] id (self : _ t) = self.id
-
   let[@inline] ty (self : _ t) = self.ty
-
   let[@inline] make ~loc id ty : _ t = { id; ty; loc }
-
   let[@inline] compare (a : _ t) (b : _ t) = ID.compare a.id b.id
-
   let[@inline] map_ty ~f (self : _ t) = { self with ty = f self.ty }
-
   let pp out (self : _ t) = ID.pp out self.id
-
   let to_string (self : _ t) = ID.to_string self.id
 
   let pp_with_ty ppty out (self : _ t) : unit =
@@ -180,7 +162,6 @@ module BVar = struct
   let as_queryable ~ty_as_q (self : _ t) =
     object
       inherit Queryable.t
-
       method loc = self.loc
 
       method pp out () =
@@ -201,15 +182,10 @@ module Meta_var = struct
   }
 
   let make ~loc ~ty (id : ID.t) : _ t = { loc; ty; id; deref = None }
-
   let[@inline] equal (a : _ t) (b : _ t) = ID.equal a.id b.id
-
   let[@inline] loc (self : _ t) = self.loc
-
   let[@inline] ty (self : _ t) = self.ty
-
   let[@inline] id (self : _ t) = self.id
-
   let pp out (self : _ t) = Fmt.fprintf out "?%a" ID.pp self.id
 
   let pp_with_ty ppty out (self : _ t) =
@@ -244,21 +220,15 @@ module Expr = struct
   }
 
   type ty = t
-
   type var = Var.t
-
   type nonrec bvar = ty bvar
-
   type binding = var * t
 
   let[@inline] view (self : t) = self.view
-
   let[@inline] loc (self : t) = self.loc
-
   let type_ = Init_.type_
 
-  (** Type of this expression.
-      Do {b not} call on [kind]. *)
+  (** Type of this expression. Do {b not} call on [kind]. *)
   let[@inline] ty_exn e =
     match e.ty with
     | Some ty -> ty
@@ -324,9 +294,7 @@ module Expr = struct
     | Error err -> Fmt.fprintf out "(@[error@ %a@])" Error.pp err
 
   and pp_binding out (x, e) = Fmt.fprintf out "[@[%a@ %a@]]" BVar.pp x pp e
-
   and pp_var_ty out v = Var.pp_with_ty pp out v
-
   and pp_bvar_ty out v = BVar.pp_with_ty pp out v
 
   let to_string = Fmt.to_string @@ Fmt.hvbox pp
@@ -380,9 +348,7 @@ module Expr = struct
   let rec as_queryable (e : t) : Queryable.t =
     object
       inherit Queryable.t
-
       method pp out () = pp out e
-
       method loc = e.loc
 
       method children yield =
@@ -391,7 +357,6 @@ module Expr = struct
 end
 
 type expr = Expr.t
-
 type ty = Expr.ty
 
 (** A logical substitution literal. *)
@@ -425,9 +390,7 @@ module Goal = struct
     mk ~loc @@ Goal { hyps; concl; new_vars }
 
   let goal_nohyps ~loc c : t = goal ~loc ~hyps:[] c
-
   let error ~loc err : t = mk ~loc @@ Error err
-
   let loc self = self.loc
 
   let pp out (self : t) =
@@ -855,7 +818,6 @@ module Top = struct
   (* TODO: | Top_def_tactic *)
 
   let[@inline] view st = st.view
-
   let[@inline] loc st = st.loc
 
   let pp out (self : t) : unit =
@@ -887,24 +849,17 @@ module Top = struct
     *)
 
   let to_string = Fmt.to_string pp
-
   let pp_quoted = Fmt.within "`" "`" pp
-
   let make ~loc view : t = { loc; view }
-
   let enter_file ~loc f : t = make ~loc (Enter_file f)
 
   let def ~loc name vars ret body : t =
     make ~loc (Def { name; ret; vars; body })
 
   let decl ~loc c : t = make ~loc (Decl c)
-
   let fixity ~loc name f : t = make ~loc (Fixity { name; fixity = f })
-
   let axiom ~loc name e : t = make ~loc (Axiom { name; thm = e })
-
   let show ~loc e : t = make ~loc (Show e)
-
   let error ~loc e : t = make ~loc (Error e)
   (* TODO
      let goal ~loc goal proof : t = make ~loc (Goal {goal; proof})
@@ -934,9 +889,7 @@ module Top = struct
   let as_queryable (self : t) : Queryable.t =
     object
       inherit Queryable.t
-
       method pp out () = pp out self
-
       method loc = self.loc
 
       method! children yield =

@@ -10,9 +10,7 @@ type item =
 type t = item list
 
 let is_empty = CCList.is_empty
-
 let size self = List.length self
-
 let items_iter self = Iter.of_list self
 
 let pp_item out = function
@@ -20,7 +18,6 @@ let pp_item out = function
   | I_const (s, s2) -> Fmt.fprintf out "const %S as %S" s s2
 
 let pp out self = Fmt.fprintf out "@[<v>%a@]" (Fmt.list pp_item) self
-
 let item_to_html i = Html.txtf "%a" pp_item i
 
 let to_html (self : t) =
@@ -54,8 +51,7 @@ let parse_item : item P.t =
   p_white_
   *> (string "type " *> skip_white *> p_quoted
      >>= (fun s ->
-           skip_white *> string "as" *> skip_white *> p_quoted >|= fun t ->
-           I_ty (s, t))
+     skip_white *> string "as" *> skip_white *> p_quoted >|= fun t -> I_ty (s, t))
      <|> ( string "const " *> skip_white *> p_quoted >>= fun s ->
            skip_white *> string "as" *> skip_white *> p_quoted >|= fun t ->
            I_const (s, t) )

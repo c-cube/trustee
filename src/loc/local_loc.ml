@@ -21,13 +21,9 @@ let create_file ~filename : ctx =
 type t = int
 
 let none : t = 0
-
 let () = assert (Sys.int_size = 63)
-
 let n_bits_offset = 31
-
 let n_bits_len = Sys.int_size - n_bits_offset
-
 let equal : t -> t -> bool = ( = )
 
 let mk_ off1 off2 : t =

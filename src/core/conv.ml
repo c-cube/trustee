@@ -19,7 +19,6 @@ let thm_res_eqn thm : E.t * E.t =
   | Some pair -> pair
 
 let[@inline] thm_res_rhs th : E.t = snd (thm_res_eqn th)
-
 let empty : t = fun _ctx _e -> Same
 
 let apply (self : t) ctx e =

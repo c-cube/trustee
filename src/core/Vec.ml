@@ -4,9 +4,7 @@ type 'a t = {
 }
 
 let make n x = { data = Array.make n x; sz = 0 }
-
 let[@inline] create () = { data = [||]; sz = 0 }
-
 let[@inline] clear s = s.sz <- 0
 
 let[@inline] shrink t i =
@@ -34,9 +32,7 @@ let[@inline] pop t =
   )
 
 let[@inline] size t = t.sz
-
 let[@inline] is_empty t = t.sz = 0
-
 let[@inline] is_full t = Array.length t.data = t.sz
 
 let[@inline] copy t : _ t =
@@ -147,17 +143,11 @@ let[@inline] iteri f t =
   done
 
 let[@inline] to_seq a k = iter k a
-
 let to_iter v k = iter k v
-
 let exists p t = Iter.exists p @@ to_seq t
-
 let for_all p t = Iter.for_all p @@ to_seq t
-
 let fold f acc a = Iter.fold f acc @@ to_seq a
-
 let to_list a = Iter.to_list @@ to_seq a
-
 let to_array a = Array.sub a.data 0 a.sz
 
 let equal p a b =

@@ -11,24 +11,18 @@ type err =
     }
 
 type +'a t = { run: sexp -> ('a, err) result } [@@unboxed]
-
 type 'a m = 'a t
 
 let[@inline] const x _ = x
-
 let spf = Printf.sprintf
-
 let return x = { run = (fun _ -> Ok x) }
-
 let fail_ ?ctx_of str sexp = Error (Err { msg = str; value = sexp; ctx_of })
-
 let fail str = { run = (fun s -> fail_ (const str) s) }
 
 let failf k =
   { run = (fun s -> fail_ (fun () -> k (fun fmt -> Fmt.asprintf fmt)) s) }
 
 let value = { run = (fun s -> Ok s) }
-
 let loc = { run = (fun s -> Ok s.S.loc) }
 
 let atom =
@@ -187,15 +181,10 @@ let ( and+ ) = ( and* )
 
 module Infix = struct
   let ( let+ ) = ( let+ )
-
   let ( >|= ) = ( let+ )
-
   let ( let* ) = ( let* )
-
   let ( >>= ) = ( let* )
-
   let ( and+ ) = ( and+ )
-
   let ( and* ) = ( and* )
 end
 
@@ -517,9 +506,7 @@ module Err = struct
     Fmt.fprintf out "@[<v>%a@]" loop self
 
   let to_string = Fmt.to_string pp
-
   let sexp (Err { value; _ }) = value
-
   let loc self = (sexp self).S.loc
 
   let rec to_error (Err { msg; value; ctx_of }) : Error.t =
@@ -621,5 +608,4 @@ module Fields = struct
 end
 
 let fields = Fields.get
-
 let applied_fields = Fields.get_applied

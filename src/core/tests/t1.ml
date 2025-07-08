@@ -4,7 +4,6 @@ module CB = Cbor_pack
 type cbor = CBOR.Simple.t
 
 let pp_cbor out c = Format.pp_print_string out @@ CBOR.Simple.to_diagnostic c
-
 let pp_vec ppx out v = Format.fprintf out "[@[<hv>%a@]]" (Vec.pp ~sep:";" ppx) v
 
 type cbor_pack = CB.t = {
@@ -23,21 +22,13 @@ type expr =
 
 module E = struct
   let bool b = Bool b
-
   let true_ = bool true
-
   let false_ = bool false
-
   let var s = Var s
-
   let app1 f a = App (f, a)
-
   let app f a = List.fold_left app1 f a
-
   let app' f a = app (var f) a
-
   let lam v e = Lam (v, e)
-
   let let_ v e1 e2 = Let (v, e1, e2)
 end
 
@@ -113,9 +104,7 @@ let c1' =
   | Error s -> failwith s
 
 let () = Format.printf "dec(enc(c1)): %a@." pp_clause c1'
-
 let () = assert (equal_clause c1 c1')
-
 let c1_str = CB.encode_to_string enc_clause c1';;
 
 Format.printf "enc(c1): (len %d) %S@." (String.length c1_str) c1_str

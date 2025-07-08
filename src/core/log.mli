@@ -8,7 +8,6 @@ type logger = {
 [@@unboxed]
 
 val void_logger : logger
-
 val set_logger : logger -> unit
 
 val debugf :

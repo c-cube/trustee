@@ -33,7 +33,6 @@ module P_state = struct
 end
 
 type state = P_state.t
-
 type 'a parser_ = state -> 'a
 
 (* We follow a mix of:
@@ -42,9 +41,7 @@ type 'a parser_ = state -> 'a
 *)
 module P_expr : sig
   val expr : ?ty_expect:A.Expr.t -> A.Expr.t parser_
-
   val expr_atomic : ?ty_expect:A.Expr.t -> A.Expr.t parser_
-
   val expr_and_eof : A.Expr.t parser_
 
   val p_tyvars_until :
@@ -54,14 +51,12 @@ module P_expr : sig
     Token.t * Loc.t * A.Expr.var list
 
   val p_const : A.Const.t parser_
-
   val p_ident : state -> string * Loc.t
 end = struct
   open P_state
   open Loc.Infix
 
   type precedence = Fixity.precedence
-
   type t = P_state.t
 
   let fixity_ (self : t) (s : string) : Fixity.t =
@@ -316,7 +311,6 @@ end = struct
     !lhs
 
   let expr_atomic ?ty_expect self : A.Expr.t = p_expr_atomic_ ~ty_expect self
-
   let expr ?ty_expect (self : t) : A.Expr.t = p_expr_ ~ty_expect self 0
 
   (* main entry point for expressions *)

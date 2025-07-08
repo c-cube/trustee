@@ -1,5 +1,4 @@
 let name_of_project = ref "trustee"
-
 let getenv_or_empty s = try Sys.getenv s with _ -> ""
 
 let ( <+> ) x y =

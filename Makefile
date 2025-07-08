@@ -19,6 +19,11 @@ clean:
 doc:
 	@dune build @doc
 
+format:
+	@dune fmt --auto-promote
+
+.PHONY: format clean
+
 KERNEL_DIR=$${HOME}/.local/share/jupyter/kernels/trustee_script/
 
 install_kernel:

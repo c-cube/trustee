@@ -2,21 +2,16 @@ module type KEY = sig
   type t
 
   include Sigs.EQ with type t := t
-
   include Sigs.HASH with type t := t
 end
 
 module type S = sig
   type key
-
   type 'a t
 
   val create : size:int -> unit -> 'a t
-
   val size : _ t -> int
-
   val max_size : _ t -> int
-
   val get : 'a t -> compute:(key -> 'a) -> key -> 'a
 end
 
@@ -39,7 +34,6 @@ module Make (K : KEY) : S with type key = K.t = struct
   }
 
   let size self = H.length self.tbl
-
   let max_size self = self.max_size
 
   let create ~size () : _ t =

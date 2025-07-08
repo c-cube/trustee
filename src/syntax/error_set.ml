@@ -1,16 +1,15 @@
 (** Error set.
 
-    An object can contain (reified) errors. For example at parsing, we
-    do not fail if a parse error occurs; we try to recover and emit an
-    "error" node with the location the parsing error occurred.
+    An object can contain (reified) errors. For example at parsing, we do not
+    fail if a parse error occurs; we try to recover and emit an "error" node
+    with the location the parsing error occurred.
 
-    This makes the whole system more robust to partial or incorrect inputs,
-    i.e. most inputs in the LSP server.
+    This makes the whole system more robust to partial or incorrect inputs, i.e.
+    most inputs in the LSP server.
 
-    The error set concept comes later, once we have processed a buffer: we
-    want to collect all the errors that occurred, and display them back
-    to the user. In batch mode we just print all the errors in the same way.
-*)
+    The error set concept comes later, once we have processed a buffer: we want
+    to collect all the errors that occurred, and display them back to the user.
+    In batch mode we just print all the errors in the same way. *)
 
 open Common_
 

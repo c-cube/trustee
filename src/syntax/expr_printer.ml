@@ -12,11 +12,9 @@ type ('t, 'ty) view =
 
 module type EXPR = sig
   type ty
-
   type t
 
   val pp_ty : Notation.t -> ty Fmt.printer
-
   val view : t -> (t, ty) view
 end
 
@@ -148,7 +146,6 @@ module Pp_k_expr : S with type E.t = Trustee_core.Kernel.Expr.t = Make (struct
   module E = K.Expr
 
   type t = E.t
-
   type ty = E.t
 
   let pp_ty _notation = E.pp

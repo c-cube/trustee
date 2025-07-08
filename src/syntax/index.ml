@@ -14,7 +14,6 @@ type t =
   | Idx of idx
 
 let empty : t = Idx { qs = []; ty_envs = [] }
-
 let fake : t = Fake
 
 let size = function

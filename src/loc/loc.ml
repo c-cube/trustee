@@ -8,13 +8,9 @@ type t = {
 }
 
 let pp_compact out { ctx; loc } = LL.pp ~ctx out loc
-
 let filename self = self.ctx.LL.filename
-
 let local_loc self = self.loc
-
 let same_local_loc a b = LL.equal a.loc b.loc
-
 let make ~ctx loc : t = { loc; ctx }
 
 let none : t =
@@ -22,11 +18,8 @@ let none : t =
   make ~ctx LL.none
 
 let create_ctx_string = LL.create
-
 let create_ctx_file = LL.create_file
-
 let of_lex_pos ~ctx p1 p2 : t = make ~ctx (LL.of_lex_pos ~ctx p1 p2)
-
 let of_lexbuf ~ctx (b : Lexing.lexbuf) : t = make ~ctx (LL.of_lexbuf ~ctx b)
 
 let contains { loc; ctx } p =
@@ -34,9 +27,7 @@ let contains { loc; ctx } p =
   LL.contains loc ~off:offset
 
 let positions { loc; ctx } = LL.positions ~ctx loc
-
 let union a b : t = { ctx = a.ctx; loc = LL.(a.loc ++ b.loc) }
-
 let union_l a ~f l = List.fold_left (fun l x -> union l (f x)) a l
 
 module Infix = struct
@@ -47,7 +38,6 @@ include Infix
 
 module Util_pp_loc : sig
   val pp : t Fmt.printer
-
   val pp_l : t list Fmt.printer
 end = struct
   let conv_loc_input (self : Loc_input.t) =
@@ -85,5 +75,4 @@ end = struct
 end
 
 let pp = Util_pp_loc.pp
-
 let pp_l = Util_pp_loc.pp_l

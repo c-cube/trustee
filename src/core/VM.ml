@@ -9,16 +9,16 @@ module Types_ = struct
     stack: value Vec.t;  (** Operand stack. *)
     stack_offsets: int Vec.t;  (** End offset for each frame in `stack` *)
     call_stack: chunk Vec.t;
-        (** Chunks currently being evaluated. The active chunk is the one
-        on top. *)
+        (** Chunks currently being evaluated. The active chunk is the one on
+            top. *)
     mutable ip: int;
         (** Instruction pointer for topmost chunk in {!call_stack} *)
     call_restore_ip: int Vec.t;
         (** IP for all items in [call_stack] except the last. *)
     call_prim: primitive Vec.t;  (** Primitives currently being evaluated *)
     regs: value Vec.t;
-        (** Stack of register value. Each call frame has its own
-        local register. *)
+        (** Stack of register value. Each call frame has its own local register.
+        *)
     ctx: K.Ctx.t;  (** Logical context *)
     mutable debug_hook: (vm -> instr -> unit) option;
   }
@@ -166,16 +166,12 @@ module Types_ = struct
       self.c_instrs pp_locals ()
 
   and debug_chunk ?ip out c = pp_chunk ?ip out c
-
   and pp_prim out (p : primitive) : unit = Fmt.fprintf out "<prim %s>" p.pr_name
 end
 
 type vm = Types_.vm
-
 type thunk = Types_.thunk
-
 type chunk = Types_.chunk
-
 type primitive = Types_.primitive
 
 (* auto generated instructions *)
@@ -188,7 +184,6 @@ module Instr = struct
   include VM_instr_.Build
 
   let pp = VM_instr_.pp
-
   let to_string = Fmt.to_string pp
 end
 
@@ -198,43 +193,24 @@ module Value = struct
   type t = value
 
   let nil : t = Nil
-
   let bool b : t = Bool b
-
   let true_ = bool true
-
   let false_ = bool false
-
   let int (x : int) : t = Int x
-
   let string (x : string) : t = String x
-
   let array (x : t vec) : t = Array x
-
   let expr (x : K.Expr.t) : t = Expr x
-
   let thm (x : K.Thm.t) : t = Thm x
-
   let seq seq : t = Seq seq
-
   let var (x : K.Var.t) : t = Var x
-
   let const (x : K.Const.t) : t = Const x
-
   let subst (x : K.Subst.t) : t = Subst x
-
   let theory (x : K.Theory.t) : t = Theory x
-
   let chunk c : t = Chunk c
-
   let thunk th : t = Thunk th
-
   let prim p : t = Prim p
-
   let pp = pp_value ~short:false
-
   let pp_short = pp_value ~short:true
-
   let show = Fmt.to_string pp
 
   let rec equal a b =
@@ -260,7 +236,6 @@ module Value = struct
       false
 
   type 'a conv_to = t -> 'a option
-
   type 'a conv_to_exn = t -> 'a
 
   let[@inline] to_str = function
@@ -358,13 +333,9 @@ module Chunk = struct
   type t = chunk
 
   let pp out c = pp_chunk out c
-
   let to_string = Fmt.to_string pp
-
   let pp_at ~ip out c = pp_chunk ~ip out c
-
   let debug = debug_chunk ?ip:None
-
   let strip_comments self = self.c_comments <- [||]
 
   (* empty chunk, does nothing *)
@@ -385,11 +356,8 @@ module Primitive = struct
   type t = primitive
 
   let[@inline] name p = p.pr_name
-
   let pp = pp_prim
-
   let to_string = Fmt.to_string pp
-
   let make ~name ~eval () : t = { pr_name = name; pr_eval = eval }
 end
 
@@ -412,13 +380,9 @@ module Thunk = struct
     | Th_suspended _ | Th_lazy _ -> assert false
 
   let pp_state = pp_thunk_state
-
   let pp = pp_thunk
-
   let debug = debug_thunk
-
   let to_string = Fmt.to_string pp
-
   let make c : t = { th_st = Th_lazy c }
 end
 
@@ -454,9 +418,7 @@ module Stanza = struct
   }
 
   let[@inline] view self = self.view
-
   let[@inline] make ~id view : t = { view; id }
-
   let[@inline] id self = self.id
 
   let pp_with ~pp_thunk out (self : t) : unit =
@@ -484,15 +446,13 @@ module Stanza = struct
     | Eval { value } -> Fmt.fprintf out "(@[eval@ %a@])" pp_thunk value
 
   let pp = pp_with ~pp_thunk:Thunk.pp
-
   let debug = pp_with ~pp_thunk:Thunk.debug
 end
 
-(** Exceptions raised to suspend a computation so as to compute
-    a required thunk *)
+(** Exceptions raised to suspend a computation so as to compute a required thunk
+*)
 
 exception Suspend_and_eval_chunk of Thunk.t * Chunk.t
-
 exception Suspend_and_resume of Thunk.t * Chunk.t * vm
 
 (* internal handling of the VM *)
@@ -522,9 +482,7 @@ module VM_ = struct
     }
 
   let[@inline] push_val (self : t) v = Vec.push self.stack v
-
   let push_vals (self : t) l = List.iter (Vec.push self.stack) l
-
   let[@inline] pop_val (self : t) = Vec.pop self.stack
 
   let[@inline] pop_val_exn (self : t) : Value.t =
@@ -1083,13 +1041,10 @@ module Chunk_builder = struct
 end
 
 type t = Types_.vm
-
 type debug_hook = t -> Instr.t -> unit
 
 let set_debug_hook vm h = vm.Types_.debug_hook <- Some h
-
 let clear_debug_hook vm = vm.Types_.debug_hook <- None
-
 let dump = VM_.dump
 
 let create ~ctx () : t =
@@ -1097,11 +1052,8 @@ let create ~ctx () : t =
   vm
 
 let reset = VM_.reset
-
 let push = VM_.push_val
-
 let pop = VM_.pop_val
-
 let pop_exn = VM_.pop_val_exn
 
 let run self c =

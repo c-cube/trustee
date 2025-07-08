@@ -20,23 +20,14 @@ let pp_syntax out = function
   | F_binder i -> Fmt.fprintf out "(binder %d)" i
 
 let to_string_syntax = Fmt.to_string pp_syntax
-
 let pp = pp_syntax
-
 let to_string = Fmt.to_string pp
-
 let normal = F_normal
-
 let prefix i = F_prefix i
-
 let postfix i = F_postfix i
-
 let lassoc i = F_left_assoc i
-
 let rassoc i = F_right_assoc i
-
 let binder i = F_binder i
-
 let infix i = F_infix i
 
 let get_prec = function

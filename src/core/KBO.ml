@@ -9,15 +9,14 @@ type result =
 
 type params = {
   var_as_cst: bool;
-      (** if true, variables are just considered to be
-      constants and are totally ordered in an unspecified but stable way.
-      If false, then variables are incomparable and [a > b] implies that
-      the multiset of variables of [a] contains the one of [b]. *)
+      (** if true, variables are just considered to be constants and are totally
+          ordered in an unspecified but stable way. If false, then variables are
+          incomparable and [a > b] implies that the multiset of variables of [a]
+          contains the one of [b]. *)
   precedence: string -> string -> int;  (** Total order on constants *)
   weight: string -> int;
-      (** Weight of constants. Must always be [>= 1]
-      (we ignore the edge cases where one unary symbol can have weight 0
-      for simplicity) *)
+      (** Weight of constants. Must always be [>= 1] (we ignore the edge cases
+          where one unary symbol can have weight 0 for simplicity) *)
 }
 
 module KBO_ = struct
@@ -65,11 +64,8 @@ module KBO_ = struct
     E.Tbl.replace st.balance var (n - 1)
 
   let add_wb_ st x = st.wb <- st.wb + x
-
   let sub_wb_ st x = st.wb <- st.wb - x
-
   let incr_wb_ st = st.wb <- st.wb + 1
-
   let decr_wb_ st = st.wb <- st.wb - 1
 
   (* Update term balance, weight balance ([wb]), and check whether `t`
@@ -241,5 +237,4 @@ let compare ?(params = default_params ()) (e1 : E.t) (e2 : E.t) : result =
   KBO_.tc_kbo st e1 e2
 
 let lt ?params a b : bool = compare ?params a b = Lt
-
 let gt ?params a b : bool = compare ?params a b = Gt

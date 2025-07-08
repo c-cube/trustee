@@ -5,9 +5,7 @@ type view =
 type t = { view: view } [@@unboxed]
 
 let file s : t = { view = File s }
-
 let string s : t = { view = String s }
-
 let view self = self.view
 
 let pp out = function

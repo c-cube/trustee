@@ -8,7 +8,8 @@ module E = K.Expr
 type rw_step =
   | Same
   | Rw_step of K.thm
-      (** A theorem [A |- a=b] where [a] is the initial term, and [b] the result. *)
+      (** A theorem [A |- a=b] where [a] is the initial term, and [b] the
+          result. *)
 
 val pp_rw_step : rw_step Fmt.printer
 
@@ -19,23 +20,24 @@ val empty : t
 (** Converter that does nothing *)
 
 val apply : t -> K.ctx -> K.expr -> K.thm
-(** [apply conv ctx e] applies [conv] to [e] once.
-    For multiple applications use [fix conv] (see {!fix}).
+(** [apply conv ctx e] applies [conv] to [e] once. For multiple applications use
+    [fix conv] (see {!fix}).
 
-    @return a theorem [thm] where [thm] is the proof [ |- e = e']
-    and [e'] is the converted version of [e]. If no rewriting took place
-    then [thm] is [refl e]. *)
+    @return
+      a theorem [thm] where [thm] is the proof [ |- e = e'] and [e'] is the
+      converted version of [e]. If no rewriting took place then [thm] is
+      [refl e]. *)
 
 val apply_e : t -> K.ctx -> K.expr -> K.expr * K.thm
-(** [apply_e conv ctx e] returns both the theorem [apply conv ctx e],
-    and the RHS of the theorem. *)
+(** [apply_e conv ctx e] returns both the theorem [apply conv ctx e], and the
+    RHS of the theorem. *)
 
 val fix : t -> t
 (** Apply converter repeatedly. *)
 
 val combine : t -> t -> t
-(** [combine c1 c2] tries to normalize a term using [c1];
-    if [c1] fails it tries [c2]. *)
+(** [combine c1 c2] tries to normalize a term using [c1]; if [c1] fails it tries
+    [c2]. *)
 
 val combine_l : t list -> t
 (** N-ary version of {!combine} *)

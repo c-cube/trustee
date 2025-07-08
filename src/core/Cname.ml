@@ -6,9 +6,7 @@ type t = {
 }
 
 let make name chash : t = { name; chash }
-
 let name self = self.name
-
 let chash self = self.chash
 
 let chasher ctx self =
@@ -16,7 +14,6 @@ let chasher ctx self =
   Chash.sub ctx self.chash
 
 let pp_name out self = Fmt.string out self.name
-
 let pp out self = Fmt.fprintf out "%s/%a" self.name Chash.pp self.chash
 
 let to_string self =

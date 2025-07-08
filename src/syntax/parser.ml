@@ -13,7 +13,6 @@ type t = {
 }
 
 type 'a parser = t -> 'a SD.t
-
 type 'a or_error = ('a, Loc.t * Error.t) result
 
 module Or_error = struct
@@ -126,7 +125,6 @@ let p_const =
 
 module P_expr : sig
   val p_var : ?require_ty:bool -> A.Expr.var parser
-
   val top : A.Expr.t parser
 end = struct
   module E = A.Expr
@@ -317,7 +315,6 @@ end
 
 module P_meta_expr : sig
   val var : A.Meta_expr.var parser
-
   val top : A.Meta_expr.t parser
 end = struct
   module E = A.Meta_expr
@@ -565,7 +562,6 @@ end
 
 module P_proof : sig
   val block : A.Proof.block or_error parser
-
   val proof : A.Proof.t parser
 end = struct
   module P = A.Proof
@@ -762,7 +758,6 @@ Proofs can be of various forms:
          GS_qed e)
 
   let proof self = SD.with_msg ~msg:"parsing a proof" @@ proof_rec_ self
-
   let block self = SD.with_msg ~msg:"parsing a proof block" @@ proof_block self
 end
 
@@ -770,7 +765,6 @@ module P_top : sig
   type top_parser = A.Top.t parser
 
   val parsers : (string * top_parser) list
-
   val top : A.Top.t parser
 end = struct
   type top_parser = A.Top.t parser

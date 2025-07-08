@@ -2,13 +2,9 @@ open Common_
 module TA = Type_ast
 
 type expr = TA.expr
-
 type ty = TA.ty
-
 type const = TA.const
-
 type 'a meta_var = 'a TA.Meta_var.t
-
 type t = { consts: const Str_map.t (* const -> ty *) }
 
 let empty = { consts = Str_map.empty |> Str_map.add "bool" TA.Const.bool }
@@ -17,7 +13,6 @@ let add_const (c : const) self : t =
   { consts = Str_map.add c.name c self.consts }
 
 let find_const n self = Str_map.find_opt n self.consts
-
 let all_consts self = Str_map.values self.consts
 
 let pp out (self : t) : unit =

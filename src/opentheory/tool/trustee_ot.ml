@@ -16,7 +16,6 @@ let print_all idx =
   ()
 
 let now () = Unix.gettimeofday ()
-
 let since_s t = now () -. t
 
 type edge =
@@ -27,17 +26,11 @@ type edge =
 type theories = { theories: (string, Thy_file.t) Hashtbl.t }
 
 let unquote_str = Util.unquote_str
-
 let print = ref false
-
 let check = ref []
-
 let check_all = ref false
-
 let progress_ = ref false
-
 let store_proofs_ = ref false
-
 let use_sqlite = ref false
 
 (* TODO: storage: use sqlite *)

@@ -1,11 +1,10 @@
 (** Main parser.
 
-    This is the parser for files, containing all top declarations,
-    logical expressions (see {!Expr_parser}), meta definitions, etc.
+    This is the parser for files, containing all top declarations, logical
+    expressions (see {!Expr_parser}), meta definitions, etc.
 
-    We use a S-expression based syntax because life is short, and it
-    looks good without having to make any syntactic decisions.
-*)
+    We use a S-expression based syntax because life is short, and it looks good
+    without having to make any syntactic decisions. *)
 
 open Common_
 module A = Parse_ast
@@ -16,19 +15,16 @@ type t
 val create : src_string:string -> notation:Notation.Ref.t -> unit -> t
 
 type 'a parser = t -> 'a SD.t
-
 type 'a or_error = ('a, Loc.t * Error.t) result
 
 module Or_error : sig
   type 'a t = 'a or_error
 
   val get_exn : 'a t -> 'a
-
   val sequence_l : 'a t list -> 'a list t
 end
 
 val run : t -> filename:string -> string -> 'a parser -> 'a or_error list
-
 val run_exn : t -> filename:string -> string -> 'a parser -> 'a list
 
 module P_expr : sig

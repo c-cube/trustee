@@ -20,7 +20,6 @@ and expl =
 (* merge [a] and [b] because of theorem [… |- a=b], modulo commutativity *)
 
 type merge_task = Merge of node * node * expl
-
 type update_sig_task = Update_sig of node [@@unboxed]
 
 (* signature table *)

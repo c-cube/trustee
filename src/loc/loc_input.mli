@@ -5,9 +5,6 @@ type view = private
 type t
 
 val file : string -> t
-
 val string : string -> t
-
 val view : t -> view
-
 val pp : t Fmt.printer

@@ -1,5 +1,4 @@
 module Log = (val Logs.src_log @@ Logs.Src.create "lsp")
-
 module TC = Trustee_core
 module TS = Trustee_syntax
 module ITP = Trustee_itp
@@ -70,7 +69,6 @@ let trustee_server _ctx =
       Hashtbl.create 32
 
     method! config_definition = Some (`Bool true)
-
     method! config_hover = Some (`Bool true)
 
     method! config_sync_opts =
@@ -175,8 +173,8 @@ let trustee_server _ctx =
 
     (* ## requests ## *)
 
-    method! on_req_hover ~notify_back:_ ~id:_ ~uri ~pos (_d : Linol.doc_state)
-        : _ option =
+    method! on_req_hover ~notify_back:_ ~id:_ ~uri ~pos (_d : Linol.doc_state) :
+        _ option =
       Log.debug (fun k ->
           k "req hover at uri=%s pos=%d:%d" uri pos.line pos.character);
       match Hashtbl.find buffers uri with
@@ -228,8 +226,8 @@ let trustee_server _ctx =
         in
         r
 
-    method! on_req_completion ~notify_back:_ ~id:_ ~uri ~pos ~ctx:_ doc_st
-        : _ option =
+    method! on_req_completion ~notify_back:_ ~id:_ ~uri ~pos ~ctx:_ doc_st :
+        _ option =
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
       | { index; _ } ->
@@ -290,9 +288,9 @@ let setup_logger_ () =
   Logs.set_level ~all:true
     (Some
        (if dbg then
-         Logs.Debug
-       else
-         Logs.Info));
+          Logs.Debug
+        else
+          Logs.Info));
 
   if true || dbg then (
     let oc = open_out "/tmp/lsp.log" in

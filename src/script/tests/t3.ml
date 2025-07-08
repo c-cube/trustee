@@ -54,11 +54,11 @@ Format.printf "@[<2>compiled stanzas:@ %a@]@."
 (* evaluate *)
 
 let debug_hook vm i = ()
-  (*
+(*
   ()
   Fmt.eprintf "@[<2>exec `%a`@ in %a@]@." VM.Instr.pp i VM.dump vm
         *)
-  [@@ocaml.warning "-27"]
+[@@ocaml.warning "-27"]
 ;;
 
 try List.iter (VM.eval_stanza_pp ~debug_hook ctx) stanzas with _ -> ()

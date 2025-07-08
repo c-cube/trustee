@@ -4,9 +4,7 @@ open Sigs
 
 module type S = sig
   val store : key:string -> ?erase:bool -> 'a Cbor_pack.Enc.t -> 'a -> unit
-
   val mem : key:string -> bool
-
   val get : key:string -> 'a Cbor_pack.Dec.t -> 'a option
 end
 
@@ -18,15 +16,15 @@ let mem (self : t) ~key : bool =
   let (module M) = self in
   M.mem ~key
 
-(** Get the value for [key] from storage, using [dec] to
-    deserialize it *)
+(** Get the value for [key] from storage, using [dec] to deserialize it *)
 let get (self : t) ~key dec : _ option =
   let (module M) = self in
   M.get ~key dec
 
 (** Store value for [key] in storage.
-    @param erase if true, the key is added unconditionally; if false, it
-    is added only if not present already (default: false) *)
+    @param erase
+      if true, the key is added unconditionally; if false, it is added only if
+      not present already (default: false) *)
 let store (self : t) ?erase ~key enc x : unit =
   let (module M) = self in
   M.store ~key ?erase enc x

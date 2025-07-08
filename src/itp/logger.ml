@@ -59,18 +59,18 @@ let as_reporter self : Logs.reporter =
 let setup_trustee_ =
   lazy
     (let open Trustee_core.Log in
-    let logger =
-      {
-        log =
-          (fun lvl k ->
-            let k2 f = k (fun fmt -> f ?header:None ?tags:None fmt) in
-            match lvl with
-            | 0 -> Logs.app k2
-            | 1 -> Logs.info k2
-            | _ -> Logs.debug k2);
-      }
-    in
-    set_logger logger)
+     let logger =
+       {
+         log =
+           (fun lvl k ->
+             let k2 f = k (fun fmt -> f ?header:None ?tags:None fmt) in
+             match lvl with
+             | 0 -> Logs.app k2
+             | 1 -> Logs.info k2
+             | _ -> Logs.debug k2);
+       }
+     in
+     set_logger logger)
 
 let setup_trustee () = Lazy.force setup_trustee_
 
@@ -82,14 +82,14 @@ let setup_logs ?(files = []) ~debug () =
   Logs.set_level ~all:true
     (Some
        (if debug then
-         Logs.Debug
-       else
-         Logs.Warning));
+          Logs.Debug
+        else
+          Logs.Warning));
   Trustee_core.Log.set_level
     (if debug then
-      50
-    else
-      1);
+       50
+     else
+       1);
   Logs.app (fun k -> k "logs are set up (debug=%b)" debug);
   List.iter
     (fun file ->

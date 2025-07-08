@@ -6,33 +6,19 @@ module Make () = struct
   include Make ()
 
   let a = const a []
-
   let b = const b []
-
   let c = const c []
-
   let c_f1 = new_const "f1" (tau @-> tau)
-
   let c_g1 = new_const "g1" (tau @-> tau)
-
   let c_f2 = new_const "f2" (tau @-> tau @-> tau)
-
   let c_g2 = new_const "g2" (tau @-> tau @-> tau)
-
   let v_x = K.Var.make "x" tau
-
   let v_y = K.Var.make "y" tau
-
   let v_z = K.Var.make "z" tau
-
   let x = var v_x
-
   let y = var v_y
-
   let z = var v_z
-
   let x1 = var_name "x1" tau
-
   let y1 = var_name "y1" tau
 
   let f1 =
@@ -52,13 +38,9 @@ module Make () = struct
     fun x y -> app_l f [ x; y ]
 
   let ax_f2_assoc = Thm.axiom ctx [] (f2 (f2 x y) z === f2 x (f2 y z))
-
   let ax_f2_comm = Thm.axiom ctx [] (f2 x y === f2 y x)
-
   let ax_g2_assoc = Thm.axiom ctx [] (g2 (g2 x y) z === g2 x (g2 y z))
-
   let ax_g2_comm = Thm.axiom ctx [] (g2 x y === g2 y x)
-
   let ax_g2_idem = Thm.axiom ctx [] (g2 x x === x)
 
   let rules_ac =

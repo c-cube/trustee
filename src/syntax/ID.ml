@@ -14,17 +14,11 @@ let make =
     x
 
 let makef fmt = Fmt.ksprintf ~f:make fmt
-
 let[@inline] copy { name; _ } = make name
-
 let[@inline] id id = id.id
-
 let[@inline] name id = id.name
-
 let[@inline] equal a b = a == b
-
 let[@inline] compare a b = CCInt.compare a.id b.id
-
 let[@inline] hash a = CCHash.int a.id
 
 let pp_id_ =
@@ -48,9 +42,7 @@ module AsKey = struct
   type nonrec t = t
 
   let equal = equal
-
   let compare = compare
-
   let hash = hash
 end
 

@@ -21,15 +21,10 @@ let unsafe_of_bytes b : t =
   Bytes.copy b
 
 let dummy = Bytes.unsafe_of_string "<dummy>"
-
 let create () = { ctx = H.init (); buf = Bytes.create 8 }
-
 let equal = Bytes.equal
-
 let hash = CCHash.bytes
-
 let compare = Bytes.compare
-
 let[@inline] string ctx s = H.update_string ctx.ctx s
 
 let[@inline] int ctx i =
@@ -104,7 +99,6 @@ module As_key = struct
   type nonrec t = t
 
   let equal = equal
-
   let hash = hash
 end
 

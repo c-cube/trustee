@@ -37,23 +37,19 @@ let ptr_tag = 6
 
 module Enc = struct
   type ptr = cbor
-
   type key_view = ..
 
   module type KEY = sig
     type t
 
     val n : int
-
     val equal : t -> t -> bool
-
     val hash : t -> int
 
     type key_view += E of t
   end
 
   type 'a key = (module KEY with type t = 'a)
-
   type any_key = Any_key : 'a key * key_view -> any_key
 
   module Key_tbl = Hashtbl.Make (struct
@@ -89,17 +85,11 @@ module Enc = struct
       ptr
 
   let int x : cbor = `Int x
-
   let bool x : cbor = `Bool x
-
   let text x : cbor = `Text x
-
   let blob x : cbor = `Bytes x
-
   let list x : cbor = `Array x
-
   let map x : cbor = `Map x
-
   let pair x y = list [ x; y ]
 
   let init () =
@@ -110,7 +100,6 @@ module Enc = struct
     }
 
   let finalize (self : encoder) ~key : cbor_pack = { h = self.eh; k = key }
-
   let n_ = ref 0
 
   let make_key (type a) (module T : Hashtbl.HashedType with type t = a) : a key
@@ -156,7 +145,6 @@ module Dec = struct
 
   module type KEY = sig
     type t
-
     type key_view += E of t
   end
 
@@ -165,7 +153,6 @@ module Dec = struct
   let make_key (type a) () : _ key =
     let module M = struct
       type t = a
-
       type key_view += E of a
     end in
     (module M)
@@ -180,7 +167,6 @@ module Dec = struct
   exception Error of path * string
 
   let error path s = raise (Error (path, s))
-
   let errorf path fmt = Format.kasprintf (error path) fmt
 
   (* dereference heap pointer *)
@@ -194,11 +180,8 @@ module Dec = struct
     | c -> c
 
   let return x = { decode = (fun _ _ _ -> x) }
-
   let delay f : _ t = { decode = (fun dec path c -> (f ()).decode dec path c) }
-
   let fail s = { decode = (fun _ path _ -> error path s) }
-
   let value = { decode = (fun dec path c -> deref dec path c) }
 
   let int =
@@ -349,9 +332,7 @@ let encode (enc : 'a Enc.t) (x : 'a) : Cbor.t =
   `Map [ `Text "h", `Array (Vec.to_list cb.h); `Text "k", cb.k ]
 
 let cbor_to_string = Cbor.encode
-
 let cbor_of_string = Cbor.decode
-
 let encode_to_string enc x : string = Cbor.encode @@ encode enc x
 
 let decode (dec : 'a Dec.t) (cbor : Cbor.t) : ('a, _) result =

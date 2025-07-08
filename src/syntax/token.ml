@@ -39,5 +39,4 @@ let pp out = function
   | EOF -> Fmt.string out "EOF"
 
 let to_string = Fmt.to_string pp
-
 let equal : t -> t -> bool = ( = )

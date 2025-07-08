@@ -2,38 +2,28 @@
 
 open Common_
 module Log = Trustee_core.Log
-
 module Log_ = (val Logs.(src_log @@ Src.create "trustee.eval"))
 
 type 'a or_error = 'a Trustee_core.Error.or_error
 
 let now () = Unix.gettimeofday ()
-
 let since_s t = now () -. t
-
 let unquote_str = Util.unquote_str
 
 (* callbacks *)
 
-class type callbacks =
-  object
-    method start_theory : string -> unit
-
-    method done_theory : string -> ok:bool -> time_s:float -> unit
-
-    method start_article : string -> unit
-
-    method done_article : string -> Article.t -> time_s:float -> unit
-  end
+class type callbacks = object
+  method start_theory : string -> unit
+  method done_theory : string -> ok:bool -> time_s:float -> unit
+  method start_article : string -> unit
+  method done_article : string -> Article.t -> time_s:float -> unit
+end
 
 class default_callbacks : callbacks =
   object
     method start_theory _ = ()
-
     method done_theory _ ~ok:_ ~time_s:_ = ()
-
     method start_article _ = ()
-
     method done_article _ _ ~time_s:_ = ()
   end
 
@@ -92,16 +82,16 @@ let rec eval_info_to_html (self : eval_info) =
         sub_e
         @@ tr [] [ td [] [ txt "info:" ]; td [] [ p [] [ txt self.info ] ] ];
         (if self.sub = [] then
-          sub_empty
-        else
-          sub_l
-            (List.map
-               (fun (s, ei) ->
-                 tr []
-                   [
-                     td [] [ txtf "sub.%s:" s ]; td [] [ eval_info_to_html ei ];
-                   ])
-               self.sub));
+           sub_empty
+         else
+           sub_l
+             (List.map
+                (fun (s, ei) ->
+                  tr []
+                    [
+                      td [] [ txtf "sub.%s:" s ]; td [] [ eval_info_to_html ei ];
+                    ])
+                self.sub));
       ])
 
 let mk_ei ~time ~info ?(sub = []) () : eval_info = { sub; time; info }

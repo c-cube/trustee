@@ -4,7 +4,6 @@ module Unif = Trustee_core.Unif
 module Error = Trustee_core.Error
 
 type 'a or_error = 'a Trustee_core.Error.or_error
-
 type input = { iter_lines: string Iter.t }
 
 module Input = struct
@@ -29,7 +28,6 @@ module Input = struct
 end
 
 type ty_op = Name.t * (K.ctx -> K.ty list -> K.ty)
-
 type const = Name.t * (K.ctx -> K.ty -> K.expr)
 
 type obj =
@@ -71,9 +69,7 @@ type t = {
 }
 
 let article (self : t) : Article.t = self.art
-
 let clear_article self = self.art <- Article.empty
-
 let clear_dict self = Hashtbl.clear self.dict
 
 let pp_stack out self =
@@ -140,8 +136,8 @@ let mk_defined_ty_ c =
   | K.Const.C_arity 0 ->
     (* non-polymorphic constant *)
     fun ctx _ty ->
-     assert (_ty = []);
-     K.Expr.const ctx c []
+      assert (_ty = []);
+      K.Expr.const ctx c []
   | K.Const.C_arity n ->
     fun ctx _tyargs ->
       assert (List.length _tyargs = n);
@@ -177,15 +173,18 @@ let typeOp : rule =
     let f_op =
       match n with
       | { Name.path = []; name = "->" } ->
-        fun ctx -> (function
+        fun ctx ->
+          (function
           | [ a; b ] -> K.Expr.arrow ctx a b
           | _ -> Error.fail "arrow expects 2 args")
       | { Name.path = []; name = "bool" } ->
-        fun ctx -> (function
+        fun ctx ->
+          (function
           | [] -> K.Expr.bool ctx
           | _ -> Error.fail "bool is a const")
       | { Name.path = []; name = "ind" } ->
-        fun ctx -> (function
+        fun ctx ->
+          (function
           | [] ->
             let ind =
               match self.ind with
@@ -276,9 +275,9 @@ let mk_defined_const_ c =
   | K.Const.C_ty_vars [] ->
     (* non-polymorphic constant *)
     fun ctx _ty ->
-     assert (K.Var.Set.is_empty @@ K.Expr.free_vars (K.Const.ty c));
-     assert (K.Var.Set.is_empty @@ K.Expr.free_vars _ty);
-     K.Expr.const ctx c []
+      assert (K.Var.Set.is_empty @@ K.Expr.free_vars (K.Const.ty c));
+      assert (K.Var.Set.is_empty @@ K.Expr.free_vars _ty);
+      K.Expr.const ctx c []
   | K.Const.C_ty_vars ty_vars ->
     (* make new variables *)
     let vars =

@@ -25,7 +25,6 @@ let[@inline] loc self : Loc.t =
   Loc.make ~ctx:self.ctx ll
 
 let[@inline] is_idx (self : st) (i : int) = i < String.length self.src
-
 let[@inline] get (self : st) (i : int) : char = String.get self.src i
 
 (* skip rest of line *)

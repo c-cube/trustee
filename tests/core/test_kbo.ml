@@ -6,21 +6,13 @@ module Make () = struct
   include Make ()
 
   let a = const a []
-
   let b = const b []
-
   let c = const c []
-
   let c_f1 = new_const "f1" (tau @-> tau)
-
   let c_g1 = new_const "g1" (tau @-> tau)
-
   let c_f2 = new_const "f2" (tau @-> tau @-> tau)
-
   let c_g2 = new_const "g2" (tau @-> tau @-> tau)
-
   let x = var_name "x" tau
-
   let y = var_name "y" tau
 
   let f1 =

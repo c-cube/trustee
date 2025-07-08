@@ -12,7 +12,6 @@ let create ~next () : _ t =
   { next; cur; loc; is_done }
 
 let is_done self = self.is_done
-
 let cur self = self.cur, self.loc
 
 let consume self =

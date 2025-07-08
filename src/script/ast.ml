@@ -6,7 +6,6 @@ type 'a with_loc = 'a With_loc.t = {
 }
 
 let pp_with_loc ppx out x = ppx out x.With_loc.view
-
 let mk ~loc x : _ with_loc = { With_loc.view = x; loc }
 
 module type PARSER_PARAM = sig
@@ -96,7 +95,6 @@ and block = block_view with_loc
 (** Meta-level block (composite expression) *)
 
 and block_view = { bl_items: block_item list }
-
 and block_item = block_item_view with_loc
 
 and block_item_view =
