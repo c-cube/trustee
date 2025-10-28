@@ -8,7 +8,8 @@ module TA = Trustee_syntax.Type_ast
 module Linol = Linol.Make (Linol.Blocking_IO)
 module Position = Linol.Position
 module Range = Linol.Range
-module LP = Lsp.Types
+module LP = Linol_lsp.Types
+module Uri = Linol_lsp.Uri0
 
 let lsp_pos_of_pos (p : TS.Position.t) : Position.t =
   Position.create
@@ -53,7 +54,7 @@ let ident_under_pos ~file (s : string) (pos : TS.Position.t) :
 
 let diag_of_error ((loc, err) : TS.Loc.t * TS.Error.t) : LP.Diagnostic.t =
   let range = lsp_range_of_loc loc in
-  let message = Fmt.asprintf "@[%a@]" TS.Error.pp err in
+  let message = `String (Fmt.asprintf "@[%a@]" TS.Error.pp err) in
   let d =
     LP.Diagnostic.create ~severity:LP.DiagnosticSeverity.Error ~range ~message
       ()
@@ -63,6 +64,7 @@ let diag_of_error ((loc, err) : TS.Loc.t * TS.Error.t) : LP.Diagnostic.t =
 let trustee_server _ctx =
   object (self)
     inherit Linol.server
+    method spawn_query_handler f = ignore (Thread.create f () : Thread.t)
 
     (* one env per document *)
     val buffers : (LP.DocumentUri.t, parsed_buffer) Hashtbl.t =
@@ -74,7 +76,7 @@ let trustee_server _ctx =
     method! config_sync_opts =
       LP.TextDocumentSyncOptions.create ~change:LP.TextDocumentSyncKind.Full
         ~openClose:true
-        ~save:(LP.SaveOptions.create ~includeText:false ())
+        ~save:(`SaveOptions (LP.SaveOptions.create ~includeText:false ()))
         ~willSave:false ()
 
     method private _on_doc ~(notify_back : Linol.notify_back)
@@ -83,7 +85,7 @@ let trustee_server _ctx =
       let notation = TS.Notation.Ref.create () in
       let stmts = TS.Parser.parse_string_exn content ~notation TS.Parser.top in
       Log.debug (fun k ->
-          k "for %s: parsed %d statements" d (List.length stmts));
+          k "for %s: parsed %d statements" (Uri.to_string d) (List.length stmts));
 
       let state = TS.Type_infer.State.create ~env:TS.Env.empty () in
       let (module TI) = TS.Type_infer.make state in
@@ -102,7 +104,8 @@ let trustee_server _ctx =
           stmts
       in
       Log.debug (fun k ->
-          k "for %s: typed %d statements" d (List.length typed_stmts));
+          k "for %s: typed %d statements" (Uri.to_string d)
+            (List.length typed_stmts));
 
       let all_errors =
         let open TS.Error_set.Syntax in
@@ -156,27 +159,30 @@ let trustee_server _ctx =
 
     method on_notif_doc_did_open ~notify_back d ~content : unit =
       Log.debug (fun k ->
-          k "did open %s (%d bytes)" d.uri (String.length content));
+          k "did open %s (%d bytes)" (Uri.to_string d.uri)
+            (String.length content));
       self#_on_doc ~notify_back d.uri content
 
     method on_notif_doc_did_close ~notify_back:_ d : unit =
-      Log.debug (fun k -> k "did close %s" d.uri);
+      Log.debug (fun k -> k "did close %s" (Uri.to_string d.uri));
       Hashtbl.remove buffers d.uri;
       ()
 
     method on_notif_doc_did_change ~notify_back d _c ~old_content:_old
         ~new_content : unit =
       Log.debug (fun k ->
-          k "did update %s (%d bytes -> %d bytes)" d.uri (String.length _old)
+          k "did update %s (%d bytes -> %d bytes)" (Uri.to_string d.uri)
+            (String.length _old)
             (String.length new_content));
       self#_on_doc ~notify_back d.uri new_content
 
     (* ## requests ## *)
 
-    method! on_req_hover ~notify_back:_ ~id:_ ~uri ~pos (_d : Linol.doc_state) :
-        _ option =
+    method! on_req_hover ~notify_back:_ ~id:_ ~uri ~pos ~workDoneToken:_
+        (_d : Linol.doc_state) : _ option =
       Log.debug (fun k ->
-          k "req hover at uri=%s pos=%d:%d" uri pos.line pos.character);
+          k "req hover at uri=%s pos=%d:%d" (Uri.to_string uri) pos.line
+            pos.character);
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
       | { index; _ } ->
@@ -200,7 +206,8 @@ let trustee_server _ctx =
         in
         r
 
-    method! on_req_definition ~notify_back:_ ~id:_ ~uri ~pos _st : _ option =
+    method! on_req_definition ~notify_back:_ ~id:_ ~uri ~pos ~workDoneToken:_
+        ~partialResultToken:_ _st : _ option =
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
       | { index; _ } ->
@@ -217,7 +224,8 @@ let trustee_server _ctx =
             | Some loc ->
               Log.debug (fun k -> k "found def at %a" TS.Loc.pp q#loc);
               let loc =
-                LP.Location.create ~uri:(TS.Loc.filename loc)
+                LP.Location.create
+                  ~uri:(Uri.of_path @@ TS.Loc.filename loc)
                   ~range:(lsp_range_of_loc loc)
               in
               let r = `Location [ loc ] in
@@ -226,8 +234,8 @@ let trustee_server _ctx =
         in
         r
 
-    method! on_req_completion ~notify_back:_ ~id:_ ~uri ~pos ~ctx:_ doc_st :
-        _ option =
+    method! on_req_completion ~notify_back:_ ~id:_ ~uri ~pos ~ctx:_
+        ~workDoneToken:_ ~partialResultToken:_ doc_st : _ option =
       match Hashtbl.find buffers uri with
       | exception Not_found -> None
       | { index; _ } ->
@@ -258,9 +266,10 @@ let trustee_server _ctx =
                    *)
                    let label = Printf.sprintf "%s %s" lbl c.name in
                    let textEdit =
-                     LP.TextEdit.create
-                       ~range:(lsp_range_of_loc ident_loc)
-                       ~newText:c.name
+                     `TextEdit
+                       (LP.TextEdit.create
+                          ~range:(lsp_range_of_loc ident_loc)
+                          ~newText:c.name)
                    in
                    let ci =
                      LP.CompletionItem.create ~label ~kind ~textEdit
@@ -305,7 +314,7 @@ let () =
   setup_logger_ ();
   let ctx = K.Ctx.create () in
   let server = trustee_server ctx in
-  let task = Linol.create_stdio server in
+  let task = Linol.create_stdio ~env:() server in
   match Linol.run task with
   | exception e ->
     let e = Printexc.to_string e in
