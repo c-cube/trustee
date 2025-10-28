@@ -74,9 +74,8 @@
     (containers (and (>= 3.0) (< 4.0)))
     (trustee (= :version))
     (trustee-itp (= :version))
-    lsp
     logs
-    (linol (and (>= 0.4) (< 0.5)))
+    (linol (and (>= 0.10) (< 0.11)))
     (ocaml (>= 4.06.0))
     (odoc :with-doc)))
 
