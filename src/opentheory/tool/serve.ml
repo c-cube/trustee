@@ -303,4 +303,9 @@ let serve (self : state) : unit =
   Printf.printf "listen on http://localhost:%d/\n%!" self.port;
   match H.run self.server with
   | Ok () -> ()
-  | Error e -> raise e
+  | Error e ->
+    H.stop self.server;
+    raise e
+  | exception e ->
+    H.stop self.server;
+    raise e
