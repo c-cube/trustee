@@ -67,19 +67,26 @@ let main ~dir ~serve ~port () =
     St.create ~cb ~progress_bar ~ctx ~idx ()
   in
 
-  let th_serve =
+  let server_opt =
     if serve then (
+      let server = Serve.create st ~port in
       let _th_metrics =
         Thread.create
           (fun () ->
             let gc = Tiny_httpd_prometheus.(GC_metrics.create global) in
+            let n_active =
+              Tiny_httpd_prometheus.(Gauge.create global) "active-conms"
+            in
             while true do
               Thread.delay 1.;
-              Tiny_httpd_prometheus.GC_metrics.update gc
+              Tiny_httpd_prometheus.GC_metrics.update gc;
+              Tiny_httpd_prometheus.Gauge.set n_active
+                (Serve.active_connections server);
+              if not (Serve.active server) then exit 1
             done)
           ()
       in
-      Some (Thread.create (fun () -> Serve.serve st ~port) ())
+      Some (server, Thread.create Serve.serve server)
     ) else
       None
   in
@@ -89,7 +96,7 @@ let main ~dir ~serve ~port () =
   else if !check <> [] then
     Check_all.check ~st ~names:(Iter.of_list !check) ();
 
-  Option.iter Thread.join th_serve;
+  Option.iter (fun (_, t) -> Thread.join t) server_opt;
   ()
 
 (* TODO: use Logs *)

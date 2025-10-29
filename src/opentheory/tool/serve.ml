@@ -48,6 +48,7 @@ let reply_page ~title req h =
 type state = {
   server: H.t;
   st: St.t;
+  port: int;
 }
 
 let home_txt =
@@ -280,10 +281,10 @@ let h_stats self : unit =
   in
   reply_page ~title:"/stats" req [ res ]
 
-let serve st ~port : unit =
-  let server = H.create ~addr:"0.0.0.0" ~port () in
+let create st ~port : state =
+  let server = H.create ~addr:"127.0.0.1" ~port () in
   Tiny_httpd_prometheus.(instrument_server server global);
-  let state = { server; st } in
+  let state = { server; st; port } in
   h_root state;
   h_thy state;
   h_art state;
@@ -293,7 +294,13 @@ let serve st ~port : unit =
   H.Dir.add_vfs server
     ~config:(H.Dir.config ~dir_behavior:H.Dir.Index_or_lists ())
     ~vfs:Static.vfs ~prefix:"static";
-  Printf.printf "listen on http://localhost:%d/\n%!" port;
-  match H.run server with
+  state
+
+let active_connections (self : state) : int = H.active_connections self.server
+let active (self : state) = H.running self.server
+
+let serve (self : state) : unit =
+  Printf.printf "listen on http://localhost:%d/\n%!" self.port;
+  match H.run self.server with
   | Ok () -> ()
   | Error e -> raise e
