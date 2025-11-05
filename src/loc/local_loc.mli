@@ -22,7 +22,7 @@ val make : ctx:ctx -> off1:int -> off2:int -> t
 val make_pos : ctx:ctx -> Position.t -> Position.t -> t
 val of_lexbuf : ctx:ctx -> Lexing.lexbuf -> t
 val of_lex_pos : ctx:ctx -> Lexing.position -> Lexing.position -> t
-val tr_position : ctx:ctx -> left:bool -> offset:int -> Lexing.position
+val tr_position : ctx:ctx -> left:bool -> offset:int -> Pp_loc.Position.t
 val offset_of_pos : ctx:ctx -> Position.t -> int
 val pos_of_offset : ctx:ctx -> int -> Position.t
 val offsets : t -> int * int

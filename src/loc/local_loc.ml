@@ -88,20 +88,21 @@ let positions ~ctx self =
   let off1, off2 = offsets self in
   pos_of_offset ~ctx off1, pos_of_offset ~ctx off2
 
-let tr_position ~ctx ~left ~offset : Lexing.position =
+let tr_position ~ctx ~left ~offset : Pp_loc.Position.t =
   let line, col = tr_offset ctx offset in
-  {
-    Lexing.pos_fname = ctx.filename;
-    pos_lnum = line;
-    pos_cnum =
-      (offset
-      +
-      if left then
-        0
-      else
-        1);
-    pos_bol = offset - col;
-  }
+  Pp_loc.Position.of_lexing
+  @@ {
+       Lexing.pos_fname = ctx.filename;
+       pos_lnum = line;
+       pos_cnum =
+         (offset
+         +
+         if left then
+           0
+         else
+           1);
+       pos_bol = offset - col;
+     }
 
 let line_cols_ ~ctx self =
   let off1, off2 = offsets self in

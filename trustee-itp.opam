@@ -9,7 +9,6 @@ bug-reports: "https://github.com/c-cube/trustee/issues"
 depends: [
   "dune" {>= "2.0"}
   "containers" {>= "3.0" & < "4.0"}
-  "containers-thread"
   "logs"
   "cmdliner"
   "ocaml" {>= "4.08.0"}

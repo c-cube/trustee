@@ -19,7 +19,7 @@
     sqlite3)
   (depends
     (containers (and (>= 3.3) (< 4.0)))
-    (pp_loc (and (>= 1.0) (< 2.0)))
+    (pp_loc (and (>= 2.0) (< 3.0)))
     (iter (>= 1.0))
     (ocaml (>= 4.08.0))
     sha
@@ -58,7 +58,6 @@
   (synopsis "Trustee-powered interactive theorem prover")
   (depends
     (containers (and (>= 3.0) (< 4.0)))
-    containers-thread
     logs
     cmdliner
     (ocaml (>= 4.08.0))
