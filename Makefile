@@ -6,7 +6,7 @@ all:
 opentheory:
 	@dune build @src/opentheory/all $(OPTS)
 
-WATCH?=@all
+WATCH?=@check
 watch:
 	@dune build $(OPTS) $(WATCH) -w
 
