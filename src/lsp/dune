@@ -3,5 +3,10 @@
  (name trustee_lsp)
  (public_name trustee-lsp)
  (flags :standard -open Trustee_core.Sigs)
- (libraries containers trustee.core trustee-itp trustee.syntax linol.lsp
-   linol))
+ (libraries
+  containers
+  trustee.core
+  trustee-itp
+  trustee.syntax
+  linol.lsp
+  linol))

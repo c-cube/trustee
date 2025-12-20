@@ -2,5 +2,4 @@
  (name trustee_itp)
  (public_name trustee-itp)
  (flags :standard -open Trustee_core.Sigs)
- (libraries trustee.core trustee.syntax pp_loc containers
-   threads.posix logs))
+ (libraries trustee.core trustee.syntax pp_loc containers threads.posix logs))
