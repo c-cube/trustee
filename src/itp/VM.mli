@@ -8,6 +8,7 @@
     other languages (rust, C, etc.) *)
 
 open Trustee_core
+open Trustee_algos
 open Sigs
 module K = Kernel
 

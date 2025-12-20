@@ -3,6 +3,8 @@
     This should be stable when parsing the same file several times, and can be
     used to "name" nameless items such as "eval". *)
 
+open Trustee_core
+
 module Component : sig
   type t =
     | Str of string

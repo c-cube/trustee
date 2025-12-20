@@ -1,0 +1,6 @@
+(library
+ (name trustee_algos)
+ (public_name trustee.algos)
+ (synopsis "logic algorithms")
+ (flags :standard -open Trustee_core)
+ (libraries trustee.core containers iter unix sha cbor))

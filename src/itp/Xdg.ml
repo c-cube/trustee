@@ -1,3 +1,5 @@
+open Trustee_core
+
 let name_of_project = ref "trustee"
 let getenv_or_empty s = try Sys.getenv s with _ -> ""
 

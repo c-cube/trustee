@@ -287,7 +287,7 @@ let mk_defined_const_ c =
     fun ctx ty ->
       let e = K.Expr.const ctx c (List.map (K.Expr.var ctx) vars) in
       let ty_e = K.Expr.ty_exn e in
-      (match Unif.match_ ty_e ty with
+      (match Trustee_algos.Unif.match_ ty_e ty with
       | None ->
         Error.failf (fun k ->
             k "type %a@ does not match type of %a" K.Expr.pp ty K.Expr.pp e)
