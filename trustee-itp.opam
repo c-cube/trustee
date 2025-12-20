@@ -7,7 +7,7 @@ authors: ["Simon Cruanes"]
 homepage: "https://github.com/c-cube/trustee/"
 bug-reports: "https://github.com/c-cube/trustee/issues"
 depends: [
-  "dune" {>= "2.0"}
+  "dune" {>= "3.0"}
   "containers" {>= "3.0" & < "4.0"}
   "logs"
   "cmdliner"
@@ -15,7 +15,7 @@ depends: [
   "odoc" {with-doc}
 ]
 build: [
-  ["dune" "subst"] {pinned}
+  ["dune" "subst"] {dev}
   [
     "dune"
     "build"

@@ -9,11 +9,12 @@ tags: ["logic" "proof" "HOL" "assistant"]
 homepage: "https://github.com/c-cube/trustee/"
 bug-reports: "https://github.com/c-cube/trustee/issues"
 depends: [
-  "dune" {>= "2.0"}
+  "dune" {>= "3.0"}
   "containers" {>= "3.3" & < "4.0"}
   "pp_loc" {>= "2.0" & < "3.0"}
   "iter" {>= "1.0"}
   "ocaml" {>= "4.08.0"}
+  "trace" {>= "0.10"}
   "sha"
   "cbor"
   "ppx_deriving" {with-test}
@@ -22,9 +23,8 @@ depends: [
   "qcheck" {with-test}
   "odoc" {with-doc}
 ]
-depopts: ["sqlite3"]
 build: [
-  ["dune" "subst"] {pinned}
+  ["dune" "subst"] {dev}
   [
     "dune"
     "build"
