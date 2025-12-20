@@ -1,9 +1,8 @@
 open Helpers
 open OUnit2
-open Trustee_core
 
 module Make () = struct
-  include Make ()
+  include Helpers.Make ()
 
   let a = const a []
   let b = const b []

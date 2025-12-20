@@ -1,9 +1,9 @@
 open Helpers
 open OUnit2
-module CC = Trustee_core.Congruence_closure
+module CC = Congruence_closure
 
 module Make () = struct
-  include Make ()
+  include Helpers.Make ()
 
   let a = const a []
   let b = const b []

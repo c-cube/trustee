@@ -1,0 +1,20 @@
+(executable
+ (name run_tests)
+ (modes native)
+ (flags
+  :standard
+  -w
+  -a
+  -warn-error
+  -a+8
+  -open
+  Trustee_core
+  -open
+  Trustee_algos)
+ (libraries trustee.core trustee.algos ounit2 qcheck-core qcheck-ounit))
+
+(rule
+ (alias runtest)
+ (locks /test)
+ (action
+  (run ./run_tests.exe -ci false -runner sequential)))
