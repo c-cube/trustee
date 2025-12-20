@@ -5,6 +5,7 @@
   containers
   unix
   trustee.core
+  trace-tef
   logs
   trustee-opentheory
   tiny_httpd

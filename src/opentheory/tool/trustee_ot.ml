@@ -3,6 +3,7 @@ open Common_
 module Log = Trustee_core.Log
 
 let print_all idx =
+  let@ _sp = Trace.with_span ~__FILE__ ~__LINE__ "print-all" in
   let { Idx.errors; theories; interps; _ } = idx in
   List.iter (fun (s, thy) -> Fmt.printf "%s: %s@." s thy.Thy_file.name) theories;
   List.iter
@@ -31,11 +32,11 @@ let check = ref []
 let check_all = ref false
 let progress_ = ref false
 let store_proofs_ = ref false
-let use_sqlite = ref false
 
 (* TODO: storage: use on-disk region files *)
 
 let main ~dir ~serve ~port () =
+  let@ _sp = Trace.with_span ~__FILE__ ~__LINE__ "main" in
   let idx =
     let t1 = now () in
     let r = Idx.list_dir dir in
@@ -97,6 +98,7 @@ let main ~dir ~serve ~port () =
 (* TODO: use Logs *)
 
 let () =
+  let@ () = Trace_tef.with_setup () in
   let dir = ref "" in
   let color = ref true in
   let serve = ref false in
@@ -116,7 +118,6 @@ let () =
         Arg.Set store_proofs_,
         " enable storage of proofs (takes a lot of ram)" );
       "--progress", Arg.Set progress_, " progress bar";
-      "--sqlite", Arg.Set use_sqlite, " use Sqlite as main storage";
       "--serve", Arg.Set serve, " launch web server";
       "--port", Arg.Set_int port, " set port for web server";
       "-p", Arg.Set_int port, " set port for web server";

@@ -39,6 +39,10 @@ module G = struct
 end
 
 let list_dir dir : t =
+  let@ _sp =
+    Trace.with_span ~__FILE__ ~__LINE__ "trustee.idx.list-dir" ~data:(fun () ->
+        [ "dir", `String dir ])
+  in
   let errors = ref [] in
   let theories = ref [] in
   let interp = ref [] in
@@ -48,6 +52,10 @@ let list_dir dir : t =
   let g = CCIO.File.walk dir in
 
   let parse_thy file =
+    let@ _sp =
+      Trace.with_span ~__FILE__ ~__LINE__ "trustee.idx.parse-thy"
+        ~data:(fun () -> [ "file", `String file ])
+    in
     let dir = Filename.dirname file in
     try
       if CCString.prefix ~pre:"group" (Filename.basename file) then
@@ -65,6 +73,10 @@ let list_dir dir : t =
   in
 
   let parse_interp file =
+    let@ _sp =
+      Trace.with_span ~__FILE__ ~__LINE__ "trustee.idx.parse-interp"
+        ~data:(fun () -> [ "file", `String file ])
+    in
     let name = Filename.basename file in
     try
       let s = CCIO.File.read_exn file in

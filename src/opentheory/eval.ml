@@ -72,7 +72,7 @@ type eval_info = {
   sub: (string * eval_info) list;
 }
 
-let rec eval_info_to_html (self : eval_info) =
+let rec eval_info_to_html_rec (self : eval_info) =
   Html.(
     table'
       [ cls "table table-sm" ]
@@ -89,10 +89,17 @@ let rec eval_info_to_html (self : eval_info) =
                 (fun (s, ei) ->
                   tr []
                     [
-                      td [] [ txtf "sub.%s:" s ]; td [] [ eval_info_to_html ei ];
+                      td [] [ txtf "sub.%s:" s ];
+                      td [] [ eval_info_to_html_rec ei ];
                     ])
                 self.sub));
       ])
+
+let eval_info_to_html self =
+  let@ _sp =
+    Trace.with_span ~__FILE__ ~__LINE__ "trustee.eval.eval-info-to-html"
+  in
+  eval_info_to_html_rec self
 
 let mk_ei ~time ~info ?(sub = []) () : eval_info = { sub; time; info }
 
@@ -121,6 +128,11 @@ let interpr_of_sub (sub : Thy_file.sub) : K.Theory.interpretation =
 
 (* index individual content of theory *)
 let add_theory_items (idx : Idx.t) (th : K.Theory.t) =
+  let@ _sp =
+    Trace.with_span ~__FILE__ ~__LINE__ "add-theory-items" ~data:(fun () ->
+        [ "th", `String (K.Theory.name th) ])
+  in
+
   let thms =
     Iter.append
       (K.Theory.param_theorems th |> Iter.of_list)
@@ -156,9 +168,8 @@ let add_theory_items (idx : Idx.t) (th : K.Theory.t) =
 (* check a theory *)
 let rec eval_rec_ (self : state) (n : string) : K.Theory.t * eval_info =
   let th = Idx.find_thy self.idx n in
-  let uv_name = Thy_file.name th in
-
   (* un-versioned name *)
+  let uv_name = Thy_file.name th in
 
   (* FIXME: just skip from there? or handle errors in the theory graph? *)
   (*   if uv_name = "group-witness" then Log.set_level 50; *)
@@ -177,6 +188,11 @@ let rec eval_rec_ (self : state) (n : string) : K.Theory.t * eval_info =
 
 and eval_rec_real_ (self : state) uv_name (th : Thy_file.t) :
     K.Theory.t * eval_info =
+  let@ _sp =
+    Trace.with_span ~__FILE__ ~__LINE__ "eval-rec" ~data:(fun () ->
+        [ "th", `String uv_name ])
+  in
+
   self.cb#start_theory uv_name;
 
   (* process theories implementing requirements of this one requires *)
@@ -298,6 +314,11 @@ and check_sub_ (self : state) ~requires th (sub : Thy_file.sub) :
 (* process an import of a sub, by checking it recursively now *)
 and process_import_ (self : state) ~requires th (name : string) : K.Theory.t * _
     =
+  let@ _sp =
+    Trace.with_span ~__FILE__ ~__LINE__ "process-import" ~data:(fun () ->
+        [ "name", `String name ])
+  in
+
   let sub =
     try List.find (fun sub -> sub.Thy_file.sub_name = name) th.Thy_file.subs
     with Not_found ->

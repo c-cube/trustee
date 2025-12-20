@@ -1,3 +1,4 @@
+open Common_
 module K = Trustee_core.Kernel
 module Log = Trustee_core.Log
 module Unif = Trustee_core.Unif
@@ -761,10 +762,16 @@ let has_empty_stack self =
 
 let parse_and_check_art_exn ~name (self : t) (input : input) :
     K.Theory.t * Article.t =
+  let@ _sp =
+    Trace.with_span ~__FILE__ ~__LINE__ "parse-and-check-art" ~data:(fun () ->
+        [ "name", `String name ])
+  in
   Log.debugf 5 (fun k ->
       k "(@[open-theory.parse-and-check-art@ :name %s@])" name);
-  Error.guard (Error.wrapf "opentheory.parse-and-check-art@ :name %s" name)
-  @@ fun () ->
+
+  let@ () =
+    Error.guard (Error.wrapf "opentheory.parse-and-check-art@ :name %s" name)
+  in
   let line_ = ref 0 in
 
   (* how to parse one line *)
@@ -800,11 +807,14 @@ let parse_and_check_art_exn ~name (self : t) (input : input) :
         Error.failf (fun k -> k "unknown rule '%s' at line %d" s !line_))
   in
   let th =
-    K.Theory.with_ self.ctx ~name @@ fun th ->
+    let@ th = K.Theory.with_ self.ctx ~name in
     input.iter_lines (process_line th)
   in
   let art = article self in
   self.art <- Article.empty;
+
+  Trace.add_data_to_span _sp [ "n-lines", `Int !line_ ];
+
   (* clear article for next file, if any *)
   th, art
 
