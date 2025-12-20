@@ -62,6 +62,8 @@
   (tiny_httpd
    (>= 0.16))
   logs
+  trace
+  trace-tef
   (odoc :with-doc)))
 
 (package
