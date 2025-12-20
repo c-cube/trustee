@@ -7,6 +7,7 @@
     meta-language. It should also allow for more efficient implementations in
     other languages (rust, C, etc.) *)
 
+open Trustee_core
 open Sigs
 module K = Kernel
 

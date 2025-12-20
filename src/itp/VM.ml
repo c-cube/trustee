@@ -1,3 +1,4 @@
+open Trustee_core
 open Sigs
 module K = Kernel
 

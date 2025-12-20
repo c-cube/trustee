@@ -2,12 +2,3 @@
  (name trustee_core)
  (public_name trustee.core)
  (libraries containers iter unix sha cbor))
-
-(rule
- (targets VM_instr_.ml)
- (deps
-  (:exe ./tools/mkinstr.exe))
- (action
-  (with-stdout-to
-   %{targets}
-   (run %{exe}))))

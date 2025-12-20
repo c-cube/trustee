@@ -1,3 +1,5 @@
+(** the virtual machine for opentheory *)
+
 module K = Trustee_core.Kernel
 
 type 'a or_error = 'a Trustee_core.Error.or_error

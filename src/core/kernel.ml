@@ -2018,18 +2018,20 @@ module Thm = struct
     Expr.equal (Expr.bool ctx) ty
 
   let assume ctx (e : Expr.t) : t =
-    Error.guard (fun err -> Error.wrapf "in assume `@[%a@]`:" Expr.pp e err)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun err -> Error.wrapf "in assume `@[%a@]`:" Expr.pp e err)
+    in
     ctx_check_e_uid ctx e;
     if not (is_bool_ ctx e) then Error.fail "assume takes a boolean";
     let proof () = Proof.(step "assume" ~args:[ a_expr e ]) in
     make_ ctx (Expr_set.singleton e) e proof None
 
   let axiom ctx hyps e : t =
-    Error.guard (fun err ->
-        let g = Sequent.make_l hyps e in
-        Error.wrapf "in axiom `@[%a@]`:" Sequent.pp g err)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun err ->
+          let g = Sequent.make_l hyps e in
+          Error.wrapf "in axiom `@[%a@]`:" Sequent.pp g err)
+    in
     ctx_check_e_uid ctx e;
     if not ctx.ctx_axioms_allowed then
       Error.fail
@@ -2050,9 +2052,11 @@ module Thm = struct
       res
 
   let cut ctx th1 th2 : t =
-    Error.guard (fun e ->
-        Error.wrapf "@[<2>in cut@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2 e)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun e ->
+          Error.wrapf "@[<2>in cut@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2
+            e)
+    in
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     let b = concl th1 in
@@ -2067,10 +2071,11 @@ module Thm = struct
     make_ ctx Expr_set.empty (Expr.app_eq ctx e e) proof None
 
   let congr ctx th1 th2 : t =
-    Error.guard (fun err ->
-        Error.wrapf "@[<2>in congr@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2
-          err)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun err ->
+          Error.wrapf "@[<2>in congr@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp
+            th2 err)
+    in
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     match Expr.unfold_eq (concl th1), Expr.unfold_eq (concl th2) with
@@ -2105,8 +2110,9 @@ module Thm = struct
     make_ ctx hyps concl proof th.th_theory
 
   let sym ctx th : t =
-    Error.guard (fun err -> Error.wrapf "@[<2>in sym@ `@[%a@]`@]:" pp th err)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun err -> Error.wrapf "@[<2>in sym@ `@[%a@]`@]:" pp th err)
+    in
     ctx_check_th_uid ctx th;
     match Expr.unfold_eq (concl th) with
     | None ->
@@ -2116,9 +2122,10 @@ module Thm = struct
       make_ ctx (hyps_ th) (Expr.app_eq ctx u t) proof th.th_theory
 
   let trans ctx th1 th2 : t =
-    Error.guard (fun err ->
-        Error.wrapf "@[<2>in trans@ %a@ %a@]:" pp_quoted th1 pp_quoted th2 err)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun err ->
+          Error.wrapf "@[<2>in trans@ %a@ %a@]:" pp_quoted th1 pp_quoted th2 err)
+    in
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     match Expr.unfold_eq (concl th1), Expr.unfold_eq (concl th2) with
@@ -2139,10 +2146,11 @@ module Thm = struct
       make_ ctx hyps (Expr.app_eq ctx t v) proof th
 
   let bool_eq ctx th1 th2 : t =
-    Error.guard (fun err ->
-        Error.wrapf "@[<hv2>in bool_eq@ th1=%a@ th2=%a@]:" pp_quoted th1
-          pp_quoted th2 err)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun err ->
+          Error.wrapf "@[<hv2>in bool_eq@ th1=%a@ th2=%a@]:" pp_quoted th1
+            pp_quoted th2 err)
+    in
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     match Expr.unfold_eq (concl th2) with
@@ -2163,10 +2171,11 @@ module Thm = struct
               pp_quoted th1 pp_quoted th2 Expr.pp t)
 
   let bool_eq_intro ctx th1 th2 : t =
-    Error.guard (fun err ->
-        Error.wrapf "@[<2>in bool_eq_intro@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp
-          th1 pp th2 err)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun err ->
+          Error.wrapf "@[<2>in bool_eq_intro@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp
+            th1 pp th2 err)
+    in
     ctx_check_th_uid ctx th1;
     ctx_check_th_uid ctx th2;
     let e1 = concl th1 in
@@ -2181,9 +2190,10 @@ module Thm = struct
     make_ ctx hyps (Expr.app_eq ctx e1 e2) proof th
 
   let beta_conv ctx e : t =
-    Error.guard (fun err ->
-        Error.wrapf "@[<2>in beta-conv `@[%a@]`:" Expr.pp e err)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun err ->
+          Error.wrapf "@[<2>in beta-conv `@[%a@]`:" Expr.pp e err)
+    in
     ctx_check_e_uid ctx e;
     match Expr.view e with
     | E_app (f, a) ->
@@ -2201,9 +2211,10 @@ module Thm = struct
       Error.failf (fun k -> k "not a redex: %a not an application" Expr.pp e)
 
   let abs ctx v th : t =
-    Error.guard (fun err ->
-        Error.wrapf "@[<2>in abs :var %a `@[%a@]`:" Var.pp v pp th err)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun err ->
+          Error.wrapf "@[<2>in abs :var %a `@[%a@]`:" Var.pp v pp th err)
+    in
     ctx_check_th_uid ctx th;
     ctx_check_e_uid ctx v.v_ty;
     match Expr.unfold_eq th.th_seq.concl with
@@ -2220,9 +2231,10 @@ module Thm = struct
       Error.failf (fun k -> k "conclusion of `%a`@ is not an equation" pp th)
 
   let new_basic_definition ctx (e : expr) : t * const =
-    Error.guard (fun err ->
-        Error.wrapf "@[<2>in new-basic-def@ `@[%a@]`@]:" Expr.pp e err)
-    @@ fun () ->
+    let@ () =
+      Error.guard (fun err ->
+          Error.wrapf "@[<2>in new-basic-def@ `@[%a@]`@]:" Expr.pp e err)
+    in
     ctx_check_e_uid ctx e;
     match Expr.unfold_eq e with
     | None ->

@@ -3,3 +3,12 @@
  (public_name trustee-itp)
  (flags :standard -open Trustee_core.Sigs)
  (libraries trustee.core trustee.syntax pp_loc containers threads.posix logs))
+
+(rule
+ (targets VM_instr_.ml)
+ (deps
+  (:exe ./tools/mkinstr.exe))
+ (action
+  (with-stdout-to
+   %{targets}
+   (run %{exe}))))

@@ -99,6 +99,7 @@ let main ~dir ~serve ~port () =
 
 let () =
   let@ () = Trace_tef.with_setup () in
+
   let dir = ref "" in
   let color = ref true in
   let serve = ref false in
