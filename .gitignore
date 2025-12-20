@@ -4,3 +4,6 @@ _build
 *.install
 target
 *.so
+*.tmp
+*.pdf
+*.tar.*
