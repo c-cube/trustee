@@ -33,7 +33,7 @@ let progress_ = ref false
 let store_proofs_ = ref false
 let use_sqlite = ref false
 
-(* TODO: storage: use sqlite *)
+(* TODO: storage: use on-disk region files *)
 
 let main ~dir ~serve ~port () =
   let idx =
@@ -46,12 +46,7 @@ let main ~dir ~serve ~port () =
   let theories = Iter.of_list idx.Idx.theories |> Iter.map snd in
 
   (* TODO: use param for store_proofs *)
-  let storage =
-    if !use_sqlite then
-      Some (Trustee_sqlite.storage_xdg_cache ())
-    else
-      None
-  in
+  let storage = None in
   let ctx =
     K.Ctx.create ?storage ~store_proofs:!store_proofs_
       ~store_concrete_definitions:true ()
