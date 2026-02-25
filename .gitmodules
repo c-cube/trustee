@@ -4,3 +4,9 @@
 [submodule "vendor/linol"]
 	path = vendor/linol
 	url = https://github.com/c-cube/linol.git
+[submodule "vendor/ambient-context"]
+	path = vendor/ambient-context
+	url = https://github.com/ocaml-tracing/ambient-context.git
+[submodule "vendor/opentelemetry"]
+	path = vendor/opentelemetry
+	url = https://github.com/ocaml-tracing/ocaml-opentelemetry.git
