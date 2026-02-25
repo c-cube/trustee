@@ -6,6 +6,9 @@
   unix
   trustee.core
   trace-tef
+  opentelemetry
+  opentelemetry.trace
+  opentelemetry-client-ocurl
   logs
   trustee-opentheory
   tiny_httpd
