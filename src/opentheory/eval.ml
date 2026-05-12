@@ -155,13 +155,10 @@ let add_theory_items (idx : Idx.t) (th : K.Theory.t) =
   in
 
   consts (fun c ->
-      let h = K.Const.chash c in
-      Chash.Tbl.replace idx.Idx.by_hash h (Idx.H_const c));
+      Str_tbl.replace idx.Idx.by_name (K.Const.name c) (Idx.H_const c));
 
   thms (fun th ->
-      K.Thm.make_main_proof th;
-      let h = K.Thm.chash th in
-      Chash.Tbl.replace idx.Idx.by_hash h (Idx.H_thm th));
+      K.Thm.make_main_proof th);
 
   ()
 
