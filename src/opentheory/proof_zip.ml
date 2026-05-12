@@ -104,17 +104,23 @@ let restore_storage (zh : zip_handle) (ctx : K.ctx) : unit =
 (* Encode a standalone const as a "ce" node. *)
 let enc_const_ (cache : (K.expr, int) Hashtbl.t) enc (c : K.Const.t) : int =
   let ty_off = K.Expr.mg_enc_expr cache enc (K.Const.ty c) in
+  (* Pre-encode var nodes BEFORE starting the "ce" write_node, so their
+     bytes don't appear inside the node's arg stream. *)
+  let args_enc = match K.Const.args c with
+    | K.Const.C_arity n -> `Ar n
+    | K.Const.C_ty_vars vs ->
+      let v_offs = List.map (K.Expr.mg_enc_var cache enc) vs in
+      `Vs (List.length vs, v_offs)
+  in
   Enc.write_node enc "ce" (fun nd ->
-      Enc.string nd (K.Const.name c);
-      Enc.ref nd ty_off;
-      (match K.Const.args c with
-      | K.Const.C_arity n ->
-        Enc.string nd "ar";
-        Enc.int nd n
-      | K.Const.C_ty_vars vs ->
-        Enc.string nd "vs";
-        Enc.int nd (List.length vs);
-        List.iter (fun v -> Enc.ref nd (K.Expr.mg_enc_var cache enc v)) vs))
+    Enc.string nd (K.Const.name c);
+    Enc.ref nd ty_off;
+    match args_enc with
+    | `Ar n -> Enc.string nd "ar"; Enc.int nd n
+    | `Vs (n, v_offs) ->
+      Enc.string nd "vs";
+      Enc.int nd n;
+      List.iter (Enc.ref nd) v_offs)
 
 (* Encode a theory into a minidag string. *)
 let encode_theory (theory : K.Theory.t) : string =
@@ -173,9 +179,7 @@ let dec_const_ (ctx : K.ctx) dec (cache : (int, K.expr) Hashtbl.t) off :
           let vs =
             List.init n (fun _ ->
                 let v_off = Dec.read_ref_exn nd in
-                match K.Expr.view (K.Expr.mg_dec_expr ctx dec cache v_off) with
-                | K.Expr.E_var v -> v
-                | _ -> failwith "proof_zip.dec_const_: ty_var not a var")
+                K.Expr.mg_dec_var ctx dec cache v_off)
           in
           K.Const.C_ty_vars vs
         | s -> failwith ("proof_zip.dec_const_: unknown args_kind " ^ s)

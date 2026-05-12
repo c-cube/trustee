@@ -287,6 +287,8 @@ module Expr : sig
     expr
   val mg_enc_var :
     (expr, int) Hashtbl.t -> Trustee_minidag.Encode.t -> var -> int
+  val mg_dec_var :
+    ctx -> Trustee_minidag.Decode.t -> (int, expr) Hashtbl.t -> int -> var
   val mg_enc_seq :
     (expr, int) Hashtbl.t -> Trustee_minidag.Encode.t -> sequent -> int
   val mg_dec_seq :
