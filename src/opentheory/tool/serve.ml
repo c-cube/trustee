@@ -125,7 +125,7 @@ let h_thy (self : state) : unit =
           div
             [
               "hx-trigger", "load";
-              "hx-get", spf "/eval/%s" @@ H.Util.percent_encode thy_name;
+              "hx-get", spf "/eval/%s" @@ H.Util.percent_encode thy.Thy_file.name;
               "hx-swap", "innerHtml";
             ]
             [
