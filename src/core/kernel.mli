@@ -120,6 +120,13 @@ module Linear_proof : sig
 
   val steps : t -> (int * step) Iter.t
   val of_thm_proof : thm -> t
+  val make_from_steps : step array -> t
+end
+
+(** Minidag encode/decode for [Linear_proof.t]. *)
+module Linear_proof_mg : sig
+  val encode : Linear_proof.t -> string
+  val decode : ctx -> string -> Linear_proof.t
 end
 
 (** Free Variables *)
@@ -260,6 +267,27 @@ module Expr : sig
   val mk_error : (string -> t) with_ctx
   val app_or_error : (t -> t -> t) with_ctx
   val lambda_or_error : (var -> t -> t) with_ctx
+
+  (** Low-level minidag encoding helpers, exposed for use by [proof.ml] and
+      other modules that sit above [expr.ml] in the dependency graph. *)
+  val mg_enc_expr :
+    (expr, int) Hashtbl.t -> Trustee_minidag.Encode.t -> expr -> int
+  val mg_dec_expr :
+    ctx ->
+    Trustee_minidag.Decode.t ->
+    (int, expr) Hashtbl.t ->
+    int ->
+    expr
+  val mg_enc_var :
+    (expr, int) Hashtbl.t -> Trustee_minidag.Encode.t -> var -> int
+  val mg_enc_seq :
+    (expr, int) Hashtbl.t -> Trustee_minidag.Encode.t -> sequent -> int
+  val mg_dec_seq :
+    ctx ->
+    Trustee_minidag.Decode.t ->
+    (int, expr) Hashtbl.t ->
+    int ->
+    sequent
 end
 
 module Sequent : sig

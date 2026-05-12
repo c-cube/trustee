@@ -63,6 +63,8 @@
   logs
   trace
   trace-tef
+  camlzip
+  tiny_httpd_camlzip
   (odoc :with-doc)))
 
 (package

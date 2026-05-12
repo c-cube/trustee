@@ -556,6 +556,14 @@ module Util_mg_ = struct
     dec_const_def_ ctx dec cache !root_off
 end
 
+(* Expose internals of Util_mg_ for use in proof.ml and other modules that
+   depend on expr but also need to encode/decode exprs/sequents. *)
+let[@inline] mg_enc_expr cache enc e = Util_mg_.enc_expr_ cache enc e
+let[@inline] mg_dec_expr ctx dec cache off = Util_mg_.dec_expr_ ctx dec cache off
+let[@inline] mg_enc_var cache enc v = Util_mg_.enc_var_ cache enc v
+let[@inline] mg_enc_seq cache enc seq = Util_mg_.enc_seq_ cache enc seq
+let[@inline] mg_dec_seq ctx dec cache off = Util_mg_.dec_seq_ ctx dec cache off
+
 (* ── Expr module ── *)
 
 include Expr0
