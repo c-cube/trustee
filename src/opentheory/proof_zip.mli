@@ -27,8 +27,14 @@ val theory_names : zip_handle -> string list
 (** Restore const-def storage from the zip's [_storage/*] entries into ctx. *)
 val restore_storage : zip_handle -> K.ctx -> unit
 
-(** Load and decode one theory from the zip on demand. Caches result. *)
+(** Load and decode one theory from the zip on demand. Caches result.
+    Proof terms are NOT decoded; call [load_proofs] for that. *)
 val load_theory : zip_handle -> ctx:K.ctx -> string -> K.Theory.t option
+
+(** Load proof terms for a previously-loaded theory, if available.
+    Returns [None] if the entry has no proof section or the theory
+    has not been loaded via [load_theory]. *)
+val load_proofs : zip_handle -> ctx:K.ctx -> string -> K.Linear_proof.t list option
 
 (** Build a zip file from all theories.
     [ts] must be the tracked storage used when creating the ctx.
