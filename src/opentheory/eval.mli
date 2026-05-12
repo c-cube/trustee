@@ -32,6 +32,12 @@ type eval_info = {
 
 val eval_info_to_html : eval_info -> Html.elt
 
+val ctx : state -> K.ctx
+(** Get the context from the eval state. *)
+
+val dummy_info : eval_info
+(** A placeholder eval_info for use when a theory is loaded from zip. *)
+
 val eval_theory : state -> string -> (K.Theory.t * eval_info) or_error
 (** [eval_theory st name] builds and returns the theory with given name from the
     index. The theory will be cached, as will any theory it depends on. *)

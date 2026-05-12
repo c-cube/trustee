@@ -81,6 +81,9 @@ let make_seq_ ctx seq proof th_theory : t =
   in
   { th_flags; th_seq = seq; th_proof = proof; th_theory }
 
+let make_for_zip ctx seq proof =
+  make_seq_ ctx seq (fun () -> proof) None
+
 let make_ ctx hyps concl proof th : t =
   let th_seq = Sequent.make hyps concl in
   make_seq_ ctx th_seq proof th

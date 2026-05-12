@@ -1,30 +1,52 @@
 (** Proof-trace zip archive.
 
-    One zip entry per theory (keyed by theory name), containing the minidag-
-    encoded [Linear_proof.t] list for all theorems defined by that theory. *)
+    Contains:
+    - ["_storage/<key>"] entries: one per const-def storage key
+    - ["<name>.entry"] per theory: minidag of consts + thm sequents *)
 
 open Common_
 
-val zip_entry_name : string -> string
-(** [zip_entry_name theory_name] returns the zip entry name for a theory. *)
+module Storage = Trustee_core.Storage
+module LP = K.Linear_proof
 
+(** A storage wrapper that records all (key, bytes) stored into it.
+    Create one before building the ctx; use [tracked_as_storage] to get
+    the storage to pass to [K.Ctx.create]; then pass [ts] to [build]. *)
+type tracked_storage
+
+val make_tracked_storage : ?size:int -> unit -> tracked_storage
+val tracked_as_storage : tracked_storage -> Storage.t
+
+(** A handle to an open zip file for server-side on-demand loading. *)
+type zip_handle
+
+val open_zip : string -> zip_handle
+val close_zip : zip_handle -> unit
+val theory_names : zip_handle -> string list
+
+(** Restore const-def storage from the zip's [_storage/*] entries into ctx. *)
+val restore_storage : zip_handle -> K.ctx -> unit
+
+(** Load and decode one theory from the zip on demand. Caches result. *)
+val load_theory : zip_handle -> ctx:K.ctx -> string -> K.Theory.t option
+
+(** Build a zip file from all theories.
+    [ts] must be the tracked storage used when creating the ctx.
+    [eval] must be the eval state that evaluated all the theories. *)
 val build :
   output:string ->
   eval:Eval.state ->
+  ts:tracked_storage ->
   names:string Iter.t ->
   unit
-(** [build ~output ~eval ~names] evaluates every theory in [names],
-    linearises the proof of every theorem defined by each theory, encodes them
-    as minidag, and stores them as a zip archive at [output]. *)
 
+(** Legacy API for backward compatibility. *)
+val zip_entry_name : string -> string
+val encode_proof_list : LP.t list -> string
+val decode_proof_list : K.ctx -> string -> LP.t list
 val load : string -> (string, string) Hashtbl.t
-(** [load path] opens the zip archive at [path] and returns a table mapping
-    zip entry name -> raw minidag bytes. *)
-
 val lookup_theory :
   cache:(string, string) Hashtbl.t ->
   ctx:K.ctx ->
   string ->
-  K.Linear_proof.t list option
-(** [lookup_theory ~cache ~ctx name] decodes the proof list for theory [name]
-    from the in-memory cache, or returns [None] if not present. *)
+  LP.t list option

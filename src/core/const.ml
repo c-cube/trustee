@@ -145,3 +145,6 @@ let new_const ctx name ty_vars ty ~def : t =
 
 let new_ty_const ctx name n ~def : ty_const =
   make ctx ~def name (C_arity n) (Expr.type_ ctx)
+
+let make_from_parts ~name ~ty ~args : t =
+  { c_name = name; c_ty = ty; c_args = args; c_concrete = false; c_labels = [] }
