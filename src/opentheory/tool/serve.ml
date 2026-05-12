@@ -201,23 +201,8 @@ let h_eval (self : state) : unit =
     in
     reply_page ~title:(spf "eval %s" thy_name) req res
   | None ->
-    (* fall back to live evaluation *)
-    let res =
-      let@ () = St.with_lock self.st.lock in
-      Eval.eval_theory self.st.eval thy_name
-    in
-    (match res with
-    | Ok (th, ei) ->
-      let res =
-        [
-          h3 [] [ txt "Evaluation information" ];
-          Eval.eval_info_to_html ei;
-          Render.theory_to_html ~config th;
-        ]
-      in
-      reply_page ~title:(spf "eval %s" thy_name) req res
-    | Error err ->
-      H.Response.make_string (Error (500, Fmt.asprintf "%a" Error.pp err)))
+    Log.debugf 1 (fun k -> k "theory not found in zip: %s" thy_name);
+    H.Response.make_string (Error (404, spf "theory not found in zip: %s" thy_name))
 
 let h_name_item (self : state) : unit =
   H.add_route_handler self.server
