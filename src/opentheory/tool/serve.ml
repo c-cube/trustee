@@ -30,6 +30,7 @@ let mk_page ~title:title_ bod : Html.elt =
           link [ A.href "/static/bootstrap.css"; A.rel "stylesheet" ];
           link [ A.href "/static/main.css"; A.rel "stylesheet" ];
           script [ A.src "/static/htmx.js" ] [];
+          script [ A.src "/static/tooltip.js" ] [];
         ];
       body [] [ div [ cls "container" ] bod ];
     ]
@@ -241,14 +242,21 @@ let h_proof (self : state) : unit =
          H.Response.make_string
            (Error (404, spf "theorem index out of bounds: %d" thm_idx))
        | Some thm, Some lp ->
+         let thy_entry = thy_name in
+         let type_offsets =
+           match self.st.zip with
+           | None -> None
+           | Some zh -> Proof_zip.expr_offset_table zh thy_entry
+         in
          let open Html in
          let res =
            [
              h3 [] [ txtf "Proof of theorem %d in %s" thm_idx thy_name ];
              div [ cls "mb-3" ]
-               [ strong [] [ txt "Theorem: " ]; Render.thm_to_html ~config thm ];
+               [ strong [] [ txt "Theorem: " ];
+                 Render.thm_to_html ~config ?type_offsets ~entry:thy_entry thm ];
              h4 [] [ txt "Proof steps" ];
-             Render.linear_proof_to_html ~config lp;
+             Render.linear_proof_to_html ~config ?type_offsets ~entry:thy_entry lp;
            ]
          in
          reply_page ~title:(spf "proof %s/%d" thy_name thm_idx) req res))
@@ -327,8 +335,66 @@ let h_stats self : unit =
   in
   reply_page ~title:"/stats" req [ res ]
 
+(** Render a single expression node (by minidag offset) as an HTML fragment.
+    Route: GET /render/<entry>/<offset>
+    Used by the hover tooltip JS to lazily fetch type strings. *)
+let h_render (self : state) : unit =
+  H.add_route_handler self.server
+    H.Route.(exact "render" @/ string_urlencoded @/ string_urlencoded @/ return)
+  @@ fun entry offset_str req ->
+  let@ () = top_wrap_ req in
+  match int_of_string_opt offset_str with
+  | None ->
+    H.Response.make_string (Error (400, spf "invalid offset: %s" offset_str))
+  | Some offset ->
+    let config = make_config_ self entry in
+    let result =
+      let@ () = St.with_lock self.st.lock in
+      match self.st.zip with
+      | None -> None
+      | Some zh ->
+        Option.map
+          (fun e -> Render.expr_to_html ~config e)
+          (Proof_zip.decode_expr_at zh ~ctx:self.st.ctx ~entry ~offset)
+    in
+    (match result with
+     | None ->
+       H.Response.make_string (Error (404, spf "expr not found at offset %d in %s" offset entry))
+     | Some elt ->
+       H.Response.make_string
+         (Ok (Html.to_string elt)))
+
+(** Render a sequent node (by minidag offset) as an HTML fragment.
+    Route: GET /render_seq/<entry>/<offset> *)
+let h_render_seq (self : state) : unit =
+  H.add_route_handler self.server
+    H.Route.(exact "render_seq" @/ string_urlencoded @/ string_urlencoded @/ return)
+  @@ fun entry offset_str req ->
+  let@ () = top_wrap_ req in
+  match int_of_string_opt offset_str with
+  | None ->
+    H.Response.make_string (Error (400, spf "invalid offset: %s" offset_str))
+  | Some offset ->
+    let config = make_config_ self entry in
+    let result =
+      let@ () = St.with_lock self.st.lock in
+      match self.st.zip with
+      | None -> None
+      | Some zh ->
+        Option.map
+          (fun seq -> Render.sequent_to_html ~config seq)
+          (Proof_zip.decode_seq_at zh ~ctx:self.st.ctx ~entry ~offset)
+    in
+    (match result with
+     | None ->
+       H.Response.make_string (Error (404, spf "seq not found at offset %d in %s" offset entry))
+     | Some elt ->
+       H.Response.make_string
+         (Ok (Html.to_string elt)))
+
 let create st ~port : state =
   let server = H.create ~addr:"127.0.0.1" ~port () in
+  Tiny_httpd_camlzip.setup server;
   Tiny_httpd_prometheus.(instrument_server server global);
   let state = { server; st; port } in
   h_root state;
@@ -338,6 +404,8 @@ let create st ~port : state =
   h_proof state;
   h_name_item state;
   h_stats state;
+  h_render state;
+  h_render_seq state;
   H.Dir.add_vfs server
     ~config:(H.Dir.config ~dir_behavior:H.Dir.Index_or_lists ())
     ~vfs:Static.vfs ~prefix:"static";

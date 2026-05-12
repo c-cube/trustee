@@ -62,6 +62,15 @@ let tracked_as_storage (ts : tracked_storage) : Storage.t =
    mg_dec_* API.  We cannot substitute a named module without touching
    the kernel. *)
 
+(** Per-entry data kept in the LRU cache. *)
+type entry_cache = {
+  ec_theory   : K.Theory.t;
+  ec_proof_off: int;           (** byte offset of the "proofs" node, -1 = absent *)
+  ec_data     : string;        (** raw minidag bytes *)
+  ec_dec      : K.expr Int_tbl.t; (** decode cache: offset -> expr (built during decode) *)
+  mutable ec_inv: int K.Expr.Tbl.t option; (** inverted: expr -> offset, built lazily *)
+}
+
 module Theory_lru = Lru.M.Make
     (struct
       type t = string
@@ -69,16 +78,13 @@ module Theory_lru = Lru.M.Make
       let hash = Hashtbl.hash
     end)
     (struct
-      (* theory, proof-section offset (-1 = absent), raw entry bytes,
-         expr cache built during theory decode (reused for proof decode) *)
-      type t = K.Theory.t * int * string * K.expr Int_tbl.t
+      type t = entry_cache
       let weight _ = 1
     end)
 
 type zip_handle = {
   zf: Zip.in_file;
   entries: Zip.entry list;
-  (* cache: name -> (theory, proof_offset, raw_entry_bytes, expr_cache) *)
   theory_cache: Theory_lru.t;
 }
 
@@ -429,9 +435,9 @@ let find_entry (zh : zip_handle) (filename : string) : Zip.entry option =
 let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     K.Theory.t option =
   match Theory_lru.find name zh.theory_cache with
-  | Some (th, _proof_off, _data, _ecache) ->
+  | Some ec ->
     Theory_lru.promote name zh.theory_cache;
-    Some th
+    Some ec.ec_theory
   | None ->
     let entry_name = name ^ entry_suffix in
     (match find_entry zh entry_name with
@@ -439,10 +445,11 @@ let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     | Some entry ->
       (try
          let data = Zip.read_entry zh.zf entry in
-         let (th, proof_off, ecache) = decode_theory ctx name data in
-         Theory_lru.add name (th, proof_off, data, ecache) zh.theory_cache;
+         let (ec_theory, ec_proof_off, ec_dec) = decode_theory ctx name data in
+         let ec = { ec_theory; ec_proof_off; ec_data = data; ec_dec; ec_inv = None } in
+         Theory_lru.add name ec zh.theory_cache;
          Theory_lru.trim zh.theory_cache;
-         Some th
+         Some ec_theory
        with e ->
          Printf.eprintf "proof_zip.load_theory: decode error for %s: %s\n%!"
            name (Printexc.to_string e);
@@ -455,25 +462,60 @@ let load_proofs (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     K.Linear_proof.t list option =
   match Theory_lru.find name zh.theory_cache with
   | None -> None
-  | Some (_th, proof_off, data, ecache) ->
+  | Some ec ->
     Theory_lru.promote name zh.theory_cache;
-    if proof_off < 0 then
+    if ec.ec_proof_off < 0 then
       None
     else (
       try
-        let dec = Dec.create data in
+        let dec = Dec.create ec.ec_data in
         (* Reuse the expr cache from theory decoding so proof nodes can
            reference const/var/expr nodes encoded in the theory section. *)
         Some (
-          Dec.read_node dec proof_off (fun nd _cmd ->
+          Dec.read_node dec ec.ec_proof_off (fun nd _cmd ->
               let n = read_int_ nd in
               let lp_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
-              Array.to_list (Array.map (dec_lp_ ctx dec ecache) lp_offs)))
+              Array.to_list (Array.map (dec_lp_ ctx dec ec.ec_dec) lp_offs)))
       with e ->
         Printf.eprintf "proof_zip.load_proofs: decode error for %s: %s\n%!"
           name (Printexc.to_string e);
         None
     )
+
+(* ---- Offset-based on-demand decode --------------------------------------- *)
+
+(** Return a table mapping [expr -> minidag_byte_offset] for [entry].
+    Built lazily from the inverted decode cache; [None] if entry not loaded. *)
+let expr_offset_table (zh : zip_handle) (entry : string) : int K.Expr.Tbl.t option =
+  match Theory_lru.find entry zh.theory_cache with
+  | None -> None
+  | Some ec ->
+    (match ec.ec_inv with
+     | Some tbl -> Some tbl
+     | None ->
+       let tbl = K.Expr.Tbl.create (Int_tbl.length ec.ec_dec) in
+       Int_tbl.iter (fun off e -> K.Expr.Tbl.replace tbl e off) ec.ec_dec;
+       ec.ec_inv <- Some tbl;
+       Some tbl)
+
+(** Decode the expression at [offset] in [entry]'s minidag.
+    Requires the entry to already be loaded (will be a cache hit). *)
+let decode_expr_at (zh : zip_handle) ~(ctx : K.ctx) ~(entry : string) ~(offset : int)
+    : K.expr option =
+  match Theory_lru.find entry zh.theory_cache with
+  | None -> None
+  | Some ec ->
+    (try Some (K.Expr.mg_dec_expr ctx (Dec.create ec.ec_data) ec.ec_dec offset)
+     with _ -> None)
+
+(** Decode the sequent at [offset] in [entry]'s minidag. *)
+let decode_seq_at (zh : zip_handle) ~(ctx : K.ctx) ~(entry : string) ~(offset : int)
+    : K.sequent option =
+  match Theory_lru.find entry zh.theory_cache with
+  | None -> None
+  | Some ec ->
+    (try Some (K.Expr.mg_dec_seq ctx (Dec.create ec.ec_data) ec.ec_dec offset)
+     with _ -> None)
 
 (* ---- Build zip ------------------------------------------------------------ *)
 
