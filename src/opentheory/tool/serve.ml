@@ -208,7 +208,8 @@ let h_eval (self : state) : unit =
     H.Response.make_string (Error (500, msg))
 
 let h_name_item (self : state) : unit =
-  H.add_route_handler self.server H.Route.(exact "c" @/ string_urlencoded @/ return)
+  H.add_route_handler self.server
+    H.Route.(exact "c" @/ string_urlencoded @/ return)
   @@ fun name req ->
   let@ () = top_wrap_ req in
   let res =

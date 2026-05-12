@@ -10,13 +10,10 @@ let equal a b =
   Var.Map.equal Expr.equal a.ty b.ty && Var.Map.equal Expr.equal a.m b.m
 
 let hash self : int =
-  let hm m =
-    CCHash.iter (CCHash.pair Var.hash Expr.hash) (Var.Map.to_iter m)
-  in
+  let hm m = CCHash.iter (CCHash.pair Var.hash Expr.hash) (Var.Map.to_iter m) in
   CCHash.combine2 (hm self.ty) (hm self.m)
 
-let[@inline] is_empty self =
-  Var.Map.is_empty self.ty && Var.Map.is_empty self.m
+let[@inline] is_empty self = Var.Map.is_empty self.ty && Var.Map.is_empty self.m
 
 let[@inline] find_exn x s =
   if Expr.is_eq_to_type x.v_ty then

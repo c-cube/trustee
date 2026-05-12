@@ -86,5 +86,4 @@ module Linear_proof = struct
 
     ignore (traverse th0.th_seq th0.th_proof : int);
     { steps }
-
 end

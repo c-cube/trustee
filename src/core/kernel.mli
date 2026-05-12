@@ -68,7 +68,6 @@ module Const : sig
   val eq : ctx -> t
   val bool : ctx -> t
   val select : ctx -> t
-
   val get_def : ctx -> t -> def option
   val get_def_exn : ctx -> t -> def
 end
@@ -203,7 +202,6 @@ module Expr : sig
   include Sigs.SER1 with type t := t and type state := ctx
 
   val pp_depth : max_depth:int -> t Fmt.printer
-
   val view : t -> view
   val ty : t -> ty option
   val ty_exn : t -> ty
@@ -215,7 +213,6 @@ module Expr : sig
   val is_lam : t -> bool
   val is_arrow : t -> bool
   val is_error : t -> bool
-
   val iter : f:(bool -> t -> unit) -> t -> unit
   val exists : f:(bool -> t -> bool) -> t -> bool
   val for_all : f:(bool -> t -> bool) -> t -> bool
@@ -319,7 +316,6 @@ module Thm : sig
   val chash : t -> Chash.t
   val proof : t -> Proof.t
   val make_main_proof : t -> unit
-
   val hyps_iter : t -> expr iter
   val hyps_l : t -> expr list
   val hyps_sorted_l : t -> expr list
@@ -343,6 +339,7 @@ module Thm : sig
   val beta_conv : (expr -> t) with_ctx
   val abs : (var -> t -> t) with_ctx
   val new_basic_definition : (expr -> t * const) with_ctx
+
   val new_basic_type_definition :
     (?ty_vars:ty_var list ->
     name:string ->
@@ -352,6 +349,7 @@ module Thm : sig
     unit ->
     New_ty_def.t)
     with_ctx
+
   val box : (thm -> thm) with_ctx
   val assume_box : (sequent -> thm) with_ctx
 end

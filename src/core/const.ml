@@ -1,8 +1,7 @@
 open Types
 open Sigs
 
-let key_const_def (c_name : string) : string =
-  Printf.sprintf "cdef:%s" c_name
+let key_const_def (c_name : string) : string = Printf.sprintf "cdef:%s" c_name
 
 module Const_def = struct
   type t = const_def
@@ -69,9 +68,7 @@ let[@inline] equal c1 c2 = String.equal c1.c_name c2.c_name
 let[@inline] args c = c.c_args
 let[@inline] ty c = c.c_ty
 let[@inline] labels c = c.c_labels
-
-let chash (self : t) : Chash.t =
-  Chash.run Chash.string self.c_name
+let chash (self : t) : Chash.t = Chash.run Chash.string self.c_name
 
 let pp_with_ty out c =
   Fmt.fprintf out "`@[%a@ : %a@]`" Fmt.string c.c_name expr_pp_ c.c_ty
@@ -115,19 +112,23 @@ let make (ctx : ctx) ~def ?(labels = []) name args ty : t =
   if ctx.ctx_store_concrete_definitions || not is_concrete then
     Storage.store ctx.ctx_storage ~erase:false ~key:(key_const_def name)
       (Const_def.encode def);
-  { c_name = name; c_concrete = is_concrete; c_ty = ty; c_args = args; c_labels = labels }
+  {
+    c_name = name;
+    c_concrete = is_concrete;
+    c_ty = ty;
+    c_args = args;
+    c_labels = labels;
+  }
 
 let get_def (self : ctx) (c : t) : const_def option =
   String_LRU.get self.ctx_def_cache c.c_name ~compute:(fun _ ->
       let key = key_const_def c.c_name in
-      Storage.get self.ctx_storage ~key
-      |> Option.map (Const_def.decode self))
+      Storage.get self.ctx_storage ~key |> Option.map (Const_def.decode self))
 
 let get_def_exn self c =
   match get_def self c with
   | Some d -> d
-  | None ->
-    Error.failf (fun k -> k "cannot find definition for %s" c.c_name)
+  | None -> Error.failf (fun k -> k "cannot find definition for %s" c.c_name)
 
 let new_const ctx name ty_vars ty ~def : t =
   let fvars = Expr.free_vars ty in
@@ -137,8 +138,8 @@ let new_const ctx name ty_vars ty ~def : t =
   | Some v ->
     Error.failf (fun k ->
         k
-          "Kernel.new_const: type variable %a@ occurs in type of the \
-           constant `%s`,@ but not in the type variables %a"
+          "Kernel.new_const: type variable %a@ occurs in type of the constant \
+           `%s`,@ but not in the type variables %a"
           Var.pp v name (Fmt.Dump.list Var.pp) ty_vars));
   make ctx ~def name (C_ty_vars ty_vars) ty
 

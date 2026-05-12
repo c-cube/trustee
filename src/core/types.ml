@@ -1,6 +1,5 @@
 open Sigs
 module H = CCHash
-
 module Int_map = CCMap.Make (CCInt)
 
 let ctx_id_bits = 5
@@ -69,14 +68,32 @@ and const_args =
 (* ── Standalone types ── *)
 
 type const_def =
-  | C_def_expr of { vars: ty_var list; rhs: expr }
-  | C_def_ty of { arity: int; phi: expr }
-  | C_def_ty_abs of { arity: int; phi: expr }
-  | C_def_ty_repr of { arity: int; phi: expr }
-  | C_def_theory_param of { ty_vars: var list; ty: expr }
+  | C_def_expr of {
+      vars: ty_var list;
+      rhs: expr;
+    }
+  | C_def_ty of {
+      arity: int;
+      phi: expr;
+    }
+  | C_def_ty_abs of {
+      arity: int;
+      phi: expr;
+    }
+  | C_def_ty_repr of {
+      arity: int;
+      phi: expr;
+    }
+  | C_def_theory_param of {
+      ty_vars: var list;
+      ty: expr;
+    }
   | C_def_theory_ty_param of { arity: int }
   | C_def_skolem of { name: string }
-  | C_def_skolem_ty of { name: string; arity: int }
+  | C_def_skolem_ty of {
+      name: string;
+      arity: int;
+    }
   | C_def_magic of string
 
 type const_kind =
@@ -213,7 +230,9 @@ module Expr_hashcons = Hashcons.Make (struct
     t.e_id <- id
 
   let on_new e =
-    (match e.e_ty with Ty t -> ignore t | _ -> ())
+    match e.e_ty with
+    | Ty t -> ignore t
+    | _ -> ()
 end)
 
 (* ── LRU keyed by string ── *)
@@ -327,8 +346,7 @@ let rec expr_pp_with_ ~max_depth out (e : expr) : unit =
           Fmt.fprintf out "%%db_%d" (idx - k))
     | E_const (c, []) -> Fmt.string out c.c_name
     | E_const (c, args) ->
-      Fmt.fprintf out "(@[%a@ %a@])" Fmt.string c.c_name
-        (pp_list pp') args
+      Fmt.fprintf out "(@[%a@ %a@])" Fmt.string c.c_name (pp_list pp') args
     | (E_app _ | E_lam _ | E_arrow _) when depth > max_depth ->
       Fmt.fprintf out "@<1>…/%d" e.e_id
     | E_app _ ->
@@ -346,8 +364,7 @@ let rec expr_pp_with_ ~max_depth out (e : expr) : unit =
       Fmt.fprintf out "(@[\\%s:@[%a@].@ %a@])" n pp' _ty
         (loop (k + 1) ~depth:(depth + 1) (n :: names))
         bod
-    | E_arrow (a, b) -> Fmt.fprintf out "@[@[%a@]@ -> %a@]" pp' a pp b
-    );
+    | E_arrow (a, b) -> Fmt.fprintf out "@[@[%a@]@ -> %a@]" pp' a pp b);
     if !__pp_ids then Fmt.fprintf out "/%d" e.e_id
   and loop' k ~depth names out e =
     match e.e_view with

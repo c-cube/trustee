@@ -157,8 +157,7 @@ let add_theory_items (idx : Idx.t) (th : K.Theory.t) =
   consts (fun c ->
       Str_tbl.replace idx.Idx.by_name (K.Const.name c) (Idx.H_const c));
 
-  thms (fun th ->
-      K.Thm.make_main_proof th);
+  thms (fun th -> K.Thm.make_main_proof th);
 
   ()
 

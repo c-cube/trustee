@@ -126,8 +126,7 @@ let merge_theory_ a b =
 let cut ctx th1 th2 : t =
   let@ () =
     Error.guard (fun e ->
-        Error.wrapf "@[<2>in cut@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2
-          e)
+        Error.wrapf "@[<2>in cut@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2 e)
   in
   ctx_check_th_uid ctx th1;
   ctx_check_th_uid ctx th2;
@@ -145,8 +144,8 @@ let refl ctx e : t =
 let congr ctx th1 th2 : t =
   let@ () =
     Error.guard (fun err ->
-        Error.wrapf "@[<2>in congr@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp
-          th2 err)
+        Error.wrapf "@[<2>in congr@ th1=`@[%a@]`@ th2=`@[%a@]`@]:" pp th1 pp th2
+          err)
   in
   ctx_check_th_uid ctx th1;
   ctx_check_th_uid ctx th2;
@@ -172,8 +171,8 @@ let subst ~recursive ctx th s : t =
        s.m
    with E_subst_non_closed (v, t) ->
      Error.failf (fun k ->
-         k "subst: variable %a@ is bound to non-closed term %a" Var.pp v
-           Expr.pp t));
+         k "subst: variable %a@ is bound to non-closed term %a" Var.pp v Expr.pp
+           t));
   let hyps =
     hyps_ th |> Expr_set.map (fun e -> Expr.subst ~recursive ctx e s)
   in
@@ -202,16 +201,14 @@ let trans ctx th1 th2 : t =
   ctx_check_th_uid ctx th2;
   match Expr.unfold_eq (concl th1), Expr.unfold_eq (concl th2) with
   | None, _ ->
-    Error.failf (fun k ->
-        k "trans: concl of %a@ should be an equation" pp th1)
+    Error.failf (fun k -> k "trans: concl of %a@ should be an equation" pp th1)
   | _, None ->
-    Error.failf (fun k ->
-        k "trans: concl of %a@ should be an equation" pp th2)
+    Error.failf (fun k -> k "trans: concl of %a@ should be an equation" pp th2)
   | Some (t, u), Some (u', v) ->
     if not (Expr.equal u u') then
       Error.failf (fun k ->
-          k "@[<2>kernel: trans: conclusions@ of %a@ and %a@ do not match@]"
-            pp th1 pp th2);
+          k "@[<2>kernel: trans: conclusions@ of %a@ and %a@ do not match@]" pp
+            th1 pp th2);
     let hyps = merge_hyps_ (hyps_ th1) (hyps_ th2) in
     let proof () = Proof.(step "trans" ~parents:[ th1; th2 ]) in
     let th = merge_theory_ th1.th_theory th2.th_theory in
@@ -240,7 +237,7 @@ let bool_eq ctx th1 th2 : t =
           k
             "bool-eq: mismatch,@ conclusion of %a@ does not match LHS of %a@ \
              (lhs is: `@[%a@]`)"
-          pp_quoted th1 pp_quoted th2 Expr.pp t)
+            pp_quoted th1 pp_quoted th2 Expr.pp t)
 
 let bool_eq_intro ctx th1 th2 : t =
   let@ () =
@@ -278,8 +275,7 @@ let beta_conv ctx e : t =
     | _ ->
       Error.failf (fun k ->
           k "not a redex: function %a is not a lambda" Expr.pp f))
-  | _ ->
-    Error.failf (fun k -> k "not a redex: %a not an application" Expr.pp e)
+  | _ -> Error.failf (fun k -> k "not a redex: %a not an application" Expr.pp e)
 
 let abs ctx v th : t =
   let@ () =
@@ -321,8 +317,7 @@ let new_basic_definition ctx (e : expr) : t * const =
       match Expr.view x with
       | E_var v -> v
       | _ ->
-        Error.failf (fun k ->
-            k "LHS must be a variable,@ but got %a" Expr.pp x)
+        Error.failf (fun k -> k "LHS must be a variable,@ but got %a" Expr.pp x)
     in
 
     let fvars = Expr.free_vars rhs in
@@ -349,8 +344,8 @@ let new_basic_definition ctx (e : expr) : t * const =
 let new_basic_type_definition ctx ?ty_vars:provided_ty_vars ~name ~abs ~repr
     ~thm_inhabited () : New_ty_def.t =
   Error.guard (fun err ->
-      Error.wrapf "@[<2>in new-basic-ty-def :name %s@ :thm `@[%a@]`@]:" name
-        pp thm_inhabited err)
+      Error.wrapf "@[<2>in new-basic-ty-def :name %s@ :thm `@[%a@]`@]:" name pp
+        thm_inhabited err)
   @@ fun () ->
   ctx_check_th_uid ctx thm_inhabited;
   if has_hyps thm_inhabited then
@@ -372,16 +367,14 @@ let new_basic_type_definition ctx ?ty_vars:provided_ty_vars ~name ~abs ~repr
     |> Var.Set.add_iter fvars_phi
   in
   (match
-     Var.Set.find_first
-       (fun v -> not (Expr.is_eq_to_type (Var.ty v)))
-       fvars_phi
+     Var.Set.find_first (fun v -> not (Expr.is_eq_to_type (Var.ty v))) fvars_phi
    with
   | v ->
     Error.failf (fun k ->
         k
           "free variable %a@ occurs in Phi (in `|- Phi t`)@ and it is not a \
            type variable"
-        Var.pp_with_ty v)
+          Var.pp_with_ty v)
   | exception Not_found -> ());
 
   let ty_vars_l =
@@ -391,8 +384,8 @@ let new_basic_type_definition ctx ?ty_vars:provided_ty_vars ~name ~abs ~repr
       if not (Var.Set.equal all_ty_fvars (Var.Set.of_list l)) then
         Error.failf (fun k ->
             k
-              "list of type variables (%a) in new-basic-ty-def@ does not \
-               match %a"
+              "list of type variables (%a) in new-basic-ty-def@ does not match \
+               %a"
               (Fmt.Dump.list Var.pp)
               (Var.Set.to_list all_ty_fvars)
               (Fmt.Dump.list Var.pp) l);

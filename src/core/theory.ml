@@ -37,8 +37,7 @@ let pp out (self : t) : unit =
     (fun th -> Fmt.fprintf out "@,(@[in-thm@ %a@])" Thm.pp_quoted th)
     inth;
   Name_k_map.iter
-    (fun _ c ->
-      Fmt.fprintf out "@,(@[defined-const@ %a@])" Const.pp_with_ty c)
+    (fun _ c -> Fmt.fprintf out "@,(@[defined-const@ %a@])" Const.pp_with_ty c)
     dc;
   List.iter
     (fun th -> Fmt.fprintf out "@,(@[defined-thm@ %a@])" Thm.pp_quoted th)
@@ -163,9 +162,9 @@ let union_const_map_ ctx ~what m1 m2 =
         let d1 = Const.get_def_exn ctx c1 in
         let d2 = Const.get_def_exn ctx c2 in
         Error.failf (fun k ->
-            k "incompatible %s constant `%a`: %a vs %a@ :def1 %a@ :def2 %a"
-              what Fmt.string n Const.pp_cname c1 Const.pp_cname c2
-              Const_def.pp d1 Const_def.pp d2)
+            k "incompatible %s constant `%a`: %a vs %a@ :def1 %a@ :def2 %a" what
+              Fmt.string n Const.pp_cname c1 Const.pp_cname c2 Const_def.pp d1
+              Const_def.pp d2)
       );
       Some c1)
     m1 m2
@@ -217,8 +216,8 @@ module Instantiate_ = struct
     find_const: string -> ty:Expr.t -> const option;
   }
 
-  let create ?(find_const = fun _ ~ty:_ -> None) ?(interp = Str_map.empty) ctx
-      : state =
+  let create ?(find_const = fun _ ~ty:_ -> None) ?(interp = Str_map.empty) ctx :
+      state =
     { ctx; interp; cache = Expr.Tbl.create 32; find_const }
 
   let rec inst_t_ (self : state) (e : expr) : expr =
@@ -246,8 +245,7 @@ module Instantiate_ = struct
   and inst_const_ (self : state) (c : const) : const =
     let ty' = inst_t_ self c.c_ty in
     let name' =
-      try Str_map.find c.c_name self.interp
-      with Not_found -> c.c_name
+      try Str_map.find c.c_name self.interp with Not_found -> c.c_name
     in
     match self.find_const name' ~ty:ty' with
     | Some c' when Expr.is_eq_to_type c'.c_ty -> c'
@@ -268,8 +266,7 @@ module Instantiate_ = struct
         Const.make self.ctx ~def name' c.c_args ty'
       )
 
-  let inst_constants_ (self : state) (m : const Name_k_map.t) : _ Name_k_map.t
-      =
+  let inst_constants_ (self : state) (m : const Name_k_map.t) : _ Name_k_map.t =
     Name_k_map.to_iter m
     |> Iter.map (fun ((k, _), c) ->
            let c' = inst_const_ self c in
