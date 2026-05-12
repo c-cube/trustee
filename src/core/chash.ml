@@ -87,14 +87,6 @@ let of_hex_exn (s : string) : string =
 
 let of_string_exn s : t = of_hex_exn s |> Bytes.unsafe_of_string
 
-let enc enc (self : t) =
-  Cbor_pack.Enc.(add_entry enc @@ blob (Bytes.unsafe_to_string self))
-
-let dec =
-  Cbor_pack.Dec.(
-    let+ b = blob in
-    unsafe_of_string b)
-
 module As_key = struct
   type nonrec t = t
 

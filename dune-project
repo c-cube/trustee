@@ -41,7 +41,6 @@
   (trace
    (>= 0.10))
   sha
-  cbor
   (ppx_deriving :with-test)
   (qtest :with-test)
   (ounit2 :with-test)

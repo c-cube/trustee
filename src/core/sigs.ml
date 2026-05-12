@@ -30,17 +30,11 @@ end
 
 module type SER = sig
   type t
-
-  val enc : t Cbor_pack.Enc.t
-  val dec : t Cbor_pack.Dec.t
 end
 
 module type SER1 = sig
   type t
   type state
-
-  val enc : t Cbor_pack.Enc.t
-  val dec : state -> t Cbor_pack.Dec.t
 end
 
 let pp_list ?(sep = " ") ppx out l =
