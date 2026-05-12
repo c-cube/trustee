@@ -36,6 +36,19 @@ val load_theory : zip_handle -> ctx:K.ctx -> string -> K.Theory.t option
     has not been loaded via [load_theory]. *)
 val load_proofs : zip_handle -> ctx:K.ctx -> string -> K.Linear_proof.t list option
 
+(** Return a table mapping [expr -> minidag_byte_offset] for the named entry.
+    Built lazily; [None] if the entry has not been loaded yet. *)
+val expr_offset_table : zip_handle -> string -> int K.Expr.Tbl.t option
+
+(** Decode the expression at a minidag byte offset inside the named entry.
+    Fast (cache hit) if the entry is already loaded. *)
+val decode_expr_at :
+  zip_handle -> ctx:K.ctx -> entry:string -> offset:int -> K.expr option
+
+(** Decode the sequent at a minidag byte offset inside the named entry. *)
+val decode_seq_at :
+  zip_handle -> ctx:K.ctx -> entry:string -> offset:int -> K.sequent option
+
 (** Build a zip file from all theories.
     [ts] must be the tracked storage used when creating the ctx.
     [eval] must be the eval state that evaluated all the theories. *)
