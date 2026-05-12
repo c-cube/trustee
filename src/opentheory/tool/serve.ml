@@ -163,49 +163,61 @@ let h_art (self : state) : unit =
   in
   reply_page ~title:(spf "article %s" art) req res
 
+let make_config_ self thy_name =
+  let thy =
+    let@ () = St.with_lock self.st.lock in
+    Idx.find_thy self.st.idx thy_name
+  in
+  let open_namespaces =
+    thy.Thy_file.meta
+    |> List.filter_map (fun (mk, v) ->
+           if mk = "show" then Some (Util.unquote_str v ^ ".")
+           else None)
+  in
+  Log.debugf 2 (fun k ->
+      k "open namespaces: [%s]" (String.concat "; " open_namespaces));
+  Render.Config.make ~open_namespaces ()
+
 let h_eval (self : state) : unit =
   H.add_route_handler self.server
     H.Route.(exact "eval" @/ string_urlencoded @/ return)
   @@ fun thy_name req ->
   let@ () = top_wrap_ req in
-  let res =
-    (* need lock around ctx/eval *)
-    let@ () = St.with_lock self.st.lock in
-    Eval.eval_theory self.st.eval thy_name
-  in
-
-  let config =
-    let thy =
-      let@ () = St.with_lock self.st.lock in
-      Idx.find_thy self.st.idx thy_name
-    in
-    let open_namespaces =
-      thy.Thy_file.meta
-      |> List.filter_map (fun (mk, v) ->
-             if mk = "show" then
-               Some (Util.unquote_str v ^ ".")
-             else
-               None)
-    in
-    Log.debugf 2 (fun k ->
-        k "open namespaces: [%s]" (String.concat "; " open_namespaces));
-    Render.Config.make ~open_namespaces ()
-  in
-
+  let config = make_config_ self thy_name in
   let open Html in
-  match res with
-  | Ok (th, ei) ->
+  (* Try zip first, fall back to live eval *)
+  let zip_result =
+    let@ () = St.with_lock self.st.lock in
+    St.load_theory self.st thy_name
+  in
+  match zip_result with
+  | Some th ->
     let res =
       [
         h3 [] [ txt "Evaluation information" ];
-        Eval.eval_info_to_html ei;
+        Eval.eval_info_to_html Eval.dummy_info;
         Render.theory_to_html ~config th;
       ]
     in
     reply_page ~title:(spf "eval %s" thy_name) req res
-  | Error err ->
-    let msg = Fmt.asprintf "%a" Error.pp err in
-    H.Response.make_string (Error (500, msg))
+  | None ->
+    (* fall back to live evaluation *)
+    let res =
+      let@ () = St.with_lock self.st.lock in
+      Eval.eval_theory self.st.eval thy_name
+    in
+    (match res with
+    | Ok (th, ei) ->
+      let res =
+        [
+          h3 [] [ txt "Evaluation information" ];
+          Eval.eval_info_to_html ei;
+          Render.theory_to_html ~config th;
+        ]
+      in
+      reply_page ~title:(spf "eval %s" thy_name) req res
+    | Error err ->
+      H.Response.make_string (Error (500, Fmt.asprintf "%a" Error.pp err)))
 
 let h_name_item (self : state) : unit =
   H.add_route_handler self.server

@@ -563,6 +563,8 @@ let[@inline] mg_dec_expr ctx dec cache off = Util_mg_.dec_expr_ ctx dec cache of
 let[@inline] mg_enc_var cache enc v = Util_mg_.enc_var_ cache enc v
 let[@inline] mg_enc_seq cache enc seq = Util_mg_.enc_seq_ cache enc seq
 let[@inline] mg_dec_seq ctx dec cache off = Util_mg_.dec_seq_ ctx dec cache off
+let[@inline] mg_enc_const_def cache enc def = Util_mg_.enc_const_def_ cache enc def
+let[@inline] mg_dec_const_def ctx dec cache off = Util_mg_.dec_const_def_ ctx dec cache off
 
 (* ── Expr module ── *)
 

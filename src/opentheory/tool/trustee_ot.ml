@@ -48,11 +48,28 @@ let main ~dir ~serve ~port () =
   if !print then print_all idx;
   let theories = Iter.of_list idx.Idx.theories |> Iter.map snd in
 
-  (* TODO: use param for store_proofs *)
-  let storage = None in
+  (* serving requires a proof-zip *)
+  if serve && !proof_zip = "" then (
+    Printf.eprintf
+      "error: --serve requires --proof-zip <file.zip>\n\
+       Build one first with:\n\
+       \  trustee_ot --dir <dir> --build-zip proofs.zip\n";
+    exit 1
+  );
+
+  (* For build-zip: use a tracked storage to capture all const defs *)
+  let ts_opt =
+    if !build_zip <> "" then Some (Proof_zip.make_tracked_storage ())
+    else None
+  in
   (* --build-zip requires store_proofs to capture proof traces *)
   let store_proofs = !store_proofs_ || !build_zip <> "" in
   let ctx =
+    let storage =
+      match ts_opt with
+      | Some ts -> Some (Proof_zip.tracked_as_storage ts)
+      | None -> None
+    in
     K.Ctx.create ?storage ~store_proofs ~store_concrete_definitions:true ()
   in
   let st =
@@ -69,6 +86,7 @@ let main ~dir ~serve ~port () =
 
   let server_opt =
     if serve then (
+      (* Server starts immediately -- theories are loaded on demand from zip *)
       let server = Serve.create st ~port in
       let _th_metrics =
         Thread.create
@@ -95,9 +113,13 @@ let main ~dir ~serve ~port () =
     (* build-zip: evaluate all theories with store_proofs=true and write zip *)
     let output = !build_zip in
     let names = Iter.map Thy_file.name theories in
+    let ts =
+      match ts_opt with
+      | Some ts -> ts
+      | None -> assert false (* ts_opt is Some when build_zip <> "" *)
+    in
     Fmt.printf "building proof zip: %s@." output;
-    Proof_zip.build ~output ~eval:st.St.eval ~names;
-    Fmt.printf "done: %s@." output
+    Proof_zip.build ~output ~eval:st.St.eval ~ts ~names
   ) else if !check_all then
     Check_all.check ~st ~names:(Iter.map Thy_file.name theories) ()
   else if !check <> [] then

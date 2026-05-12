@@ -111,6 +111,9 @@ type state = {
   cb: callbacks;
 }
 
+let ctx (self : state) = self.ctx
+let dummy_info : eval_info = { info = "(loaded from zip)"; time = 0.; sub = [] }
+
 let create ?(cb = new default_callbacks) ?(progress_bar = false) ~ctx ~idx () :
     state =
   { ctx; idx; progress_bar; theories = Str_tbl.create 32; cb }
