@@ -19,4 +19,6 @@ val thm_to_html : ?config:Config.t -> K.Thm.t -> Html.elt
 val const_to_html : ?config:Config.t -> K.Const.t -> Html.elt
 val const_def_to_html : ?config:Config.t -> K.Ctx.t -> K.Const.t -> Html.elt
 val subst_to_html : ?config:Config.t -> K.Subst.t -> Html.elt
-val theory_to_html : ?config:Config.t -> K.Theory.t -> Html.elt
+val sequent_to_html : ?config:Config.t -> K.sequent -> Html.elt
+val linear_proof_to_html : ?config:Config.t -> K.Linear_proof.t -> Html.elt
+val theory_to_html : ?config:Config.t -> ?make_proof_link:(int -> string) -> K.Theory.t -> Html.elt

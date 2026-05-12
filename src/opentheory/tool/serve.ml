@@ -192,17 +192,78 @@ let h_eval (self : state) : unit =
   in
   match zip_result with
   | Some th ->
+    let make_proof_link i =
+      spf "/proof/%s/%d" (H.Util.percent_encode thy_name) i
+    in
     let res =
       [
         h3 [] [ txt "Evaluation information" ];
         Eval.eval_info_to_html Eval.dummy_info;
-        Render.theory_to_html ~config th;
+        Render.theory_to_html ~config ~make_proof_link th;
       ]
     in
     reply_page ~title:(spf "eval %s" thy_name) req res
   | None ->
     Log.debugf 1 (fun k -> k "theory not found in zip: %s" thy_name);
     H.Response.make_string (Error (404, spf "theory not found in zip: %s" thy_name))
+
+let h_proof (self : state) : unit =
+  H.add_route_handler self.server
+    H.Route.(exact "proof" @/ string_urlencoded @/ string_urlencoded @/ return)
+  @@ fun thy_name thm_idx_str req ->
+  let@ () = top_wrap_ req in
+  match int_of_string_opt thm_idx_str with
+  | None ->
+    H.Response.make_string (Error (400, spf "invalid theorem index: %s" thm_idx_str))
+  | Some thm_idx ->
+    let config = make_config_ self thy_name in
+    let (th_opt, proofs_opt) =
+      let@ () = St.with_lock self.st.lock in
+      let th = St.load_theory self.st thy_name in
+      let proofs =
+        match self.st.zip with
+        | None -> None
+        | Some zh ->
+          Proof_zip.load_proofs zh ~ctx:self.st.ctx thy_name
+      in
+      (th, proofs)
+    in
+    (match th_opt with
+    | None ->
+      H.Response.make_string (Error (404, spf "theory not found: %s" thy_name))
+    | Some th ->
+      let thms = K.Theory.theorems th in
+      if thm_idx < 0 || thm_idx >= List.length thms then
+        H.Response.make_string (Error (404, spf "theorem index out of bounds: %d" thm_idx))
+      else (
+        let thm = List.nth thms thm_idx in
+        match proofs_opt with
+        | None ->
+          H.Response.make_string (Error (404, spf "no proofs available for theory: %s" thy_name))
+        | Some proofs ->
+          if thm_idx >= List.length proofs then
+            H.Response.make_string (Error (404, spf "proof index out of bounds: %d" thm_idx))
+          else (
+            let lp = List.nth proofs thm_idx in
+            let open Html in
+            let res =
+              [
+                h3 []
+                  [
+                    txtf "Proof of theorem %d in %s" thm_idx thy_name;
+                  ];
+                div [ cls "mb-3" ]
+                  [
+                    strong [] [ txt "Theorem: " ];
+                    Render.thm_to_html ~config thm;
+                  ];
+                h4 [] [ txt "Proof steps" ];
+                Render.linear_proof_to_html ~config lp;
+              ]
+            in
+            reply_page ~title:(spf "proof %s/%d" thy_name thm_idx) req res
+          )
+      ))
 
 let h_name_item (self : state) : unit =
   H.add_route_handler self.server
@@ -286,6 +347,7 @@ let create st ~port : state =
   h_thy state;
   h_art state;
   h_eval state;
+  h_proof state;
   h_name_item state;
   h_stats state;
   H.Dir.add_vfs server
