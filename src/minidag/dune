@@ -1,0 +1,3 @@
+(library
+ (name trustee_minidag)
+ (modules encode decode))
