@@ -377,7 +377,72 @@ let proof_to_html ?(config = Config.make ()) (th0 : K.Thm.t) : Html.elt =
       tbody [] (Vec.to_iter steps |> Iter.map snd |> Iter.to_list);
     ]
 
-let theory_to_html ?(config = Config.make ()) (self : K.Theory.t) =
+let sequent_to_html ?(config = Config.make ()) (seq : K.sequent) : Html.elt =
+  let open Html in
+  let hyps = K.Sequent.hyps_l seq in
+  let concl = K.Sequent.concl seq in
+  match hyps with
+  | [] -> span [ cls "theorem" ] [ txt "⊢ "; expr_to_html ~config concl ]
+  | l ->
+    span [ cls "theorem" ]
+      (List.map (expr_to_html ~config) l @ [ txt " ⊢ "; expr_to_html ~config concl ])
+
+let linear_proof_to_html ?(config = Config.make ()) (lp : K.Linear_proof.t) : Html.elt =
+  let open Html in
+  let arg_to_html = function
+    | K.Proof.Pr_expr e -> expr_to_html ~config e
+    | K.Proof.Pr_subst s -> subst_as_l_to_html ~config s
+  in
+  let steps = K.Linear_proof.steps lp |> Iter.to_list in
+  let mk_row (idx, (step : K.Linear_proof.step)) =
+    let parent_links =
+      if step.parents = [] then
+        span [] []
+      else
+        span' []
+          [
+            sub_e @@ txt "[";
+            sub_l
+              (List.mapi
+                 (fun i n ->
+                   span [] [
+                     (if i > 0 then txt ", " else span [] []);
+                     a [ A.href (spf "#step%d" n); cls "proof-step" ] [ txtf "%d" n ];
+                   ])
+                 step.parents);
+            sub_e @@ txt "]";
+          ]
+    in
+    let args_html =
+      span [] (List.map arg_to_html step.args)
+    in
+    tr []
+      [
+        td [ A.id (spf "step%d" idx) ] [ txtf "%d" idx ];
+        td [] [ sequent_to_html ~config step.concl ];
+        td []
+          [
+            span [] [ txt step.rule; txt " "; args_html ];
+            parent_links;
+          ];
+      ]
+  in
+  table
+    [ cls "table table-sm table-striped" ]
+    [
+      thead []
+        [
+          tr []
+            [
+              th [] [ txt "idx" ];
+              th [] [ txt "sequent" ];
+              th [] [ txt "rule / args" ];
+            ];
+        ];
+      tbody [] (List.map mk_row steps);
+    ]
+
+let theory_to_html ?(config = Config.make ()) ?(make_proof_link : (int -> string) option) (self : K.Theory.t) =
   let _name = K.Theory.name self in
   let in_consts = K.Theory.param_consts self in
   let in_thms = K.Theory.param_theorems self in
@@ -419,12 +484,20 @@ let theory_to_html ?(config = Config.make ()) (self : K.Theory.t) =
                    ])
                out_consts);
           sub_l
-            (List.map
-               (fun th ->
+            (List.mapi
+               (fun i th ->
+                 let proof_link =
+                   match make_proof_link with
+                   | None -> span [] []
+                   | Some f ->
+                     a
+                       [ A.href (f i); cls "btn btn-sm btn-outline-secondary ms-2" ]
+                       [ txt "proof" ]
+                 in
                  tr []
                    [
                      td [ cls "theory-out" ] [ txt "defined-theorem" ];
-                     td [] [ thm_to_html ~config th ];
+                     td [] [ thm_to_html ~config th; proof_link ];
                    ])
                out_thms);
         ];

@@ -57,17 +57,28 @@ let tracked_as_storage (ts : tracked_storage) : Storage.t =
 
 (* ---- Zip handle ----------------------------------------------------------- *)
 
+module Theory_lru = Lru.M.Make
+    (struct
+      type t = string
+      let equal = String.equal
+      let hash = Hashtbl.hash
+    end)
+    (struct
+      type t = K.Theory.t * int * string * (int, K.expr) Hashtbl.t
+      let weight _ = 1
+    end)
+
 type zip_handle = {
   zf: Zip.in_file;
   entries: Zip.entry list;
-  (* cache: name -> (theory, proof_offset, raw_entry_bytes) *)
-  theory_cache: (string, K.Theory.t * int * string) Hashtbl.t;
+  (* cache: name -> (theory, proof_offset, raw_entry_bytes, expr_cache) *)
+  theory_cache: Theory_lru.t;
 }
 
 let open_zip (path : string) : zip_handle =
   let zf = Zip.open_in path in
   let entries = Zip.entries zf in
-  { zf; entries; theory_cache = Hashtbl.create 64  }
+  { zf; entries; theory_cache = Theory_lru.create 8 }
 
 let close_zip (zh : zip_handle) : unit = Zip.close_in zh.zf
 
@@ -307,11 +318,7 @@ let dec_lp_arg_ (ctx : K.ctx) dec (cache : (int, K.expr) Hashtbl.t) off : K.Proo
         while !go do
           match Dec.read nd with
           | Dec.Ref v_off ->
-            let v =
-              match K.Expr.view (K.Expr.mg_dec_expr ctx dec cache v_off) with
-              | K.Expr.E_var v -> v
-              | _ -> failwith "proof_zip.dec_lp_arg_: ps: expected var"
-            in
+            let v = K.Expr.mg_dec_var ctx dec cache v_off in
             let e_off = Dec.read_ref_exn nd in
             let e = K.Expr.mg_dec_expr ctx dec cache e_off in
             acc := (v, e) :: !acc
@@ -363,7 +370,7 @@ let find_theory_root_off (data : string) : int =
 
 (* Decode a theory from minidag bytes.
    Returns the theory and the byte offset of the "proofs" node (-1 = no proofs). *)
-let decode_theory (ctx : K.ctx) (name : string) (data : string) : K.Theory.t * int =
+let decode_theory (ctx : K.ctx) (name : string) (data : string) : K.Theory.t * int * (int, K.expr) Hashtbl.t =
   let dec = Dec.create data in
   let cache : (int, K.expr) Hashtbl.t = Hashtbl.create 128 in
   let root_off = find_theory_root_off data in
@@ -404,7 +411,7 @@ let decode_theory (ctx : K.ctx) (name : string) (data : string) : K.Theory.t * i
                 K.Theory.add_theorem th thm)
               thm_seqs)
       in
-      (th, proof_node_off))
+      (th, proof_node_off, cache))
 
 (* ---- Load theory from zip ------------------------------------------------- *)
 
@@ -413,8 +420,10 @@ let find_entry (zh : zip_handle) (filename : string) : Zip.entry option =
 
 let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     K.Theory.t option =
-  match Hashtbl.find_opt zh.theory_cache name with
-  | Some (th, _proof_off, _data) -> Some th
+  match Theory_lru.find name zh.theory_cache with
+  | Some (th, _proof_off, _data, _ecache) ->
+    Theory_lru.promote name zh.theory_cache;
+    Some th
   | None ->
     let entry_name = name ^ entry_suffix in
     (match find_entry zh entry_name with
@@ -422,8 +431,9 @@ let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     | Some entry ->
       (try
          let data = Zip.read_entry zh.zf entry in
-         let (th, proof_off) = decode_theory ctx name data in
-         Hashtbl.replace zh.theory_cache name (th, proof_off, data);
+         let (th, proof_off, ecache) = decode_theory ctx name data in
+         Theory_lru.add name (th, proof_off, data, ecache) zh.theory_cache;
+         Theory_lru.trim zh.theory_cache;
          Some th
        with e ->
          Printf.eprintf "proof_zip.load_theory: decode error for %s: %s\n%!"
@@ -435,21 +445,24 @@ let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     has not been loaded yet via [load_theory]. *)
 let load_proofs (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     K.Linear_proof.t list option =
-  match Hashtbl.find_opt zh.theory_cache name with
-  | None -> None
-  | Some (_th, proof_off, data) ->
+  match Theory_lru.find name zh.theory_cache with
+  | None ->
+    Printf.eprintf "proof_zip.load_proofs: theory not in cache: %s\n%!" name;
+    None
+  | Some (_th, proof_off, data, ecache) ->
+    Theory_lru.promote name zh.theory_cache;
     if proof_off < 0 then
       None
     else (
       try
         let dec = Dec.create data in
-        let cache : (int, K.expr) Hashtbl.t = Hashtbl.create 64 in
-        (* Read the "proofs" node directly at the known offset. *)
+        (* Reuse the expr cache from theory decoding so proof nodes can
+           reference const/var/expr nodes encoded in the theory section. *)
         Some (
           Dec.read_node dec proof_off (fun nd _cmd ->
               let n = read_int_ nd in
               let lp_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
-              Array.to_list (Array.map (dec_lp_ ctx dec cache) lp_offs)))
+              Array.to_list (Array.map (dec_lp_ ctx dec ecache) lp_offs)))
       with e ->
         Printf.eprintf "proof_zip.load_proofs: decode error for %s: %s\n%!"
           name (Printexc.to_string e);
@@ -570,11 +583,7 @@ let decode_proof_list (ctx : K.ctx) (s : string) : LP.t list =
           while !go do
             match Dec.read nd with
             | Dec.Ref v_off ->
-              let v =
-                match K.Expr.view (K.Expr.mg_dec_expr ctx dec cache v_off) with
-                | K.Expr.E_var v -> v
-                | _ -> failwith "proof_zip.decode: ps: expected var"
-              in
+              let v = K.Expr.mg_dec_var ctx dec cache v_off in
               let e_off = Dec.read_ref_exn nd in
               let e = K.Expr.mg_dec_expr ctx dec cache e_off in
               acc := (v, e) :: !acc
