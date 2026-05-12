@@ -393,53 +393,36 @@ let linear_proof_to_html ?(config = Config.make ()) (lp : K.Linear_proof.t) : Ht
     | K.Proof.Pr_expr e -> expr_to_html ~config e
     | K.Proof.Pr_subst s -> subst_as_l_to_html ~config s
   in
-  let steps = K.Linear_proof.steps lp |> Iter.to_list in
+  (* Render "[p0, p1, ...]" parent-step links, or nothing. *)
+  let parent_links_html parents =
+    match parents with
+    | [] -> txt ""
+    | _ ->
+      let links =
+        parents
+        |> List.mapi (fun i n ->
+               let comma = if i > 0 then txt ", " else txt "" in
+               span [] [ comma; a [ A.href (spf "#step%d" n); cls "proof-step" ] [ txtf "%d" n ] ])
+      in
+      span [] ([ txt "[" ] @ links @ [ txt "]" ])
+  in
   let mk_row (idx, (step : K.Linear_proof.step)) =
-    let parent_links =
-      if step.parents = [] then
-        span [] []
-      else
-        span' []
-          [
-            sub_e @@ txt "[";
-            sub_l
-              (List.mapi
-                 (fun i n ->
-                   span [] [
-                     (if i > 0 then txt ", " else span [] []);
-                     a [ A.href (spf "#step%d" n); cls "proof-step" ] [ txtf "%d" n ];
-                   ])
-                 step.parents);
-            sub_e @@ txt "]";
-          ]
-    in
-    let args_html =
-      span [] (List.map arg_to_html step.args)
-    in
     tr []
       [
         td [ A.id (spf "step%d" idx) ] [ txtf "%d" idx ];
         td [] [ sequent_to_html ~config step.concl ];
         td []
-          [
-            span [] [ txt step.rule; txt " "; args_html ];
-            parent_links;
-          ];
+          ([ txt step.rule ]
+           @ List.map (fun a -> span [] [ txt " "; arg_to_html a ]) step.args
+           @ [ txt " "; parent_links_html step.parents ]);
       ]
   in
   table
     [ cls "table table-sm table-striped" ]
     [
       thead []
-        [
-          tr []
-            [
-              th [] [ txt "idx" ];
-              th [] [ txt "sequent" ];
-              th [] [ txt "rule / args" ];
-            ];
-        ];
-      tbody [] (List.map mk_row steps);
+        [ tr [] [ th [] [ txt "idx" ]; th [] [ txt "sequent" ]; th [] [ txt "rule" ] ] ];
+      tbody [] (K.Linear_proof.steps lp |> Iter.map mk_row |> Iter.to_list);
     ]
 
 let theory_to_html ?(config = Config.make ()) ?(make_proof_link : (int -> string) option) (self : K.Theory.t) =
@@ -488,7 +471,7 @@ let theory_to_html ?(config = Config.make ()) ?(make_proof_link : (int -> string
                (fun i th ->
                  let proof_link =
                    match make_proof_link with
-                   | None -> span [] []
+                   | None -> txt ""
                    | Some f ->
                      a
                        [ A.href (f i); cls "btn btn-sm btn-outline-secondary ms-2" ]

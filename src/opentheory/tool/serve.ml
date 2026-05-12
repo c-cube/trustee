@@ -217,53 +217,41 @@ let h_proof (self : state) : unit =
     H.Response.make_string (Error (400, spf "invalid theorem index: %s" thm_idx_str))
   | Some thm_idx ->
     let config = make_config_ self thy_name in
-    let (th_opt, proofs_opt) =
+    let th_opt, proofs_opt =
       let@ () = St.with_lock self.st.lock in
       let th = St.load_theory self.st thy_name in
       let proofs =
         match self.st.zip with
         | None -> None
-        | Some zh ->
-          Proof_zip.load_proofs zh ~ctx:self.st.ctx thy_name
+        | Some zh -> Proof_zip.load_proofs zh ~ctx:self.st.ctx thy_name
       in
-      (th, proofs)
+      th, proofs
     in
-    (match th_opt with
-    | None ->
+    (match th_opt, proofs_opt with
+    | None, _ ->
       H.Response.make_string (Error (404, spf "theory not found: %s" thy_name))
-    | Some th ->
-      let thms = K.Theory.theorems th in
-      if thm_idx < 0 || thm_idx >= List.length thms then
-        H.Response.make_string (Error (404, spf "theorem index out of bounds: %d" thm_idx))
-      else (
-        let thm = List.nth thms thm_idx in
-        match proofs_opt with
-        | None ->
-          H.Response.make_string (Error (404, spf "no proofs available for theory: %s" thy_name))
-        | Some proofs ->
-          if thm_idx >= List.length proofs then
-            H.Response.make_string (Error (404, spf "proof index out of bounds: %d" thm_idx))
-          else (
-            let lp = List.nth proofs thm_idx in
-            let open Html in
-            let res =
-              [
-                h3 []
-                  [
-                    txtf "Proof of theorem %d in %s" thm_idx thy_name;
-                  ];
-                div [ cls "mb-3" ]
-                  [
-                    strong [] [ txt "Theorem: " ];
-                    Render.thm_to_html ~config thm;
-                  ];
-                h4 [] [ txt "Proof steps" ];
-                Render.linear_proof_to_html ~config lp;
-              ]
-            in
-            reply_page ~title:(spf "proof %s/%d" thy_name thm_idx) req res
-          )
-      ))
+    | _, None ->
+      H.Response.make_string (Error (404, spf "no proofs available for: %s" thy_name))
+    | Some th, Some proofs ->
+      (match
+         List.nth_opt (K.Theory.theorems th) thm_idx,
+         List.nth_opt proofs thm_idx
+       with
+       | None, _ | _, None ->
+         H.Response.make_string
+           (Error (404, spf "theorem index out of bounds: %d" thm_idx))
+       | Some thm, Some lp ->
+         let open Html in
+         let res =
+           [
+             h3 [] [ txtf "Proof of theorem %d in %s" thm_idx thy_name ];
+             div [ cls "mb-3" ]
+               [ strong [] [ txt "Theorem: " ]; Render.thm_to_html ~config thm ];
+             h4 [] [ txt "Proof steps" ];
+             Render.linear_proof_to_html ~config lp;
+           ]
+         in
+         reply_page ~title:(spf "proof %s/%d" thy_name thm_idx) req res))
 
 let h_name_item (self : state) : unit =
   H.add_route_handler self.server

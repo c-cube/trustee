@@ -57,6 +57,11 @@ let tracked_as_storage (ts : tracked_storage) : Storage.t =
 
 (* ---- Zip handle ----------------------------------------------------------- *)
 
+(* Note: the minidag encode/decode caches (expr↔offset) remain plain
+   Hashtbl.t because that is the type required by the kernel's mg_enc_*/
+   mg_dec_* API.  We cannot substitute a named module without touching
+   the kernel. *)
+
 module Theory_lru = Lru.M.Make
     (struct
       type t = string
@@ -64,6 +69,8 @@ module Theory_lru = Lru.M.Make
       let hash = Hashtbl.hash
     end)
     (struct
+      (* theory, proof-section offset (-1 = absent), raw entry bytes,
+         expr cache built during theory decode (reused for proof decode) *)
       type t = K.Theory.t * int * string * (int, K.expr) Hashtbl.t
       let weight _ = 1
     end)
@@ -446,9 +453,7 @@ let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
 let load_proofs (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     K.Linear_proof.t list option =
   match Theory_lru.find name zh.theory_cache with
-  | None ->
-    Printf.eprintf "proof_zip.load_proofs: theory not in cache: %s\n%!" name;
-    None
+  | None -> None
   | Some (_th, proof_off, data, ecache) ->
     Theory_lru.promote name zh.theory_cache;
     if proof_off < 0 then
@@ -639,21 +644,22 @@ let decode_proof_list (ctx : K.ctx) (s : string) : LP.t list =
       let lp_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
       Array.to_list (Array.map dec_lp lp_offs))
 
-let load (path : string) : (string, string) Hashtbl.t =
-  let tbl = Hashtbl.create 64 in
+let load (path : string) : string Str_tbl.t =
+  let tbl = Str_tbl.create 64 in
   let zf = Zip.open_in path in
   List.iter
     (fun entry ->
       let name = entry.Zip.filename in
       let data = Zip.read_entry zf entry in
-      Hashtbl.replace tbl name data)
+      Str_tbl.replace tbl name data)
     (Zip.entries zf);
   Zip.close_in zf;
   tbl
 
-let lookup_theory ~cache ~(ctx : K.ctx) name : K.Linear_proof.t list option =
+let lookup_theory ~cache:(cache : string Str_tbl.t) ~(ctx : K.ctx) name
+    : K.Linear_proof.t list option =
   let entry = zip_entry_name name in
-  match Hashtbl.find_opt cache entry with
+  match Str_tbl.get cache entry with
   | None -> None
   | Some data ->
     (try Some (decode_proof_list ctx data)
