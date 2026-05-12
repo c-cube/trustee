@@ -108,7 +108,7 @@ module Linear_proof_mg = struct
       end
     in
     let enc = Enc.create ~out () in
-    let cache : (expr, int) Hashtbl.t = Hashtbl.create 32 in
+    let cache : int Expr.Tbl.t = Expr.Tbl.create 32 in
     let enc_arg = function
       | Pr_expr e ->
         let e' = Expr.mg_enc_expr cache enc e in
@@ -148,7 +148,7 @@ module Linear_proof_mg = struct
 
   let decode (ctx : ctx) (s : string) : Linear_proof.t =
     let dec = Dec.create s in
-    let cache : (int, expr) Hashtbl.t = Hashtbl.create 32 in
+    let cache : expr Int_tbl.t = Int_tbl.create 32 in
     let root_off = ref 0 in
     Dec.iter_nodes dec (fun off _cmd _args -> root_off := off);
     let dec_arg_node off =
@@ -163,11 +163,7 @@ module Linear_proof_mg = struct
             while !go do
               match Dec.read nd with
               | Dec.Ref v_off ->
-                let v =
-                  match (Expr.mg_dec_expr ctx dec cache v_off).e_view with
-                  | E_var v -> v
-                  | _ -> failwith "Linear_proof_mg.decode: ps: expected var"
-                in
+                let v = Expr.mg_dec_var ctx dec cache v_off in
                 let e_off = Dec.read_ref_exn nd in
                 let e = Expr.mg_dec_expr ctx dec cache e_off in
                 acc := (v, e) :: !acc

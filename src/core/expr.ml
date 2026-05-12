@@ -204,18 +204,18 @@ module Util_mg_ = struct
   module Dec = Trustee_minidag.Decode
 
   (* Encode expr to minidag, with sharing via physical-equality cache *)
-  let rec enc_var_ (cache : (expr, int) Hashtbl.t) enc (v : var) : int =
+  let rec enc_var_ (cache : int Expr0.Tbl.t) enc (v : var) : int =
     let ty_off = enc_expr_ cache enc v.v_ty in
     Enc.write_node enc "v" (fun nd ->
         Enc.string nd v.v_name;
         Enc.ref nd ty_off)
 
-  and enc_expr_ (cache : (expr, int) Hashtbl.t) enc (e : expr) : int =
-    match Hashtbl.find_opt cache e with
+  and enc_expr_ (cache : int Expr0.Tbl.t) enc (e : expr) : int =
+    match Expr0.Tbl.find_opt cache e with
     | Some off -> off
     | None ->
       let off = enc_expr_inner_ cache enc e in
-      Hashtbl.add cache e off;
+      Expr0.Tbl.add cache e off;
       off
 
   and enc_expr_inner_ cache enc (e : expr) : int =
@@ -343,22 +343,22 @@ module Util_mg_ = struct
       end
     in
     let enc = Enc.create ~out () in
-    let cache : (expr, int) Hashtbl.t = Hashtbl.create 32 in
+    let cache : int Expr0.Tbl.t = Expr0.Tbl.create 32 in
     let _root = enc_const_def_ cache enc def in
     Enc.flush enc;
     Buffer.contents buf
 
   (* Decoder helpers *)
 
-  let rec dec_var_ ctx dec (cache : (int, expr) Hashtbl.t) off =
+  let rec dec_var_ ctx dec (cache : expr Int_tbl.t) off =
     Dec.read_node dec off (fun nd _cmd ->
         let name = Dec.read_string_exn nd in
         let ty_off = Dec.read_ref_exn nd in
         let v_ty = dec_expr_ ctx dec cache ty_off in
         { v_name = name; v_ty })
 
-  and dec_expr_ ctx dec (cache : (int, expr) Hashtbl.t) off =
-    match Hashtbl.find_opt cache off with
+  and dec_expr_ ctx dec (cache : expr Int_tbl.t) off =
+    match Int_tbl.find_opt cache off with
     | Some e -> e
     | None ->
       let (module Mk : Expr0.MK) =
@@ -452,7 +452,7 @@ module Util_mg_ = struct
               Mk.box ctx seq
             | cmd -> failwith ("dec_expr_: unknown cmd " ^ cmd))
       in
-      Hashtbl.add cache off e;
+      Int_tbl.add cache off e;
       e
 
   and dec_seq_ ctx dec cache off =
@@ -549,7 +549,7 @@ module Util_mg_ = struct
 
   let decode_const_def ctx (s : string) : const_def =
     let dec = Dec.create s in
-    let cache : (int, expr) Hashtbl.t = Hashtbl.create 32 in
+    let cache : expr Int_tbl.t = Int_tbl.create 32 in
     (* The root is the last node written — find it via iter_nodes *)
     let root_off = ref 0 in
     Dec.iter_nodes dec (fun off _cmd _args -> root_off := off);
