@@ -78,6 +78,4 @@ let new_skolem_const self name tyvars ty : const =
 
 let new_skolem_ty_const self name ~arity : const =
   let ty = Expr.type_ self in
-  Const.make self
-    ~def:(C_def_skolem_ty { name; arity })
-    name (C_arity arity) ty
+  Const.make self ~def:(C_def_skolem_ty { name; arity }) name (C_arity arity) ty

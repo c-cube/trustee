@@ -59,12 +59,13 @@ let expr_wrap_ f e =
 
 let percent_encode s =
   let buf = Buffer.create (String.length s) in
-  String.iter (fun c ->
-    match c with
-    | 'A'..'Z' | 'a'..'z' | '0'..'9' | '-' | '_' | '.' | '~' ->
-      Buffer.add_char buf c
-    | c -> Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c))
-  ) s;
+  String.iter
+    (fun c ->
+      match c with
+      | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '_' | '.' | '~' ->
+        Buffer.add_char buf c
+      | c -> Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c)))
+    s;
   Buffer.contents buf
 
 let href_const c = spf "/c/%s" (percent_encode @@ K.Const.name c)
@@ -72,9 +73,7 @@ let href_const c = spf "/c/%s" (percent_encode @@ K.Const.name c)
 let var_to_html (v : K.Var.t) : Html.elt =
   let open Html in
   let name = K.Var.name v in
-  let title_ =
-    Fmt.asprintf "%s : %a" name E.pp (K.Var.ty v)
-  in
+  let title_ = Fmt.asprintf "%s : %a" name E.pp (K.Var.ty v) in
   span [ A.title title_ ] [ txt name ]
 
 let expr_to_html ?(config = Config.make ()) (e : K.Expr.t) : Html.elt =
@@ -101,9 +100,7 @@ let expr_to_html ?(config = Config.make ()) (e : K.Expr.t) : Html.elt =
       span [ A.title title_ ] [ txt descr ]
     | K.E_const (c, []) ->
       let c_name = strip_name_ ~config @@ K.Const.name c in
-      let title_ =
-        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e)
-      in
+      let title_ = Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
       let href = href_const c in
       let res =
         span
@@ -117,9 +114,7 @@ let expr_to_html ?(config = Config.make ()) (e : K.Expr.t) : Html.elt =
     | K.E_const (c, args) when E.is_a_type e ->
       (* always write type arguments explicitly for types *)
       let descr = strip_name_ ~config @@ K.Const.name c in
-      let title =
-        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e)
-      in
+      let title = Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
       span' []
         [
           sub_e
@@ -131,9 +126,7 @@ let expr_to_html ?(config = Config.make ()) (e : K.Expr.t) : Html.elt =
     | K.E_const (c, _) ->
       (* omit arguments *)
       let c_name = strip_name_ ~config @@ K.Const.name c in
-      let title =
-        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e)
-      in
+      let title = Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e) in
       let res =
         span
           [ A.title title ]
@@ -241,9 +234,7 @@ let const_def_to_html ?(config = Config.make ()) ctx (c : K.Const.t) =
 let const_to_html ?(config = Config.make ()) (c : K.Const.t) =
   let name = strip_name_ ~config @@ K.Const.name c in
   let args = Fmt.to_string K.Const.pp_args (K.Const.args c) in
-  let title_ =
-    Fmt.asprintf "%a" K.Const.pp_with_ty c
-  in
+  let title_ = Fmt.asprintf "%a" K.Const.pp_with_ty c in
   Html.(
     span
       [ cls "const" ]
@@ -334,9 +325,7 @@ let proof_to_html ?(config = Config.make ()) (th0 : K.Thm.t) : Html.elt =
     match step with
     | K.Proof.Pr_main _ ->
       (* link to theorem *)
-      let step =
-        span [] [ txt "lemma" ]
-      in
+      let step = span [] [ txt "lemma" ] in
       add_step thm step
     | K.Proof.Pr_dummy -> add_step thm (txt "<dummy>")
     | K.Proof.Pr_step { rule; args; parents } ->

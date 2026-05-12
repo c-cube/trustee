@@ -121,8 +121,8 @@ let read_all (nd : node_decoder) : value list =
   in
   loop []
 
-(** Read all Ref values until Stop, returning offsets as an array.
-    Fails if a non-Ref, non-Stop value is encountered. *)
+(** Read all Ref values until Stop, returning offsets as an array. Fails if a
+    non-Ref, non-Stop value is encountered. *)
 let read_refs (nd : node_decoder) : int array =
   let buf = Buffer.create 8 in
   let rec loop () =
@@ -142,19 +142,19 @@ let read_refs (nd : node_decoder) : int array =
   let s = Buffer.contents buf in
   let n = String.length s / 4 in
   Array.init n (fun i ->
-    let b0 = Char.code s.[i*4] in
-    let b1 = Char.code s.[i*4+1] in
-    let b2 = Char.code s.[i*4+2] in
-    let b3 = Char.code s.[i*4+3] in
-    b0 lor (b1 lsl 8) lor (b2 lsl 16) lor (b3 lsl 24))
+      let b0 = Char.code s.[i * 4] in
+      let b1 = Char.code s.[(i * 4) + 1] in
+      let b2 = Char.code s.[(i * 4) + 2] in
+      let b3 = Char.code s.[(i * 4) + 3] in
+      b0 lor (b1 lsl 8) lor (b2 lsl 16) lor (b3 lsl 24))
 
 (** Read exactly [n] Ref values; fail if not enough or too many. *)
 let read_n_refs (nd : node_decoder) (n : int) : int array =
   Array.init n (fun _i ->
-    let off = nd.off in
-    match read nd with
-    | Ref r -> r
-    | _ -> fail off (Printf.sprintf "read_n_refs: expected Ref"))
+      let off = nd.off in
+      match read nd with
+      | Ref r -> r
+      | _ -> fail off (Printf.sprintf "read_n_refs: expected Ref"))
 
 (** Read the next value and assert it is a String; return the string. *)
 let read_string_exn (nd : node_decoder) : string =

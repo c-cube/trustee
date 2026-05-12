@@ -1,7 +1,5 @@
 open Sigs
-
 include Types
-
 module Expr = Expr
 module Const = Const
 module Const_def = Const.Const_def

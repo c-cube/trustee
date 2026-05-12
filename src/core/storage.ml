@@ -34,11 +34,9 @@ let in_memory ?(size = 1024) () : t =
   let tbl : string Str_tbl.t = Str_tbl.create size in
   let module M = struct
     let get ~key = Str_tbl.get tbl key
-
     let mem ~key = Str_tbl.mem tbl key
 
     let store ~key ?(erase = false) s =
-      if erase || not (Str_tbl.mem tbl key) then
-        Str_tbl.replace tbl key s
+      if erase || not (Str_tbl.mem tbl key) then Str_tbl.replace tbl key s
   end in
   (module M)

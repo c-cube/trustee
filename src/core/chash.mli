@@ -23,6 +23,7 @@ val run : 'a hasher -> 'a -> t
 val string : ctx -> string -> unit
 val int : ctx -> int -> unit
 val sub : ctx -> t -> unit
+
 module Tbl : CCHashtbl.S with type key = t
 
 val unsafe_to_bytes : t -> bytes

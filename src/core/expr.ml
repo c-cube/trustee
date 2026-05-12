@@ -8,7 +8,10 @@ module Expr0 = struct
   type t = expr
 
   let[@inline] ty e =
-    match e.e_ty with Ty t -> Some t | _ -> None
+    match e.e_ty with
+    | Ty t -> Some t
+    | _ -> None
+
   let[@inline] view e = e.e_view
 
   let[@inline] ty_exn e =
@@ -58,7 +61,11 @@ module Expr0 = struct
     let rec loop e =
       if not (Tbl.mem tbl e) then (
         Tbl.add tbl e ();
-        if iter_ty then (match e.e_ty with Ty t -> loop t | _ -> ());
+        if iter_ty then (
+          match e.e_ty with
+          | Ty t -> loop t
+          | _ -> ()
+        );
         f e;
         iter e ~f:(fun _ u -> loop u)
       )
@@ -200,8 +207,8 @@ module Util_mg_ = struct
   let rec enc_var_ (cache : (expr, int) Hashtbl.t) enc (v : var) : int =
     let ty_off = enc_expr_ cache enc v.v_ty in
     Enc.write_node enc "v" (fun nd ->
-      Enc.string nd v.v_name;
-      Enc.ref nd ty_off)
+        Enc.string nd v.v_name;
+        Enc.ref nd ty_off)
 
   and enc_expr_ (cache : (expr, int) Hashtbl.t) enc (e : expr) : int =
     match Hashtbl.find_opt cache e with
@@ -234,55 +241,57 @@ module Util_mg_ = struct
           `TyVars vs'
       in
       Enc.write_node enc "c" (fun nd ->
-        Enc.string nd c.c_name;
-        Enc.ref nd ty';
-        Enc.bool nd c.c_concrete;
-        (match c_args_enc with
-         | `Arity n ->
-           Enc.string nd "ar";
-           Enc.int nd n
-         | `TyVars vs' ->
-           Enc.string nd "vs";
-           Enc.int nd (List.length vs');
-           List.iter (Enc.ref nd) vs');
-        List.iter (Enc.ref nd) args')
+          Enc.string nd c.c_name;
+          Enc.ref nd ty';
+          Enc.bool nd c.c_concrete;
+          (match c_args_enc with
+          | `Arity n ->
+            Enc.string nd "ar";
+            Enc.int nd n
+          | `TyVars vs' ->
+            Enc.string nd "vs";
+            Enc.int nd (List.length vs');
+            List.iter (Enc.ref nd) vs');
+          List.iter (Enc.ref nd) args')
     | E_var v ->
       let v' = enc_var_ cache enc v in
       Enc.write_node enc "V" (fun nd -> Enc.ref nd v')
     | E_bound_var bv ->
       let ty' = enc_expr_ cache enc bv.bv_ty in
       Enc.write_node enc "bv" (fun nd ->
-        Enc.int nd bv.bv_idx;
-        Enc.ref nd ty')
+          Enc.int nd bv.bv_idx;
+          Enc.ref nd ty')
     | E_app (f, a) ->
       let f' = enc_expr_ cache enc f in
       let a' = enc_expr_ cache enc a in
       Enc.write_node enc "@" (fun nd ->
-        Enc.ref nd f';
-        Enc.ref nd a')
+          Enc.ref nd f';
+          Enc.ref nd a')
     | E_lam (name, ty, body) ->
       let ty' = enc_expr_ cache enc ty in
       let body' = enc_expr_ cache enc body in
       Enc.write_node enc "\\" (fun nd ->
-        Enc.string nd name;
-        Enc.ref nd ty';
-        Enc.ref nd body')
+          Enc.string nd name;
+          Enc.ref nd ty';
+          Enc.ref nd body')
     | E_arrow (a, b) ->
       let a' = enc_expr_ cache enc a in
       let b' = enc_expr_ cache enc b in
       Enc.write_node enc "->" (fun nd ->
-        Enc.ref nd a';
-        Enc.ref nd b')
+          Enc.ref nd a';
+          Enc.ref nd b')
     | E_box seq ->
       let seq' = enc_seq_ cache enc seq in
       Enc.write_node enc "box" (fun nd -> Enc.ref nd seq')
 
   and enc_seq_ cache enc (seq : sequent) : int =
     let concl' = enc_expr_ cache enc seq.concl in
-    let hyps' = Expr_set.to_list seq.hyps |> List.rev_map (enc_expr_ cache enc) in
+    let hyps' =
+      Expr_set.to_list seq.hyps |> List.rev_map (enc_expr_ cache enc)
+    in
     Enc.write_node enc "seq" (fun nd ->
-      List.iter (Enc.ref nd) (List.rev hyps');
-      Enc.ref nd concl')
+        List.iter (Enc.ref nd) (List.rev hyps');
+        Enc.ref nd concl')
 
   let enc_const_def_ cache enc (def : const_def) : int =
     match def with
@@ -292,45 +301,47 @@ module Util_mg_ = struct
       let var_offs = List.map (enc_var_ cache enc) vars in
       let rhs' = enc_expr_ cache enc rhs in
       Enc.write_node enc "dt" (fun nd ->
-        Enc.int nd (List.length var_offs);
-        List.iter (Enc.ref nd) var_offs;
-        Enc.ref nd rhs')
+          Enc.int nd (List.length var_offs);
+          List.iter (Enc.ref nd) var_offs;
+          Enc.ref nd rhs')
     | C_def_ty { arity; phi } ->
       let phi' = enc_expr_ cache enc phi in
       Enc.write_node enc "dty" (fun nd ->
-        Enc.int nd arity;
-        Enc.ref nd phi')
+          Enc.int nd arity;
+          Enc.ref nd phi')
     | C_def_ty_abs { arity; phi } ->
       let phi' = enc_expr_ cache enc phi in
       Enc.write_node enc "dty.abs" (fun nd ->
-        Enc.int nd arity;
-        Enc.ref nd phi')
+          Enc.int nd arity;
+          Enc.ref nd phi')
     | C_def_ty_repr { arity; phi } ->
       let phi' = enc_expr_ cache enc phi in
       Enc.write_node enc "dty.repr" (fun nd ->
-        Enc.int nd arity;
-        Enc.ref nd phi')
+          Enc.int nd arity;
+          Enc.ref nd phi')
     | C_def_theory_param { ty_vars; ty } ->
       let tv_offs = List.map (enc_var_ cache enc) ty_vars in
       let ty' = enc_expr_ cache enc ty in
       Enc.write_node enc "th.param" (fun nd ->
-        Enc.int nd (List.length tv_offs);
-        List.iter (Enc.ref nd) tv_offs;
-        Enc.ref nd ty')
+          Enc.int nd (List.length tv_offs);
+          List.iter (Enc.ref nd) tv_offs;
+          Enc.ref nd ty')
     | C_def_theory_ty_param { arity } ->
       Enc.write_node enc "th.typaram" (fun nd -> Enc.int nd arity)
     | C_def_skolem { name } ->
       Enc.write_node enc "sko" (fun nd -> Enc.string nd name)
     | C_def_skolem_ty { name; arity } ->
       Enc.write_node enc "sko.ty" (fun nd ->
-        Enc.string nd name;
-        Enc.int nd arity)
+          Enc.string nd name;
+          Enc.int nd arity)
 
   let encode_const_def (def : const_def) : string =
     let buf = Buffer.create 256 in
-    let out = object
-      method write b off len = Buffer.add_subbytes buf b off len
-    end in
+    let out =
+      object
+        method write b off len = Buffer.add_subbytes buf b off len
+      end
+    in
     let enc = Enc.create ~out () in
     let cache : (expr, int) Hashtbl.t = Hashtbl.create 32 in
     let _root = enc_const_def_ cache enc def in
@@ -341,10 +352,10 @@ module Util_mg_ = struct
 
   let rec dec_var_ ctx dec (cache : (int, expr) Hashtbl.t) off =
     Dec.read_node dec off (fun nd _cmd ->
-      let name = Dec.read_string_exn nd in
-      let ty_off = Dec.read_ref_exn nd in
-      let v_ty = dec_expr_ ctx dec cache ty_off in
-      { v_name = name; v_ty })
+        let name = Dec.read_string_exn nd in
+        let ty_off = Dec.read_ref_exn nd in
+        let v_ty = dec_expr_ ctx dec cache ty_off in
+        { v_name = name; v_ty })
 
   and dec_expr_ ctx dec (cache : (int, expr) Hashtbl.t) off =
     match Hashtbl.find_opt cache off with
@@ -355,153 +366,186 @@ module Util_mg_ = struct
         | None -> assert false
         | Some m -> m
       in
-      let e = Dec.read_node dec off (fun nd cmd ->
-        match cmd with
-        | "T" -> Mk.type_ ctx
-        | "bool" -> Mk.bool ctx
-        | "=" ->
-          let a = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-          Mk.eq ctx a
-        | "sel" ->
-          let a = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-          Mk.select ctx a
-        | "c" ->
-          let name = Dec.read_string_exn nd in
-          let ty_off = Dec.read_ref_exn nd in
-          let c_ty = dec_expr_ ctx dec cache ty_off in
-          let concrete = Dec.read_bool_exn nd in
-          let args_kind_str = Dec.read_string_exn nd in
-          let c_args =
-            if args_kind_str = "ar" then (
-              match Dec.read nd with
-              | Dec.Int64 i -> C_arity (Int64.to_int i)
-              | _ -> failwith "c: expected arity int"
-            ) else (
-              (* "vs": read count, then var refs *)
-              let n = match Dec.read nd with
-                | Dec.Int64 i -> Int64.to_int i
-                | _ -> failwith "vs: expected count"
+      let e =
+        Dec.read_node dec off (fun nd cmd ->
+            match cmd with
+            | "T" -> Mk.type_ ctx
+            | "bool" -> Mk.bool ctx
+            | "=" ->
+              let a = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+              Mk.eq ctx a
+            | "sel" ->
+              let a = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+              Mk.select ctx a
+            | "c" ->
+              let name = Dec.read_string_exn nd in
+              let ty_off = Dec.read_ref_exn nd in
+              let c_ty = dec_expr_ ctx dec cache ty_off in
+              let concrete = Dec.read_bool_exn nd in
+              let args_kind_str = Dec.read_string_exn nd in
+              let c_args =
+                if args_kind_str = "ar" then (
+                  match Dec.read nd with
+                  | Dec.Int64 i -> C_arity (Int64.to_int i)
+                  | _ -> failwith "c: expected arity int"
+                ) else (
+                  (* "vs": read count, then var refs *)
+                  let n =
+                    match Dec.read nd with
+                    | Dec.Int64 i -> Int64.to_int i
+                    | _ -> failwith "vs: expected count"
+                  in
+                  let var_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
+                  let vars =
+                    Array.to_list var_offs |> List.map (dec_var_ ctx dec cache)
+                  in
+                  C_ty_vars vars
+                )
               in
-              let var_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
-              let vars = Array.to_list var_offs |> List.map (dec_var_ ctx dec cache) in
-              C_ty_vars vars
-            )
-          in
-          (* Read remaining refs as inst args *)
-          let acc = ref [] in
-          let go = ref true in
-          while !go do
-            match Dec.read nd with
-            | Dec.Ref r -> acc := r :: !acc
-            | Dec.Stop -> go := false
-            | _ -> failwith "c: expected Ref or Stop"
-          done;
-          let args = List.rev_map (dec_expr_ ctx dec cache) !acc in
-          let c = { c_name = name; c_ty; c_args; c_concrete = concrete; c_labels = [] } in
-          Mk.const ctx c args
-        | "V" ->
-          let v_off = Dec.read_ref_exn nd in
-          let v = dec_var_ ctx dec cache v_off in
-          Mk.var ctx v
-        | "bv" ->
-          let idx = (match Dec.read nd with
-            | Dec.Int64 i -> Int64.to_int i
-            | _ -> failwith "bv: expected int") in
-          let ty = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-          Mk.bvar ctx idx ty
-        | "@" ->
-          let f = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-          let a = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-          Mk.app ctx f a
-        | "\\" ->
-          let name = Dec.read_string_exn nd in
-          let ty_v = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-          let body = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-          Mk.lambda_db ctx ~name ~ty_v body
-        | "->" ->
-          let a = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-          let b = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-          Mk.arrow ctx a b
-        | "box" ->
-          let seq = dec_seq_ ctx dec cache (Dec.read_ref_exn nd) in
-          Mk.box ctx seq
-        | cmd -> failwith ("dec_expr_: unknown cmd " ^ cmd)
-      ) in
+              (* Read remaining refs as inst args *)
+              let acc = ref [] in
+              let go = ref true in
+              while !go do
+                match Dec.read nd with
+                | Dec.Ref r -> acc := r :: !acc
+                | Dec.Stop -> go := false
+                | _ -> failwith "c: expected Ref or Stop"
+              done;
+              let args = List.rev_map (dec_expr_ ctx dec cache) !acc in
+              let c =
+                {
+                  c_name = name;
+                  c_ty;
+                  c_args;
+                  c_concrete = concrete;
+                  c_labels = [];
+                }
+              in
+              Mk.const ctx c args
+            | "V" ->
+              let v_off = Dec.read_ref_exn nd in
+              let v = dec_var_ ctx dec cache v_off in
+              Mk.var ctx v
+            | "bv" ->
+              let idx =
+                match Dec.read nd with
+                | Dec.Int64 i -> Int64.to_int i
+                | _ -> failwith "bv: expected int"
+              in
+              let ty = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+              Mk.bvar ctx idx ty
+            | "@" ->
+              let f = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+              let a = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+              Mk.app ctx f a
+            | "\\" ->
+              let name = Dec.read_string_exn nd in
+              let ty_v = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+              let body = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+              Mk.lambda_db ctx ~name ~ty_v body
+            | "->" ->
+              let a = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+              let b = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+              Mk.arrow ctx a b
+            | "box" ->
+              let seq = dec_seq_ ctx dec cache (Dec.read_ref_exn nd) in
+              Mk.box ctx seq
+            | cmd -> failwith ("dec_expr_: unknown cmd " ^ cmd))
+      in
       Hashtbl.add cache off e;
       e
 
   and dec_seq_ ctx dec cache off =
     Dec.read_node dec off (fun nd _cmd ->
-      let acc = ref [] in
-      let go = ref true in
-      while !go do
-        match Dec.read nd with
-        | Dec.Ref r -> acc := r :: !acc
-        | Dec.Stop -> go := false
-        | _ -> failwith "dec_seq_: expected Ref or Stop"
-      done;
-      match !acc with
-      | [] -> failwith "dec_seq_: empty"
-      | concl_off :: rev_hyp_offs ->
-        let concl = dec_expr_ ctx dec cache concl_off in
-        let hyps = List.rev_map (dec_expr_ ctx dec cache) rev_hyp_offs |> Expr_set.of_list in
-        { concl; hyps })
+        let acc = ref [] in
+        let go = ref true in
+        while !go do
+          match Dec.read nd with
+          | Dec.Ref r -> acc := r :: !acc
+          | Dec.Stop -> go := false
+          | _ -> failwith "dec_seq_: expected Ref or Stop"
+        done;
+        match !acc with
+        | [] -> failwith "dec_seq_: empty"
+        | concl_off :: rev_hyp_offs ->
+          let concl = dec_expr_ ctx dec cache concl_off in
+          let hyps =
+            List.rev_map (dec_expr_ ctx dec cache) rev_hyp_offs
+            |> Expr_set.of_list
+          in
+          { concl; hyps })
 
   let dec_const_def_ ctx dec cache off =
     Dec.read_node dec off (fun nd cmd ->
-      match cmd with
-      | "magic" ->
-        C_def_magic (Dec.read_string_exn nd)
-      | "dt" ->
-        let n_vars = (match Dec.read nd with
-          | Dec.Int64 i -> Int64.to_int i
-          | _ -> failwith "dt: expected count") in
-        let var_offs = Array.init n_vars (fun _ -> Dec.read_ref_exn nd) in
-        let rhs_off = Dec.read_ref_exn nd in
-        let vars = Array.to_list var_offs |> List.map (dec_var_ ctx dec cache) in
-        let rhs = dec_expr_ ctx dec cache rhs_off in
-        C_def_expr { vars; rhs }
-      | "dty" ->
-        let arity = (match Dec.read nd with
-          | Dec.Int64 i -> Int64.to_int i
-          | _ -> failwith "dty: expected arity") in
-        let phi = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-        C_def_ty { arity; phi }
-      | "dty.abs" ->
-        let arity = (match Dec.read nd with
-          | Dec.Int64 i -> Int64.to_int i
-          | _ -> failwith "dty.abs: expected arity") in
-        let phi = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-        C_def_ty_abs { arity; phi }
-      | "dty.repr" ->
-        let arity = (match Dec.read nd with
-          | Dec.Int64 i -> Int64.to_int i
-          | _ -> failwith "dty.repr: expected arity") in
-        let phi = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
-        C_def_ty_repr { arity; phi }
-      | "th.param" ->
-        let n_vars = (match Dec.read nd with
-          | Dec.Int64 i -> Int64.to_int i
-          | _ -> failwith "th.param: expected count") in
-        let tv_offs = Array.init n_vars (fun _ -> Dec.read_ref_exn nd) in
-        let ty_off = Dec.read_ref_exn nd in
-        let ty_vars = Array.to_list tv_offs |> List.map (dec_var_ ctx dec cache) in
-        let ty = dec_expr_ ctx dec cache ty_off in
-        C_def_theory_param { ty_vars; ty }
-      | "th.typaram" ->
-        let arity = (match Dec.read nd with
-          | Dec.Int64 i -> Int64.to_int i
-          | _ -> failwith "th.typaram: expected arity") in
-        C_def_theory_ty_param { arity }
-      | "sko" ->
-        C_def_skolem { name = Dec.read_string_exn nd }
-      | "sko.ty" ->
-        let name = Dec.read_string_exn nd in
-        let arity = (match Dec.read nd with
-          | Dec.Int64 i -> Int64.to_int i
-          | _ -> failwith "sko.ty: expected arity") in
-        C_def_skolem_ty { name; arity }
-      | cmd -> failwith ("dec_const_def_: unknown cmd " ^ cmd))
+        match cmd with
+        | "magic" -> C_def_magic (Dec.read_string_exn nd)
+        | "dt" ->
+          let n_vars =
+            match Dec.read nd with
+            | Dec.Int64 i -> Int64.to_int i
+            | _ -> failwith "dt: expected count"
+          in
+          let var_offs = Array.init n_vars (fun _ -> Dec.read_ref_exn nd) in
+          let rhs_off = Dec.read_ref_exn nd in
+          let vars =
+            Array.to_list var_offs |> List.map (dec_var_ ctx dec cache)
+          in
+          let rhs = dec_expr_ ctx dec cache rhs_off in
+          C_def_expr { vars; rhs }
+        | "dty" ->
+          let arity =
+            match Dec.read nd with
+            | Dec.Int64 i -> Int64.to_int i
+            | _ -> failwith "dty: expected arity"
+          in
+          let phi = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+          C_def_ty { arity; phi }
+        | "dty.abs" ->
+          let arity =
+            match Dec.read nd with
+            | Dec.Int64 i -> Int64.to_int i
+            | _ -> failwith "dty.abs: expected arity"
+          in
+          let phi = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+          C_def_ty_abs { arity; phi }
+        | "dty.repr" ->
+          let arity =
+            match Dec.read nd with
+            | Dec.Int64 i -> Int64.to_int i
+            | _ -> failwith "dty.repr: expected arity"
+          in
+          let phi = dec_expr_ ctx dec cache (Dec.read_ref_exn nd) in
+          C_def_ty_repr { arity; phi }
+        | "th.param" ->
+          let n_vars =
+            match Dec.read nd with
+            | Dec.Int64 i -> Int64.to_int i
+            | _ -> failwith "th.param: expected count"
+          in
+          let tv_offs = Array.init n_vars (fun _ -> Dec.read_ref_exn nd) in
+          let ty_off = Dec.read_ref_exn nd in
+          let ty_vars =
+            Array.to_list tv_offs |> List.map (dec_var_ ctx dec cache)
+          in
+          let ty = dec_expr_ ctx dec cache ty_off in
+          C_def_theory_param { ty_vars; ty }
+        | "th.typaram" ->
+          let arity =
+            match Dec.read nd with
+            | Dec.Int64 i -> Int64.to_int i
+            | _ -> failwith "th.typaram: expected arity"
+          in
+          C_def_theory_ty_param { arity }
+        | "sko" -> C_def_skolem { name = Dec.read_string_exn nd }
+        | "sko.ty" ->
+          let name = Dec.read_string_exn nd in
+          let arity =
+            match Dec.read nd with
+            | Dec.Int64 i -> Int64.to_int i
+            | _ -> failwith "sko.ty: expected arity"
+          in
+          C_def_skolem_ty { name; arity }
+        | cmd -> failwith ("dec_const_def_: unknown cmd " ^ cmd))
 
   let decode_const_def ctx (s : string) : const_def =
     let dec = Dec.create s in
@@ -628,10 +672,11 @@ let[@inline] is_lam e =
   | _ -> false
 
 let[@inline] is_error e =
-  match e.e_ty with Ill_typed _ -> true | _ -> false
+  match e.e_ty with
+  | Ill_typed _ -> true
+  | _ -> false
 
-let mk_error ctx msg : t =
-  make_ ctx E_kind (Ill_typed msg)
+let mk_error ctx msg : t = make_ ctx E_kind (Ill_typed msg)
 let bool ctx = Lazy.force ctx.ctx_bool
 
 let var ctx v : t =
@@ -650,10 +695,10 @@ let[@inline] map ctx ~f (e : t) : t =
   | E_kind | E_type | E_const (_, []) | E_box _ -> e
   | _ ->
     let ty' =
-      (match e.e_ty with
+      match e.e_ty with
       | Ty ty -> Ty (f false ty)
       | Kind -> Kind
-      | Ill_typed msg -> Ill_typed msg)
+      | Ill_typed msg -> Ill_typed msg
     in
     (match view e with
     | E_var v ->
@@ -673,9 +718,7 @@ let[@inline] map ctx ~f (e : t) : t =
       if v.bv_ty == ty' then
         e
       else
-        make_ ctx
-          (E_bound_var { v with bv_ty = ty' })
-          (Ty ty')
+        make_ ctx (E_bound_var { v with bv_ty = ty' }) (Ty ty')
     | E_app (hd, a) ->
       let hd' = f false hd in
       let a' = f false a in
@@ -729,7 +772,6 @@ let free_vars ?(init = Var.Set.empty) e : Var.Set.t =
   !set
 
 let id_gen_ = ref 0
-
 let mk_const_ ctx c args ty : t = make_ ctx (E_const (c, args)) ty
 let subst_empty_ : subst = { ty = Var.Map.empty; m = Var.Map.empty }
 
@@ -752,7 +794,10 @@ let subst_bind_ (subst : subst) v t : subst =
 
 let db_shift ctx (e : t) (n : int) =
   ctx_check_e_uid ctx e;
-  assert (match e.e_ty with Ty t -> is_closed t | _ -> true);
+  assert (
+    match e.e_ty with
+    | Ty t -> is_closed t
+    | _ -> true);
   let rec loop e k : t =
     if is_closed e then
       e
@@ -856,14 +901,14 @@ let const ctx c args : t =
     | C_arity n ->
       if List.length args <> n then
         Error.failf (fun k ->
-            k "constant %s requires %d arguments, but is applied to %d"
-              c.c_name n (List.length args));
+            k "constant %s requires %d arguments, but is applied to %d" c.c_name
+              n (List.length args));
       Ty c.c_ty
     | C_ty_vars ty_vars ->
       if List.length args <> List.length ty_vars then
         Error.failf (fun k ->
-            k "constant %s requires %d arguments, but is applied to %d"
-              c.c_name (List.length ty_vars) (List.length args));
+            k "constant %s requires %d arguments, but is applied to %d" c.c_name
+              (List.length ty_vars) (List.length args));
       let sigma = List.fold_left2 subst_bind_ subst_empty_ ty_vars args in
       Ty (subst ~recursive:false ctx c.c_ty sigma)
   in
@@ -902,8 +947,7 @@ let subst_db_0 ctx e ~by:u : t =
     else (
       match view e with
       | E_const _ -> e
-      | E_bound_var bv when bv.bv_idx = k ->
-        db_shift ctx u k
+      | E_bound_var bv when bv.bv_idx = k -> db_shift ctx u k
       | _ ->
         (try E_int_tbl.find cache_ (e, k)
          with Not_found ->
@@ -978,8 +1022,7 @@ let app ctx f a : t =
 
   let ty =
     match view ty_f with
-    | E_arrow (ty_arg, ty_ret) when equal ty_arg ty_a ->
-      ty_ret
+    | E_arrow (ty_arg, ty_ret) when equal ty_arg ty_a -> ty_ret
     | _ -> fail ()
   in
   let ty = Ty ty in
@@ -990,8 +1033,7 @@ let app_or_error ctx f a : t =
   match view (ty_exn f) with
   | E_arrow (ty_arg, ty_ret) when equal ty_arg (ty_exn a) ->
     make_ ctx (E_app (f, a)) (Ty ty_ret)
-  | _ ->
-    mk_error ctx (Fmt.asprintf "cannot apply %a to %a" pp f pp a)
+  | _ -> mk_error ctx (Fmt.asprintf "cannot apply %a to %a" pp f pp a)
 
 let rec app_l ctx f l =
   match l with
@@ -1025,8 +1067,7 @@ let lambda_or_error ctx v bod =
   try
     let bod = abs_on_ ctx v bod in
     lambda_db ctx ~name:v.v_name ~ty_v:v.v_ty bod
-  with Error.E _ ->
-    mk_error ctx (Fmt.asprintf "lambda_or_error")
+  with Error.E _ -> mk_error ctx (Fmt.asprintf "lambda_or_error")
 
 let lambda ctx v bod =
   let bod = abs_on_ ctx v bod in
@@ -1050,7 +1091,7 @@ let () =
     let const = const
     let bvar = bvar
     let mk_error = (mk_error : ctx -> string -> t)
-    let _ = mk_error  (* avoid unused warning *)
+    let _ = mk_error (* avoid unused warning *)
   end in
   Expr0.make_ := Some (module M)
 
@@ -1059,8 +1100,7 @@ let unfold_app = unfold_app
 let[@inline] unfold_eq e =
   let f, l = unfold_app e in
   match view f, l with
-  | E_const ({ c_name; _ }, [ _ ]), [ a; b ]
-    when String.equal c_name id_eq ->
+  | E_const ({ c_name; _ }, [ _ ]), [ a; b ] when String.equal c_name id_eq ->
     Some (a, b)
   | _ -> None
 
