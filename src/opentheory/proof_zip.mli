@@ -50,9 +50,9 @@ val build :
 val zip_entry_name : string -> string
 val encode_proof_list : LP.t list -> string
 val decode_proof_list : K.ctx -> string -> LP.t list
-val load : string -> (string, string) Hashtbl.t
+val load : string -> string Str_tbl.t
 val lookup_theory :
-  cache:(string, string) Hashtbl.t ->
+  cache:string Str_tbl.t ->
   ctx:K.ctx ->
   string ->
   LP.t list option
