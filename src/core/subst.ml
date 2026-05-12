@@ -58,26 +58,6 @@ let is_renaming (self : t) : bool =
   in
   is_renaming_ self.ty && is_renaming_ self.m
 
-let enc enc (self : t) =
-  let open Cbor_pack.Enc in
-  let lt =
-    Var.Map.to_iter self.m
-    |> Iter.map (fun (v, t) -> Expr.Util_enc_.enc_var enc v, Expr.Util_enc_.enc_expr enc t)
-    |> Iter.to_rev_list |> map
-  and lty =
-    Var.Map.to_iter self.ty
-    |> Iter.map (fun (v, t) -> Expr.Util_enc_.enc_var enc v, Expr.Util_enc_.enc_expr enc t)
-    |> Iter.to_rev_list |> map
-  in
-  add_entry enc @@ map [ text "t", lt; text "ty", lty ]
-
-let dec ctx : t Cbor_pack.Dec.t =
-  let open Cbor_pack.Dec in
-  let d_map = map (Expr.Util_dec_.dec_var ctx) (Expr.Util_dec_.dec_expr ctx) in
-  let+ m = field "t" d_map and+ ty = field "ty" d_map in
-  let m = Var.Map.of_list m and ty = Var.Map.of_list ty in
-  { m; ty }
-
 let[@inline] bind_uncurry_ s (x, t) = bind s x t
 let of_list = List.fold_left bind_uncurry_ empty
 let of_iter = Iter.fold bind_uncurry_ empty

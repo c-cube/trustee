@@ -29,8 +29,8 @@ module Const_def = struct
     | C_def_magic ma -> Fmt.fprintf out "(magic %S)" ma
 
   let to_string = Fmt.to_string pp
-  let enc = Expr.Util_enc_.enc_const_def
-  let dec = Expr.Util_dec_.dec_const_def
+  let encode = Expr.Util_mg_.encode_const_def
+  let decode = Expr.Util_mg_.decode_const_def
 
   let map ~f (def : t) : t =
     match def with
@@ -76,8 +76,6 @@ let chash (self : t) : Chash.t =
 let pp_with_ty out c =
   Fmt.fprintf out "`@[%a@ : %a@]`" Fmt.string c.c_name expr_pp_ c.c_ty
 
-let enc = Expr.Util_enc_.enc_const
-let dec = Expr.Util_dec_.dec_const
 let[@inline] eq ctx = Lazy.force ctx.ctx_eq_c
 let[@inline] bool ctx = Lazy.force ctx.ctx_bool_c
 let[@inline] select ctx = Lazy.force ctx.ctx_select_c
@@ -116,13 +114,14 @@ let make (ctx : ctx) ~def ?(labels = []) name args ty : t =
   let is_concrete = is_concrete_def def in
   if ctx.ctx_store_concrete_definitions || not is_concrete then
     Storage.store ctx.ctx_storage ~erase:false ~key:(key_const_def name)
-      Const_def.enc def;
+      (Const_def.encode def);
   { c_name = name; c_concrete = is_concrete; c_ty = ty; c_args = args; c_labels = labels }
 
 let get_def (self : ctx) (c : t) : const_def option =
   String_LRU.get self.ctx_def_cache c.c_name ~compute:(fun _ ->
       let key = key_const_def c.c_name in
-      Storage.get self.ctx_storage (Const_def.dec self) ~key)
+      Storage.get self.ctx_storage ~key
+      |> Option.map (Const_def.decode self))
 
 let get_def_exn self c =
   match get_def self c with

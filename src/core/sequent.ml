@@ -17,7 +17,6 @@ let[@inline] n_hyps self = Int_map.cardinal self.hyps
 let[@inline] hyps g = g.hyps
 let[@inline] hyps_iter g = Expr_set.to_iter g.hyps
 let[@inline] hyps_l g = Expr_set.to_list g.hyps
-let enc = Expr.Util_enc_.enc_seq
 let iter_exprs self = Iter.cons (concl self) (hyps_iter self)
 
 let pp out (self : t) : unit =

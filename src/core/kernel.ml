@@ -15,6 +15,4 @@ module Theory = Theory
 
 module Var = struct
   include Types.Var
-  let enc = Expr.Util_enc_.enc_var
-  let dec = Expr.Util_dec_.dec_var
 end

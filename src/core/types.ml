@@ -1,6 +1,5 @@
 open Sigs
 module H = CCHash
-module CB = Cbor_pack
 
 module Int_map = CCMap.Make (CCInt)
 

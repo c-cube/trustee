@@ -23,9 +23,6 @@ val run : 'a hasher -> 'a -> t
 val string : ctx -> string -> unit
 val int : ctx -> int -> unit
 val sub : ctx -> t -> unit
-val enc : t Cbor_pack.Enc.t
-val dec : t Cbor_pack.Dec.t
-
 module Tbl : CCHashtbl.S with type key = t
 
 val unsafe_to_bytes : t -> bytes
