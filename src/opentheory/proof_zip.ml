@@ -71,7 +71,7 @@ module Theory_lru = Lru.M.Make
     (struct
       (* theory, proof-section offset (-1 = absent), raw entry bytes,
          expr cache built during theory decode (reused for proof decode) *)
-      type t = K.Theory.t * int * string * (int, K.expr) Hashtbl.t
+      type t = K.Theory.t * int * string * K.expr Int_tbl.t
       let weight _ = 1
     end)
 
@@ -121,7 +121,7 @@ let restore_storage (zh : zip_handle) (ctx : K.ctx) : unit =
 (* ---- Encode a theory ------------------------------------------------------ *)
 
 (* Encode a standalone const as a "ce" node. *)
-let enc_const_ (cache : (K.expr, int) Hashtbl.t) enc (c : K.Const.t) : int =
+let enc_const_ (cache : int K.Expr.Tbl.t) enc (c : K.Const.t) : int =
   let ty_off = K.Expr.mg_enc_expr cache enc (K.Const.ty c) in
   (* Pre-encode var nodes BEFORE starting the "ce" write_node, so their
      bytes don't appear inside the node's arg stream. *)
@@ -143,7 +143,7 @@ let enc_const_ (cache : (K.expr, int) Hashtbl.t) enc (c : K.Const.t) : int =
 
 (* Encode LP proof args and steps, sharing the expr cache with the theory encoder.
    Returns the offset of the "lp" root node. *)
-let enc_lp_ (cache : (K.expr, int) Hashtbl.t) enc (lp : K.Linear_proof.t) : int =
+let enc_lp_ (cache : int K.Expr.Tbl.t) enc (lp : K.Linear_proof.t) : int =
   let enc_arg = function
     | K.Proof.Pr_expr e ->
       let e' = K.Expr.mg_enc_expr cache enc e in
@@ -236,7 +236,7 @@ let encode_theory ?(proofs : K.Linear_proof.t list option) (theory : K.Theory.t)
     end
   in
   let enc = Enc.create ~out () in
-  let cache : (K.expr, int) Hashtbl.t = Hashtbl.create 128 in
+  let cache : int K.Expr.Tbl.t = K.Expr.Tbl.create 128 in
   let enc_c c = enc_const_ cache enc c in
   let enc_thm_seq th = K.Expr.mg_enc_seq cache enc (K.Thm.sequent th) in
   let param_consts = K.Theory.param_consts theory in
@@ -290,7 +290,7 @@ let read_int_ nd =
   | _ -> failwith "proof_zip.read_int_: expected int"
 
 (* Decode a "ce" node into a K.Const.t. *)
-let dec_const_ (ctx : K.ctx) dec (cache : (int, K.expr) Hashtbl.t) off :
+let dec_const_ (ctx : K.ctx) dec (cache : K.expr Int_tbl.t) off :
     K.Const.t =
   Dec.read_node dec off (fun nd _cmd ->
       let name = Dec.read_string_exn nd in
@@ -313,7 +313,7 @@ let dec_const_ (ctx : K.ctx) dec (cache : (int, K.expr) Hashtbl.t) off :
       K.Const.make_from_parts ~name ~ty ~args:c_args)
 
 (* Decode LP arg from a node at [off]. *)
-let dec_lp_arg_ (ctx : K.ctx) dec (cache : (int, K.expr) Hashtbl.t) off : K.Proof.arg =
+let dec_lp_arg_ (ctx : K.ctx) dec (cache : K.expr Int_tbl.t) off : K.Proof.arg =
   Dec.read_node dec off (fun nd cmd ->
       match cmd with
       | "pe" ->
@@ -336,7 +336,7 @@ let dec_lp_arg_ (ctx : K.ctx) dec (cache : (int, K.expr) Hashtbl.t) off : K.Proo
       | c -> failwith ("proof_zip.dec_lp_arg_: unknown arg cmd " ^ c))
 
 (* Decode a single "lp" node at [off]. *)
-let dec_lp_ (ctx : K.ctx) dec (cache : (int, K.expr) Hashtbl.t) off : K.Linear_proof.t =
+let dec_lp_ (ctx : K.ctx) dec (cache : K.expr Int_tbl.t) off : K.Linear_proof.t =
   Dec.read_node dec off (fun nd _cmd ->
       let n = read_int_ nd in
       let step_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
@@ -377,9 +377,10 @@ let find_theory_root_off (data : string) : int =
 
 (* Decode a theory from minidag bytes.
    Returns the theory and the byte offset of the "proofs" node (-1 = no proofs). *)
-let decode_theory (ctx : K.ctx) (name : string) (data : string) : K.Theory.t * int * (int, K.expr) Hashtbl.t =
+let decode_theory (ctx : K.ctx) (name : string) (data : string)
+    : K.Theory.t * int * K.expr Int_tbl.t =
   let dec = Dec.create data in
-  let cache : (int, K.expr) Hashtbl.t = Hashtbl.create 128 in
+  let cache : K.expr Int_tbl.t = Int_tbl.create 128 in
   let root_off = find_theory_root_off data in
   Dec.read_node dec root_off (fun nd _cmd ->
       let n_pc = read_int_ nd in
@@ -528,7 +529,7 @@ let encode_proof_list (proofs : LP.t list) : string =
     end
   in
   let enc = Enc.create ~out () in
-  let cache : (K.expr, int) Hashtbl.t = Hashtbl.create 64 in
+  let cache : int K.Expr.Tbl.t = K.Expr.Tbl.create 64 in
   let enc_arg = function
     | K.Proof.Pr_expr e ->
       let e' = K.Expr.mg_enc_expr cache enc e in
@@ -573,7 +574,7 @@ let encode_proof_list (proofs : LP.t list) : string =
 
 let decode_proof_list (ctx : K.ctx) (s : string) : LP.t list =
   let dec = Dec.create s in
-  let cache : (int, K.expr) Hashtbl.t = Hashtbl.create 64 in
+  let cache : K.expr Int_tbl.t = Int_tbl.create 64 in
   let root_off = ref 0 in
   Dec.iter_nodes dec (fun off _cmd _args -> root_off := off);
   let dec_arg_node off =

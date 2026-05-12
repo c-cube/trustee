@@ -278,33 +278,21 @@ module Expr : sig
   (** Low-level minidag encoding helpers, exposed for use by [proof.ml] and
       other modules that sit above [expr.ml] in the dependency graph. *)
   val mg_enc_expr :
-    (expr, int) Hashtbl.t -> Trustee_minidag.Encode.t -> expr -> int
+    int Tbl.t -> Trustee_minidag.Encode.t -> expr -> int
   val mg_dec_expr :
-    ctx ->
-    Trustee_minidag.Decode.t ->
-    (int, expr) Hashtbl.t ->
-    int ->
-    expr
+    ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> expr
   val mg_enc_var :
-    (expr, int) Hashtbl.t -> Trustee_minidag.Encode.t -> var -> int
+    int Tbl.t -> Trustee_minidag.Encode.t -> var -> int
   val mg_dec_var :
-    ctx -> Trustee_minidag.Decode.t -> (int, expr) Hashtbl.t -> int -> var
+    ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> var
   val mg_enc_seq :
-    (expr, int) Hashtbl.t -> Trustee_minidag.Encode.t -> sequent -> int
+    int Tbl.t -> Trustee_minidag.Encode.t -> sequent -> int
   val mg_dec_seq :
-    ctx ->
-    Trustee_minidag.Decode.t ->
-    (int, expr) Hashtbl.t ->
-    int ->
-    sequent
+    ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> sequent
   val mg_enc_const_def :
-    (expr, int) Hashtbl.t -> Trustee_minidag.Encode.t -> const_def -> int
+    int Tbl.t -> Trustee_minidag.Encode.t -> const_def -> int
   val mg_dec_const_def :
-    ctx ->
-    Trustee_minidag.Decode.t ->
-    (int, expr) Hashtbl.t ->
-    int ->
-    const_def
+    ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> const_def
 end
 
 module Sequent : sig
