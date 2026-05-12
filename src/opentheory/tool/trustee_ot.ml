@@ -30,6 +30,8 @@ let unquote_str = Util.unquote_str
 let print = ref false
 let check = ref []
 let check_all = ref false
+let build_zip = ref ""
+let proof_zip = ref ""
 let progress_ = ref false
 let store_proofs_ = ref false
 
@@ -48,9 +50,10 @@ let main ~dir ~serve ~port () =
 
   (* TODO: use param for store_proofs *)
   let storage = None in
+  (* --build-zip requires store_proofs to capture proof traces *)
+  let store_proofs = !store_proofs_ || !build_zip <> "" in
   let ctx =
-    K.Ctx.create ?storage ~store_proofs:!store_proofs_
-      ~store_concrete_definitions:true ()
+    K.Ctx.create ?storage ~store_proofs ~store_concrete_definitions:true ()
   in
   let st =
     let progress_bar = !progress_ in
@@ -60,7 +63,8 @@ let main ~dir ~serve ~port () =
       else
         new Eval.print_callbacks
     in
-    St.create ~cb ~progress_bar ~ctx ~idx ()
+    let proof_zip_opt = if !proof_zip = "" then None else Some !proof_zip in
+    St.create ~cb ~progress_bar ?proof_zip:proof_zip_opt ~ctx ~idx ()
   in
 
   let server_opt =
@@ -87,7 +91,14 @@ let main ~dir ~serve ~port () =
       None
   in
 
-  if !check_all then
+  if !build_zip <> "" then (
+    (* build-zip: evaluate all theories with store_proofs=true and write zip *)
+    let output = !build_zip in
+    let names = Iter.map Thy_file.name theories in
+    Fmt.printf "building proof zip: %s@." output;
+    Proof_zip.build ~output ~eval:st.St.eval ~names;
+    Fmt.printf "done: %s@." output
+  ) else if !check_all then
     Check_all.check ~st ~names:(Iter.map Thy_file.name theories) ()
   else if !check <> [] then
     Check_all.check ~st ~names:(Iter.of_list !check) ();
@@ -113,6 +124,12 @@ let () =
         Arg.Rest (fun s -> check := s :: !check),
         " check given theories" );
       "--check-all", Arg.Set check_all, " check all";
+      ( "--build-zip",
+        Arg.Set_string build_zip,
+        " build a zip of proof traces and store to given file" );
+      ( "--proof-zip",
+        Arg.Set_string proof_zip,
+        " load proof traces from a zip file for serving" );
       "-nc", Arg.Clear color, " disable colors";
       "-d", Arg.Set_int debug, " set debug level";
       ( "--store-proofs",

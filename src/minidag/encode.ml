@@ -54,7 +54,7 @@ let ensure_ self n : unit =
   assert (self.len + n <= buf_len self)
 
 let write_leading (self : t) ~high ~low =
-  if low >= 12 then ensure_ self 9;
+  ensure_ self (if low >= 12 then 9 else 1);
   Bytes.set self.buf self.len (Char.unsafe_chr ((high lsl 4) lor low));
   self.len <- self.len + 1
 

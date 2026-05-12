@@ -7,6 +7,7 @@ module Sequent = Sequent
 module Subst = Subst
 module Proof = Trustee_core__Proof
 module Linear_proof = Proof.Linear_proof
+module Linear_proof_mg = Proof.Linear_proof_mg
 module Thm = Thm
 module Ctx = Ctx
 module Theory = Theory
