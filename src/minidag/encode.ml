@@ -24,6 +24,7 @@ let[@inline never] flush_ self : unit =
   self.len <- 0
 
 let[@inline] abs_offset_ (self : t) : int = self.cur_offset + self.len
+let current_offset (self : t) : int = self.cur_offset + self.len
 let flush self : unit = if self.len > 0 then flush_ self
 
 type node_encoder = t

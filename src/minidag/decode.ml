@@ -88,6 +88,28 @@ let read_node (self : t) (off : offset) f =
   | String s -> f dec s
   | _ -> fail off "expected node to start with a string"
 
+(** Like [iter_nodes] but stops before [limit] (exclusive). *)
+let iter_nodes_until (self : t) ~limit (f : offset -> string -> value list -> unit) : unit =
+  let rec go off =
+    if off < limit then (
+      let dec = { dec = self; off } in
+      match read dec with
+      | String cmd ->
+        let stop_off = ref dec.off in
+        let rec collect acc =
+          stop_off := dec.off;
+          match read dec with
+          | Stop -> List.rev acc
+          | v -> collect (v :: acc)
+        in
+        let args = collect [] in
+        f off cmd args;
+        go (!stop_off + 1)
+      | _ -> fail off "expected string at start of node"
+    )
+  in
+  go 0
+
 let iter_nodes (self : t) (f : offset -> string -> value list -> unit) : unit =
   let total_len = String.length self.str in
   let rec go off =
