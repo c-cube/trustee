@@ -19,7 +19,7 @@ type t = {
   interp_by_name: Interp_file.t Str_tbl.t;
   articles: path Str_tbl.t; (* basename -> path *)
   errors: (path * Trustee_core.Error.t) list;
-  by_hash: hashed_item Chash.Tbl.t;
+  by_name: hashed_item Str_tbl.t;
 }
 (** Results of listing a directory *)
 

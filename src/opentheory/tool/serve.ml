@@ -207,21 +207,20 @@ let h_eval (self : state) : unit =
     let msg = Fmt.asprintf "%a" Error.pp err in
     H.Response.make_string (Error (500, msg))
 
-let h_hash_item (self : state) : unit =
-  H.add_route_handler self.server H.Route.(exact "h" @/ string @/ return)
-  @@ fun h req ->
+let h_name_item (self : state) : unit =
+  H.add_route_handler self.server H.Route.(exact "c" @/ string_urlencoded @/ return)
+  @@ fun name req ->
   let@ () = top_wrap_ req in
-  let h = Chash.of_string_exn h in
   let res =
     (* need lock around ctx/eval *)
     let@ () = St.with_lock self.st.lock in
-    Chash.Tbl.find_opt self.st.idx.Idx.by_hash h
+    Str_tbl.find_opt self.st.idx.Idx.by_name name
   in
 
   let r =
     match res with
     | Some r -> r
-    | None -> Error.failf (fun k -> k "hash not found: %a" Chash.pp h)
+    | None -> Error.failf (fun k -> k "name not found: %s" name)
   in
   let config = Render.Config.make ~open_all_namespaces:true () in
 
@@ -246,7 +245,7 @@ let h_hash_item (self : state) : unit =
           Render.proof_to_html ~config thm;
         ] )
   in
-  reply_page ~title:(spf "%s %s" kind @@ Chash.to_string h) req res
+  reply_page ~title:(spf "%s %s" kind name) req res
 
 let h_stats self : unit =
   H.add_route_handler self.server H.Route.(exact "stats" @/ return)
@@ -257,7 +256,7 @@ let h_stats self : unit =
     let@ () = St.with_lock self.st.lock in
     let n_exprs = K.Ctx.n_exprs self.st.ctx in
     let n_theories = List.length self.st.idx.Idx.theories in
-    let n_hashes = Chash.Tbl.length self.st.idx.Idx.by_hash in
+    let n_names = Str_tbl.length self.st.idx.Idx.by_name in
     Html.(
       table
         [ cls "table table-striped table-sm" ]
@@ -273,8 +272,8 @@ let h_stats self : unit =
                 ];
               tr []
                 [
-                  td [] [ txt "number of objects indexed by their hash" ];
-                  td [] [ txtf "%d" n_hashes ];
+                  td [] [ txt "number of objects indexed by name" ];
+                  td [] [ txtf "%d" n_names ];
                 ];
             ];
         ])
@@ -289,7 +288,7 @@ let create st ~port : state =
   h_thy state;
   h_art state;
   h_eval state;
-  h_hash_item state;
+  h_name_item state;
   h_stats state;
   H.Dir.add_vfs server
     ~config:(H.Dir.config ~dir_behavior:H.Dir.Index_or_lists ())

@@ -16,7 +16,7 @@ type t = {
   interp_by_name: Interp_file.t Str_tbl.t;
   articles: path Str_tbl.t; (* basename -> path *)
   errors: (path * Trustee_core.Error.t) list;
-  by_hash: hashed_item Chash.Tbl.t;
+  by_name: hashed_item Str_tbl.t;
 }
 (** Results of listing a directory *)
 
@@ -106,5 +106,5 @@ let list_dir dir : t =
     interps = !interp;
     articles;
     errors = !errors;
-    by_hash = Chash.Tbl.create 32;
+    by_name = Str_tbl.create 32;
   }

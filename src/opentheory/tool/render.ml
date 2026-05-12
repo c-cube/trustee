@@ -57,14 +57,23 @@ let expr_wrap_ f e =
   | E_app _ | E_lam _ | E_arrow _ | E_const _ ->
     span [] [ txt "("; f e; txt ")" ]
 
-let href_const c = spf "/h/%s" (Chash.to_string @@ K.Const.chash c)
+let percent_encode s =
+  let buf = Buffer.create (String.length s) in
+  String.iter (fun c ->
+    match c with
+    | 'A'..'Z' | 'a'..'z' | '0'..'9' | '-' | '_' | '.' | '~' ->
+      Buffer.add_char buf c
+    | c -> Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c))
+  ) s;
+  Buffer.contents buf
+
+let href_const c = spf "/c/%s" (percent_encode @@ K.Const.name c)
 
 let var_to_html (v : K.Var.t) : Html.elt =
   let open Html in
   let name = K.Var.name v in
   let title_ =
-    Fmt.asprintf "%s : %a@ hash-of-ty %a" name E.pp (K.Var.ty v) Chash.pp
-      (K.Expr.chash v.v_ty)
+    Fmt.asprintf "%s : %a" name E.pp (K.Var.ty v)
   in
   span [ A.title title_ ] [ txt name ]
 
@@ -93,8 +102,7 @@ let expr_to_html ?(config = Config.make ()) (e : K.Expr.t) : Html.elt =
     | K.E_const (c, []) ->
       let c_name = strip_name_ ~config @@ K.Const.name c in
       let title_ =
-        Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e) Chash.pp
-          (K.Expr.chash e)
+        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e)
       in
       let href = href_const c in
       let res =
@@ -110,8 +118,7 @@ let expr_to_html ?(config = Config.make ()) (e : K.Expr.t) : Html.elt =
       (* always write type arguments explicitly for types *)
       let descr = strip_name_ ~config @@ K.Const.name c in
       let title =
-        Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e) Chash.pp
-          (K.Expr.chash e)
+        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e)
       in
       span' []
         [
@@ -125,8 +132,7 @@ let expr_to_html ?(config = Config.make ()) (e : K.Expr.t) : Html.elt =
       (* omit arguments *)
       let c_name = strip_name_ ~config @@ K.Const.name c in
       let title =
-        Fmt.asprintf "%a : %a@ hash %a" E.pp e E.pp (E.ty_exn e) Chash.pp
-          (K.Expr.chash e)
+        Fmt.asprintf "%a : %a" E.pp e E.pp (E.ty_exn e)
       in
       let res =
         span
@@ -215,7 +221,7 @@ let expr_to_html ?(config = Config.make ()) (e : K.Expr.t) : Html.elt =
         ]
     | K.E_arrow (a, b) -> span [] [ recurse' a; txt " -> "; recurse b ]
     | K.E_box _seq ->
-      let title_ = Fmt.asprintf "box@ hash %a" Chash.pp (K.Expr.chash e) in
+      let title_ = Fmt.asprintf "box %a" E.pp e in
       span [ cls "box"; A.title title_ ] [ txtf "%a" E.pp e ]
   and loop' k ~depth ~names e : Html.elt =
     expr_wrap_ (loop k ~depth ~names) e
@@ -236,7 +242,7 @@ let const_to_html ?(config = Config.make ()) (c : K.Const.t) =
   let name = strip_name_ ~config @@ K.Const.name c in
   let args = Fmt.to_string K.Const.pp_args (K.Const.args c) in
   let title_ =
-    Fmt.asprintf "%a@ hash: %a" K.Const.pp_with_ty c Chash.pp (K.Const.chash c)
+    Fmt.asprintf "%a" K.Const.pp_with_ty c
   in
   Html.(
     span
@@ -267,20 +273,12 @@ let thm_to_html ?(config = Config.make ()) thm : Html.elt =
   let hyps = K.Thm.hyps_l thm in
   let concl = K.Thm.concl thm in
   let bod =
-    let h = K.Thm.chash thm in
     let title_ =
-      Fmt.asprintf "hash %a;@ fully concrete: %B" Chash.pp h
-        (K.Thm.is_fully_concrete thm)
+      Fmt.asprintf "fully concrete: %B" (K.Thm.is_fully_concrete thm)
     in
     let vdash =
       if K.Thm.proof thm |> K.Proof.is_main then
-        a
-          [
-            cls "theorem";
-            A.title title_;
-            A.href (spf "/h/%s" (Chash.to_string h));
-          ]
-          [ txt "⊢" ]
+        span [ cls "theorem"; A.title title_ ] [ txt "⊢" ]
       else
         txt "⊢"
     in
@@ -337,9 +335,7 @@ let proof_to_html ?(config = Config.make ()) (th0 : K.Thm.t) : Html.elt =
     | K.Proof.Pr_main _ ->
       (* link to theorem *)
       let step =
-        a
-          [ A.href (spf "/h/%s" (Chash.to_string @@ K.Thm.chash thm)) ]
-          [ txt "lemma" ]
+        span [] [ txt "lemma" ]
       in
       add_step thm step
     | K.Proof.Pr_dummy -> add_step thm (txt "<dummy>")
