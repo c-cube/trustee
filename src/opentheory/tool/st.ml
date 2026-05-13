@@ -32,8 +32,8 @@ let[@inline] with_lock l f =
   Mutex.lock l;
   Fun.protect ~finally:(fun () -> Mutex.unlock l) f
 
-(** Load a theory from zip (caches in zip_handle's theory_cache).
-    Also populates [idx.by_name] with the theory's consts and thms. *)
+(** Load a theory from zip (caches in zip_handle's theory_cache). Also populates
+    [idx.by_name] with the theory's consts and thms. *)
 let load_theory (self : t) (name : string) : K.Theory.t option =
   match self.zip with
   | None -> None
@@ -42,13 +42,10 @@ let load_theory (self : t) (name : string) : K.Theory.t option =
     | None -> None
     | Some th as result ->
       (* Populate by_name so /c/<name> works for visited theories *)
-      let all_consts =
-        K.Theory.param_consts th @ K.Theory.consts th
-      in
+      let all_consts = K.Theory.param_consts th @ K.Theory.consts th in
       List.iter
         (fun c ->
-          Str_tbl.replace self.idx.Idx.by_name (K.Const.name c)
-            (Idx.H_const c))
+          Str_tbl.replace self.idx.Idx.by_name (K.Const.name c) (Idx.H_const c))
         all_consts;
       List.iter
         (fun thm ->

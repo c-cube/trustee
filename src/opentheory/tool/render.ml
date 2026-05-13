@@ -70,28 +70,31 @@ let percent_encode s =
 
 let href_const c = spf "/c/%s" (percent_encode @@ K.Const.name c)
 
-(** Span attributes for a type expression: [data-off=] + [data-entry=] when
-    the expr is in the offset table, falling back to a static [title=].
-    [fallback] is a thunk evaluated only when no offset is available. *)
+(** Span attributes for a type expression: [data-off=] + [data-entry=] when the
+    expr is in the offset table, falling back to a static [title=]. [fallback]
+    is a thunk evaluated only when no offset is available. *)
 let ty_attrs_ ~type_offsets ~entry ty ~fallback =
   match type_offsets with
   | Some tbl ->
     (match K.Expr.Tbl.find_opt tbl ty with
-     | Some off -> [ ("data-off", string_of_int off); ("data-entry", entry) ]
-     | None -> [ ("title", fallback ()) ])
-  | None -> [ ("title", fallback ()) ]
+    | Some off -> [ "data-off", string_of_int off; "data-entry", entry ]
+    | None -> [ "title", fallback () ])
+  | None -> [ "title", fallback () ]
 
-let var_to_html ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "") (v : K.Var.t) : Html.elt =
+let var_to_html ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "")
+    (v : K.Var.t) : Html.elt =
   let open Html in
   let name = K.Var.name v in
   let ty = K.Var.ty v in
-  let attrs = ty_attrs_ ~type_offsets ~entry ty
-    ~fallback:(fun () -> Fmt.asprintf "%s : %a" name E.pp ty) in
+  let attrs =
+    ty_attrs_ ~type_offsets ~entry ty ~fallback:(fun () ->
+        Fmt.asprintf "%s : %a" name E.pp ty)
+  in
   span attrs [ txt name ]
 
 let expr_to_html ?(config = Config.make ())
-    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "")
-    (e : K.Expr.t) : Html.elt =
+    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "") (e : K.Expr.t) :
+    Html.elt =
   let open Html in
   (* Local alias: [fallback] is a lazy string thunk. *)
   let ty_attrs ty fallback = ty_attrs_ ~type_offsets ~entry ty ~fallback in
@@ -113,12 +116,16 @@ let expr_to_html ?(config = Config.make ())
           else
             spf "%%db_%d" (idx - k)
       in
-      let attrs = ty_attrs v.bv_ty (fun () -> Fmt.asprintf "%s : %a" descr E.pp v.bv_ty) in
+      let attrs =
+        ty_attrs v.bv_ty (fun () -> Fmt.asprintf "%s : %a" descr E.pp v.bv_ty)
+      in
       span attrs [ txt descr ]
     | K.E_const (c, []) ->
       let c_name = strip_name_ ~config @@ K.Const.name c in
       let ty = E.ty_exn e in
-      let attrs = ty_attrs ty (fun () -> Fmt.asprintf "%a : %a" E.pp e E.pp ty) in
+      let attrs =
+        ty_attrs ty (fun () -> Fmt.asprintf "%a : %a" E.pp e E.pp ty)
+      in
       let href = href_const c in
       let res = span attrs [ a [ A.href href; cls "const" ] [ txt c_name ] ] in
       if is_a_binder c c_name || is_infix c c_name then
@@ -129,7 +136,9 @@ let expr_to_html ?(config = Config.make ())
       (* always write type arguments explicitly for types *)
       let descr = strip_name_ ~config @@ K.Const.name c in
       let ty = E.ty_exn e in
-      let attrs = ty_attrs ty (fun () -> Fmt.asprintf "%a : %a" E.pp e E.pp ty) in
+      let attrs =
+        ty_attrs ty (fun () -> Fmt.asprintf "%a : %a" E.pp e E.pp ty)
+      in
       span' []
         [
           sub_e
@@ -141,8 +150,12 @@ let expr_to_html ?(config = Config.make ())
       (* omit arguments *)
       let c_name = strip_name_ ~config @@ K.Const.name c in
       let ty = E.ty_exn e in
-      let attrs = ty_attrs ty (fun () -> Fmt.asprintf "%a : %a" E.pp e E.pp ty) in
-      let res = span attrs [ a [ A.href (href_const c); cls "const" ] [ txt c_name ] ] in
+      let attrs =
+        ty_attrs ty (fun () -> Fmt.asprintf "%a : %a" E.pp e E.pp ty)
+      in
+      let res =
+        span attrs [ a [ A.href (href_const c); cls "const" ] [ txt c_name ] ]
+      in
       if is_a_binder c c_name || is_infix c c_name then
         span [] [ txt "("; res; txt ")" ]
       else
@@ -174,10 +187,19 @@ let expr_to_html ?(config = Config.make ())
           | E_lam (n, ty, bod) -> n, ty, bod
           | _ -> assert false
         in
-        let varname = if n = "" then spf "x_%d" k else n in
+        let varname =
+          if n = "" then
+            spf "x_%d" k
+          else
+            n
+        in
         let f_ty = E.ty_exn f in
-        let c_attrs = ty_attrs f_ty (fun () -> Fmt.asprintf "%a : %a" E.pp f E.pp f_ty) in
-        let var_attrs = ty_attrs ty (fun () -> Fmt.asprintf "%s : %a" varname E.pp ty) in
+        let c_attrs =
+          ty_attrs f_ty (fun () -> Fmt.asprintf "%a : %a" E.pp f E.pp f_ty)
+        in
+        let var_attrs =
+          ty_attrs ty (fun () -> Fmt.asprintf "%s : %a" varname E.pp ty)
+        in
         let c_href = href_const c in
         span []
           [
@@ -189,18 +211,31 @@ let expr_to_html ?(config = Config.make ())
       | E_const (c, _), [ a; b ] when is_infix c c_name ->
         (* display infix *)
         let f_ty = E.ty_exn f in
-        let c_attrs = ty_attrs f_ty (fun () -> Fmt.asprintf "%a : %a" E.pp f E.pp f_ty) in
+        let c_attrs =
+          ty_attrs f_ty (fun () -> Fmt.asprintf "%a : %a" E.pp f E.pp f_ty)
+        in
         span []
           [
             recurse' a;
             span c_attrs
-              [ Html.a [ A.href (href_const c); cls "const" ] [ txt (spf " %s " c_name) ] ];
+              [
+                Html.a
+                  [ A.href (href_const c); cls "const" ]
+                  [ txt (spf " %s " c_name) ];
+              ];
             recurse' b;
           ]
       | _ -> default ())
     | E_lam (n, ty, bod) ->
-      let varname = if n = "" then spf "x_%d" k else n in
-      let var_attrs = ty_attrs ty (fun () -> Fmt.asprintf "%s : %a" varname E.pp ty) in
+      let varname =
+        if n = "" then
+          spf "x_%d" k
+        else
+          n
+      in
+      let var_attrs =
+        ty_attrs ty (fun () -> Fmt.asprintf "%s : %a" varname E.pp ty)
+      in
       span []
         [
           txt "λ";
@@ -251,8 +286,12 @@ let subst_as_l_to_html ?(config = Config.make ())
   ul []
     (List.map
        (fun (v, e) ->
-         li [] [ var_to_html ?type_offsets ~entry v; txt " := ";
-                 expr_to_html ~config ?type_offsets ~entry e ])
+         li []
+           [
+             var_to_html ?type_offsets ~entry v;
+             txt " := ";
+             expr_to_html ~config ?type_offsets ~entry e;
+           ])
        su)
 
 let subst_to_html ?(config = Config.make ())
@@ -261,8 +300,7 @@ let subst_to_html ?(config = Config.make ())
   |> subst_as_l_to_html ~config ?type_offsets ~entry
 
 let thm_to_html ?(config = Config.make ())
-    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "")
-    thm : Html.elt =
+    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "") thm : Html.elt =
   let open Html in
   let hyps = K.Thm.hyps_l thm in
   let concl = K.Thm.concl thm in
@@ -382,17 +420,21 @@ let proof_to_html ?(config = Config.make ()) (th0 : K.Thm.t) : Html.elt =
     ]
 
 let sequent_to_html ?(config = Config.make ())
-    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "")
-    (seq : K.sequent) : Html.elt =
+    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "") (seq : K.sequent) :
+    Html.elt =
   let open Html in
   let hyps = K.Sequent.hyps_l seq in
   let concl = K.Sequent.concl seq in
   match hyps with
-  | [] -> span [ cls "theorem" ] [ txt "⊢ "; expr_to_html ~config ?type_offsets ~entry concl ]
+  | [] ->
+    span
+      [ cls "theorem" ]
+      [ txt "⊢ "; expr_to_html ~config ?type_offsets ~entry concl ]
   | l ->
-    span [ cls "theorem" ]
+    span
+      [ cls "theorem" ]
       (List.map (expr_to_html ~config ?type_offsets ~entry) l
-       @ [ txt " ⊢ "; expr_to_html ~config ?type_offsets ~entry concl ])
+      @ [ txt " ⊢ "; expr_to_html ~config ?type_offsets ~entry concl ])
 
 let linear_proof_to_html ?(config = Config.make ())
     ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "")
@@ -410,8 +452,19 @@ let linear_proof_to_html ?(config = Config.make ())
       let links =
         parents
         |> List.mapi (fun i n ->
-               let comma = if i > 0 then txt ", " else txt "" in
-               span [] [ comma; a [ A.href (spf "#step%d" n); cls "proof-step" ] [ txtf "%d" n ] ])
+               let comma =
+                 if i > 0 then
+                   txt ", "
+                 else
+                   txt ""
+               in
+               span []
+                 [
+                   comma;
+                   a
+                     [ A.href (spf "#step%d" n); cls "proof-step" ]
+                     [ txtf "%d" n ];
+                 ])
       in
       span [] ([ txt "[" ] @ links @ [ txt "]" ])
   in
@@ -422,19 +475,25 @@ let linear_proof_to_html ?(config = Config.make ())
         td [] [ sequent_to_html ~config ?type_offsets ~entry step.concl ];
         td []
           ([ txt step.rule ]
-           @ List.map (fun a -> span [] [ txt " "; arg_to_html a ]) step.args
-           @ [ txt " "; parent_links_html step.parents ]);
+          @ List.map (fun a -> span [] [ txt " "; arg_to_html a ]) step.args
+          @ [ txt " "; parent_links_html step.parents ]);
       ]
   in
   table
     [ cls "table table-sm table-striped" ]
     [
       thead []
-        [ tr [] [ th [] [ txt "idx" ]; th [] [ txt "sequent" ]; th [] [ txt "rule" ] ] ];
+        [
+          tr []
+            [
+              th [] [ txt "idx" ]; th [] [ txt "sequent" ]; th [] [ txt "rule" ];
+            ];
+        ];
       tbody [] (K.Linear_proof.steps lp |> Iter.map mk_row |> Iter.to_list);
     ]
 
-let theory_to_html ?(config = Config.make ()) ?(make_proof_link : (int -> string) option) (self : K.Theory.t) =
+let theory_to_html ?(config = Config.make ())
+    ?(make_proof_link : (int -> string) option) (self : K.Theory.t) =
   let _name = K.Theory.name self in
   let in_consts = K.Theory.param_consts self in
   let in_thms = K.Theory.param_theorems self in
@@ -483,7 +542,10 @@ let theory_to_html ?(config = Config.make ()) ?(make_proof_link : (int -> string
                    | None -> txt ""
                    | Some f ->
                      a
-                       [ A.href (f i); cls "btn btn-sm btn-outline-secondary ms-2" ]
+                       [
+                         A.href (f i);
+                         cls "btn btn-sm btn-outline-secondary ms-2";
+                       ]
                        [ txt "proof" ]
                  in
                  tr []

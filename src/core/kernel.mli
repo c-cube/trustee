@@ -70,9 +70,10 @@ module Const : sig
   val select : ctx -> t
   val get_def : ctx -> t -> def option
   val get_def_exn : ctx -> t -> def
+
   val make_from_parts : name:string -> ty:ty -> args:args -> t
   (** Reconstruct a const record from its parts, without registering it in any
-      storage.  Useful for decoding consts from a serialised format where the
+      storage. Useful for decoding consts from a serialised format where the
       definition is stored separately. *)
 
   val key_const_def : string -> string
@@ -275,22 +276,26 @@ module Expr : sig
   val app_or_error : (t -> t -> t) with_ctx
   val lambda_or_error : (var -> t -> t) with_ctx
 
+  val mg_enc_expr : int Tbl.t -> Trustee_minidag.Encode.t -> expr -> int
   (** Low-level minidag encoding helpers, exposed for use by [proof.ml] and
       other modules that sit above [expr.ml] in the dependency graph. *)
-  val mg_enc_expr :
-    int Tbl.t -> Trustee_minidag.Encode.t -> expr -> int
+
   val mg_dec_expr :
     ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> expr
-  val mg_enc_var :
-    int Tbl.t -> Trustee_minidag.Encode.t -> var -> int
+
+  val mg_enc_var : int Tbl.t -> Trustee_minidag.Encode.t -> var -> int
+
   val mg_dec_var :
     ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> var
-  val mg_enc_seq :
-    int Tbl.t -> Trustee_minidag.Encode.t -> sequent -> int
+
+  val mg_enc_seq : int Tbl.t -> Trustee_minidag.Encode.t -> sequent -> int
+
   val mg_dec_seq :
     ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> sequent
+
   val mg_enc_const_def :
     int Tbl.t -> Trustee_minidag.Encode.t -> const_def -> int
+
   val mg_dec_const_def :
     ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> const_def
 end
@@ -404,8 +409,10 @@ module Theory : sig
   val add_const : t -> const -> unit
   val add_ty_const : t -> ty_const -> unit
   val add_theorem : t -> thm -> unit
+
   val add_param_theorem : t -> thm -> unit
   (** Add a thm to the list of parameter (input) theorems. *)
+
   val find_const : t -> string -> const option
   val find_ty_const : t -> string -> ty_const option
   val param_consts : t -> const list

@@ -53,14 +53,16 @@ let main ~dir ~serve ~port () =
     Printf.eprintf
       "error: --serve requires --proof-zip <file.zip>\n\
        Build one first with:\n\
-       \  trustee_ot --dir <dir> --build-zip proofs.zip\n";
+      \  trustee_ot --dir <dir> --build-zip proofs.zip\n";
     exit 1
   );
 
   (* For build-zip: use a tracked storage to capture all const defs *)
   let ts_opt =
-    if !build_zip <> "" then Some (Proof_zip.make_tracked_storage ())
-    else None
+    if !build_zip <> "" then
+      Some (Proof_zip.make_tracked_storage ())
+    else
+      None
   in
   (* --build-zip requires store_proofs to capture proof traces *)
   let store_proofs = !store_proofs_ || !build_zip <> "" in
@@ -80,7 +82,12 @@ let main ~dir ~serve ~port () =
       else
         new Eval.print_callbacks
     in
-    let proof_zip_opt = if !proof_zip = "" then None else Some !proof_zip in
+    let proof_zip_opt =
+      if !proof_zip = "" then
+        None
+      else
+        Some !proof_zip
+    in
     St.create ~cb ~progress_bar ?proof_zip:proof_zip_opt ~ctx ~idx ()
   in
 

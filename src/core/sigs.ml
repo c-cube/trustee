@@ -46,10 +46,13 @@ let pp_iter ?(sep = " ") ppx out iter =
 let[@inline] ( let@ ) f x = f x
 
 module Str_tbl = CCHashtbl.Make (CCString)
+
 module Int_tbl = CCHashtbl.Make (struct
   type t = int
+
   let equal (a : int) (b : int) = a = b
   let hash (n : int) = n land max_int
 end)
+
 module Str_map = CCMap.Make (CCString)
 module Str_set = CCSet.Make (CCString)

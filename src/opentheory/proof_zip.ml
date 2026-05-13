@@ -30,12 +30,12 @@ let storage_prefix = "_storage/"
 
 (* ---- Tracked storage ------------------------------------------------------ *)
 
-(** Wraps an in-memory storage and records every (key, bytes) stored into it,
-    so they can later be written to the zip. *)
 type tracked_storage = {
   ts_inner: Storage.t;
   mutable ts_entries: (string * string) list;
 }
+(** Wraps an in-memory storage and records every (key, bytes) stored into it, so
+    they can later be written to the zip. *)
 
 let make_tracked_storage ?(size = 1024) () : tracked_storage =
   let ts_inner = Storage.in_memory ~size () in
@@ -62,23 +62,28 @@ let tracked_as_storage (ts : tracked_storage) : Storage.t =
    mg_dec_* API.  We cannot substitute a named module without touching
    the kernel. *)
 
-(** Per-entry data kept in the LRU cache. *)
 type entry_cache = {
-  ec_theory   : K.Theory.t;
-  ec_proof_off: int;           (** byte offset of the "proofs" node, -1 = absent *)
-  ec_data     : string;        (** raw minidag bytes *)
-  ec_dec      : K.expr Int_tbl.t; (** decode cache: offset -> expr (built during decode) *)
-  mutable ec_inv: int K.Expr.Tbl.t option; (** inverted: expr -> offset, built lazily *)
+  ec_theory: K.Theory.t;
+  ec_proof_off: int;  (** byte offset of the "proofs" node, -1 = absent *)
+  ec_data: string;  (** raw minidag bytes *)
+  ec_dec: K.expr Int_tbl.t;
+      (** decode cache: offset -> expr (built during decode) *)
+  mutable ec_inv: int K.Expr.Tbl.t option;
+      (** inverted: expr -> offset, built lazily *)
 }
+(** Per-entry data kept in the LRU cache. *)
 
-module Theory_lru = Lru.M.Make
+module Theory_lru =
+  Lru.M.Make
     (struct
       type t = string
+
       let equal = String.equal
       let hash = Hashtbl.hash
     end)
     (struct
       type t = entry_cache
+
       let weight _ = 1
     end)
 
@@ -101,8 +106,10 @@ let theory_names (zh : zip_handle) : string list =
     (fun entry ->
       let name = entry.Zip.filename in
       let nlen = String.length name in
-      if nlen > suf_len
-         && String.sub name (nlen - suf_len) suf_len = entry_suffix then
+      if
+        nlen > suf_len
+        && String.sub name (nlen - suf_len) suf_len = entry_suffix
+      then
         Some (String.sub name 0 (nlen - suf_len))
       else
         None)
@@ -131,21 +138,24 @@ let enc_const_ (cache : int K.Expr.Tbl.t) enc (c : K.Const.t) : int =
   let ty_off = K.Expr.mg_enc_expr cache enc (K.Const.ty c) in
   (* Pre-encode var nodes BEFORE starting the "ce" write_node, so their
      bytes don't appear inside the node's arg stream. *)
-  let args_enc = match K.Const.args c with
+  let args_enc =
+    match K.Const.args c with
     | K.Const.C_arity n -> `Ar n
     | K.Const.C_ty_vars vs ->
       let v_offs = List.map (K.Expr.mg_enc_var cache enc) vs in
       `Vs (List.length vs, v_offs)
   in
   Enc.write_node enc "ce" (fun nd ->
-    Enc.string nd (K.Const.name c);
-    Enc.ref nd ty_off;
-    match args_enc with
-    | `Ar n -> Enc.string nd "ar"; Enc.int nd n
-    | `Vs (n, v_offs) ->
-      Enc.string nd "vs";
-      Enc.int nd n;
-      List.iter (Enc.ref nd) v_offs)
+      Enc.string nd (K.Const.name c);
+      Enc.ref nd ty_off;
+      match args_enc with
+      | `Ar n ->
+        Enc.string nd "ar";
+        Enc.int nd n
+      | `Vs (n, v_offs) ->
+        Enc.string nd "vs";
+        Enc.int nd n;
+        List.iter (Enc.ref nd) v_offs)
 
 (* Encode LP proof args and steps, sharing the expr cache with the theory encoder.
    Returns the offset of the "lp" root node. *)
@@ -158,11 +168,15 @@ let enc_lp_ (cache : int K.Expr.Tbl.t) enc (lp : K.Linear_proof.t) : int =
       let pair_offs =
         List.map
           (fun (v, e) ->
-            (K.Expr.mg_enc_var cache enc v, K.Expr.mg_enc_expr cache enc e))
+            K.Expr.mg_enc_var cache enc v, K.Expr.mg_enc_expr cache enc e)
           pairs
       in
       Enc.write_node enc "ps" (fun nd ->
-          List.iter (fun (v', e') -> Enc.ref nd v'; Enc.ref nd e') pair_offs)
+          List.iter
+            (fun (v', e') ->
+              Enc.ref nd v';
+              Enc.ref nd e')
+            pair_offs)
   in
   let enc_step (step : K.Linear_proof.step) =
     let { K.Linear_proof.concl; rule; args; parents } = step in
@@ -186,11 +200,11 @@ let enc_lp_ (cache : int K.Expr.Tbl.t) enc (lp : K.Linear_proof.t) : int =
 
 (** Footer size and magic. *)
 let footer_size = 16
-let footer_magic = 0x504F4F462E454E54L  (* "POOF.ENT" *)
 
-(** Write a 16-byte footer:
-    [last_node_size as LE int64][magic as LE int64]
-    where [last_node_size] is the byte-length of the "theory" root node.  This
+let footer_magic = 0x504F4F462E454E54L (* "POOF.ENT" *)
+
+(** Write a 16-byte footer: [last_node_size as LE int64][magic as LE int64]
+    where [last_node_size] is the byte-length of the "theory" root node. This
     lets the decoder find the root in O(1) by jumping backward. *)
 let write_footer buf ~last_node_size =
   let b = Bytes.create footer_size in
@@ -198,7 +212,7 @@ let write_footer buf ~last_node_size =
   Bytes.set_int64_le b 8 footer_magic;
   Buffer.add_bytes buf b
 
-(** Read the footer from [data].  Returns the byte-length of the last minidag
+(** Read the footer from [data]. Returns the byte-length of the last minidag
     node, or [-1] if the footer is absent (old format / no proofs). *)
 let read_footer data : int =
   let total = String.length data in
@@ -234,7 +248,8 @@ let read_footer data : int =
 
    Old entries without a valid footer fall back to full iter_nodes scan
    (no proof section available). *)
-let encode_theory ?(proofs : K.Linear_proof.t list option) (theory : K.Theory.t) : string =
+let encode_theory ?(proofs : K.Linear_proof.t list option) (theory : K.Theory.t)
+    : string =
   let buf = Buffer.create 4096 in
   let out =
     object
@@ -259,9 +274,11 @@ let encode_theory ?(proofs : K.Linear_proof.t list option) (theory : K.Theory.t)
     | None -> None
     | Some lps ->
       let lp_offs = List.map (enc_lp_ cache enc) lps in
-      let off = Enc.write_node enc "proofs" (fun nd ->
-          Enc.int nd (List.length lp_offs);
-          List.iter (Enc.ref nd) lp_offs) in
+      let off =
+        Enc.write_node enc "proofs" (fun nd ->
+            Enc.int nd (List.length lp_offs);
+            List.iter (Enc.ref nd) lp_offs)
+      in
       Some off
   in
   (* Theory root is the last minidag node. Record its start offset. *)
@@ -296,8 +313,7 @@ let read_int_ nd =
   | _ -> failwith "proof_zip.read_int_: expected int"
 
 (* Decode a "ce" node into a K.Const.t. *)
-let dec_const_ (ctx : K.ctx) dec (cache : K.expr Int_tbl.t) off :
-    K.Const.t =
+let dec_const_ (ctx : K.ctx) dec (cache : K.expr Int_tbl.t) off : K.Const.t =
   Dec.read_node dec off (fun nd _cmd ->
       let name = Dec.read_string_exn nd in
       let ty_off = Dec.read_ref_exn nd in
@@ -342,7 +358,8 @@ let dec_lp_arg_ (ctx : K.ctx) dec (cache : K.expr Int_tbl.t) off : K.Proof.arg =
       | c -> failwith ("proof_zip.dec_lp_arg_: unknown arg cmd " ^ c))
 
 (* Decode a single "lp" node at [off]. *)
-let dec_lp_ (ctx : K.ctx) dec (cache : K.expr Int_tbl.t) off : K.Linear_proof.t =
+let dec_lp_ (ctx : K.ctx) dec (cache : K.expr Int_tbl.t) off : K.Linear_proof.t
+    =
   Dec.read_node dec off (fun nd _cmd ->
       let n = read_int_ nd in
       let step_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
@@ -360,8 +377,11 @@ let dec_lp_ (ctx : K.ctx) dec (cache : K.expr Int_tbl.t) off : K.Linear_proof.t 
               | Dec.Stop -> go := false
               | _ -> failwith "proof_zip.dec_lp_: expected Ref or Stop for args"
             done;
-            let args = List.rev_map (dec_lp_arg_ ctx dec cache) (List.rev !arg_offs) in
-            ({ K.Linear_proof.concl; rule; parents; args } : K.Linear_proof.step))
+            let args =
+              List.rev_map (dec_lp_arg_ ctx dec cache) (List.rev !arg_offs)
+            in
+            ({ K.Linear_proof.concl; rule; parents; args }
+              : K.Linear_proof.step))
       in
       K.Linear_proof.make_from_steps (Array.map dec_step step_offs))
 
@@ -383,8 +403,8 @@ let find_theory_root_off (data : string) : int =
 
 (* Decode a theory from minidag bytes.
    Returns the theory and the byte offset of the "proofs" node (-1 = no proofs). *)
-let decode_theory (ctx : K.ctx) (name : string) (data : string)
-    : K.Theory.t * int * K.expr Int_tbl.t =
+let decode_theory (ctx : K.ctx) (name : string) (data : string) :
+    K.Theory.t * int * K.expr Int_tbl.t =
   let dec = Dec.create data in
   let cache : K.expr Int_tbl.t = Int_tbl.create 128 in
   let root_off = find_theory_root_off data in
@@ -425,7 +445,7 @@ let decode_theory (ctx : K.ctx) (name : string) (data : string)
                 K.Theory.add_theorem th thm)
               thm_seqs)
       in
-      (th, proof_node_off, cache))
+      th, proof_node_off, cache)
 
 (* ---- Load theory from zip ------------------------------------------------- *)
 
@@ -445,8 +465,10 @@ let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     | Some entry ->
       (try
          let data = Zip.read_entry zh.zf entry in
-         let (ec_theory, ec_proof_off, ec_dec) = decode_theory ctx name data in
-         let ec = { ec_theory; ec_proof_off; ec_data = data; ec_dec; ec_inv = None } in
+         let ec_theory, ec_proof_off, ec_dec = decode_theory ctx name data in
+         let ec =
+           { ec_theory; ec_proof_off; ec_data = data; ec_dec; ec_inv = None }
+         in
          Theory_lru.add name ec zh.theory_cache;
          Theory_lru.trim zh.theory_cache;
          Some ec_theory
@@ -455,9 +477,9 @@ let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
            name (Printexc.to_string e);
          None))
 
-(** Load the proof terms for an already-loaded theory on demand.
-    Returns [None] if proofs are not present in the entry or if the theory
-    has not been loaded yet via [load_theory]. *)
+(** Load the proof terms for an already-loaded theory on demand. Returns [None]
+    if proofs are not present in the entry or if the theory has not been loaded
+    yet via [load_theory]. *)
 let load_proofs (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     K.Linear_proof.t list option =
   match Theory_lru.find name zh.theory_cache with
@@ -471,37 +493,38 @@ let load_proofs (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
         let dec = Dec.create ec.ec_data in
         (* Reuse the expr cache from theory decoding so proof nodes can
            reference const/var/expr nodes encoded in the theory section. *)
-        Some (
-          Dec.read_node dec ec.ec_proof_off (fun nd _cmd ->
-              let n = read_int_ nd in
-              let lp_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
-              Array.to_list (Array.map (dec_lp_ ctx dec ec.ec_dec) lp_offs)))
+        Some
+          (Dec.read_node dec ec.ec_proof_off (fun nd _cmd ->
+               let n = read_int_ nd in
+               let lp_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
+               Array.to_list (Array.map (dec_lp_ ctx dec ec.ec_dec) lp_offs)))
       with e ->
-        Printf.eprintf "proof_zip.load_proofs: decode error for %s: %s\n%!"
-          name (Printexc.to_string e);
+        Printf.eprintf "proof_zip.load_proofs: decode error for %s: %s\n%!" name
+          (Printexc.to_string e);
         None
     )
 
 (* ---- Offset-based on-demand decode --------------------------------------- *)
 
-(** Return a table mapping [expr -> minidag_byte_offset] for [entry].
-    Built lazily from the inverted decode cache; [None] if entry not loaded. *)
-let expr_offset_table (zh : zip_handle) (entry : string) : int K.Expr.Tbl.t option =
+(** Return a table mapping [expr -> minidag_byte_offset] for [entry]. Built
+    lazily from the inverted decode cache; [None] if entry not loaded. *)
+let expr_offset_table (zh : zip_handle) (entry : string) :
+    int K.Expr.Tbl.t option =
   match Theory_lru.find entry zh.theory_cache with
   | None -> None
   | Some ec ->
     (match ec.ec_inv with
-     | Some tbl -> Some tbl
-     | None ->
-       let tbl = K.Expr.Tbl.create (Int_tbl.length ec.ec_dec) in
-       Int_tbl.iter (fun off e -> K.Expr.Tbl.replace tbl e off) ec.ec_dec;
-       ec.ec_inv <- Some tbl;
-       Some tbl)
+    | Some tbl -> Some tbl
+    | None ->
+      let tbl = K.Expr.Tbl.create (Int_tbl.length ec.ec_dec) in
+      Int_tbl.iter (fun off e -> K.Expr.Tbl.replace tbl e off) ec.ec_dec;
+      ec.ec_inv <- Some tbl;
+      Some tbl)
 
-(** Decode the expression at [offset] in [entry]'s minidag.
-    Requires the entry to already be loaded (will be a cache hit). *)
-let decode_expr_at (zh : zip_handle) ~(ctx : K.ctx) ~(entry : string) ~(offset : int)
-    : K.expr option =
+(** Decode the expression at [offset] in [entry]'s minidag. Requires the entry
+    to already be loaded (will be a cache hit). *)
+let decode_expr_at (zh : zip_handle) ~(ctx : K.ctx) ~(entry : string)
+    ~(offset : int) : K.expr option =
   match Theory_lru.find entry zh.theory_cache with
   | None -> None
   | Some ec ->
@@ -509,8 +532,8 @@ let decode_expr_at (zh : zip_handle) ~(ctx : K.ctx) ~(entry : string) ~(offset :
      with _ -> None)
 
 (** Decode the sequent at [offset] in [entry]'s minidag. *)
-let decode_seq_at (zh : zip_handle) ~(ctx : K.ctx) ~(entry : string) ~(offset : int)
-    : K.sequent option =
+let decode_seq_at (zh : zip_handle) ~(ctx : K.ctx) ~(entry : string)
+    ~(offset : int) : K.sequent option =
   match Theory_lru.find entry zh.theory_cache with
   | None -> None
   | Some ec ->
@@ -527,8 +550,8 @@ let build ~output ~(eval : Eval.state) ~(ts : tracked_storage)
     (fun name ->
       match Eval.eval_theory eval name with
       | Error e ->
-        Format.eprintf "build-zip: error in %s: %a@." name
-          Trustee_core.Error.pp e
+        Format.eprintf "build-zip: error in %s: %a@." name Trustee_core.Error.pp
+          e
       | Ok (theory, _info) ->
         (try
            (* Collect linear proofs from theorems (if store_proofs was enabled) *)
@@ -548,16 +571,16 @@ let build ~output ~(eval : Eval.state) ~(ts : tracked_storage)
     names;
   (* Write storage entries (const defs, etc.) collected during evaluation *)
   let storage_entries =
-    List.sort_uniq (fun (k1, _) (k2, _) -> String.compare k1 k2)
-      ts.ts_entries
+    List.sort_uniq (fun (k1, _) (k2, _) -> String.compare k1 k2) ts.ts_entries
   in
   List.iter
     (fun (key, data) -> Zip.add_entry data zf (storage_prefix ^ key))
     storage_entries;
   Zip.close_out zf;
-  Printf.printf
-    "wrote %d theory entries + %d storage entries to %s\n%!"
-    !n_theories (List.length storage_entries) output
+  Printf.printf "wrote %d theory entries + %d storage entries to %s\n%!"
+    !n_theories
+    (List.length storage_entries)
+    output
 
 (* ---- Legacy API ----------------------------------------------------------- *)
 
@@ -580,11 +603,15 @@ let encode_proof_list (proofs : LP.t list) : string =
       let pair_offs =
         List.map
           (fun (v, e) ->
-            (K.Expr.mg_enc_var cache enc v, K.Expr.mg_enc_expr cache enc e))
+            K.Expr.mg_enc_var cache enc v, K.Expr.mg_enc_expr cache enc e)
           pairs
       in
       Enc.write_node enc "ps" (fun nd ->
-          List.iter (fun (v', e') -> Enc.ref nd v'; Enc.ref nd e') pair_offs)
+          List.iter
+            (fun (v', e') ->
+              Enc.ref nd v';
+              Enc.ref nd e')
+            pair_offs)
   in
   let enc_step step =
     let { LP.concl; rule; args; parents } = step in
@@ -699,8 +726,8 @@ let load (path : string) : string Str_tbl.t =
   Zip.close_in zf;
   tbl
 
-let lookup_theory ~cache:(cache : string Str_tbl.t) ~(ctx : K.ctx) name
-    : K.Linear_proof.t list option =
+let lookup_theory ~(cache : string Str_tbl.t) ~(ctx : K.ctx) name :
+    K.Linear_proof.t list option =
   let entry = zip_entry_name name in
   match Str_tbl.get cache entry with
   | None -> None
