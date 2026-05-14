@@ -126,7 +126,8 @@ let h_thy (self : state) : unit =
           div
             [
               "hx-trigger", "load";
-              "hx-get", spf "/eval/%s" @@ H.Util.percent_encode thy.Thy_file.name;
+              ( "hx-get",
+                spf "/eval/%s" @@ H.Util.percent_encode thy.Thy_file.name );
               "hx-swap", "innerHtml";
             ]
             [
@@ -172,8 +173,10 @@ let make_config_ self thy_name =
   let open_namespaces =
     thy.Thy_file.meta
     |> List.filter_map (fun (mk, v) ->
-           if mk = "show" then Some (Util.unquote_str v ^ ".")
-           else None)
+           if mk = "show" then
+             Some (Util.unquote_str v ^ ".")
+           else
+             None)
   in
   Log.debugf 2 (fun k ->
       k "open namespaces: [%s]" (String.concat "; " open_namespaces));
@@ -206,7 +209,8 @@ let h_eval (self : state) : unit =
     reply_page ~title:(spf "eval %s" thy_name) req res
   | None ->
     Log.debugf 1 (fun k -> k "theory not found in zip: %s" thy_name);
-    H.Response.make_string (Error (404, spf "theory not found in zip: %s" thy_name))
+    H.Response.make_string
+      (Error (404, spf "theory not found in zip: %s" thy_name))
 
 let h_proof (self : state) : unit =
   H.add_route_handler self.server
@@ -215,7 +219,8 @@ let h_proof (self : state) : unit =
   let@ () = top_wrap_ req in
   match int_of_string_opt thm_idx_str with
   | None ->
-    H.Response.make_string (Error (400, spf "invalid theorem index: %s" thm_idx_str))
+    H.Response.make_string
+      (Error (400, spf "invalid theorem index: %s" thm_idx_str))
   | Some thm_idx ->
     let config = make_config_ self thy_name in
     let th_opt, proofs_opt =
@@ -232,34 +237,39 @@ let h_proof (self : state) : unit =
     | None, _ ->
       H.Response.make_string (Error (404, spf "theory not found: %s" thy_name))
     | _, None ->
-      H.Response.make_string (Error (404, spf "no proofs available for: %s" thy_name))
+      H.Response.make_string
+        (Error (404, spf "no proofs available for: %s" thy_name))
     | Some th, Some proofs ->
       (match
-         List.nth_opt (K.Theory.theorems th) thm_idx,
-         List.nth_opt proofs thm_idx
+         ( List.nth_opt (K.Theory.theorems th) thm_idx,
+           List.nth_opt proofs thm_idx )
        with
-       | None, _ | _, None ->
-         H.Response.make_string
-           (Error (404, spf "theorem index out of bounds: %d" thm_idx))
-       | Some thm, Some lp ->
-         let thy_entry = thy_name in
-         let type_offsets =
-           match self.st.zip with
-           | None -> None
-           | Some zh -> Proof_zip.expr_offset_table zh thy_entry
-         in
-         let open Html in
-         let res =
-           [
-             h3 [] [ txtf "Proof of theorem %d in %s" thm_idx thy_name ];
-             div [ cls "mb-3" ]
-               [ strong [] [ txt "Theorem: " ];
-                 Render.thm_to_html ~config ?type_offsets ~entry:thy_entry thm ];
-             h4 [] [ txt "Proof steps" ];
-             Render.linear_proof_to_html ~config ?type_offsets ~entry:thy_entry lp;
-           ]
-         in
-         reply_page ~title:(spf "proof %s/%d" thy_name thm_idx) req res))
+      | None, _ | _, None ->
+        H.Response.make_string
+          (Error (404, spf "theorem index out of bounds: %d" thm_idx))
+      | Some thm, Some lp ->
+        let thy_entry = thy_name in
+        let type_offsets =
+          match self.st.zip with
+          | None -> None
+          | Some zh -> Proof_zip.expr_offset_table zh thy_entry
+        in
+        let open Html in
+        let res =
+          [
+            h3 [] [ txtf "Proof of theorem %d in %s" thm_idx thy_name ];
+            div
+              [ cls "mb-3" ]
+              [
+                strong [] [ txt "Theorem: " ];
+                Render.thm_to_html ~config ?type_offsets ~entry:thy_entry thm;
+              ];
+            h4 [] [ txt "Proof steps" ];
+            Render.linear_proof_to_html ~config ?type_offsets ~entry:thy_entry
+              lp;
+          ]
+        in
+        reply_page ~title:(spf "proof %s/%d" thy_name thm_idx) req res))
 
 let h_name_item (self : state) : unit =
   H.add_route_handler self.server
@@ -336,8 +346,8 @@ let h_stats self : unit =
   reply_page ~title:"/stats" req [ res ]
 
 (** Render a single expression node (by minidag offset) as an HTML fragment.
-    Route: GET /render/<entry>/<offset>
-    Used by the hover tooltip JS to lazily fetch type strings. *)
+    Route: GET /render/<entry>/<offset> Used by the hover tooltip JS to lazily
+    fetch type strings. *)
 let h_render (self : state) : unit =
   H.add_route_handler self.server
     H.Route.(exact "render" @/ string_urlencoded @/ string_urlencoded @/ return)
@@ -358,17 +368,17 @@ let h_render (self : state) : unit =
           (Proof_zip.decode_expr_at zh ~ctx:self.st.ctx ~entry ~offset)
     in
     (match result with
-     | None ->
-       H.Response.make_string (Error (404, spf "expr not found at offset %d in %s" offset entry))
-     | Some elt ->
-       H.Response.make_string
-         (Ok (Html.to_string elt)))
+    | None ->
+      H.Response.make_string
+        (Error (404, spf "expr not found at offset %d in %s" offset entry))
+    | Some elt -> H.Response.make_string (Ok (Html.to_string elt)))
 
-(** Render a sequent node (by minidag offset) as an HTML fragment.
-    Route: GET /render_seq/<entry>/<offset> *)
+(** Render a sequent node (by minidag offset) as an HTML fragment. Route: GET
+    /render_seq/<entry>/<offset> *)
 let h_render_seq (self : state) : unit =
   H.add_route_handler self.server
-    H.Route.(exact "render_seq" @/ string_urlencoded @/ string_urlencoded @/ return)
+    H.Route.(
+      exact "render_seq" @/ string_urlencoded @/ string_urlencoded @/ return)
   @@ fun entry offset_str req ->
   let@ () = top_wrap_ req in
   match int_of_string_opt offset_str with
@@ -386,11 +396,10 @@ let h_render_seq (self : state) : unit =
           (Proof_zip.decode_seq_at zh ~ctx:self.st.ctx ~entry ~offset)
     in
     (match result with
-     | None ->
-       H.Response.make_string (Error (404, spf "seq not found at offset %d in %s" offset entry))
-     | Some elt ->
-       H.Response.make_string
-         (Ok (Html.to_string elt)))
+    | None ->
+      H.Response.make_string
+        (Error (404, spf "seq not found at offset %d in %s" offset entry))
+    | Some elt -> H.Response.make_string (Ok (Html.to_string elt)))
 
 let create st ~port : state =
   let server = H.create ~addr:"127.0.0.1" ~port () in

@@ -146,19 +146,26 @@ let mk_ ctx ~name : t =
 let mk_str_ ctx ~name : t = mk_ ctx ~name
 
 let const_kind_ c =
-  if Expr.is_eq_to_type c.c_ty then C_ty else C_term
+  if Expr.is_eq_to_type c.c_ty then
+    C_ty
+  else
+    C_term
 
 let make_for_zip ctx ~name ~param_consts ~param_theorems ~consts ~theorems : t =
   let self = mk_ ctx ~name in
-  List.iter (fun c ->
-    let k = const_kind_ c in
-    self.theory_in_constants <-
-      Name_k_map.add (k, c.c_name) c self.theory_in_constants) param_consts;
+  List.iter
+    (fun c ->
+      let k = const_kind_ c in
+      self.theory_in_constants <-
+        Name_k_map.add (k, c.c_name) c self.theory_in_constants)
+    param_consts;
   self.theory_in_theorems <- param_theorems;
-  List.iter (fun c ->
-    let k = const_kind_ c in
-    self.theory_defined_constants <-
-      Name_k_map.add (k, c.c_name) c self.theory_defined_constants) consts;
+  List.iter
+    (fun c ->
+      let k = const_kind_ c in
+      self.theory_defined_constants <-
+        Name_k_map.add (k, c.c_name) c self.theory_defined_constants)
+    consts;
   self.theory_defined_theorems <- theorems;
   self
 

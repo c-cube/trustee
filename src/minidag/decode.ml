@@ -89,7 +89,8 @@ let read_node (self : t) (off : offset) f =
   | _ -> fail off "expected node to start with a string"
 
 (** Like [iter_nodes] but stops before [limit] (exclusive). *)
-let iter_nodes_until (self : t) ~limit (f : offset -> string -> value list -> unit) : unit =
+let iter_nodes_until (self : t) ~limit
+    (f : offset -> string -> value list -> unit) : unit =
   let rec go off =
     if off < limit then (
       let dec = { dec = self; off } in

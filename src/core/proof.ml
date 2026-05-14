@@ -93,8 +93,8 @@ module Linear_proof = struct
     { steps }
 end
 
-(** Minidag encode/decode for [Linear_proof.t]. Lives here (not in expr.ml)
-    to avoid a circular dependency: proof.ml depends on expr.ml, and
+(** Minidag encode/decode for [Linear_proof.t]. Lives here (not in expr.ml) to
+    avoid a circular dependency: proof.ml depends on expr.ml, and
     [Expr.mg_enc_expr] etc. are the bridging helpers. *)
 module Linear_proof_mg = struct
   module Enc = Trustee_minidag.Encode
@@ -117,11 +117,15 @@ module Linear_proof_mg = struct
         let pair_offs =
           List.map
             (fun (v, e) ->
-              (Expr.mg_enc_var cache enc v, Expr.mg_enc_expr cache enc e))
+              Expr.mg_enc_var cache enc v, Expr.mg_enc_expr cache enc e)
             pairs
         in
         Enc.write_node enc "ps" (fun nd ->
-            List.iter (fun (v', e') -> Enc.ref nd v'; Enc.ref nd e') pair_offs)
+            List.iter
+              (fun (v', e') ->
+                Enc.ref nd v';
+                Enc.ref nd e')
+              pair_offs)
     in
     let enc_step (step : Linear_proof.step) =
       let concl' = Expr.mg_enc_seq cache enc step.concl in
@@ -134,9 +138,7 @@ module Linear_proof_mg = struct
           List.iter (Enc.ref nd) arg_offs)
     in
     let step_offs =
-      Vec.to_iter lp.Linear_proof.steps
-      |> Iter.map enc_step
-      |> Iter.to_list
+      Vec.to_iter lp.Linear_proof.steps |> Iter.map enc_step |> Iter.to_list
     in
     let _root =
       Enc.write_node enc "lp" (fun nd ->
@@ -194,11 +196,10 @@ module Linear_proof_mg = struct
             match Dec.read nd with
             | Dec.Ref r -> arg_offs := r :: !arg_offs
             | Dec.Stop -> go := false
-            | _ -> failwith "Linear_proof_mg.decode: expected Ref or Stop for args"
+            | _ ->
+              failwith "Linear_proof_mg.decode: expected Ref or Stop for args"
           done;
-          let args =
-            List.rev_map dec_arg_node (List.rev !arg_offs)
-          in
+          let args = List.rev_map dec_arg_node (List.rev !arg_offs) in
           { Linear_proof.concl; rule; parents; args })
     in
     Dec.read_node dec !root_off (fun nd _cmd ->

@@ -29,5 +29,3 @@
    --url=htmx.js,https://unpkg.com/htmx.org@1.7.0/dist/htmx.min.js
    -o
    %{targets})))
-
-
