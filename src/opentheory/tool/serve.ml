@@ -1,5 +1,6 @@
 open Trustee_opentheory
 module Log = Trustee_core.Log
+module Vec = Trustee_core.Vec
 module OT = Trustee_opentheory
 open OT.Common_
 
@@ -31,6 +32,7 @@ let mk_page ~title:title_ bod : Html.elt =
           link [ A.href "/static/main.css"; A.rel "stylesheet" ];
           script [ A.src "/static/htmx.js" ] [];
           script [ A.src "/static/tooltip.js" ] [];
+          script [ A.src "/static/proof.js" ] [];
         ];
       body [] [ div [ cls "container" ] bod ];
     ]
@@ -212,6 +214,456 @@ let h_eval (self : state) : unit =
     H.Response.make_string
       (Error (404, spf "theory not found in zip: %s" thy_name))
 
+(* ---- Helpers duplicated from render.ml (not exported) ---- *)
+
+let strip_name_json_ ~config (s : string) : string =
+  if config.Render.Config.open_all_namespaces then (
+    match List.rev (String.split_on_char '.' s) with
+    | c :: _ -> c
+    | [] -> s
+  ) else (
+    match
+      List.find
+        (fun pre -> CCString.prefix ~pre s)
+        config.Render.Config.open_namespaces
+    with
+    | pre -> CCString.chop_prefix ~pre s |> Option.get_exn_or "strip name"
+    | exception Not_found -> s
+  )
+
+let is_symbol_json_ s =
+  let anum = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' -> true
+    | _ -> false
+  in
+  not (String.length s > 0 && anum s.[0])
+
+let is_a_binder_json_ c c_name =
+  is_symbol_json_ c_name
+  &&
+  match K.Expr.unfold_arrow @@ K.Const.ty c with
+  | [ a ], _ret -> K.Expr.is_arrow a
+  | _ -> false
+
+let is_infix_json_ c c_name =
+  is_symbol_json_ c_name
+  &&
+  match K.Expr.unfold_arrow @@ K.Const.ty c with
+  | [ _; _ ], _ -> true
+  | _ -> false
+
+(* ---- JSON serialisation helpers ---- *)
+
+let json_buf_string (buf : Buffer.t) (s : string) : unit =
+  Buffer.add_char buf '"';
+  String.iter
+    (fun c ->
+      match c with
+      | '"' -> Buffer.add_string buf "\\\""
+      | '\\' -> Buffer.add_string buf "\\\\"
+      | '\n' -> Buffer.add_string buf "\\n"
+      | '\r' -> Buffer.add_string buf "\\r"
+      | '\t' -> Buffer.add_string buf "\\t"
+      | c when Char.code c < 32 ->
+        Buffer.add_string buf (Printf.sprintf "\\u%04X" (Char.code c))
+      | c -> Buffer.add_char buf c)
+    s;
+  Buffer.add_char buf '"'
+
+let json_int (buf : Buffer.t) (n : int) : unit =
+  Buffer.add_string buf (string_of_int n)
+
+(* ----- Build the terms array for a proof ----- *)
+
+type term_entry =
+  | TE_type
+  | TE_const of {
+      name: string;
+      short: string;
+      href: string;
+      ty: int;
+      is_infix: bool;
+      is_binder: bool;
+      ty_args: int list;
+    }
+  | TE_var of {
+      name: string;
+      ty: int;
+    }
+  | TE_bvar of {
+      idx: int;
+      ty: int;
+    }
+  | TE_app of {
+      f: int;
+      a: int;
+    }
+  | TE_lam of {
+      name: string;
+      ty: int;
+      body: int;
+    }
+  | TE_arrow of {
+      a: int;
+      b: int;
+    }
+  | TE_eq of {
+      ty: int;
+      l: int;
+      r: int;
+    }
+
+let percent_encode_json s =
+  let buf = Buffer.create (String.length s) in
+  String.iter
+    (fun c ->
+      match c with
+      | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '_' | '.' | '~' ->
+        Buffer.add_char buf c
+      | c -> Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c)))
+    s;
+  Buffer.contents buf
+
+let proof_to_json (lp : K.Linear_proof.t) (config : Render.Config.t) : string =
+  let tbl : int K.Expr.Tbl.t = K.Expr.Tbl.create 256 in
+  let entries : term_entry Vec.t = Vec.create () in
+
+  let rec intern2 (e : K.Expr.t) : int =
+    match K.Expr.Tbl.find_opt tbl e with
+    | Some id -> id
+    | None ->
+      let id = Vec.size entries in
+      K.Expr.Tbl.add tbl e id;
+      Vec.push entries TE_type;
+      (* placeholder *)
+      let entry =
+        match K.Expr.view e with
+        | K.E_kind | K.E_type -> TE_type
+        | K.E_var v ->
+          let ty_id = intern2 v.v_ty in
+          TE_var { name = v.v_name; ty = ty_id }
+        | K.E_bound_var bv ->
+          let ty_id = intern2 bv.bv_ty in
+          TE_bvar { idx = bv.bv_idx; ty = ty_id }
+        | K.E_const (c, args) ->
+          let full_name = K.Const.name c in
+          let short_name = strip_name_json_ ~config full_name in
+          let href = "/c/" ^ percent_encode_json full_name in
+          let ty_id = intern2 (K.Expr.ty_exn e) in
+          let is_inf = is_infix_json_ c short_name in
+          let is_bind = is_a_binder_json_ c short_name in
+          let ty_args = List.map intern2 args in
+          TE_const
+            {
+              name = full_name;
+              short = short_name;
+              href;
+              ty = ty_id;
+              is_infix = is_inf;
+              is_binder = is_bind;
+              ty_args;
+            }
+        | K.E_app _ ->
+          (* Unfold the app chain *)
+          let f_expr, args_list = K.Expr.unfold_app e in
+          (match K.Expr.view f_expr, args_list with
+          | K.E_const (c, [ _ty_arg ]), [ a; b ]
+            when String.equal (K.Const.name c) "=" ->
+            (* equality: emit as special = node *)
+            let ty_id = intern2 (K.Expr.ty_exn f_expr) in
+            let l_id = intern2 a in
+            let r_id = intern2 b in
+            TE_eq { ty = ty_id; l = l_id; r = r_id }
+          | _ ->
+            (* Regular app: only store the immediate f/a from the original view *)
+            let f_e, a_e =
+              match K.Expr.view e with
+              | K.E_app (f, a) -> f, a
+              | _ -> assert false
+            in
+            let f_id = intern2 f_e in
+            let a_id = intern2 a_e in
+            TE_app { f = f_id; a = a_id })
+        | K.E_lam (name, ty, body) ->
+          let ty_id = intern2 ty in
+          let body_id = intern2 body in
+          TE_lam { name; ty = ty_id; body = body_id }
+        | K.E_arrow (a, b) ->
+          let a_id = intern2 a in
+          let b_id = intern2 b in
+          TE_arrow { a = a_id; b = b_id }
+        | K.E_box _ -> TE_type
+      in
+      Vec.set entries id entry;
+      id
+  in
+
+  let intern_expr e = ignore (intern2 e : int) in
+
+  (* Collect all exprs from steps *)
+  K.Linear_proof.steps lp
+  |> Iter.iter (fun (_idx, step) ->
+         let seq = step.K.Linear_proof.concl in
+         K.Sequent.hyps_l seq |> List.iter intern_expr;
+         intern_expr (K.Sequent.concl seq);
+         step.K.Linear_proof.args
+         |> List.iter (function
+              | K.Proof.Pr_expr e -> intern_expr e
+              | K.Proof.Pr_subst pairs ->
+                List.iter
+                  (fun (v, e) ->
+                    intern_expr (K.Var.ty v);
+                    intern_expr e)
+                  pairs));
+
+  (* For Pr_subst vars we need to assign IDs to the vars themselves.
+     We use a separate var tbl keyed by (name, ty_id). *)
+  let var_tbl : (string * int, int) Hashtbl.t = Hashtbl.create 16 in
+  let n_terms = ref (Vec.size entries) in
+  let var_entries : term_entry Vec.t = Vec.create () in
+
+  let intern_subst_var (v : K.Var.t) : int =
+    let ty_id =
+      match K.Expr.Tbl.find_opt tbl v.v_ty with
+      | Some id -> id
+      | None -> -1 (* shouldn't happen after we interned all types *)
+    in
+    let key = v.v_name, ty_id in
+    match Hashtbl.find_opt var_tbl key with
+    | Some id -> id
+    | None ->
+      let id = !n_terms + Vec.size var_entries in
+      Hashtbl.add var_tbl key id;
+      Vec.push var_entries (TE_var { name = v.v_name; ty = ty_id });
+      id
+  in
+
+  (* --- Pass 2: build step records --- *)
+  let steps_arr :
+      (int list
+      * int
+      * string
+      * int list
+      * [ `E of int | `S of (int * int) list ] list)
+      list =
+    K.Linear_proof.steps lp
+    |> Iter.map (fun (_idx, step) ->
+           let seq = step.K.Linear_proof.concl in
+           let hyp_ids =
+             K.Sequent.hyps_l seq
+             |> List.map (fun e ->
+                    match K.Expr.Tbl.find_opt tbl e with
+                    | Some id -> id
+                    | None -> -1)
+           in
+           let concl_id =
+             match K.Expr.Tbl.find_opt tbl (K.Sequent.concl seq) with
+             | Some id -> id
+             | None -> -1
+           in
+           let rule = step.K.Linear_proof.rule in
+           let parents = step.K.Linear_proof.parents in
+           let args =
+             step.K.Linear_proof.args
+             |> List.map (function
+                  | K.Proof.Pr_expr e ->
+                    let eid =
+                      match K.Expr.Tbl.find_opt tbl e with
+                      | Some id -> id
+                      | None -> -1
+                    in
+                    `E eid
+                  | K.Proof.Pr_subst pairs ->
+                    let ps =
+                      List.map
+                        (fun (v, e) ->
+                          let vid = intern_subst_var v in
+                          let eid =
+                            match K.Expr.Tbl.find_opt tbl e with
+                            | Some id -> id
+                            | None -> -1
+                          in
+                          vid, eid)
+                        pairs
+                    in
+                    `S ps)
+           in
+           hyp_ids, concl_id, rule, parents, args)
+    |> Iter.to_list
+  in
+
+  (* --- Serialise --- *)
+  let buf = Buffer.create (16 * 1024) in
+  Buffer.add_string buf "{\"terms\":";
+
+  let n_exprs = Vec.size entries in
+  let n_vars = Vec.size var_entries in
+  let total = n_exprs + n_vars in
+
+  Buffer.add_char buf '[';
+  let emit_entry i te =
+    if i > 0 then Buffer.add_char buf ',';
+    match te with
+    | TE_type -> Buffer.add_string buf "{\"k\":\"type\"}"
+    | TE_const { name; short; href; ty; is_infix; is_binder; ty_args } ->
+      Buffer.add_string buf "{\"k\":\"const\",\"name\":";
+      json_buf_string buf name;
+      Buffer.add_string buf ",\"short\":";
+      json_buf_string buf short;
+      Buffer.add_string buf ",\"href\":";
+      json_buf_string buf href;
+      Buffer.add_string buf ",\"ty\":";
+      json_int buf ty;
+      if is_infix then Buffer.add_string buf ",\"infix\":true";
+      if is_binder then Buffer.add_string buf ",\"binder\":true";
+      if ty_args <> [] then (
+        Buffer.add_string buf ",\"args\":[";
+        List.iteri
+          (fun j aid ->
+            if j > 0 then Buffer.add_char buf ',';
+            json_int buf aid)
+          ty_args;
+        Buffer.add_char buf ']'
+      );
+      Buffer.add_char buf '}'
+    | TE_var { name; ty } ->
+      Buffer.add_string buf "{\"k\":\"var\",\"name\":";
+      json_buf_string buf name;
+      Buffer.add_string buf ",\"ty\":";
+      json_int buf ty;
+      Buffer.add_char buf '}'
+    | TE_bvar { idx; ty } ->
+      Buffer.add_string buf "{\"k\":\"bvar\",\"idx\":";
+      json_int buf idx;
+      Buffer.add_string buf ",\"ty\":";
+      json_int buf ty;
+      Buffer.add_char buf '}'
+    | TE_app { f; a } ->
+      Buffer.add_string buf "{\"k\":\"app\",\"f\":";
+      json_int buf f;
+      Buffer.add_string buf ",\"a\":";
+      json_int buf a;
+      Buffer.add_char buf '}'
+    | TE_lam { name; ty; body } ->
+      Buffer.add_string buf "{\"k\":\"lam\",\"name\":";
+      json_buf_string buf name;
+      Buffer.add_string buf ",\"ty\":";
+      json_int buf ty;
+      Buffer.add_string buf ",\"body\":";
+      json_int buf body;
+      Buffer.add_char buf '}'
+    | TE_arrow { a; b } ->
+      Buffer.add_string buf "{\"k\":\"arrow\",\"a\":";
+      json_int buf a;
+      Buffer.add_string buf ",\"b\":";
+      json_int buf b;
+      Buffer.add_char buf '}'
+    | TE_eq { ty; l; r } ->
+      Buffer.add_string buf "{\"k\":\"=\",\"ty\":";
+      json_int buf ty;
+      Buffer.add_string buf ",\"l\":";
+      json_int buf l;
+      Buffer.add_string buf ",\"r\":";
+      json_int buf r;
+      Buffer.add_char buf '}'
+  in
+  for i = 0 to n_exprs - 1 do
+    emit_entry i (Vec.get entries i)
+  done;
+  for j = 0 to n_vars - 1 do
+    emit_entry (n_exprs + j) (Vec.get var_entries j)
+  done;
+  ignore total;
+  Buffer.add_char buf ']';
+
+  (* Steps *)
+  Buffer.add_string buf ",\"steps\":[";
+  List.iteri
+    (fun si (hyp_ids, concl_id, rule, parents, args) ->
+      if si > 0 then Buffer.add_char buf ',';
+      Buffer.add_string buf "{\"hyps\":[";
+      List.iteri
+        (fun j hid ->
+          if j > 0 then Buffer.add_char buf ',';
+          json_int buf hid)
+        hyp_ids;
+      Buffer.add_string buf "],\"concl\":";
+      json_int buf concl_id;
+      Buffer.add_string buf ",\"rule\":";
+      json_buf_string buf rule;
+      Buffer.add_string buf ",\"parents\":[";
+      List.iteri
+        (fun j p ->
+          if j > 0 then Buffer.add_char buf ',';
+          json_int buf p)
+        parents;
+      Buffer.add_string buf "],\"args\":[";
+      List.iteri
+        (fun j arg ->
+          if j > 0 then Buffer.add_char buf ',';
+          match arg with
+          | `E eid ->
+            Buffer.add_string buf "{\"e\":";
+            json_int buf eid;
+            Buffer.add_char buf '}'
+          | `S ps ->
+            Buffer.add_string buf "{\"s\":[";
+            List.iteri
+              (fun k (vid, eid) ->
+                if k > 0 then Buffer.add_char buf ',';
+                Buffer.add_char buf '[';
+                json_int buf vid;
+                Buffer.add_char buf ',';
+                json_int buf eid;
+                Buffer.add_char buf ']')
+              ps;
+            Buffer.add_string buf "]}")
+        args;
+      Buffer.add_string buf "]}")
+    steps_arr;
+  Buffer.add_string buf "]";
+
+  Buffer.add_char buf '}';
+  Buffer.contents buf
+
+(* ---- h_proof_json handler ---- *)
+
+let h_proof_json (self : state) : unit =
+  H.add_route_handler self.server
+    H.Route.(
+      exact "proof-json" @/ string_urlencoded @/ string_urlencoded @/ return)
+  @@ fun thy_name thm_idx_str req ->
+  let@ () = top_wrap_ req in
+  match int_of_string_opt thm_idx_str with
+  | None ->
+    H.Response.make_string
+      (Error (400, spf "invalid theorem index: %s" thm_idx_str))
+  | Some thm_idx ->
+    let config = make_config_ self thy_name in
+    let proofs_opt =
+      let@ () = St.with_lock self.st.lock in
+      (* Ensure the theory is loaded into the cache first, then load proofs *)
+      (match self.st.zip with
+      | None -> None
+      | Some zh ->
+        (match Proof_zip.load_theory zh ~ctx:self.st.ctx thy_name with
+        | None -> None
+        | Some _ -> Proof_zip.load_proofs zh ~ctx:self.st.ctx thy_name))
+    in
+    (match proofs_opt with
+    | None ->
+      H.Response.make_string
+        (Error (404, spf "no proofs available for: %s" thy_name))
+    | Some proofs ->
+      (match List.nth_opt proofs thm_idx with
+      | None ->
+        H.Response.make_string
+          (Error (404, spf "theorem index out of bounds: %d" thm_idx))
+      | Some lp ->
+        let json_str = proof_to_json lp config in
+        let headers = [ "content-type", "application/json" ] in
+        H.Response.make_string ~headers (Ok json_str)))
+
 let h_proof (self : state) : unit =
   H.add_route_handler self.server
     H.Route.(exact "proof" @/ string_urlencoded @/ string_urlencoded @/ return)
@@ -222,39 +674,44 @@ let h_proof (self : state) : unit =
     H.Response.make_string
       (Error (400, spf "invalid theorem index: %s" thm_idx_str))
   | Some thm_idx ->
-    let config = make_config_ self thy_name in
-    let th_opt, proofs_opt =
+    let n_steps_opt =
       let@ () = St.with_lock self.st.lock in
-      let th = St.load_theory self.st thy_name in
-      let proofs =
-        match self.st.zip with
+      match self.st.zip with
+      | None -> None
+      | Some zh ->
+        (match Proof_zip.load_proofs zh ~ctx:self.st.ctx thy_name with
         | None -> None
-        | Some zh -> Proof_zip.load_proofs zh ~ctx:self.st.ctx thy_name
-      in
-      th, proofs
+        | Some proofs ->
+          (match List.nth_opt proofs thm_idx with
+          | None -> None
+          | Some lp -> Some (K.Linear_proof.steps lp |> Iter.length)))
     in
-    (match th_opt, proofs_opt with
+    let th_opt =
+      let@ () = St.with_lock self.st.lock in
+      St.load_theory self.st thy_name
+    in
+    (match th_opt, n_steps_opt with
     | None, _ ->
       H.Response.make_string (Error (404, spf "theory not found: %s" thy_name))
     | _, None ->
       H.Response.make_string
         (Error (404, spf "no proofs available for: %s" thy_name))
-    | Some th, Some proofs ->
-      (match
-         ( List.nth_opt (K.Theory.theorems th) thm_idx,
-           List.nth_opt proofs thm_idx )
-       with
-      | None, _ | _, None ->
+    | Some th, Some n_steps ->
+      (match List.nth_opt (K.Theory.theorems th) thm_idx with
+      | None ->
         H.Response.make_string
           (Error (404, spf "theorem index out of bounds: %d" thm_idx))
-      | Some thm, Some lp ->
-        let thy_entry = thy_name in
+      | Some thm ->
+        let config = make_config_ self thy_name in
         let type_offsets =
           match self.st.zip with
           | None -> None
-          | Some zh -> Proof_zip.expr_offset_table zh thy_entry
+          | Some zh -> Proof_zip.expr_offset_table zh thy_name
         in
         let open Html in
+        let proof_url =
+          spf "/proof-json/%s/%d" (H.Util.percent_encode thy_name) thm_idx
+        in
         let res =
           [
             h3 [] [ txtf "Proof of theorem %d in %s" thm_idx thy_name ];
@@ -262,11 +719,37 @@ let h_proof (self : state) : unit =
               [ cls "mb-3" ]
               [
                 strong [] [ txt "Theorem: " ];
-                Render.thm_to_html ~config ?type_offsets ~entry:thy_entry thm;
+                Render.thm_to_html ~config ?type_offsets ~entry:thy_name thm;
               ];
-            h4 [] [ txt "Proof steps" ];
-            Render.linear_proof_to_html ~config ?type_offsets ~entry:thy_entry
-              lp;
+            div
+              [
+                A.id "proof-info";
+                "data-proof-thy", H.Util.percent_encode thy_name;
+                "data-proof-idx", string_of_int thm_idx;
+              ]
+              [];
+            div
+              [ A.id "proof-loading" ]
+              [ txtf "Loading proof (%d steps)\xe2\x80\xa6" n_steps ];
+            div
+              [ A.id "proof-table"; A.style "display:none" ]
+              [
+                table
+                  [ cls "table table-sm table-striped" ]
+                  [
+                    thead []
+                      [
+                        tr []
+                          [
+                            th [] [ txt "idx" ];
+                            th [] [ txt "sequent" ];
+                            th [] [ txt "rule" ];
+                          ];
+                      ];
+                    tbody [ A.id "proof-tbody" ] [];
+                  ];
+              ];
+            p [] [ txt "("; a [ A.href proof_url ] [ txt "raw JSON" ]; txt ")" ];
           ]
         in
         reply_page ~title:(spf "proof %s/%d" thy_name thm_idx) req res))
@@ -411,6 +894,7 @@ let create st ~port : state =
   h_art state;
   h_eval state;
   h_proof state;
+  h_proof_json state;
   h_name_item state;
   h_stats state;
   h_render state;
