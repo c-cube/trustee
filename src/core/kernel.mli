@@ -425,6 +425,11 @@ module Theory : sig
   val consts : t -> const list
   val theorems : t -> thm list
 
+  val drop_theorems : t -> unit
+  (** Clear the param and defined theorem lists to reclaim memory. Safe only
+      after all downstream theories that import this one have finished
+      evaluating (and been serialised). *)
+
   type interpretation = string Str_map.t
 
   val instantiate : interp:interpretation -> t -> t

@@ -16,6 +16,13 @@ let consts self =
   Name_k_map.values self.theory_defined_constants |> Iter.to_list
 
 let theorems self = self.theory_defined_theorems
+
+(** Release the theorem lists to reclaim memory after serialisation. Safe only
+    once all downstream theories have finished evaluating. *)
+let drop_theorems self =
+  self.theory_in_theorems <- [];
+  self.theory_defined_theorems <- []
+
 let pp_name out self = Fmt.string out self.theory_name
 
 let pp out (self : t) : unit =
