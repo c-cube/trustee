@@ -43,6 +43,10 @@ let make_main_proof self =
   if not (Proof.is_main_or_dummy self.th_proof) then
     self.th_proof <- Pr_main self.th_proof
 
+(** Release the proof DAG, replacing it with [Pr_dummy]. Call this after the
+    proof has been serialised to reclaim memory. *)
+let drop_proof self = self.th_proof <- Pr_dummy
+
 let[@inline] equal a b = Sequent.equal a.th_seq b.th_seq
 let hash (self : t) = Sequent.hash self.th_seq
 

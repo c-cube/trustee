@@ -554,15 +554,48 @@ let build ~output ~(eval : Eval.state) ~(ts : tracked_storage)
           e
       | Ok (theory, _info) ->
         (try
-           (* Collect linear proofs from theorems (if store_proofs was enabled) *)
+           let@ _sp =
+             Trace.with_span ~__FILE__ ~__LINE__ "build-zip.encode-theory"
+               ~data:(fun () -> [ "name", `String name ])
+           in
+           (* Collect linear proofs from theorems (if store_proofs was enabled),
+              then immediately drop the proof DAGs to reclaim memory. *)
            let proofs =
              try
                let thms = K.Theory.theorems theory in
-               let lps = List.map K.Linear_proof.of_thm_proof thms in
+               let lps =
+                 let@ _sp =
+                   Trace.with_span ~__FILE__ ~__LINE__
+                     "build-zip.linearize-proofs" ~data:(fun () ->
+                       [
+                         "name", `String name; "n_thms", `Int (List.length thms);
+                       ])
+                 in
+                 List.map K.Linear_proof.of_thm_proof thms
+               in
+               (* Drop the in-memory proof DAG from theorems defined by this
+                  theory now that we have the serialisable Linear_proof.t.
+                  We only drop `theorems` (not `param_theorems`) because
+                  param theorems belong to upstream theories which may still
+                  be referenced; their proofs were already wrapped in
+                  Pr_main by add_theory_items, so traversal stops at them
+                  anyway. *)
+               List.iter K.Thm.drop_proof (K.Theory.theorems theory);
                Some lps
              with _ -> None
            in
-           let data = encode_theory ?proofs theory in
+           let data =
+             let@ _sp =
+               Trace.with_span ~__FILE__ ~__LINE__ "build-zip.encode-minidag"
+                 ~data:(fun () -> [ "name", `String name ])
+             in
+             encode_theory ?proofs theory
+           in
+           let@ _sp =
+             Trace.with_span ~__FILE__ ~__LINE__ "build-zip.zip-add-entry"
+               ~data:(fun () ->
+                 [ "name", `String name; "bytes", `Int (String.length data) ])
+           in
            Zip.add_entry data zf (name ^ entry_suffix);
            incr n_theories
          with e ->
@@ -572,6 +605,10 @@ let build ~output ~(eval : Eval.state) ~(ts : tracked_storage)
   (* Write storage entries (const defs, etc.) collected during evaluation *)
   let storage_entries =
     List.sort_uniq (fun (k1, _) (k2, _) -> String.compare k1 k2) ts.ts_entries
+  in
+  let@ _sp =
+    Trace.with_span ~__FILE__ ~__LINE__ "build-zip.write-storage"
+      ~data:(fun () -> [ "n_entries", `Int (List.length storage_entries) ])
   in
   List.iter
     (fun (key, data) -> Zip.add_entry data zf (storage_prefix ^ key))
