@@ -36,7 +36,7 @@ let mk_page ~title:title_ bod : Html.elt =
     ]
 
 let reply_page ~title req h =
-  let headers = [ "content-encoding", "utf-8" ] in
+  let headers = [ "content-encoding", "utf-8"; "content-type", "text/html" ] in
   let res =
     if H.Headers.contains "hx-request" (H.Request.headers req) then
       (* fragment *)
