@@ -2,5 +2,5 @@
 
 eval $( opam env )
 exec dune exec --profile=release ./src/opentheory/tool/trustee_ot.exe \
-  -- --serve --port 8089 --proofs-zip ot-data.zip $@
+  -- --dir vendor/opentheory/data/ --build-zip ot-data.zip $@
 
