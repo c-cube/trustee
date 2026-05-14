@@ -559,30 +559,34 @@ let build ~output ~(eval : Eval.state) ~(ts : tracked_storage)
                ~data:(fun () -> [ "name", `String name ])
            in
            (* Collect linear proofs from theorems (if store_proofs was enabled),
-              then immediately drop the proof DAGs to reclaim memory. *)
+              then immediately drop the proof DAGs to reclaim memory.
+              We always drop, even if linearization fails, to avoid
+              accumulating proof DAGs across the entire build. *)
+           let thms = K.Theory.theorems theory in
            let proofs =
-             try
-               let thms = K.Theory.theorems theory in
-               let lps =
-                 let@ _sp =
-                   Trace.with_span ~__FILE__ ~__LINE__
-                     "build-zip.linearize-proofs" ~data:(fun () ->
-                       [
-                         "name", `String name; "n_thms", `Int (List.length thms);
-                       ])
-                 in
-                 List.map K.Linear_proof.of_thm_proof thms
-               in
-               (* Drop the in-memory proof DAG from theorems defined by this
-                  theory now that we have the serialisable Linear_proof.t.
-                  We only drop `theorems` (not `param_theorems`) because
-                  param theorems belong to upstream theories which may still
-                  be referenced; their proofs were already wrapped in
-                  Pr_main by add_theory_items, so traversal stops at them
-                  anyway. *)
-               List.iter K.Thm.drop_proof (K.Theory.theorems theory);
-               Some lps
-             with _ -> None
+             (try
+                let lps =
+                  let@ _sp =
+                    Trace.with_span ~__FILE__ ~__LINE__
+                      "build-zip.linearize-proofs" ~data:(fun () ->
+                        [
+                          "name", `String name;
+                          "n_thms", `Int (List.length thms);
+                        ])
+                  in
+                  List.map K.Linear_proof.of_thm_proof thms
+                in
+                Some lps
+              with _ -> None)
+             |> fun result ->
+             (* Drop proof DAGs for this theory's own theorems and param
+                theorems. With topological ordering of the build loop,
+                all upstream theories are encoded before this one, so
+                their Pr_step trees are no longer needed.
+                drop_proof is idempotent (Pr_dummy -> Pr_dummy). *)
+             List.iter K.Thm.drop_proof thms;
+             List.iter K.Thm.drop_proof (K.Theory.param_theorems theory);
+             result
            in
            let data =
              let@ _sp =
@@ -597,7 +601,12 @@ let build ~output ~(eval : Eval.state) ~(ts : tracked_storage)
                  [ "name", `String name; "bytes", `Int (String.length data) ])
            in
            Zip.add_entry data zf (name ^ entry_suffix);
-           incr n_theories
+           incr n_theories;
+           (* Clear theorem lists from the theory object itself. All
+              downstream theories that used these lists for compose/union
+              have already been evaluated (topo order). Frees sequent
+              objects accumulated in theory_in_theorems. *)
+           K.Theory.drop_theorems theory
          with e ->
            Format.eprintf "build-zip: encode error in %s: %s@." name
              (Printexc.to_string e)))

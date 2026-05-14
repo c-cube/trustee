@@ -119,7 +119,43 @@ let main ~dir ~serve ~port () =
   if !build_zip <> "" then (
     (* build-zip: evaluate all theories with store_proofs=true and write zip *)
     let output = !build_zip in
-    let names = Iter.map Thy_file.name theories in
+    (* Topological sort: encode a theory only after all its requires are
+       encoded. This ensures proof DAGs can be freed as early as possible
+       because upstream theories are always processed before downstream ones. *)
+    let names =
+      let all = List.map Thy_file.name (Iter.to_list theories) in
+      let name_set = Str_set.of_list all in
+      (* deps: unversioned name -> list of unversioned dep names *)
+      let deps name =
+        try
+          let thy = Idx.find_thy idx name in
+          Thy_file.requires thy
+          |> List.filter_map (fun req ->
+                 (* req may be versioned; find it in idx and get unversioned *)
+                 try Some (Idx.find_thy idx req |> Thy_file.name)
+                 with _ -> None)
+          |> List.filter (fun d -> Str_set.mem d name_set)
+        with _ -> []
+      in
+      let sorted = ref [] in
+      let visiting = Str_tbl.create 64 in
+      let visited = Str_tbl.create 64 in
+      let rec visit name =
+        if not (Str_tbl.mem visited name) then
+          if Str_tbl.mem visiting name then
+            ()
+          (* cycle: skip *)
+          else (
+            Str_tbl.add visiting name ();
+            List.iter visit (deps name);
+            Str_tbl.remove visiting name;
+            Str_tbl.add visited name ();
+            sorted := name :: !sorted
+          )
+      in
+      List.iter visit all;
+      Iter.of_list (List.rev !sorted)
+    in
     let ts =
       match ts_opt with
       | Some ts -> ts
