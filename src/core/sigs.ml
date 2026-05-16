@@ -30,17 +30,11 @@ end
 
 module type SER = sig
   type t
-
-  val enc : t Cbor_pack.Enc.t
-  val dec : t Cbor_pack.Dec.t
 end
 
 module type SER1 = sig
   type t
   type state
-
-  val enc : t Cbor_pack.Enc.t
-  val dec : state -> t Cbor_pack.Dec.t
 end
 
 let pp_list ?(sep = " ") ppx out l =
@@ -52,5 +46,13 @@ let pp_iter ?(sep = " ") ppx out iter =
 let[@inline] ( let@ ) f x = f x
 
 module Str_tbl = CCHashtbl.Make (CCString)
+
+module Int_tbl = CCHashtbl.Make (struct
+  type t = int
+
+  let equal (a : int) (b : int) = a = b
+  let hash (n : int) = n land max_int
+end)
+
 module Str_map = CCMap.Make (CCString)
 module Str_set = CCSet.Make (CCString)

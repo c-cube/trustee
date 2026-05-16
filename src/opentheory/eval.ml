@@ -111,6 +111,9 @@ type state = {
   cb: callbacks;
 }
 
+let ctx (self : state) = self.ctx
+let dummy_info : eval_info = { info = "(loaded from zip)"; time = 0.; sub = [] }
+
 let create ?(cb = new default_callbacks) ?(progress_bar = false) ~ctx ~idx () :
     state =
   { ctx; idx; progress_bar; theories = Str_tbl.create 32; cb }
@@ -155,13 +158,9 @@ let add_theory_items (idx : Idx.t) (th : K.Theory.t) =
   in
 
   consts (fun c ->
-      let h = K.Const.chash c in
-      Chash.Tbl.replace idx.Idx.by_hash h (Idx.H_const c));
+      Str_tbl.replace idx.Idx.by_name (K.Const.name c) (Idx.H_const c));
 
-  thms (fun th ->
-      K.Thm.make_main_proof th;
-      let h = K.Thm.chash th in
-      Chash.Tbl.replace idx.Idx.by_hash h (Idx.H_thm th));
+  thms (fun th -> K.Thm.make_main_proof th);
 
   ()
 
@@ -227,6 +226,10 @@ and eval_rec_real_ (self : state) uv_name (th : Thy_file.t) :
 (* check a sub-entry of a theory file *)
 and check_sub_ (self : state) ~requires th (sub : Thy_file.sub) :
     K.Theory.t * eval_info =
+  let@ _sp =
+    Trace.with_span ~__FILE__ ~__LINE__ "check-sub" ~data:(fun () ->
+        [ "th", `String th.Thy_file.name; "sub", `String sub.Thy_file.sub_name ])
+  in
   (* process imports *)
   let imports, subs =
     let l =
@@ -255,8 +258,11 @@ and check_sub_ (self : state) ~requires th (sub : Thy_file.sub) :
   | None, None ->
     (* union of imports *)
     let t0 = now () in
+    let@ _sp =
+      Trace.with_span ~__FILE__ ~__LINE__ "theory-union" ~data:(fun () ->
+          [ "name", `String th_name ])
+    in
     let r = K.Theory.union self.ctx ~name:th_name imports in
-
     let ei =
       mk_ei ~time:(since_s t0)
         ~info:(spf "union [%s]" (String.concat ", " @@ List.map fst subs))
@@ -272,11 +278,19 @@ and check_sub_ (self : state) ~requires th (sub : Thy_file.sub) :
     if imports = [] && Str_map.is_empty interp then
       th_p, ei0
     else if imports = [] then
+      let@ _sp =
+        Trace.with_span ~__FILE__ ~__LINE__ "theory-instantiate"
+          ~data:(fun () -> [ "package", `String p; "name", `String th_name ])
+      in
       ( K.Theory.instantiate ~interp th_p,
         mk_ei
           ~time:(now () -. t0)
           ~info:"instantiate" ~sub:(("th", ei0) :: subs) () )
     else
+      let@ _sp =
+        Trace.with_span ~__FILE__ ~__LINE__ "theory-compose" ~data:(fun () ->
+            [ "package", `String p; "name", `String th_name ])
+      in
       ( K.Theory.compose ~interp imports th_p,
         mk_ei
           ~time:(now () -. t0)
@@ -328,6 +342,10 @@ and process_import_ (self : state) ~requires th (name : string) : K.Theory.t * _
 
 (* process a require, looking for a theory with that name *)
 and process_requires_ self _th (name : string) : K.Theory.t * _ =
+  let@ _sp =
+    Trace.with_span ~__FILE__ ~__LINE__ "process-requires" ~data:(fun () ->
+        [ "name", `String name ])
+  in
   eval_rec_ self name
 
 let eval_theory (self : state) name0 : (K.Theory.t * eval_info) or_error =

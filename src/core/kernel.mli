@@ -24,16 +24,12 @@ type bvar = {
 }
 
 type expr_set
-(** A set of expressions. *)
 
 type sequent = private {
   concl: expr;
   hyps: expr_set;
 }
-(** A sequent [hyps |- concl]. It does not necessarily represent a valid
-    theorem; it can also represent an hypothesis, or a goal. *)
 
-(** Main view on expressions *)
 type expr_view =
   | E_kind
   | E_type
@@ -43,7 +39,12 @@ type expr_view =
   | E_app of expr * expr
   | E_lam of string * expr * expr
   | E_arrow of expr * expr
-  | E_box of sequent (* reified sequent *)
+  | E_box of sequent
+
+type ty_or_error =
+  | Kind
+  | Ty of expr
+  | Ill_typed of string
 
 (** Logic constants *)
 module Const : sig
@@ -58,26 +59,28 @@ module Const : sig
     | C_arity of int
 
   val name : t -> string
-  val cname : t -> Cname.t
   val chash : t -> Chash.t
   val args : t -> args
   val ty : t -> ty
+  val labels : t -> (string * string) list
   val pp_args : args Fmt.printer
   val pp_with_ty : t Fmt.printer
   val eq : ctx -> t
   val bool : ctx -> t
-
   val select : ctx -> t
-  (** Choice constant *)
-
   val get_def : ctx -> t -> def option
   val get_def_exn : ctx -> t -> def
+
+  val make_from_parts : name:string -> ty:ty -> args:args -> t
+  (** Reconstruct a const record from its parts, without registering it in any
+      storage. Useful for decoding consts from a serialised format where the
+      definition is stored separately. *)
+
+  val key_const_def : string -> string
+  (** Storage key for a const def, given the const name. *)
 end
 
-(** Constant definitions.
-
-    The definition of a constant is saved separately and might be saved on disk,
-    erased (forgotten), stored remotely, etc. *)
+(** Constant definitions. *)
 module Const_def : sig
   type t = const_def
 
@@ -85,13 +88,9 @@ module Const_def : sig
   include Sigs.SER1 with type t := t and type state := ctx
 
   val approx_def : t -> [ `Other | `Param | `Ty_def of expr | `Def of expr ]
-  (** An approximation of the definition *)
 end
 
-(** Proofs.
-
-    A proof is a series of steps that can be used to construct a theorem using
-    the base rules of HOL, and other existing theorems. *)
+(** Proofs. *)
 module Proof : sig
   type arg =
     | Pr_expr of expr
@@ -110,11 +109,7 @@ module Proof : sig
   val is_main_or_dummy : t -> bool
 end
 
-(** Linear proofs.
-
-    A linear proof is a sequential, step-by-step representation of the proof of
-    a theorem, using rules and other lemmas. It is intended to be serializable
-    and printable for human consumption. *)
+(** Linear proofs. *)
 module Linear_proof : sig
   type t
 
@@ -133,6 +128,13 @@ module Linear_proof : sig
 
   val steps : t -> (int * step) Iter.t
   val of_thm_proof : thm -> t
+  val make_from_steps : step array -> t
+end
+
+(** Minidag encode/decode for [Linear_proof.t]. *)
+module Linear_proof_mg : sig
+  val encode : Linear_proof.t -> string
+  val decode : ctx -> string -> Linear_proof.t
 end
 
 (** Free Variables *)
@@ -204,7 +206,7 @@ module Expr : sig
     | E_app of t * t
     | E_lam of string * expr * expr
     | E_arrow of expr * expr
-    | E_box of sequent (* reified sequent *)
+    | E_box of sequent
 
   val chash : t -> Chash.t
 
@@ -215,9 +217,6 @@ module Expr : sig
   include Sigs.SER1 with type t := t and type state := ctx
 
   val pp_depth : max_depth:int -> t Fmt.printer
-  (** Print the term and insert ellipsis in subterms above given depth. Useful
-      to print very deep terms *)
-
   val view : t -> view
   val ty : t -> ty option
   val ty_exn : t -> ty
@@ -225,23 +224,13 @@ module Expr : sig
   val is_eq_to_type : t -> bool
   val is_eq_to_bool : t -> bool
   val is_a_bool : t -> bool
-
   val is_a_type : t -> bool
-  (** Is the type of [e] equal to [Type]? *)
-
   val is_lam : t -> bool
   val is_arrow : t -> bool
-
+  val is_error : t -> bool
   val iter : f:(bool -> t -> unit) -> t -> unit
-  (** [iter ~f e] calls [f] on immediate subterms of [e]. It calls [f true u] if
-      [u] is an immediate subterm under a binder, and [f false u] otherwise. *)
-
   val exists : f:(bool -> t -> bool) -> t -> bool
-  (** Is there an immediate subterm of [t] satisfying [f]? *)
-
   val for_all : f:(bool -> t -> bool) -> t -> bool
-  (** Do all immediate subterms of [t] satisfy [f]? *)
-
   val contains : t -> sub:t -> bool
   val free_vars : ?init:Var.Set.t -> t -> Var.Set.t
   val free_vars_iter : t -> var Iter.t
@@ -257,9 +246,6 @@ module Expr : sig
   module Tbl : CCHashtbl.S with type key = t
 
   val iter_dag : iter_ty:bool -> f:(t -> unit) -> t -> unit
-  (** [iter_dag ~f e] calls [f] once on each unique subterm of [e].
-      @param iter_ty if true, also recurse in each subterm's type. *)
-
   val iter_dag' : iter_ty:bool -> t -> t Iter.t
 
   type 'a with_ctx = ctx -> 'a
@@ -281,28 +267,37 @@ module Expr : sig
   val lambda_db : (name:string -> ty_v:ty -> t -> t) with_ctx
   val arrow : (t -> t -> t) with_ctx
   val arrow_l : (t list -> t -> t) with_ctx
-
   val box : (sequent -> t) with_ctx
-  (** [box (A1…An |- b)] is a term that wraps the sequent in an opaque box,
-      which is equal only to itself. Boxes can be useful to carry assumptions
-      around before eventually resolving them, using {!Thm.box} and
-      {!Thm.assume_box}.
-
-      We denote [box (A1…An |- b)] by [ « A1…An |- B » ]. *)
-
   val map : (f:(bool -> t -> t) -> t -> t) with_ctx
-  (** [map ~f t] maps [f] over the immediate subterms, giving it [true] if it
-      enters a binder, [false] if not. *)
-
   val db_shift : (t -> int -> t) with_ctx
-
   val open_lambda : (t -> (var * t) option) with_ctx
-  (** [open_lambda (\x. t)] introduces a new free variable [y], and returns
-      [Some (y, t[x := y])]. Otherwise it returns [None] *)
-
   val open_lambda_exn : (t -> var * t) with_ctx
-  (** Unsafe version of {!open_lambda}.
-      @raise Error.Error if the term is not a lambda. *)
+  val mk_error : (string -> t) with_ctx
+  val app_or_error : (t -> t -> t) with_ctx
+  val lambda_or_error : (var -> t -> t) with_ctx
+
+  val mg_enc_expr : int Tbl.t -> Trustee_minidag.Encode.t -> expr -> int
+  (** Low-level minidag encoding helpers, exposed for use by [proof.ml] and
+      other modules that sit above [expr.ml] in the dependency graph. *)
+
+  val mg_dec_expr :
+    ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> expr
+
+  val mg_enc_var : int Tbl.t -> Trustee_minidag.Encode.t -> var -> int
+
+  val mg_dec_var :
+    ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> var
+
+  val mg_enc_seq : int Tbl.t -> Trustee_minidag.Encode.t -> sequent -> int
+
+  val mg_dec_seq :
+    ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> sequent
+
+  val mg_enc_const_def :
+    int Tbl.t -> Trustee_minidag.Encode.t -> const_def -> int
+
+  val mg_dec_const_def :
+    ctx -> Trustee_minidag.Decode.t -> expr Int_tbl.t -> int -> const_def
 end
 
 module Sequent : sig
@@ -323,29 +318,23 @@ module Sequent : sig
   val iter_exprs : t -> Expr.t Iter.t
 
   include Sigs.PP with type t := t
-  (* TODO
-     include Sigs.SER with type t := t and type state := ctx
-  *)
 end
 
 (** Data returned by a new type definition *)
 module New_ty_def : sig
   type t = {
-    tau: ty_const;  (** The new type constructor *)
-    fvars: var list;  (** List of type variables *)
-    c_abs: const;  (** Function from the general type to [tau] *)
-    c_repr: const;  (** Function from [tau] back to the general type *)
-    abs_thm: thm;  (** [abs_thm] is [|- abs (repr x) = x] *)
-    abs_x: var;  (** Variable used in [abs_thm] *)
-    repr_thm: thm;  (** [repr_thm] is [|- Phi x <=> repr (abs x) = x] *)
-    repr_x: var;  (** Variable used in [repr_thm] *)
+    tau: ty_const;
+    fvars: var list;
+    c_abs: const;
+    c_repr: const;
+    abs_thm: thm;
+    abs_x: var;
+    repr_thm: thm;
+    repr_x: var;
   }
 end
 
-(** {2 Theorems and Deduction Rules}
-
-    The API to build theorems ensure that only valid theorems are produced,
-    following the LCF tradition. *)
+(** {2 Theorems and Deduction Rules} *)
 
 (** Theorem API. *)
 module Thm : sig
@@ -361,92 +350,38 @@ module Thm : sig
   include Sigs.HASH with type t := t
 
   val sequent : t -> Sequent.t
-  (** View theorem as a sequent. *)
-
   val is_fully_concrete : t -> bool
-  (** [is_fully_concrete th] is true iff [th]'s expressions are entirely made of
-      fully concrete constants (as opposed to theory parameters) *)
-
   val chash : t -> Chash.t
-
   val proof : t -> Proof.t
-  (** Recover stored proof. Actual proof are stored only if the context was
-      created using [Ctx.create ~store_proofs:true]. *)
-
   val make_main_proof : t -> unit
-  (** [make_main_proof thm] wraps the proof of [thm] with {!Pr_main}, so as to
-      indicate that other proofs should stop there. *)
+
+  val drop_proof : t -> unit
+  (** Release the proof DAG (replace with [Pr_dummy]) to reclaim memory once the
+      proof has been serialised. *)
 
   val hyps_iter : t -> expr iter
   val hyps_l : t -> expr list
-
   val hyps_sorted_l : t -> expr list
-  (** List of hypothesis of this theorem, sorted, and deduplicated. *)
-
   val iter_exprs : t -> Expr.t Iter.t
-
   val n_hyps : t -> int
-  (** Number of hypothesis of this theorem *)
-
   val has_hyps : t -> bool
-  (** Does this theorem have any hypothesis? Similar to [n_hyps th > 0] but
-      faster *)
-
-  (* TODO: store proofs optionally *)
-
   val is_proof_of : t -> Sequent.t -> bool
-  (** Is this theorem a proof of the given goal? *)
 
   type 'a with_ctx = ctx -> 'a
 
-  (** {3 Deduction rules} *)
-
   val assume : (expr -> t) with_ctx
-  (** [assume e] returns [e |- e]. *)
-
   val axiom : (expr list -> expr -> t) with_ctx
-  (** [axiom hyps e] is [hyps |- e]. Fails if [pledge_no_more_axioms] was called
-  *)
-
   val cut : (t -> t -> t) with_ctx
-  (** [cut (F1 |- b) (F2, b |- c)] is [F1, F2 |- c]. Fails if [b] does not occur
-      {b syntactically} in the hypothesis of the second theorem. *)
-
   val refl : (expr -> t) with_ctx
-  (** [refl e] returns [|- e=e] *)
-
   val congr : (t -> t -> t) with_ctx
-  (** [congr (|- f=g) (|- t=u)] is [|- (f t) = (g u)] *)
-
   val subst : recursive:bool -> (t -> Subst.t -> t) with_ctx
-  (** [subst (A |- t) \sigma] is [A\sigma |- t\sigma] *)
-
   val sym : (t -> t) with_ctx
-  (** [sym (|- t=u)] is [|- u=t] *)
-
   val trans : (t -> t -> t) with_ctx
-  (** trans (F1 |- t=u)] [(F2 |- u=v)] is [F1, F2 |- t=v] *)
-
   val bool_eq : (t -> t -> t) with_ctx
-  (** [bool_eq (F1 |- a) (F2 |- a=b)] is [F1, F2 |- b]. This is the boolean
-      equivalent of transitivity. *)
-
   val bool_eq_intro : (t -> t -> t) with_ctx
-  (** [bool_eq_intro (F1, a |- b) (F2, b |- a)] is [F1, F2 |- b=a]. This is a
-      way of building a boolean [a=b] from proofs of [a|-b] and [b|-a]. *)
-
   val beta_conv : (expr -> t) with_ctx
-  (** [beta_conv ((λx.u) a)] is [|- (λx.u) a = u[x:=a]]. Fails if the term is
-      not a beta-redex. *)
-
   val abs : (var -> t -> t) with_ctx
-  (** [abs (F |- a=b) x] is [F |- (\x. a) = (\x. b)] fails if [x] occurs in [F].
-  *)
-
   val new_basic_definition : (expr -> t * const) with_ctx
-  (** [new_basic_definition (x=t)] where [x] is a variable and [t] a term with a
-      closed type, returns a theorem [|- x=t] where [x] is now a constant, along
-      with the constant [x]. *)
 
   val new_basic_type_definition :
     (?ty_vars:ty_var list ->
@@ -457,51 +392,12 @@ module Thm : sig
     unit ->
     New_ty_def.t)
     with_ctx
-  (** Introduce a new type operator.
-
-      Here, too, we follow HOL light:
-      [new_basic_type_definition(tau, abs, repr, inhabited)] where [inhabited]
-      is the theorem [|- Phi x] with [x : ty], defines a new type operator named
-      [tau] and two functions, [abs : ty -> tau] and [repr: tau -> ty].
-
-      It returns a struct [New_ty_def.t] containing [tau, absthm, reprthm],
-      where:
-      - [tau] is the new (possibly parametrized) type operator
-      - [absthm] is [|- abs (repr x) = x]
-      - [reprthm] is [|- Phi x <=> repr (abs x) = x]
-
-      @param ty_var
-        if provided, use the type variables in the given order. It must be the
-        exact set of free variables of [thm_inhabited]. *)
 
   val box : (thm -> thm) with_ctx
-  (** [box (A1…An |- B)] is the new theorem [|- « A1…An |- B »]. It can be used
-      to discharge assumptions from other theorems that assumed [A1…An|-B] to be
-      true. *)
-
   val assume_box : (sequent -> thm) with_ctx
-  (** [assume_box (A1…An ?- B)] takes a sequent, and makes a conditional theorem
-      out of it.
-
-      The result is [« A1…An |- B », A1, …, An |- B]. This is {b almost}, but
-      not quite, the original sequent, except for the additional box hypothesis.
-      One can use this result, as if [A1…An |- B] was proved, and proceeed;
-      later, the box can be discharged by proving [A1…An |- b] and using {!box},
-      and then using {!cut} to remove the box [« A1…An |- B»] in the hypothesis.
-  *)
 end
 
-(** {2 Theories}
-
-    Theories are similar to OpenTheory's theories.
-
-    A theory bundles input constants/theorems (assumptions), and defined
-    constants/theorems (proved in the theory). It can be composed or interpreted
-    (renaming of constants).
-
-    TODO: make the theories explicit and always present in the theorems (using
-    perhaps some form of patricia tree with good sharing, so it's easy to merge
-    theories when applying binary inference rules *)
+(** {2 Theories} *)
 
 (** Theory *)
 module Theory : sig
@@ -511,80 +407,37 @@ module Theory : sig
 
   val with_ : ctx -> name:string -> (t -> unit) -> t
   val name : t -> string
-
   val assume : t -> expr list -> expr -> thm
-  (** [assume theory hyps concl] creates the theorem [hyps |- concl] as a
-      parameter of the theory [theory]. *)
-
   val add_assumption_const : t -> const -> unit
-
   val assume_const : t -> string -> ty_var list -> ty -> const
-  (** [assume_ty_const theory name vars ty] creates a new constant with type
-      paramters [vars] and type [ty]. It adds it to the theory's parameters. *)
-
   val assume_ty_const : t -> string -> arity:int -> const
-  (** [assume_ty_const theory name ~arity] creates a new type constant with
-      given arity and adds it to the theory's parameters. *)
-
   val add_const : t -> const -> unit
-  (** Add defined constant to the theory's output *)
-
   val add_ty_const : t -> ty_const -> unit
-  (** Add defined type constant to the theory's output *)
-
   val add_theorem : t -> thm -> unit
-  (** Add derived theorem to the theory's output *)
+
+  val add_param_theorem : t -> thm -> unit
+  (** Add a thm to the list of parameter (input) theorems. *)
 
   val find_const : t -> string -> const option
-  (** Find a constant used or defined in this theory by its name *)
-
   val find_ty_const : t -> string -> ty_const option
-  (** Find a type constant used or defined in this theory by its name *)
-
   val param_consts : t -> const list
   val param_theorems : t -> thm list
   val consts : t -> const list
   val theorems : t -> thm list
 
-  (** {3 Composition} *)
+  val drop_theorems : t -> unit
+  (** Clear the param and defined theorem lists to reclaim memory. Safe only
+      after all downstream theories that import this one have finished
+      evaluating (and been serialised). *)
 
   type interpretation = string Str_map.t
 
   val instantiate : interp:interpretation -> t -> t
-  (** [instantiate ~interp theory] renames constants according to [interpr].
-      This can change the types of some terms if [interp] renames type
-      constants.
-
-      {b NOTE} to function properly, this requires that the context the theory
-      depends has real storage available, because interpreting requires access
-      to some definitions. The reason is that the {!Chash.t} of a constant
-      depends on its definition, and the definition can change when interpreting
-      a theory (since the parameters might also change), therefore we need
-      access to the definitions to change them.
-
-      @raise Error.E if definitions cannot be accessed. *)
-
   val compose : ?interp:interpretation -> t list -> t -> t
-  (** [compose l theory], where [theory = Gamma |> Delta] proves [Delta] under
-      assumptions [Gamma], and where [l = [Gamma1 |> Delta1, …]] is a list of
-      theories, returns
-      [Gamma1, …, Gamma_n, Gamma \ {Delta1 U … U Delta_n} |> Delta].
-
-      In other words, it uses the theores proved in [l] to discharge some of the
-      assumptions in [theory], and adds assumptions of [l] to the result
-      instead.
-
-      @param interp
-        if provided, instantiate theory with this interpretation first. *)
-
   val union : ctx -> name:string -> t list -> t
-  (** Union of several theories *)
 end
 
-(** Context
-
-    The context is storing the term state, list of axioms, and other parameters.
-    Terms from distinct contexts must never be mixed. *)
+(** Context *)
 module Ctx : sig
   type t = ctx
 
@@ -595,26 +448,13 @@ module Ctx : sig
     ?store_concrete_definitions:bool ->
     unit ->
     t
-  (** Create a new context.
-      @param storage
-        storage backend for definitions, possibly proofs, etc. By default we use
-        the in-memory storage.
-      @param store_concrete_definitions
-        if true, we store all constant definitions using [storage]. If false
-        (default) we only store the definition of constants that depend on
-        theory parameters, as it's required for theory interpretations.
-      @param store_proofs
-        if true and a real storage is provided, theorems' proofs are stored in
-        the storage. *)
 
   val pledge_no_more_axioms : t -> unit
-  (** Forbid the creation of new axioms. From now on, this logical context is
-      frozen. *)
-
   val n_exprs : t -> int
   val axioms : t -> thm iter
   val new_skolem_const : t -> string -> var list -> ty -> const
   val new_skolem_ty_const : t -> string -> arity:int -> const
+  val storage : t -> Storage.t
 end
 
 (**/**)

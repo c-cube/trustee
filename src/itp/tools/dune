@@ -1,5 +1,0 @@
-; generate instructions for the VM
-
-(executable
- (modules mkinstr)
- (name mkinstr))

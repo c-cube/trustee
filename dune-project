@@ -1,7 +1,5 @@
 (lang dune 3.0)
 
-(using menhir 2.0)
-
 (generate_opam_files true)
 
 (name trustee)
@@ -41,7 +39,6 @@
   (trace
    (>= 0.10))
   sha
-  cbor
   (ppx_deriving :with-test)
   (qtest :with-test)
   (ounit2 :with-test)
@@ -61,47 +58,11 @@
    (= :version))
   (tiny_httpd
    (>= 0.16))
+  lru
   logs
   trace
   trace-tef
+  camlzip
+  tiny_httpd_camlzip
   (odoc :with-doc)))
 
-(package
- (name trustee-itp)
- (synopsis "Trustee-powered interactive theorem prover")
- (depends
-  (containers
-   (and
-    (>= 3.0)
-    (< 4.0)))
-  logs
-  cmdliner
-  (ocaml
-   (>= 4.08.0))
-  (odoc :with-doc)))
-
-(package
- (name trustee-lsp)
- (synopsis "LSP server for trustee")
- (license MIT)
- (tags
-  (logic proof HOL assistant))
- (depends
-  (dune
-   (>= "2.0"))
-  (containers
-   (and
-    (>= 3.0)
-    (< 4.0)))
-  (trustee
-   (= :version))
-  (trustee-itp
-   (= :version))
-  logs
-  (linol
-   (and
-    (>= 0.10)
-    (< 0.11)))
-  (ocaml
-   (>= 4.06.0))
-  (odoc :with-doc)))

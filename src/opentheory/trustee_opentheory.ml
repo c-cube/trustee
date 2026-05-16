@@ -13,3 +13,7 @@ module Interp_file = Interp_file
 module Util = Util
 module Eval = Eval
 module Logger = Logger
+module Proof_zip = Proof_zip
+
+(* Print GC stats on exit, useful for tracking memory usage of the opentheory binary. *)
+let () = at_exit (fun () -> Gc.print_stat stderr)

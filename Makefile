@@ -22,6 +22,9 @@ doc:
 format:
 	@dune fmt --auto-promote
 
+format-check:
+	@dune fmt --display=quiet
+
 .PHONY: format clean
 
 KERNEL_DIR=$${HOME}/.local/share/jupyter/kernels/trustee_script/

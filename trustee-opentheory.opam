@@ -12,9 +12,12 @@ depends: [
   "containers" {>= "3.6" & < "4.0"}
   "trustee" {= version}
   "tiny_httpd" {>= "0.16"}
+  "lru"
   "logs"
   "trace"
   "trace-tef"
+  "camlzip"
+  "tiny_httpd_camlzip"
   "odoc" {with-doc}
 ]
 build: [

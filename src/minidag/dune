@@ -1,0 +1,4 @@
+(library
+ (name trustee_minidag)
+ (public_name trustee.minidag)
+ (modules encode decode))

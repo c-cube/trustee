@@ -1,4 +1,4 @@
 (library
  (name trustee_core)
  (public_name trustee.core)
- (libraries containers iter unix sha cbor))
+ (libraries containers iter unix sha trustee_minidag))
