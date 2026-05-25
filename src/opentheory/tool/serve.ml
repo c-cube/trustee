@@ -2,6 +2,7 @@ open Trustee_opentheory
 module Log = Trustee_core.Log
 module OT = Trustee_opentheory
 open OT.Common_
+module OTEL = Opentelemetry
 
 let top_wrap_ req f =
   try f ()
@@ -401,7 +402,12 @@ let h_render_seq (self : state) : unit =
         (Error (404, spf "seq not found at offset %d in %s" offset entry))
     | Some elt -> H.Response.make_string (Ok (Html.to_string elt)))
 
+let setup_otel () =
+  Opentelemetry_client_ocurl.setup ();
+  OTEL.Gc_metrics.setup ~min_interval_s:60 ()
+
 let create st ~port : state =
+  setup_otel ();
   let server = H.create ~addr:"127.0.0.1" ~port () in
   Tiny_httpd_camlzip.setup server;
   Tiny_httpd_prometheus.(instrument_server server global);
