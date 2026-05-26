@@ -419,6 +419,7 @@ let h_render_seq (self : state) : unit =
 
 let setup_otel () =
   Opentelemetry_client_ocurl.setup ();
+  Opentelemetry_trace.setup ();
   OTEL.Gc_metrics.setup ~min_interval_s:60 ()
 
 let create st ~port : state =
