@@ -4,6 +4,21 @@ module OT = Trustee_opentheory
 open OT.Common_
 module OTEL = Opentelemetry
 
+let trace_middleware : H.Middleware.t =
+ fun h req ~resp ->
+  let@ _span = Trace.with_span ~parent:None ~__FILE__ ~__LINE__ "http.handle" in
+  Trace.add_data_to_span _span
+    [
+      "http.path", `String req.path;
+      "http.method", `String (H.Meth.to_string req.meth);
+    ];
+  let resp (response : H.Response.t) =
+    Trace.add_data_to_span _span [ "http.response.code", `Int response.code ];
+    resp response
+  in
+  h req ~resp
+
+
 let top_wrap_ req f =
   try f ()
   with Error.E e ->
@@ -408,7 +423,9 @@ let setup_otel () =
 
 let create st ~port : state =
   setup_otel ();
-  let server = H.create ~addr:"127.0.0.1" ~port () in
+  let server =
+    H.create ~addr:"127.0.0.1" ~port
+      ~middlewares:[ `Stage 1, trace_middleware ] () in
   Tiny_httpd_camlzip.setup server;
   Tiny_httpd_prometheus.(instrument_server server global);
   let state = { server; st; port } in
