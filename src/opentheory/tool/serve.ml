@@ -18,7 +18,6 @@ let trace_middleware : H.Middleware.t =
   in
   h req ~resp
 
-
 let top_wrap_ req f =
   try f ()
   with Error.E e ->
@@ -426,7 +425,9 @@ let create st ~port : state =
   setup_otel ();
   let server =
     H.create ~addr:"127.0.0.1" ~port
-      ~middlewares:[ `Stage 1, trace_middleware ] () in
+      ~middlewares:[ `Stage 1, trace_middleware ]
+      ()
+  in
   Tiny_httpd_camlzip.setup server;
   Tiny_httpd_prometheus.(instrument_server server global);
   let state = { server; st; port } in
