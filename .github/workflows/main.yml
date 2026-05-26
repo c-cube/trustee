@@ -23,6 +23,6 @@ jobs:
         submodules:
           recursive
     - run: opam pin -n .
-    - run: apt update && opam install -t . --deps-only
+    - run: apt update && opam update && opam install -t . --deps-only
     - run: opam exec -- dune build -p trustee,trustee-opentheory
     - run: opam exec -- dune runtest -p trustee,trustee-opentheory
