@@ -15,6 +15,17 @@
   tiny_httpd.prometheus
   tiny_httpd_camlzip))
 
+(executable
+ (name browse_zip)
+ (flags :standard -warn-error -a+8 -open Trustee_core.Sigs)
+ (libraries
+  containers
+  trustee.core
+  trustee-opentheory
+  tiny_httpd
+  tiny_httpd_camlzip
+  hx_inspect))
+
 (rule
  (targets static.ml)
  (deps
