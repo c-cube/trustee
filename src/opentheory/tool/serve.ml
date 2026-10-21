@@ -123,13 +123,13 @@ let h_root (self : state) : unit =
             (thy_by_name |> Str_tbl.to_list
             |> List.sort CCOrd.(map fst string)
             |> List.map (fun (name, _th) ->
-                   li
-                     [ A.class_ "list-group-item" ]
-                     [
-                       a
-                         [ A.href (spf "/thy/%s" (H.Util.percent_encode name)) ]
-                         [ txt name ];
-                     ]));
+                li
+                  [ A.class_ "list-group-item" ]
+                  [
+                    a
+                      [ A.href (spf "/thy/%s" (H.Util.percent_encode name)) ]
+                      [ txt name ];
+                  ]));
         ];
     ]
   in
@@ -199,10 +199,10 @@ let make_config_ self thy_name =
   let open_namespaces =
     thy.Thy_file.meta
     |> List.filter_map (fun (mk, v) ->
-           if mk = "show" then
-             Some (Util.unquote_str v ^ ".")
-           else
-             None)
+        if mk = "show" then
+          Some (Util.unquote_str v ^ ".")
+        else
+          None)
   in
   Log.debugf 2 (fun k ->
       k "open namespaces: [%s]" (String.concat "; " open_namespaces));

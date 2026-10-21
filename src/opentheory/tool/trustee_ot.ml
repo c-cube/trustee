@@ -131,9 +131,8 @@ let main ~dir ~serve ~port () =
           let thy = Idx.find_thy idx name in
           Thy_file.requires thy
           |> List.filter_map (fun req ->
-                 (* req may be versioned; find it in idx and get unversioned *)
-                 try Some (Idx.find_thy idx req |> Thy_file.name)
-                 with _ -> None)
+              (* req may be versioned; find it in idx and get unversioned *)
+              try Some (Idx.find_thy idx req |> Thy_file.name) with _ -> None)
           |> List.filter (fun d -> Str_set.mem d name_set)
         with _ -> []
       in

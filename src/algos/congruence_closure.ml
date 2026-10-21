@@ -313,10 +313,10 @@ let prove_cc_false (ctx : K.ctx) ~prove_false ~not_e (hyps : K.thm list) :
   let pos, neg =
     hyps
     |> CCList.partition_filter_map (fun th ->
-           let concl = K.Thm.concl th in
-           match as_not concl with
-           | None -> `Left (concl, th)
-           | Some e' -> `Right (concl, e', th))
+        let concl = K.Thm.concl th in
+        match as_not concl with
+        | None -> `Left (concl, th)
+        | Some e' -> `Right (concl, e', th))
   in
 
   (* add all positive and negative terms to a CC *)
@@ -324,29 +324,29 @@ let prove_cc_false (ctx : K.ctx) ~prove_false ~not_e (hyps : K.thm list) :
   let pos =
     pos
     |> List.map (fun (e, th) ->
-           add_thm' self th;
-           add_ self e, th)
+        add_thm' self th;
+        add_ self e, th)
   in
   let neg =
     neg
     |> List.map (fun (c, e, th) ->
-           add_thm' self th;
-           c, add_ self e, th)
+        add_thm' self th;
+        c, add_ self e, th)
   in
 
   update self;
 
   Iter.product (Iter.of_list pos) (Iter.of_list neg)
   |> Iter.find_map (fun ((n_pos, th_pos), (_concl_neg, n_neg, th_neg)) ->
-         if find n_pos == find n_neg then (
-           (* th1: [|- e_pos = e_neg] *)
-           let th1 = prove_eq self n_pos n_neg in
+      if find n_pos == find n_neg then (
+        (* th1: [|- e_pos = e_neg] *)
+        let th1 = prove_eq self n_pos n_neg in
 
-           (* th2: [|- e_neg] via [th_pos] which is [|- e_pos] and [|- e_pos=e_neg] *)
-           let th2 = K.Thm.bool_eq ctx th_pos th1 in
+        (* th2: [|- e_neg] via [th_pos] which is [|- e_pos] and [|- e_pos=e_neg] *)
+        let th2 = K.Thm.bool_eq ctx th_pos th1 in
 
-           (* th3: [|- false] from [|- e_neg] and [|- ¬ e_neg] (ie. th_neg) *)
-           let th3 = prove_false ctx th2 th_neg in
-           Some th3
-         ) else
-           None)
+        (* th3: [|- false] from [|- e_neg] and [|- ¬ e_neg] (ie. th_neg) *)
+        let th3 = prove_false ctx th2 th_neg in
+        Some th3
+      ) else
+        None)

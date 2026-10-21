@@ -164,8 +164,8 @@ let versioned_name self = spf "%s-%s" self.name self.version
 let requires self : _ list =
   self.meta
   |> CCList.filter_map (function
-       | "requires", s -> Some s
-       | _ -> None)
+    | "requires", s -> Some s
+    | _ -> None)
 
 let sub_packages self : _ list =
   let l = ref [] in
@@ -195,8 +195,8 @@ let parse ~dir : t P.t =
       let key = String.sub key 0 (String.length key - 1) in
       P.skip_space
       *> P.chars1_if (function
-           | '\n' -> false
-           | _ -> true)
+        | '\n' -> false
+        | _ -> true)
       >>= fun v -> P.return (I_kv (key, v))
     ) else
       P.skip_space *> P.char '{' *> P.skip_white *> pitems [] >>= fun l ->

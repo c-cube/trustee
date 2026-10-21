@@ -633,8 +633,8 @@ let compute_db_depth_ e : int =
 
 let compute_has_fvars_ e : bool =
   (match ty e with
-  | None -> false
-  | Some ty -> has_fvars ty)
+    | None -> false
+    | Some ty -> has_fvars ty)
   ||
   match view e with
   | E_var _ -> true

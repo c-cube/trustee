@@ -153,13 +153,13 @@ let to_array a = Array.sub a.data 0 a.sz
 let equal p a b =
   a.sz = b.sz
   &&
-  try
-    for i = 0 to a.sz - 1 do
-      if not (p (Array.unsafe_get a.data i) (Array.unsafe_get b.data i)) then
-        raise Exit
-    done;
-    true
-  with Exit -> false
+    try
+      for i = 0 to a.sz - 1 do
+        if not (p (Array.unsafe_get a.data i) (Array.unsafe_get b.data i)) then
+          raise Exit
+      done;
+      true
+    with Exit -> false
 
 let of_list l : _ t =
   match l with

@@ -35,16 +35,16 @@ let p_white_ =
   *> (eoi
      <|> char '#'
          *> P.skip_chars (function
-              | '\n' -> false
-              | _ -> true)
+           | '\n' -> false
+           | _ -> true)
          *> self
      <|> return ())
 
 let p_quoted : string P.t =
   skip_white *> char '"'
   *> chars_if (function
-       | '"' -> false
-       | _ -> true)
+    | '"' -> false
+    | _ -> true)
   <* char '"'
 
 let parse_item : item P.t =

@@ -303,8 +303,8 @@ module Instantiate_ = struct
   let inst_constants_ (self : state) (m : const Name_k_map.t) : _ Name_k_map.t =
     Name_k_map.to_iter m
     |> Iter.map (fun ((k, _), c) ->
-           let c' = inst_const_ self c in
-           (k, c'.c_name), c')
+        let c' = inst_const_ self c in
+        (k, c'.c_name), c')
     |> Name_k_map.of_iter
 
   let inst_thm_ (self : state) theory (th : thm) : thm =

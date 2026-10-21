@@ -452,19 +452,17 @@ let linear_proof_to_html ?(config = Config.make ())
       let links =
         parents
         |> List.mapi (fun i n ->
-               let comma =
-                 if i > 0 then
-                   txt ", "
-                 else
-                   txt ""
-               in
-               span []
-                 [
-                   comma;
-                   a
-                     [ A.href (spf "#step%d" n); cls "proof-step" ]
-                     [ txtf "%d" n ];
-                 ])
+            let comma =
+              if i > 0 then
+                txt ", "
+              else
+                txt ""
+            in
+            span []
+              [
+                comma;
+                a [ A.href (spf "#step%d" n); cls "proof-step" ] [ txtf "%d" n ];
+              ])
       in
       span [] ([ txt "[" ] @ links @ [ txt "]" ])
   in

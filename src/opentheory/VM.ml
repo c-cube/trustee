@@ -249,8 +249,8 @@ let opType : rule =
     let args =
       l
       |> List.map (function
-           | O_ty ty -> ty
-           | o -> Error.failf (fun k -> k "typeOp: %a is not a type" pp_obj o))
+        | O_ty ty -> ty
+        | o -> Error.failf (fun k -> k "typeOp: %a is not a type" pp_obj o))
     in
     let ty = op self.ctx args in
     self.stack <- O_ty ty :: st

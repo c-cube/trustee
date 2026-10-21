@@ -126,7 +126,7 @@ let interpr_of_sub (sub : Thy_file.sub) : K.Theory.interpretation =
   let i = sub.Thy_file.interp in
   Interp_file.items_iter i
   |> Iter.map (function
-         | Interp_file.I_const (a, b) | Interp_file.I_ty (a, b) -> a, b)
+      | Interp_file.I_const (a, b) | Interp_file.I_ty (a, b) -> a, b)
   |> Str_map.of_iter
 
 (* index individual content of theory *)
