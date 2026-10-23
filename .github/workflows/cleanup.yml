@@ -1,0 +1,12 @@
+name: cleanup
+on:
+  schedule:
+    - cron: "17 4 * * 1" # weekly
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  ghcr:
+    uses: c-cube/c-cube-common/.github/workflows/ghcr-cleanup.yml@170b6600d0c23345f76d93ddb123462f982f9f6c
