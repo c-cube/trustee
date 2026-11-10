@@ -23,6 +23,9 @@ val open_zip : string -> zip_handle
 val close_zip : zip_handle -> unit
 val theory_names : zip_handle -> string list
 
+val sweep : zip_handle -> unit
+(** Drop entries that have been idle for longer than the TTL. *)
+
 val restore_storage : zip_handle -> K.ctx -> unit
 (** Restore const-def storage from the zip's [_storage/*] entries into ctx. *)
 
@@ -38,8 +41,8 @@ val load_proofs :
 
 val load_proof_at :
   zip_handle -> ctx:K.ctx -> name:string -> idx:int -> K.Linear_proof.t option
-(** Decode only the [idx]-th proof of the named theory. Cheaper than
-    [load_proofs] when a single proof is needed. *)
+(** Decode only the [idx]-th proof of the named theory. [None] if proofs are
+    unavailable, the theory is not loaded, or [idx] is out of bounds. *)
 
 val expr_offset_table : zip_handle -> string -> int K.Expr.Tbl.t option
 (** Return a table mapping [expr -> minidag_byte_offset] for the named entry.

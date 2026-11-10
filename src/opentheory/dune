@@ -9,5 +9,5 @@
   trace.core
   tiny_httpd
   logs
-  camlzip
-  lru))
+  mtime.clock.os
+  camlzip))

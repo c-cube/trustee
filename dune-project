@@ -58,7 +58,6 @@
    (= :version))
   (tiny_httpd
    (>= 0.16))
-  lru
   logs
   trace
   trace-tef

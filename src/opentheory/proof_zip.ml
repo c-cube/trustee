@@ -19,6 +19,7 @@
 
 open Common_
 module Storage = Trustee_core.Storage
+module Log = Trustee_core.Log
 module LP = K.Linear_proof
 module Enc = Trustee_minidag.Encode
 module Dec = Trustee_minidag.Decode
@@ -70,33 +71,47 @@ type entry_cache = {
       (** decode cache: offset -> expr (built during decode) *)
   mutable ec_inv: int K.Expr.Tbl.t option;
       (** inverted: expr -> offset, built lazily *)
+  mutable ec_last_use: Mtime.t;
 }
-(** Per-entry data kept in the LRU cache. *)
+(** Per-entry data kept in the theory cache. *)
 
-module Theory_lru =
-  Lru.M.Make
-    (struct
-      type t = string
-
-      let equal = String.equal
-      let hash = Hashtbl.hash
-    end)
-    (struct
-      type t = entry_cache
-
-      let weight _ = 1
-    end)
+(* Decoded theories are big (tens of MB each); keep an entry only for a short
+   while after its last use, then drop it. *)
+let cache_ttl_s = 30.
 
 type zip_handle = {
   zf: Zip.in_file;
   entries: Zip.entry list;
-  theory_cache: Theory_lru.t;
+  theory_cache: entry_cache Str_tbl.t;
 }
 
 let open_zip (path : string) : zip_handle =
   let zf = Zip.open_in path in
   let entries = Zip.entries zf in
-  { zf; entries; theory_cache = Theory_lru.create 8 }
+  { zf; entries; theory_cache = Str_tbl.create 8 }
+
+(* Drop expired entries; runs before every lookup and before compaction. *)
+let sweep (zh : zip_handle) : unit =
+  let now = Mtime_clock.now () in
+  let dead = ref [] in
+  Str_tbl.iter
+    (fun name ec ->
+      if
+        Mtime.Span.to_float_ns (Mtime.span ec.ec_last_use now) /. 1e9
+        >= cache_ttl_s
+      then
+        dead := name :: !dead)
+    zh.theory_cache;
+  List.iter (Str_tbl.remove zh.theory_cache) !dead
+
+(* Find the entry for [name] if cached and not expired, updating last-use. *)
+let find_ (zh : zip_handle) (name : string) : entry_cache option =
+  sweep zh;
+  match Str_tbl.find_opt zh.theory_cache name with
+  | Some ec ->
+    ec.ec_last_use <- Mtime_clock.now ();
+    Some ec
+  | None -> None
 
 let close_zip (zh : zip_handle) : unit = Zip.close_in zh.zf
 
@@ -454,10 +469,8 @@ let find_entry (zh : zip_handle) (filename : string) : Zip.entry option =
 
 let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     K.Theory.t option =
-  match Theory_lru.find name zh.theory_cache with
-  | Some ec ->
-    Theory_lru.promote name zh.theory_cache;
-    Some ec.ec_theory
+  match find_ zh name with
+  | Some ec -> Some ec.ec_theory
   | None ->
     let entry_name = name ^ entry_suffix in
     (match find_entry zh entry_name with
@@ -467,14 +480,21 @@ let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
          let data = Zip.read_entry zh.zf entry in
          let ec_theory, ec_proof_off, ec_dec = decode_theory ctx name data in
          let ec =
-           { ec_theory; ec_proof_off; ec_data = data; ec_dec; ec_inv = None }
+           {
+             ec_theory;
+             ec_proof_off;
+             ec_data = data;
+             ec_dec;
+             ec_inv = None;
+             ec_last_use = Mtime_clock.now ();
+           }
          in
-         Theory_lru.add name ec zh.theory_cache;
-         Theory_lru.trim zh.theory_cache;
+         Str_tbl.replace zh.theory_cache name ec;
          Some ec_theory
        with e ->
-         Printf.eprintf "proof_zip.load_theory: decode error for %s: %s\n%!"
-           name (Printexc.to_string e);
+         Log.debugf 1 (fun k ->
+             k "proof_zip.load_theory: decode error for %s: %s" name
+               (Printexc.to_string e));
          None))
 
 (** Load the proof terms for an already-loaded theory on demand. Returns [None]
@@ -482,19 +502,15 @@ let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     yet via [load_theory]. *)
 let load_proofs (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     K.Linear_proof.t list option =
-  match Theory_lru.find name zh.theory_cache with
+  match find_ zh name with
   | None -> None
   | Some ec ->
-    Theory_lru.promote name zh.theory_cache;
     if ec.ec_proof_off < 0 then
       None
     else (
       try
         let dec = Dec.create ec.ec_data in
-        (* Throwaway cache: memoizing into [ec.ec_dec] would pin the whole proof
-           DAG (much bigger than the theory) until the entry expires. Decoded
-           exprs are hashconsed, so re-decoding still shares structure with the
-           theory's exprs. *)
+        (* temporary cache to not leak memory *)
         let cache : K.expr Int_tbl.t = Int_tbl.create 128 in
         Some
           (Dec.read_node dec ec.ec_proof_off (fun nd _cmd ->
@@ -502,8 +518,9 @@ let load_proofs (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
                let lp_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
                Array.to_list (Array.map (dec_lp_ ctx dec cache) lp_offs)))
       with e ->
-        Printf.eprintf "proof_zip.load_proofs: decode error for %s: %s\n%!" name
-          (Printexc.to_string e);
+        Log.debugf 1 (fun k ->
+            k "proof_zip.load_proofs: decode error for %s: %s" name
+              (Printexc.to_string e));
         None
     )
 
@@ -511,26 +528,28 @@ let load_proofs (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     [load_proofs] when a single proof is needed. *)
 let load_proof_at (zh : zip_handle) ~(ctx : K.ctx) ~(name : string) ~(idx : int)
     : K.Linear_proof.t option =
-  match Theory_lru.find name zh.theory_cache with
+  match find_ zh name with
   | None -> None
   | Some ec ->
-    Theory_lru.promote name zh.theory_cache;
     if ec.ec_proof_off < 0 then
       None
     else (
       try
         let dec = Dec.create ec.ec_data in
         let cache : K.expr Int_tbl.t = Int_tbl.create 128 in
-        Some
-          (Dec.read_node dec ec.ec_proof_off (fun nd _cmd ->
-               let n = read_int_ nd in
-               let lp_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
-               if idx < 0 || idx >= Array.length lp_offs then
-                 failwith "proof index out of bounds";
-               dec_lp_ ctx dec cache lp_offs.(idx)))
+        let lp =
+          Dec.read_node dec ec.ec_proof_off (fun nd _cmd ->
+              let n = read_int_ nd in
+              let lp_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
+              if idx < 0 || idx >= Array.length lp_offs then
+                failwith "proof index out of bounds";
+              dec_lp_ ctx dec cache lp_offs.(idx))
+        in
+        Some lp
       with e ->
-        Printf.eprintf "proof_zip.load_proof_at: decode error for %s: %s\n%!"
-          name (Printexc.to_string e);
+        Log.debugf 1 (fun k ->
+            k "proof_zip.load_proof_at: decode error for %s: %s" name
+              (Printexc.to_string e));
         None
     )
 
@@ -540,7 +559,7 @@ let load_proof_at (zh : zip_handle) ~(ctx : K.ctx) ~(name : string) ~(idx : int)
     lazily from the inverted decode cache; [None] if entry not loaded. *)
 let expr_offset_table (zh : zip_handle) (entry : string) :
     int K.Expr.Tbl.t option =
-  match Theory_lru.find entry zh.theory_cache with
+  match find_ zh entry with
   | None -> None
   | Some ec ->
     (match ec.ec_inv with
@@ -555,7 +574,7 @@ let expr_offset_table (zh : zip_handle) (entry : string) :
     to already be loaded (will be a cache hit). *)
 let decode_expr_at (zh : zip_handle) ~(ctx : K.ctx) ~(entry : string)
     ~(offset : int) : K.expr option =
-  match Theory_lru.find entry zh.theory_cache with
+  match find_ zh entry with
   | None -> None
   | Some ec ->
     (try Some (K.Expr.mg_dec_expr ctx (Dec.create ec.ec_data) ec.ec_dec offset)
@@ -564,7 +583,7 @@ let decode_expr_at (zh : zip_handle) ~(ctx : K.ctx) ~(entry : string)
 (** Decode the sequent at [offset] in [entry]'s minidag. *)
 let decode_seq_at (zh : zip_handle) ~(ctx : K.ctx) ~(entry : string)
     ~(offset : int) : K.sequent option =
-  match Theory_lru.find entry zh.theory_cache with
+  match find_ zh entry with
   | None -> None
   | Some ec ->
     (try Some (K.Expr.mg_dec_seq ctx (Dec.create ec.ec_data) ec.ec_dec offset)
@@ -810,6 +829,7 @@ let lookup_theory ~(cache : string Str_tbl.t) ~(ctx : K.ctx) name :
   | Some data ->
     (try Some (decode_proof_list ctx data)
      with e ->
-       Printf.eprintf "proof_zip.lookup_theory: decode error for %s: %s\n%!"
-         name (Printexc.to_string e);
+       Log.debugf 1 (fun k ->
+           k "proof_zip.lookup_theory: decode error for %s: %s" name
+             (Printexc.to_string e));
        None)
