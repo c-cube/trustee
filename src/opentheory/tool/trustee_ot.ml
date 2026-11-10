@@ -102,12 +102,22 @@ let main ~dir ~serve ~port () =
             let n_active =
               Tiny_httpd_prometheus.(Gauge.create global) "active-conms"
             in
+
+            let tick_duration_sec_ = 10 in
+            let ticks = ref 0 in
             while true do
-              Thread.delay 1.;
+              Thread.delay (float tick_duration_sec_);
+              incr ticks;
               Tiny_httpd_prometheus.GC_metrics.update gc;
               Tiny_httpd_prometheus.Gauge.set n_active
                 (Serve.active_connections server);
-              if not (Serve.active server) then exit 1
+              if not (Serve.active server) then exit 1;
+              (* sweep expired cache entries, then hand heap pages back to the
+                 OS every ~5min *)
+              if !ticks * tick_duration_sec_ mod 30 = 0 then (
+                St.with_lock st.lock (fun () -> St.sweep st);
+                Gc.compact ()
+              )
             done)
           ()
       in

@@ -32,6 +32,14 @@ let[@inline] with_lock l f =
   Mutex.lock l;
   Fun.protect ~finally:(fun () -> Mutex.unlock l) f
 
+(** Drop expired entries from all caches, so that a subsequent [Gc.compact ()]
+    can actually reclaim their memory. *)
+let sweep (self : t) : unit =
+  Idx.by_name_sweep self.idx;
+  match self.zip with
+  | Some zh -> Proof_zip.sweep zh
+  | None -> ()
+
 (** Load a theory from zip (caches in zip_handle's theory_cache). Also populates
     [idx.by_name] with the theory's consts and thms. *)
 let load_theory (self : t) (name : string) : K.Theory.t option =
