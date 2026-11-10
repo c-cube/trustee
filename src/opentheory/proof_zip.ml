@@ -491,16 +491,46 @@ let load_proofs (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     else (
       try
         let dec = Dec.create ec.ec_data in
-        (* Reuse the expr cache from theory decoding so proof nodes can
-           reference const/var/expr nodes encoded in the theory section. *)
+        (* Throwaway cache: memoizing into [ec.ec_dec] would pin the whole proof
+           DAG (much bigger than the theory) until the entry expires. Decoded
+           exprs are hashconsed, so re-decoding still shares structure with the
+           theory's exprs. *)
+        let cache : K.expr Int_tbl.t = Int_tbl.create 128 in
         Some
           (Dec.read_node dec ec.ec_proof_off (fun nd _cmd ->
                let n = read_int_ nd in
                let lp_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
-               Array.to_list (Array.map (dec_lp_ ctx dec ec.ec_dec) lp_offs)))
+               Array.to_list (Array.map (dec_lp_ ctx dec cache) lp_offs)))
       with e ->
         Printf.eprintf "proof_zip.load_proofs: decode error for %s: %s\n%!" name
           (Printexc.to_string e);
+        None
+    )
+
+(** Decode only the [idx]-th proof of the named theory. Cheaper than
+    [load_proofs] when a single proof is needed. *)
+let load_proof_at (zh : zip_handle) ~(ctx : K.ctx) ~(name : string) ~(idx : int)
+    : K.Linear_proof.t option =
+  match Theory_lru.find name zh.theory_cache with
+  | None -> None
+  | Some ec ->
+    Theory_lru.promote name zh.theory_cache;
+    if ec.ec_proof_off < 0 then
+      None
+    else (
+      try
+        let dec = Dec.create ec.ec_data in
+        let cache : K.expr Int_tbl.t = Int_tbl.create 128 in
+        Some
+          (Dec.read_node dec ec.ec_proof_off (fun nd _cmd ->
+               let n = read_int_ nd in
+               let lp_offs = Array.init n (fun _ -> Dec.read_ref_exn nd) in
+               if idx < 0 || idx >= Array.length lp_offs then
+                 failwith "proof index out of bounds";
+               dec_lp_ ctx dec cache lp_offs.(idx)))
+      with e ->
+        Printf.eprintf "proof_zip.load_proof_at: decode error for %s: %s\n%!"
+          name (Printexc.to_string e);
         None
     )
 

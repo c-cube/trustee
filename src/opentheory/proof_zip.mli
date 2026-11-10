@@ -36,6 +36,11 @@ val load_proofs :
     [None] if the entry has no proof section or the theory has not been loaded
     via [load_theory]. *)
 
+val load_proof_at :
+  zip_handle -> ctx:K.ctx -> name:string -> idx:int -> K.Linear_proof.t option
+(** Decode only the [idx]-th proof of the named theory. Cheaper than
+    [load_proofs] when a single proof is needed. *)
+
 val expr_offset_table : zip_handle -> string -> int K.Expr.Tbl.t option
 (** Return a table mapping [expr -> minidag_byte_offset] for the named entry.
     Built lazily; [None] if the entry has not been loaded yet. *)
