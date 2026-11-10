@@ -9,6 +9,15 @@ type hashed_item =
   | H_expr of K.Expr.t
   | H_thm of K.Thm.t
 
+(* by_name entries expire after a while, so a visited theory's consts and
+   theorems don't stay pinned forever *)
+type by_name_entry = {
+  mutable bn_item: hashed_item;
+  mutable bn_last_use: Mtime.t;
+}
+
+let by_name_ttl_s = 30.
+
 type t = {
   theories: (path * Thy_file.t) list;
   thy_by_name: Thy_file.t Str_tbl.t;
@@ -16,7 +25,7 @@ type t = {
   interp_by_name: Interp_file.t Str_tbl.t;
   articles: path Str_tbl.t; (* basename -> path *)
   errors: (path * Trustee_core.Error.t) list;
-  by_name: hashed_item Str_tbl.t;
+  by_name: by_name_entry Str_tbl.t;
 }
 (** Results of listing a directory *)
 
@@ -27,6 +36,45 @@ let find_thy (self : t) name : Thy_file.t =
 let find_article self name : string =
   try Str_tbl.find self.articles name
   with Not_found -> Error.failf (fun k -> k "cannot find article %S" name)
+
+(* Drop expired by_name entries. *)
+let by_name_sweep (self : t) : unit =
+  let now = Mtime_clock.now () in
+  let dead = ref [] in
+  Str_tbl.iter
+    (fun name e ->
+      if
+        Mtime.Span.to_float_ns (Mtime.span e.bn_last_use now) /. 1e9
+        >= by_name_ttl_s
+      then
+        dead := name :: !dead)
+    self.by_name;
+  List.iter (Str_tbl.remove self.by_name) !dead
+
+let by_name_add (self : t) (name : string) (item : hashed_item) : unit =
+  let now = Mtime_clock.now () in
+  match Str_tbl.find_opt self.by_name name with
+  | Some e ->
+    e.bn_item <- item;
+    e.bn_last_use <- now
+  | None ->
+    Str_tbl.replace self.by_name name { bn_item = item; bn_last_use = now }
+
+let by_name_find (self : t) (name : string) : hashed_item option =
+  match Str_tbl.find_opt self.by_name name with
+  | Some e ->
+    if
+      Mtime.Span.to_float_ns (Mtime.span e.bn_last_use (Mtime_clock.now ()))
+      /. 1e9
+      >= by_name_ttl_s
+    then (
+      Str_tbl.remove self.by_name name;
+      None
+    ) else (
+      e.bn_last_use <- Mtime_clock.now ();
+      Some e.bn_item
+    )
+  | None -> None
 
 (* gen util(s) *)
 module G = struct

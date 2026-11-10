@@ -41,15 +41,16 @@ let load_theory (self : t) (name : string) : K.Theory.t option =
     (match Proof_zip.load_theory zh ~ctx:self.ctx name with
     | None -> None
     | Some th as result ->
-      (* Populate by_name so /c/<name> works for visited theories *)
+      (* Populate by_name so /c/<name> works for visited theories; entries
+         expire after a while (see [Idx.by_name_ttl_s]). *)
+      Idx.by_name_sweep self.idx;
       let all_consts = K.Theory.param_consts th @ K.Theory.consts th in
       List.iter
-        (fun c ->
-          Str_tbl.replace self.idx.Idx.by_name (K.Const.name c) (Idx.H_const c))
+        (fun c -> Idx.by_name_add self.idx (K.Const.name c) (Idx.H_const c))
         all_consts;
       List.iter
         (fun thm ->
           let key = Fmt.to_string K.Thm.pp thm in
-          Str_tbl.replace self.idx.Idx.by_name key (Idx.H_thm thm))
+          Idx.by_name_add self.idx key (Idx.H_thm thm))
         (K.Theory.param_theorems th @ K.Theory.theorems th);
       result)

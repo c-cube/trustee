@@ -312,7 +312,7 @@ let h_name_item (self : state) : unit =
   let res =
     (* need lock around ctx/eval *)
     let@ () = St.with_lock self.st.lock in
-    Str_tbl.find_opt self.st.idx.Idx.by_name name
+    Idx.by_name_find self.st.idx name
   in
 
   let r =
