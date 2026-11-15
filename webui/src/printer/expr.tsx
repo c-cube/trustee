@@ -15,6 +15,7 @@ import {
 import { currentTip, hoverExpr, hoverTy, installHover, registerRoot } from "./hover";
 import { bvName, displayName, hrefConst } from "./names";
 import { seqText } from "./text";
+import { SeqAt } from "./views";
 
 export type ExprProps = {
   dag: Dag;
@@ -220,6 +221,14 @@ function appExpr(ctx: Ctx, off: Offset, k: number, names: string[]): JSX.Element
 
 installHover(() => (
   <Show keyed when={currentTip()}>
-    {(t) => <Expr dag={t.dag} off={t.ty.off} env={t.ty.env} cfg={t.cfg} />}
+    {(t) =>
+      t.kind === "seq" ? (
+        <span style="white-space:normal">
+          <SeqAt dag={t.dag} cfg={t.cfg} off={t.off} />
+        </span>
+      ) : (
+        <Expr dag={t.dag} off={t.ty.off} env={t.ty.env} cfg={t.cfg} />
+      )
+    }
   </Show>
 ));

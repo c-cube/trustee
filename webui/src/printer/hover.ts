@@ -5,7 +5,9 @@ import type { Config } from "../types";
 import { type TyRef, tyRefOf } from "./dag";
 
 export type RootInfo = { dag: Dag; cfg: Config };
-export type Tip = { dag: Dag; cfg: Config; ty: TyRef };
+export type Tip =
+  | { kind: "ty"; dag: Dag; cfg: Config; ty: TyRef }
+  | { kind: "seq"; dag: Dag; cfg: Config; off: Offset };
 
 /** Port of tool/tooltip.js cssText. */
 const CSS = [
@@ -55,15 +57,32 @@ export function hoverTy(off: Offset): { "data-off": number; "data-kind": "ty" } 
   return { "data-off": off, "data-kind": "ty" };
 }
 
+/** Span attributes for a span popping up the sequent at [off]. */
+export function hoverSeq(off: Offset): { "data-seq": number } {
+  return { "data-seq": off };
+}
+
+type HoverAttrs = { off?: string; seq?: string; kind?: string };
+
+/** Tip for the hover target attributes, or undefined when nothing to show. */
+export function tipOf(attrs: HoverAttrs, info: RootInfo): Tip | undefined {
+  if (attrs.seq !== undefined) {
+    const off = Number.parseInt(attrs.seq, 10);
+    return Number.isNaN(off) ? undefined : { kind: "seq", dag: info.dag, cfg: info.cfg, off };
+  }
+  const off = Number.parseInt(attrs.off ?? "", 10);
+  if (Number.isNaN(off)) return undefined;
+  const ty = attrs.kind === "ty" ? { off } : tyRefOf(info.dag, off);
+  return ty === undefined ? undefined : { kind: "ty", dag: info.dag, cfg: info.cfg, ty };
+}
+
 function onOver(ev: MouseEvent): void {
   const el = targetOf(ev);
   if (el === null) return;
   const info = infoOf(el);
-  const off = Number.parseInt(el.dataset.off ?? "", 10);
-  if (info === undefined || Number.isNaN(off)) return;
-  const ty = el.dataset.kind === "ty" ? { off } : tyRefOf(info.dag, off);
-  if (ty === undefined) return;
-  show(el, { dag: info.dag, cfg: info.cfg, ty });
+  if (info === undefined) return;
+  const t = tipOf({ off: el.dataset.off, seq: el.dataset.seq, kind: el.dataset.kind }, info);
+  if (t !== undefined) show(el, t);
 }
 
 function onOut(ev: MouseEvent): void {
@@ -77,7 +96,7 @@ function onOut(ev: MouseEvent): void {
 function targetOf(ev: MouseEvent): HTMLElement | null {
   const target = ev.target;
   if (!(target instanceof Element)) return null;
-  const el = target.closest("[data-off]");
+  const el = target.closest("[data-off],[data-seq]");
   return el instanceof HTMLElement ? el : null;
 }
 

@@ -3,7 +3,7 @@ import { type Dag, DagError, type Offset } from "../minidag/dec";
 import type { Config, ViewProps } from "../types";
 import { type AppMemo, dagOf, nodeOf } from "./dag";
 import { Expr } from "./expr";
-import { hoverExpr, registerRoot } from "./hover";
+import { hoverExpr, hoverSeq, registerRoot } from "./hover";
 
 /** render.ml `sequent_to_html`. */
 export function Sequent(props: ViewProps): JSX.Element {
@@ -32,6 +32,10 @@ export function Proof(props: ViewProps): JSX.Element {
   const dag = dagOf(props.bytes);
   const memo: AppMemo = new Map();
   const lp = nodeOf(dag, props.offset, "lp");
+  const seqOf = (idx: number): Offset | undefined => {
+    const s = lp.steps[idx];
+    return s === undefined ? undefined : nodeOf(dag, s, "step").concl;
+  };
   return (
     <table
       class="table table-sm table-striped"
@@ -49,12 +53,17 @@ export function Proof(props: ViewProps): JSX.Element {
           <tr>
             <td id={`step${idx}`}>{String(idx)}</td>
             <td>{seqView(dag, props.cfg, nodeOf(dag, step, "step").concl, memo)}</td>
-            <td>{ruleCell(dag, props.cfg, memo, step)}</td>
+            <td>{ruleCell(dag, props.cfg, memo, step, seqOf)}</td>
           </tr>
         ))}
       </tbody>
     </table>
   );
+}
+
+/** Sequent at [off], for hover popups. */
+export function SeqAt(props: { dag: Dag; cfg: Config; off: Offset }): JSX.Element {
+  return seqView(props.dag, props.cfg, props.off, new Map());
 }
 
 function seqView(dag: Dag, cfg: Config, off: Offset, memo: AppMemo): JSX.Element {
@@ -70,7 +79,13 @@ function seqView(dag: Dag, cfg: Config, off: Offset, memo: AppMemo): JSX.Element
   );
 }
 
-function ruleCell(dag: Dag, cfg: Config, memo: AppMemo, off: Offset): JSX.Element {
+function ruleCell(
+  dag: Dag,
+  cfg: Config,
+  memo: AppMemo,
+  off: Offset,
+  seqOf: (idx: number) => Offset | undefined,
+): JSX.Element {
   const step = nodeOf(dag, off, "step");
   return (
     <>
@@ -78,7 +93,7 @@ function ruleCell(dag: Dag, cfg: Config, memo: AppMemo, off: Offset): JSX.Elemen
       {step.args.map((a) => (
         <> {argView(dag, cfg, memo, a)}</>
       ))}{" "}
-      {parentLinks(step.parents)}
+      {parentLinks(step.parents, seqOf)}
     </>
   );
 }
@@ -110,19 +125,22 @@ function substList(
   );
 }
 
-function parentLinks(parents: number[]): JSX.Element {
+function parentLinks(parents: number[], seqOf: (idx: number) => Offset | undefined): JSX.Element {
   if (parents.length === 0) return null;
   return (
     <span>
       {"["}
-      {parents.map((p, i) => (
-        <span>
-          {i > 0 ? ", " : ""}
-          <a href={`#step${p}`} class="proof-step">
-            {String(p)}
-          </a>
-        </span>
-      ))}
+      {parents.map((p, i) => {
+        const seq = seqOf(p);
+        return (
+          <span>
+            {i > 0 ? ", " : ""}
+            <a href={`#step${p}`} class="proof-step" {...(seq === undefined ? {} : hoverSeq(seq))}>
+              {String(p)}
+            </a>
+          </span>
+        );
+      })}
       {"]"}
     </span>
   );
