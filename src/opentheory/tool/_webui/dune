@@ -14,5 +14,3 @@
   (with-stdout-to
    %{targets}
    (echo "{}"))))
-
-
