@@ -3,3 +3,8 @@ _build
 doc
 *.zip
 target
+webui/node_modules
+webui/dist
+# the ui stage builds these from source; host artifacts must not leak in
+src/opentheory/tool/_webui/*
+!src/opentheory/tool/_webui/dune
