@@ -28,4 +28,8 @@ RUN opam exec -- dune build --profile=release src/opentheory/tool/trustee_ot.exe
 FROM alpine:${ALPINE_VERSION} AS prod
 RUN apk add --no-cache libcurl zlib ca-certificates
 COPY --from=build /src/_build/default/src/opentheory/tool/trustee_ot.exe /usr/local/bin/trustee_ot
-ENTRYPOINT ["/usr/local/bin/trustee_ot"]
+ENV PORT=8089 \
+    ADDR=0.0.0.0
+HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
+  CMD wget -q --spider http://127.0.0.1:${PORT}/ || exit 1
+CMD exec /usr/local/bin/trustee_ot --serve --dir /data --proof-zip /ot-data.zip --port "$PORT" --addr "$ADDR"
