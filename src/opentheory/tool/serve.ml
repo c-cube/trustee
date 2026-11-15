@@ -587,6 +587,7 @@ let h_blob_const (self : state) : unit =
   | Some (data, _root, _def_root) -> blob_response data
 
 let setup_otel () =
+  OTEL.Globals.service_name := "trustee";
   Opentelemetry_client_ocurl.setup ();
   Opentelemetry_trace.setup ();
   OTEL.Gc_metrics.setup ~min_interval_s:60 ()
