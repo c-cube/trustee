@@ -23,6 +23,7 @@ module Log = Trustee_core.Log
 module LP = K.Linear_proof
 module Enc = Trustee_minidag.Encode
 module Dec = Trustee_minidag.Decode
+module Slice = Trustee_minidag.Slice
 
 (* ---- Constants ------------------------------------------------------------ *)
 
@@ -75,6 +76,21 @@ type entry_cache = {
 }
 (** Per-entry data kept in the theory cache. *)
 
+type theory_root_info = {
+  tri_data: string;
+  tri_param_consts: int array;
+  tri_param_seqs: int array;
+  tri_consts: int array;
+  tri_seqs: int array;
+  tri_lp: int array;
+}
+(** Undecoded theory root, enough to locate const/proof/sequent nodes. *)
+
+type light_entry = {
+  le_info: theory_root_info;
+  mutable le_last_use: Mtime.t;
+}
+
 (* Decoded theories are big (tens of MB each); keep an entry only for a short
    while after its last use, then drop it. *)
 let cache_ttl_s = 30.
@@ -83,12 +99,18 @@ type zip_handle = {
   zf: Zip.in_file;
   entries: Zip.entry list;
   theory_cache: entry_cache Str_tbl.t;
+  light_cache: light_entry Str_tbl.t;
 }
 
 let open_zip (path : string) : zip_handle =
   let zf = Zip.open_in path in
   let entries = Zip.entries zf in
-  { zf; entries; theory_cache = Str_tbl.create 8 }
+  {
+    zf;
+    entries;
+    theory_cache = Str_tbl.create 8;
+    light_cache = Str_tbl.create 8;
+  }
 
 (* Drop expired entries; runs before every lookup and before compaction. *)
 let sweep (zh : zip_handle) : unit =
@@ -102,7 +124,17 @@ let sweep (zh : zip_handle) : unit =
       then
         dead := name :: !dead)
     zh.theory_cache;
-  List.iter (Str_tbl.remove zh.theory_cache) !dead
+  List.iter (Str_tbl.remove zh.theory_cache) !dead;
+  let dead = ref [] in
+  Str_tbl.iter
+    (fun name le ->
+      if
+        Mtime.Span.to_float_ns (Mtime.span le.le_last_use now) /. 1e9
+        >= cache_ttl_s
+      then
+        dead := name :: !dead)
+    zh.light_cache;
+  List.iter (Str_tbl.remove zh.light_cache) !dead
 
 (* Find the entry for [name] if cached and not expired, updating last-use. *)
 let find_ (zh : zip_handle) (name : string) : entry_cache option =
@@ -466,6 +498,202 @@ let decode_theory (ctx : K.ctx) (name : string) (data : string) :
 
 let find_entry (zh : zip_handle) (filename : string) : Zip.entry option =
   List.find_opt (fun e -> e.Zip.filename = filename) zh.entries
+
+let last_node_off (data : string) : int =
+  let dec = Dec.create data in
+  let off = ref 0 in
+  Dec.iter_nodes dec (fun o _cmd _args -> off := o);
+  !off
+
+let parse_root_info (data : string) : theory_root_info =
+  let root = find_theory_root_off data in
+  let dec = Dec.create data in
+  Dec.read_node dec root (fun nd _cmd ->
+      let read_refs () =
+        let n = read_int_ nd in
+        Array.init n (fun _ -> Dec.read_ref_exn nd)
+      in
+      let tri_param_consts = read_refs () in
+      let tri_param_seqs = read_refs () in
+      let tri_consts = read_refs () in
+      let tri_seqs = read_refs () in
+      let proofs =
+        match Dec.read nd with
+        | Dec.Ref r -> Some r
+        | _ -> None
+      in
+      let tri_lp =
+        match proofs with
+        | None -> [||]
+        | Some off ->
+          Dec.read_node dec off (fun nd _cmd ->
+              let n = read_int_ nd in
+              Array.init n (fun _ -> Dec.read_ref_exn nd))
+      in
+      {
+        tri_data = data;
+        tri_param_consts;
+        tri_param_seqs;
+        tri_consts;
+        tri_seqs;
+        tri_lp;
+      })
+
+let light_entry (zh : zip_handle) (name : string) : theory_root_info option =
+  sweep zh;
+  match Str_tbl.find_opt zh.light_cache name with
+  | Some le ->
+    le.le_last_use <- Mtime_clock.now ();
+    Some le.le_info
+  | None ->
+    let data =
+      (* reuse the theory cache's copy when present, without refreshing its TTL *)
+      match Str_tbl.find_opt zh.theory_cache name with
+      | Some ec -> Some ec.ec_data
+      | None ->
+        (match find_entry zh (name ^ entry_suffix) with
+        | None -> None
+        | Some entry ->
+          (try Some (Zip.read_entry zh.zf entry)
+           with e ->
+             Log.debugf 1 (fun k ->
+                 k "proof_zip.light_entry: read error for %s: %s" name
+                   (Printexc.to_string e));
+             None))
+    in
+    (match data with
+    | None -> None
+    | Some data ->
+      (try
+         let info = parse_root_info data in
+         Str_tbl.replace zh.light_cache name
+           { le_info = info; le_last_use = Mtime_clock.now () };
+         Some info
+       with e ->
+         Log.debugf 1 (fun k ->
+             k "proof_zip.light_entry: decode error for %s: %s" name
+               (Printexc.to_string e));
+         None))
+
+let proof_count (zh : zip_handle) ~(name : string) : int option =
+  match light_entry zh name with
+  | None -> None
+  | Some info -> Some (Array.length info.tri_lp)
+
+let theory_offsets (zh : zip_handle) ~(name : string) :
+    (int array * int array * int array * int array) option =
+  match light_entry zh name with
+  | None -> None
+  | Some info ->
+    Some
+      ( info.tri_consts,
+        info.tri_seqs,
+        info.tri_param_consts,
+        info.tri_param_seqs )
+
+let const_off (info : theory_root_info) (const : string) : int option =
+  let check off =
+    let dec = Dec.create info.tri_data in
+    Dec.read_node dec off (fun nd cmd ->
+        String.equal cmd "ce" && String.equal (Dec.read_string_exn nd) const)
+  in
+  let offs = Array.append info.tri_consts info.tri_param_consts in
+  let rec find i =
+    if i >= Array.length offs then
+      None
+    else if check offs.(i) then
+      Some offs.(i)
+    else
+      find (i + 1)
+  in
+  find 0
+
+let entry_bytes (zh : zip_handle) (name : string) : string option =
+  match find_entry zh (name ^ entry_suffix) with
+  | None -> None
+  | Some entry ->
+    (try Some (Zip.read_entry zh.zf entry)
+     with e ->
+       Log.debugf 1 (fun k ->
+           k "proof_zip.entry_bytes: read error for %s: %s" name
+             (Printexc.to_string e));
+       None)
+
+let slice_proof_blob (zh : zip_handle) ~(name : string) ~(idx : int) :
+    (string * int) option =
+  match light_entry zh name with
+  | None -> None
+  | Some info ->
+    (try
+       if idx < 0 || idx >= Array.length info.tri_lp then
+         None
+       else
+         Some (Slice.slice ~data:info.tri_data ~root:info.tri_lp.(idx))
+     with e ->
+       Log.debugf 1 (fun k ->
+           k "proof_zip.slice_proof_blob: slice error for %s/%d: %s" name idx
+             (Printexc.to_string e));
+       None)
+
+(* Def node cmds and where the displayable expr lives inside them.
+   Keep in sync with Expr.Util_mg_.enc_const_def_. *)
+let def_expr (data : string) (root : int) : (int * string) option =
+  let dec = Dec.create data in
+  Dec.read_node dec root (fun nd cmd ->
+      match cmd with
+      | "dt" ->
+        let n_vars = read_int_ nd in
+        for _ = 1 to n_vars do
+          ignore (Dec.read_ref_exn nd)
+        done;
+        Some (Dec.read_ref_exn nd, cmd)
+      | "dty" ->
+        ignore (read_int_ nd);
+        Some (Dec.read_ref_exn nd, cmd)
+      | "magic" | "dty.abs" | "dty.repr" | "th.param" | "th.typaram" | "sko"
+      | "sko.ty" ->
+        None
+      | _ -> None)
+
+let slice_const_blob (zh : zip_handle) ~(name : string) ~(const : string) :
+    (string * int * (int * string) option) option =
+  match light_entry zh name with
+  | None -> None
+  | Some info ->
+    (try
+       match const_off info const with
+       | None -> None
+       | Some c_off ->
+         let c_data, c_root = Slice.slice ~data:info.tri_data ~root:c_off in
+         let key = K.Const.key_const_def const in
+         (match find_entry zh (storage_prefix ^ key) with
+         | None -> Some (c_data, c_root, None)
+         | Some entry ->
+           (try
+              let d_data = Zip.read_entry zh.zf entry in
+              let d_node = last_node_off d_data in
+              let d_expr, d_cmd =
+                match def_expr d_data d_node with
+                | Some r -> r
+                | None -> failwith ("unsupported def cmd for " ^ const)
+              in
+              let d_data, d_root = Slice.slice ~data:d_data ~root:d_expr in
+              let data, roots =
+                Slice.merge [ c_data, c_root; d_data, d_root ]
+              in
+              match roots with
+              | [ r; r' ] -> Some (data, r, Some (r', d_cmd))
+              | _ -> None
+            with e ->
+              Log.debugf 1 (fun k ->
+                  k "proof_zip.slice_const_blob: def dropped for %s: %s" const
+                    (Printexc.to_string e));
+              Some (c_data, c_root, None)))
+     with e ->
+       Log.debugf 1 (fun k ->
+           k "proof_zip.slice_const_blob: slice error for %s: %s" const
+             (Printexc.to_string e));
+       None)
 
 let load_theory (zh : zip_handle) ~(ctx : K.ctx) (name : string) :
     K.Theory.t option =

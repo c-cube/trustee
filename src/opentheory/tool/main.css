@@ -34,3 +34,16 @@ a.const, a.theorem, a.proof-step {
 a.const:hover, a.theorem:hover, a.proof-step:hover {
   background-color: gold;
 }
+
+trustee-view {
+  display: inline;
+}
+
+trustee-view[kind="proof"] {
+  display: block;
+}
+
+.trustee-error {
+  color: #b00020;
+  font-family: monospace;
+}

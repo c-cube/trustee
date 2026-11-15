@@ -1,5 +1,4 @@
 open Trustee_opentheory.Common_
-module Vec = Trustee_core.Vec
 module E = K.Expr
 
 module Config = struct
@@ -70,41 +69,29 @@ let percent_encode s =
 
 let href_const c = spf "/c/%s" (percent_encode @@ K.Const.name c)
 
-(** Span attributes for a type expression: [data-off=] + [data-entry=] when the
-    expr is in the offset table, falling back to a static [title=]. [fallback]
-    is a thunk evaluated only when no offset is available. *)
-let ty_attrs_ ~type_offsets ~entry ty ~fallback =
-  match type_offsets with
-  | Some tbl ->
-    (match K.Expr.Tbl.find_opt tbl ty with
-    | Some off -> [ "data-off", string_of_int off; "data-entry", entry ]
-    | None -> [ "title", fallback () ])
-  | None -> [ "title", fallback () ]
+(** Static [title=] fallback for server-rendered expressions. [fallback] is a
+    thunk evaluated only when the span is emitted. *)
+let ty_attrs_ ~fallback = [ "title", fallback () ]
 
-let var_to_html ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "")
-    (v : K.Var.t) : Html.elt =
+let var_to_html (v : K.Var.t) : Html.elt =
   let open Html in
   let name = K.Var.name v in
   let ty = K.Var.ty v in
   let attrs =
-    ty_attrs_ ~type_offsets ~entry ty ~fallback:(fun () ->
-        Fmt.asprintf "%s : %a" name E.pp ty)
+    ty_attrs_ ~fallback:(fun () -> Fmt.asprintf "%s : %a" name E.pp ty)
   in
   span attrs [ txt name ]
 
-let expr_to_html ?(config = Config.make ())
-    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "") (e : K.Expr.t) :
-    Html.elt =
+let expr_to_html ?(config = Config.make ()) (e : K.Expr.t) : Html.elt =
   let open Html in
-  (* Local alias: [fallback] is a lazy string thunk. *)
-  let ty_attrs ty fallback = ty_attrs_ ~type_offsets ~entry ty ~fallback in
+  let ty_attrs _ty fallback = ty_attrs_ ~fallback in
   let rec loop k ~depth ~names e : Html.elt =
     let recurse = loop k ~depth ~names in
     let recurse' e = loop' k ~depth ~names e in
     match E.view e with
     | K.E_kind -> txt "kind"
     | K.E_type -> txt "type"
-    | K.E_var v -> var_to_html ?type_offsets ~entry v
+    | K.E_var v -> var_to_html v
     | K.E_bound_var v ->
       let idx = v.bv_idx in
       let descr =
@@ -252,6 +239,11 @@ let expr_to_html ?(config = Config.make ())
   in
   span [ cls "expr" ] [ loop 0 ~depth:0 ~names:[] e ]
 
+let island ~(kind : string) ~(blob : string) ~(off : int) : Html.elt =
+  Html.raw_html
+    (spf "<trustee-view kind=\"%s\" blob=\"%s\" off=\"%d\"></trustee-view>" kind
+       blob off)
+
 let const_def_to_html ?(config = Config.make ()) ctx (c : K.Const.t) =
   let open Html in
   match K.Const_def.approx_def @@ K.Const.get_def_exn ctx c with
@@ -262,45 +254,25 @@ let const_def_to_html ?(config = Config.make ()) ctx (c : K.Const.t) =
   | `Param -> p [] [ txt "theory parameter" ]
   | `Other -> p [] [ txt "opaque" ]
 
-let const_to_html ?(config = Config.make ()) (c : K.Const.t) =
+let const_head_html ?(config = Config.make ()) (c : K.Const.t) : Html.elt =
   let name = strip_name_ ~config @@ K.Const.name c in
   let args = Fmt.to_string K.Const.pp_args (K.Const.args c) in
-  let title_ = Fmt.asprintf "%a" K.Const.pp_with_ty c in
   Html.(
-    span
-      [ cls "const" ]
+    span []
       [
-        span
-          [ A.title title_ ]
-          [ a [ cls "const"; A.href (href_const c) ] [ txt name ] ];
+        a [ cls "const"; A.href (href_const c) ] [ txt name ];
         txt " ";
         txt args;
         txt " : ";
-        expr_to_html ~config (K.Const.ty c);
       ])
 
-let subst_as_l_to_html ?(config = Config.make ())
-    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "")
-    (su : (K.var * K.expr) list) =
-  let open Html in
-  ul []
-    (List.map
-       (fun (v, e) ->
-         li []
-           [
-             var_to_html ?type_offsets ~entry v;
-             txt " := ";
-             expr_to_html ~config ?type_offsets ~entry e;
-           ])
-       su)
+let const_to_html ?(config = Config.make ()) (c : K.Const.t) =
+  Html.(
+    span
+      [ cls "const" ]
+      [ const_head_html ~config c; expr_to_html ~config (K.Const.ty c) ])
 
-let subst_to_html ?(config = Config.make ())
-    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "") su =
-  K.Subst.to_iter su |> Iter.to_rev_list
-  |> subst_as_l_to_html ~config ?type_offsets ~entry
-
-let thm_to_html ?(config = Config.make ())
-    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "") thm : Html.elt =
+let thm_to_html ?(config = Config.make ()) thm : Html.elt =
   let open Html in
   let hyps = K.Thm.hyps_l thm in
   let concl = K.Thm.concl thm in
@@ -315,190 +287,42 @@ let thm_to_html ?(config = Config.make ())
         txt "⊢"
     in
     match hyps with
-    | [] -> [ vdash; expr_to_html ~config ?type_offsets ~entry concl ]
+    | [] -> [ vdash; expr_to_html ~config concl ]
     | l ->
       (* TODO: some basic layout *)
-      List.map (expr_to_html ~config ?type_offsets ~entry) l
-      @ [ vdash; expr_to_html ~config ?type_offsets ~entry concl ]
+      List.map (expr_to_html ~config) l @ [ vdash; expr_to_html ~config concl ]
   in
   span [ cls "theorem" ] bod
 
-module Th_tbl = CCHashtbl.Make (K.Thm)
-
-let proof_to_html ?(config = Config.make ()) (th0 : K.Thm.t) : Html.elt =
-  let open Html in
-  let steps = Vec.create () in
-  let idx = ref 0 in
-  let seen = Th_tbl.create 8 in
-
-  (* add step to the proof *)
-  let add_step (thm : K.Thm.t) (step : Html.elt) : int =
-    let i = !idx in
-    incr idx;
-    let row =
-      tr []
-        [
-          td [ A.id (spf "step%d" i); cls "proof-step" ] [ txtf "%d:" i ];
-          td [] [ thm_to_html ~config thm ];
-          td [] [ step ];
-        ]
-    in
-    Vec.push steps (thm, row);
-    i
-  in
-
-  let arg_to_html = function
-    | K.Proof.Pr_expr e -> expr_to_html ~config e
-    | K.Proof.Pr_subst s -> subst_as_l_to_html ~config s
-  in
-
-  let rec traverse thm pr : int =
-    match Th_tbl.find_opt seen thm with
-    | Some i -> i
-    | None ->
-      let i =
-        match pr with
-        | K.Proof.Pr_main pr' when thm == th0 -> step_to_html thm pr'
-        | _ -> step_to_html thm pr
-      in
-      Th_tbl.add seen thm i;
-      i
-  and step_to_html (thm : K.Thm.t) step : int =
-    match step with
-    | K.Proof.Pr_main _ ->
-      (* link to theorem *)
-      let step = span [] [ txt "lemma" ] in
-      add_step thm step
-    | K.Proof.Pr_dummy -> add_step thm (txt "<dummy>")
-    | K.Proof.Pr_step { rule; args; parents } ->
-      let parents =
-        List.map (fun th' -> traverse th' (K.Thm.proof th')) parents
-      in
-      let render_parent i n =
-        let title_ = K.Thm.to_string (fst @@ Vec.get steps n) in
-        a
-          [ A.href (spf "#step%d" n); A.title title_; cls "proof-step" ]
-          [
-            txtf "%s%d"
-              (if i > 0 then
-                 ", "
-               else
-                 "")
-              n;
-          ]
-      in
-      let step =
-        div []
-          [
-            span [] (txt rule :: List.map arg_to_html args);
-            (if parents = [] then
-               span [] []
-             else
-               span' []
-                 [
-                   sub_e @@ txt "[";
-                   sub_l @@ List.mapi render_parent parents;
-                   sub_e @@ txt "]";
-                 ]);
-          ]
-      in
-      add_step thm step
-  in
-
-  ignore (traverse th0 (K.Thm.proof th0) : int);
-  table
-    [ cls "table table-sm table-striped" ]
-    [
-      thead []
-        [
-          tr []
-            [
-              th [] [ txt "idx" ]; th [] [ txt "result" ]; th [] [ txt "proof" ];
-            ];
-        ];
-      tbody [] (Vec.to_iter steps |> Iter.map snd |> Iter.to_list);
-    ]
-
-let sequent_to_html ?(config = Config.make ())
-    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "") (seq : K.sequent) :
-    Html.elt =
-  let open Html in
-  let hyps = K.Sequent.hyps_l seq in
-  let concl = K.Sequent.concl seq in
-  match hyps with
-  | [] ->
-    span
-      [ cls "theorem" ]
-      [ txt "⊢ "; expr_to_html ~config ?type_offsets ~entry concl ]
-  | l ->
-    span
-      [ cls "theorem" ]
-      (List.map (expr_to_html ~config ?type_offsets ~entry) l
-      @ [ txt " ⊢ "; expr_to_html ~config ?type_offsets ~entry concl ])
-
-let linear_proof_to_html ?(config = Config.make ())
-    ?(type_offsets : int K.Expr.Tbl.t option) ?(entry = "")
-    (lp : K.Linear_proof.t) : Html.elt =
-  let open Html in
-  let arg_to_html = function
-    | K.Proof.Pr_expr e -> expr_to_html ~config ?type_offsets ~entry e
-    | K.Proof.Pr_subst s -> subst_as_l_to_html ~config ?type_offsets ~entry s
-  in
-  (* Render "[p0, p1, ...]" parent-step links, or nothing. *)
-  let parent_links_html parents =
-    match parents with
-    | [] -> txt ""
-    | _ ->
-      let links =
-        parents
-        |> List.mapi (fun i n ->
-            let comma =
-              if i > 0 then
-                txt ", "
-              else
-                txt ""
-            in
-            span []
-              [
-                comma;
-                a [ A.href (spf "#step%d" n); cls "proof-step" ] [ txtf "%d" n ];
-              ])
-      in
-      span [] ([ txt "[" ] @ links @ [ txt "]" ])
-  in
-  let mk_row (idx, (step : K.Linear_proof.step)) =
-    tr []
-      [
-        td [ A.id (spf "step%d" idx) ] [ txtf "%d" idx ];
-        td [] [ sequent_to_html ~config ?type_offsets ~entry step.concl ];
-        td []
-          ([ txt step.rule ]
-          @ List.map (fun a -> span [] [ txt " "; arg_to_html a ]) step.args
-          @ [ txt " "; parent_links_html step.parents ]);
-      ]
-  in
-  table
-    [ cls "table table-sm table-striped" ]
-    [
-      thead []
-        [
-          tr []
-            [
-              th [] [ txt "idx" ]; th [] [ txt "sequent" ]; th [] [ txt "rule" ];
-            ];
-        ];
-      tbody [] (K.Linear_proof.steps lp |> Iter.map mk_row |> Iter.to_list);
-    ]
+let option_at (a : int option array) (i : int) : int option =
+  if i >= 0 && i < Array.length a then
+    a.(i)
+  else
+    None
 
 let theory_to_html ?(config = Config.make ())
-    ?(make_proof_link : (int -> string) option) (self : K.Theory.t) =
-  let _name = K.Theory.name self in
+    ?(make_proof_link : (int -> string) option) ~(blob : string)
+    ~(const_offsets : int option array) ~(seq_offsets : int option array)
+    (self : K.Theory.t) =
   let in_consts = K.Theory.param_consts self in
   let in_thms = K.Theory.param_theorems self in
   let out_consts = K.Theory.consts self in
   let out_thms = K.Theory.theorems self in
 
   let open Html in
+  let const_row i c =
+    match option_at const_offsets i with
+    | Some off ->
+      span
+        [ cls "const" ]
+        [ const_head_html ~config c; island ~kind:"term" ~blob ~off ]
+    | None -> const_to_html ~config c
+  in
+  let thm_row i th =
+    match option_at seq_offsets i with
+    | Some off -> island ~kind:"sequent" ~blob ~off
+    | None -> thm_to_html ~config th
+  in
   div
     [ cls "theory" ]
     [
@@ -506,35 +330,36 @@ let theory_to_html ?(config = Config.make ())
         [ cls "table table-sm table-striped table-bordered" ]
         [
           sub_l
-            (List.map
-               (fun c ->
+            (List.mapi
+               (fun i c ->
                  tr []
                    [
                      td [ cls "theory-param" ] [ txt "in-const" ];
-                     td [] [ const_to_html ~config c ];
+                     td [] [ const_row i c ];
                    ])
                in_consts);
           sub_l
-            (List.map
-               (fun th ->
+            (List.mapi
+               (fun i th ->
                  tr []
                    [
                      td [ cls "theory-param" ] [ txt "in-theorem" ];
-                     td [] [ thm_to_html ~config th ];
+                     td [] [ thm_row i th ];
                    ])
                in_thms);
           sub_l
-            (List.map
-               (fun c ->
+            (List.mapi
+               (fun i c ->
                  tr []
                    [
                      td [ cls "theory-out" ] [ txt "defined-const" ];
-                     td [] [ const_to_html ~config c ];
+                     td [] [ const_row (List.length in_consts + i) c ];
                    ])
                out_consts);
           sub_l
             (List.mapi
                (fun i th ->
+                 let row = thm_row (List.length in_thms + i) th in
                  let proof_link =
                    match make_proof_link with
                    | None -> txt ""
@@ -549,7 +374,7 @@ let theory_to_html ?(config = Config.make ())
                  tr []
                    [
                      td [ cls "theory-out" ] [ txt "defined-theorem" ];
-                     td [] [ thm_to_html ~config th; proof_link ];
+                     td [] [ row; proof_link ];
                    ])
                out_thms);
         ];

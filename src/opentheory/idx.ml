@@ -26,6 +26,7 @@ type t = {
   articles: path Str_tbl.t; (* basename -> path *)
   errors: (path * Trustee_core.Error.t) list;
   by_name: by_name_entry Str_tbl.t;
+  origin: (string * int) Str_tbl.t;
 }
 (** Results of listing a directory *)
 
@@ -155,4 +156,11 @@ let list_dir dir : t =
     articles;
     errors = !errors;
     by_name = Str_tbl.create 32;
+    origin = Str_tbl.create 64;
   }
+
+let origin_add (self : t) (key : string) (thy : string) (idx : int) : unit =
+  Str_tbl.replace self.origin key (thy, idx)
+
+let origin_find (self : t) (key : string) : (string * int) option =
+  Str_tbl.find_opt self.origin key

@@ -1,0 +1,18 @@
+(rule
+ (mode fallback)
+ (targets trustee-ui.js)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo
+    "class P extends HTMLElement { connectedCallback() { this.textContent = \"[trustee-ui not built: run `make webui`]\"; } } customElements.define(\"trustee-view\", P);"))))
+
+(rule
+ (mode fallback)
+ (targets trustee-ui.js.map)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo "{}"))))
+
+

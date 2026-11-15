@@ -23,6 +23,33 @@ val open_zip : string -> zip_handle
 val close_zip : zip_handle -> unit
 val theory_names : zip_handle -> string list
 
+val entry_bytes : zip_handle -> string -> string option
+(** Raw [<name>.entry] bytes, without decoding the theory. *)
+
+val proof_count : zip_handle -> name:string -> int option
+(** Number of encoded proofs, or [None] if the theory entry is missing. *)
+
+val theory_offsets :
+  zip_handle ->
+  name:string ->
+  (int array * int array * int array * int array) option
+(** [(consts, seqs, param_consts, param_seqs)] minidag offsets from the theory
+    root, backed by the light cache (no kernel decode). *)
+
+val slice_proof_blob :
+  zip_handle -> name:string -> idx:int -> (string * int) option
+(** Reachable subgraph of the [idx]-th proof in [name], as bytes and lp root. *)
+
+val slice_const_blob :
+  zip_handle ->
+  name:string ->
+  const:string ->
+  (string * int * (int * string) option) option
+(** Reachable slice of [const]'s "ce" node in [name], merged with the expression
+    of its storage definition if it has one. Returns bytes, the const root, and
+    [(def expr root, def cmd)] so the page can emit the right wrapper text
+    server-side; the def node cmds themselves are never shipped. *)
+
 val sweep : zip_handle -> unit
 (** Drop entries that have been idle for longer than the TTL. *)
 

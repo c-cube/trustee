@@ -25,6 +25,7 @@ type t = {
   articles: path Str_tbl.t; (* basename -> path *)
   errors: (path * Trustee_core.Error.t) list;
   by_name: by_name_entry Str_tbl.t;
+  origin: (string * int) Str_tbl.t;
 }
 (** Results of listing a directory *)
 
@@ -40,3 +41,11 @@ val by_name_add : t -> string -> hashed_item -> unit
 
 val by_name_find : t -> string -> hashed_item option
 (** Look up a [by_name] entry, refreshing its expiry. *)
+
+val origin_add : t -> string -> string -> int -> unit
+(** Remember that [key] (a const name or thm string) lives in theory [thy] at
+    index [idx] ([-1] for consts). No TTL: blob routing needs it to outlive
+    [by_name], and values are small. Param theorems are not recorded (they have
+    no proofs of their own). *)
+
+val origin_find : t -> string -> (string * int) option

@@ -37,7 +37,7 @@ let store_proofs_ = ref false
 
 (* TODO: storage: use on-disk region files *)
 
-let main ~dir ~serve ~port () =
+let main ~dir ~addr ~serve ~port () =
   let@ _sp = Trace.with_span ~__FILE__ ~__LINE__ "main" in
   let idx =
     let t1 = now () in
@@ -94,7 +94,7 @@ let main ~dir ~serve ~port () =
   let server_opt =
     if serve then (
       (* Server starts immediately -- theories are loaded on demand from zip *)
-      let server = Serve.create st ~port in
+      let server = Serve.create st ~addr ~port in
       let _th_metrics =
         Thread.create
           (fun () ->
@@ -188,6 +188,7 @@ let () =
   let dir = ref "" in
   let color = ref true in
   let serve = ref false in
+  let addr = ref "127.0.0.1" in
   let port = ref 8089 in
   let debug = ref 1 in
   let opts =
@@ -213,6 +214,7 @@ let () =
       "--serve", Arg.Set serve, " launch web server";
       "--port", Arg.Set_int port, " set port for web server";
       "-p", Arg.Set_int port, " set port for web server";
+      "--addr", Arg.Set_string addr, " bind address for web server";
       "--progress", Arg.Set progress_, " progress bar";
       ( "--bt",
         Arg.Unit (fun () -> Printexc.record_backtrace true),
@@ -226,7 +228,7 @@ let () =
 
   Arg.parse opts (fun _ -> failwith "invalid option") "trustee_ot [option*]";
   if !color then Fmt.set_color_default true;
-  try main ~dir:!dir ~serve:!serve ~port:!port () with
+  try main ~dir:!dir ~addr:!addr ~serve:!serve ~port:!port () with
   | Failure s ->
     Fmt.eprintf "%s@." s;
     exit 1

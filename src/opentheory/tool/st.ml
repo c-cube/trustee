@@ -7,6 +7,7 @@ type t = {
   idx: Idx.t;
   eval: Eval.state;
   zip: Proof_zip.zip_handle option;
+  zip_v: int;
 }
 
 let create ?cb ?progress_bar ?proof_zip ~ctx ~idx () : t =
@@ -26,7 +27,13 @@ let create ?cb ?progress_bar ?proof_zip ~ctx ~idx () : t =
            (Printexc.to_string e);
          None)
   in
-  { lock = Mutex.create (); ctx; idx; eval; zip }
+  let zip_v =
+    match proof_zip with
+    | Some path ->
+      (try int_of_float (Unix.stat path).Unix.st_mtime with _ -> 0)
+    | None -> 0
+  in
+  { lock = Mutex.create (); ctx; idx; eval; zip; zip_v }
 
 let[@inline] with_lock l f =
   Mutex.lock l;
@@ -54,11 +61,19 @@ let load_theory (self : t) (name : string) : K.Theory.t option =
       Idx.by_name_sweep self.idx;
       let all_consts = K.Theory.param_consts th @ K.Theory.consts th in
       List.iter
-        (fun c -> Idx.by_name_add self.idx (K.Const.name c) (Idx.H_const c))
+        (fun c ->
+          let cname = K.Const.name c in
+          Idx.by_name_add self.idx cname (Idx.H_const c);
+          Idx.origin_add self.idx cname name (-1))
         all_consts;
       List.iter
         (fun thm ->
           let key = Fmt.to_string K.Thm.pp thm in
           Idx.by_name_add self.idx key (Idx.H_thm thm))
         (K.Theory.param_theorems th @ K.Theory.theorems th);
+      List.iteri
+        (fun i thm ->
+          let key = Fmt.to_string K.Thm.pp thm in
+          Idx.origin_add self.idx key name i)
+        (K.Theory.theorems th);
       result)
