@@ -1,0 +1,26 @@
+{
+  "name": "trustee-webui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@11.17.0",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "check": "biome check .",
+    "e2e": "node e2e/e2e.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6",
+    "@types/node": "22.20.5",
+    "fflate": "0.8.3",
+    "puppeteer": "25.17.0",
+    "solid-js": "1.9.18",
+    "typescript": "7.0.2",
+    "vite": "8.3.7",
+    "vite-plugin-solid": "2.11.15",
+    "vitest": "5.1.0"
+  }
+}
