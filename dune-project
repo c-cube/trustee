@@ -63,6 +63,6 @@
   trace-tef
   camlzip
   tiny_httpd_camlzip
-  (opentelemetry-client-ocurl (>= 0.91))
+  (opentelemetry-client-ocurl (>= 0.92))
   (odoc :with-doc)))
 
