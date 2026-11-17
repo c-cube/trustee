@@ -4,8 +4,13 @@ module OT = Trustee_opentheory
 open OT.Common_
 module OTEL = Opentelemetry
 
+let req_duration : float Opentelemetry.Meter.Instrument.t =
+  Opentelemetry.Meter.Instrument.Histogram.create
+    ~name:"http.server.request.duration" ~unit_:"s" ()
+
 let trace_middleware : H.Middleware.t =
  fun h req ~resp ->
+  let t0 = Unix.gettimeofday () in
   let@ _span = Trace.with_span ~parent:None ~__FILE__ ~__LINE__ "http.handle" in
   Trace.add_data_to_span _span
     [
@@ -21,12 +26,16 @@ let trace_middleware : H.Middleware.t =
     in
     Trace.add_data_to_span _span
       (size @ [ "http.response.code", `Int response.code ]);
+    Opentelemetry.Meter.Instrument.Histogram.record req_duration
+      (Unix.gettimeofday () -. t0);
     resp response
   in
   try h req ~resp
   with exn ->
     let bt = Printexc.get_raw_backtrace () in
     Opentelemetry_trace.record_exception _span exn bt;
+    Opentelemetry.Meter.Instrument.Histogram.record req_duration
+      (Unix.gettimeofday () -. t0);
     Printexc.raise_with_backtrace exn bt
 
 let top_wrap_ req f =
