@@ -17,9 +17,6 @@ importers:
       fflate:
         specifier: 0.8.3
         version: 0.8.3
-      puppeteer:
-        specifier: 25.17.0
-        version: 25.17.0
       solid-js:
         specifier: 1.9.18
         version: 1.9.18
@@ -35,6 +32,12 @@ importers:
       vitest:
         specifier: 5.1.0
         version: 5.1.0(@types/node@22.20.5)(vite@8.3.7(@types/node@22.20.5))
+
+  e2e:
+    dependencies:
+      puppeteer:
+        specifier: 25.17.0
+        version: 25.17.0
 
 packages:
 

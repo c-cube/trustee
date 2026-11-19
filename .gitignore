@@ -11,6 +11,7 @@ old
 /ot-data.zip
 .kata.local.toml
 webui/node_modules/
+webui/e2e/node_modules/
 webui/dist/
 # dune needs the fallback rule here; the packed files stay untracked
 src/opentheory/tool/_webui/*

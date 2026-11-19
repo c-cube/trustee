@@ -1,3 +1,6 @@
+packages:
+  - "."
+  - "e2e"
 allowBuilds:
   puppeteer: true
 # pnpm 11 excludes packages younger than its minimum release age; these pins are deliberate.

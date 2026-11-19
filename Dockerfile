@@ -1,45 +1,35 @@
-ARG ALPINE_VERSION=3.22
-ARG OCAML_VERSION=5.4.1
-ARG OPAM_REPO_COMMIT=e7fc498b6a22a2e3a3004a201c785ee47c594502
 ARG NODE_VERSION=22
 
 FROM node:${NODE_VERSION}-alpine AS ui
 WORKDIR /ui
-ENV PUPPETEER_SKIP_DOWNLOAD=1
 COPY webui/package.json webui/pnpm-lock.yaml webui/pnpm-workspace.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile
+RUN corepack enable && pnpm install --frozen-lockfile --filter trustee-webui
 COPY webui/ .
-RUN pnpm build
+RUN pnpm --config.verify-deps-before-run=false build
+# ^ without this flag, pnpm reconciles the workspace on `pnpm run` and
+# headless-installs the e2e package (puppeteer) into the prod image
 
-FROM alpine:${ALPINE_VERSION} AS build
-ARG OCAML_VERSION
-ARG OPAM_REPO_COMMIT
-RUN apk add --no-cache ca-certificates curl git unzip build-base pkgconf m4 \
-      opam zlib-dev curl-dev openssl-dev
-ENV OPAMROOT=/root/.opam OPAMSWITCH=/root/w OPAMYES=1 OPAMCONFIRMLEVEL=unsafe-yes
-# deterministically setup switch from a commit of opam-repo
-RUN git init /tmp/opam-repo && cd /tmp/opam-repo && \
-    git remote add origin https://github.com/ocaml/opam-repository.git && \
-    git fetch --depth 1 origin $OPAM_REPO_COMMIT && \
-    git checkout FETCH_HEAD && \
-    opam init --disable-sandboxing --bare --no-setup -k local /tmp/opam-repo && \
-    opam switch create /root/w --packages=ocaml-base-compiler.$OCAML_VERSION && \
-    opam install --no-depexts \
-      dune ocamlfind containers pp_loc iter trace sha trace-tef logs lru \
-      tiny_httpd tiny_httpd_camlzip camlzip opentelemetry-client-ocurl && \
-    rm -rf /tmp/opam-repo
-
+FROM ghcr.io/c-cube/c-cube-commmon/ci-5.5:latest AS build
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends zlib1g-dev && \
+    rm -rf /var/lib/apt/lists/*
+RUN opam install --no-depexts \
+      containers pp_loc iter trace sha trace-tef logs lru \
+      tiny_httpd tiny_httpd_camlzip camlzip opentelemetry-client-ocurl
 WORKDIR /src
 COPY . .
 COPY --from=ui /ui/dist/ src/opentheory/tool/_webui/
 RUN opam exec -- dune build --profile=release src/opentheory/tool/trustee_ot.exe && \
     strip _build/default/src/opentheory/tool/trustee_ot.exe
 
-FROM alpine:${ALPINE_VERSION} AS prod
-RUN apk add --no-cache libcurl zlib ca-certificates
+FROM debian:trixie-slim AS prod
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      libcurl4t64 zlib1g ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/_build/default/src/opentheory/tool/trustee_ot.exe /usr/local/bin/trustee_ot
 ENV PORT=8089 \
     ADDR=0.0.0.0
 HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
-  CMD wget -q --spider http://127.0.0.1:${PORT}/ || exit 1
+  CMD curl -fs http://127.0.0.1:${PORT}/ || exit 1
 CMD exec /usr/local/bin/trustee_ot --serve --dir /data --proof-zip /ot-data.zip --port "$PORT" --addr "$ADDR"
